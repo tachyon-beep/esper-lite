@@ -17,6 +17,31 @@ _SPEC.loader.exec_module(_PROOF_PACKET)
 build_proof_packet = _PROOF_PACKET.build_proof_packet
 
 
+def _training_started_event(
+    event_id: str,
+    group_id: str,
+    proof_baseline_mode: str,
+) -> dict:
+    return {
+        "event_id": event_id,
+        "event_type": "TRAINING_STARTED",
+        "timestamp": datetime.now().isoformat(),
+        "group_id": group_id,
+        "data": {
+            "episode_id": "proof",
+            "task": "cifar_impaired",
+            "reward_mode": "simplified",
+            "n_envs": 2,
+            "n_episodes": 2,
+            "max_epochs": 25,
+            "max_batches": 1,
+            "proof_baseline_mode": proof_baseline_mode,
+            "proof_baseline_pair_id": "blueprint-health-proof",
+        },
+        "severity": "info",
+    }
+
+
 def _ppo_update_payload() -> dict:
     heads = (
         "slot",
@@ -39,6 +64,8 @@ def _ppo_update_payload() -> dict:
     for head in heads:
         payload[f"head_{head}_learnable_fraction"] = 1.0
         payload[f"head_{head}_gradient_state"] = "finite"
+    payload["head_value_grad_norm"] = 0.4
+    payload["head_value_gradient_state"] = "finite"
     return payload
 
 
@@ -143,3 +170,46 @@ def test_proof_packet_blocks_missing_learnability_telemetry(tmp_path):
 
     assert "Verdict: `BLOCKED`" in packet
     assert "missing learnability telemetry" in packet
+
+
+def test_proof_packet_blocks_missing_blueprint_health_baselines(tmp_path):
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = [
+        _training_started_event("start-1", "off", "off_switch"),
+        _training_started_event("start-2", "initial", "static_initial"),
+        _training_started_event("start-3", "schedule", "fixed_schedule"),
+        _training_started_event("start-4", "lockstep-a", "lockstep_reward_ab"),
+    ]
+    (run_dir / "events.jsonl").write_text("\n".join(json.dumps(event) for event in events) + "\n")
+
+    packet = build_proof_packet(
+        str(tmp_path),
+        require_blueprint_health_baselines=True,
+    )
+
+    assert "Verdict: `BLOCKED`" in packet
+    assert "## Blueprint-Health Baselines" in packet
+    assert "missing required proof baseline `static_final`" in packet
+
+
+def test_proof_packet_accepts_complete_blueprint_health_baseline_set(tmp_path):
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = [
+        _training_started_event("start-1", "off", "off_switch"),
+        _training_started_event("start-2", "initial", "static_initial"),
+        _training_started_event("start-3", "final", "static_final"),
+        _training_started_event("start-4", "schedule", "fixed_schedule"),
+        _training_started_event("start-5", "lockstep-a", "lockstep_reward_ab"),
+        _training_started_event("start-6", "lockstep-b", "lockstep_reward_ab"),
+    ]
+    (run_dir / "events.jsonl").write_text("\n".join(json.dumps(event) for event in events) + "\n")
+
+    packet = build_proof_packet(
+        str(tmp_path),
+        require_blueprint_health_baselines=True,
+    )
+
+    assert "Verdict: `REVIEW`" in packet
+    assert "All required blueprint-health proof baselines are present." in packet

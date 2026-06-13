@@ -51,6 +51,9 @@ allow_hits:
 - key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.normalize_advantages:item:2
   owner: John
   reason: PPO update - pre-normalization std for diagnostics and D4 floor detection; once per update
+- key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.mark_terminal_with_penalty:item
+  owner: John
+  reason: Rollback bookkeeping - reads last effective op for terminal penalty attribution; only on rollback path, not policy hot path
 - key: src/esper/simic/agent/ppo_metrics.py:PPOUpdateMetricsBuilder.finalize:item
   owner: John
   reason: PPO metrics aggregation (telemetry payload)
@@ -111,6 +114,12 @@ allow_hits:
 - key: src/esper/simic/training/action_execution.py:execute_actions:tolist
   owner: John
   reason: Forced action tracking - single GPU-to-CPU sync for forced step flags; batched per-batch not per-step
+- key: src/esper/simic/training/action_execution.py:_observation_hash:to_cpu
+  owner: John
+  reason: Morphology causal-log proof evidence - hashes lifecycle observations only when mutation/rollback audit rows are emitted
+- key: src/esper/simic/training/action_execution.py:_observation_hash:numpy
+  owner: John
+  reason: Morphology causal-log proof evidence - serializes the copied lifecycle observation for stable content hashing
 - key: src/esper/simic/control/normalization.py:ValueNormalizer.get_scale:item
   owner: John
   reason: Telemetry - extract normalizer scale once per PPO update; not in hot path, defaults to CPU device

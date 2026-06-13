@@ -202,6 +202,72 @@ class TestTolariaGovernor:
 
         assert len(gov.loss_history) == 9
 
+    def test_preflight_verdict_carries_structured_health_snapshot(self):
+        """Lifecycle preflight verdicts expose loss, accuracy, capacity, and topology inputs."""
+        from esper.leyline import LifecycleOp
+        from esper.tolaria import TolariaGovernor
+
+        gov = TolariaGovernor(DummyModel())
+
+        verdict = gov.preflight_lifecycle_mutation(
+            operation=LifecycleOp.GERMINATE,
+            slot_id="r0c0",
+            blueprint_id="conv_l",
+            alpha_target=None,
+            alpha_speed_steps=None,
+            alpha_curve=None,
+            val_loss=1.2,
+            val_accuracy=65.0,
+            seed_stage=None,
+            total_params=100_000,
+            effective_seed_params=2_500.0,
+            max_seeds=4,
+            active_seed_count=1,
+            cooldown_epochs_remaining=0,
+            event_id="proposal-1",
+        )
+
+        assert verdict.approved is True
+        assert verdict.blocked_factor is None
+        assert verdict.health_snapshot is not None
+        assert verdict.health_snapshot.operation == "GERMINATE"
+        assert verdict.health_snapshot.val_loss == 1.2
+        assert verdict.health_snapshot.val_accuracy == 65.0
+        assert verdict.health_snapshot.total_params == 100_000
+        assert verdict.health_snapshot.effective_seed_params == 2_500.0
+        assert verdict.health_snapshot.active_seed_count == 1
+        assert verdict.health_snapshot.blueprint_id == "conv_l"
+
+    def test_preflight_accuracy_veto_names_blocked_factor(self):
+        """Tolaria preflight should identify accuracy health separately from loss."""
+        from esper.leyline import LifecycleOp
+        from esper.tolaria import TolariaGovernor
+
+        gov = TolariaGovernor(DummyModel())
+
+        verdict = gov.preflight_lifecycle_mutation(
+            operation=LifecycleOp.GERMINATE,
+            slot_id="r0c0",
+            blueprint_id="conv_l",
+            alpha_target=None,
+            alpha_speed_steps=None,
+            alpha_curve=None,
+            val_loss=1.2,
+            val_accuracy=float("nan"),
+            seed_stage=None,
+            total_params=100_000,
+            effective_seed_params=2_500.0,
+            max_seeds=4,
+            active_seed_count=1,
+            cooldown_epochs_remaining=0,
+            event_id="proposal-2",
+        )
+
+        assert verdict.approved is False
+        assert verdict.blocked_factor == "val_accuracy_finite"
+        assert verdict.health_snapshot is not None
+        assert math.isnan(verdict.health_snapshot.val_accuracy)
+
     def test_check_vital_signs_no_panic_on_normal_loss(self):
         """Test that normal loss values don't trigger panic."""
         from esper.tolaria import TolariaGovernor

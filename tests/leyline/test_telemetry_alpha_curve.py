@@ -111,6 +111,30 @@ class TestSeedGerminatedPayloadAlphaCurve:
         with pytest.raises(KeyError):
             SeedGerminatedPayload.from_dict(incomplete_data)
 
+    def test_from_dict_restores_causal_morphology_identity(self):
+        """Lifecycle telemetry should carry proposal/verdict/mutation and RNG lineage."""
+        data = {
+            "slot_id": "slot_0",
+            "env_id": 0,
+            "blueprint_id": "conv_l",
+            "params": 1000,
+            "alpha_curve": "COSINE",
+            "episode_idx": 0,
+            "morphology_proposal_id": "morph-b1-e2-env0-r0c0-op1-proposal",
+            "morphology_verdict_id": "morph-b1-e2-env0-r0c0-op1-verdict",
+            "morphology_mutation_id": "morph-b1-e2-env0-r0c0-op1-mutation",
+            "rng_stream": "simic.lifecycle.env0",
+            "rng_seed": 42000,
+        }
+
+        payload = SeedGerminatedPayload.from_dict(data)
+
+        assert payload.morphology_proposal_id == "morph-b1-e2-env0-r0c0-op1-proposal"
+        assert payload.morphology_verdict_id == "morph-b1-e2-env0-r0c0-op1-verdict"
+        assert payload.morphology_mutation_id == "morph-b1-e2-env0-r0c0-op1-mutation"
+        assert payload.rng_stream == "simic.lifecycle.env0"
+        assert payload.rng_seed == 42000
+
 
 class TestSeedStageChangedPayloadAlphaCurve:
     """Test alpha_curve field in SeedStageChangedPayload.

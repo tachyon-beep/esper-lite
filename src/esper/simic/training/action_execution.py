@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
 
 import numpy as np
@@ -16,18 +17,17 @@ from esper.leyline import (
     AlphaMode,
     AlphaSpeedAction,
     BLUEPRINT_IDS,
-    DEFAULT_GAMMA,
-    DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     EPISODE_SUCCESS_THRESHOLD,
     EpisodeOutcome,
     EpisodeOutcomePayload,
     GovernorRollbackPayload,
     HEAD_NAMES,
-    HINDSIGHT_CREDIT_WEIGHT,
     HeadTelemetry,
+    LifecycleMutationCausalContext,
     LifecycleOp,
-    MAX_HINDSIGHT_CREDIT,
+    MorphologyCausalLogPhase,
     MIN_PRUNE_AGE,
+    MorphologyCausalLogPayload,
     OP_ADVANCE,
     OP_FOSSILIZE,
     OP_GERMINATE,
@@ -42,15 +42,12 @@ from esper.leyline import (
     SlotConfig,
     STYLE_ALPHA_ALGORITHMS,
     STYLE_BLEND_IDS,
-    TEMPO_TO_EPOCHS,
     TelemetryEvent,
     TelemetryEventType,
-    TempoAction,
 )
 from esper.simic.rewards import (
     compute_reward,
     compute_loss_reward,
-    compute_scaffold_hindsight_credit,
     ContributionRewardConfig,
     RewardFamily,
     RewardMode,
@@ -61,6 +58,13 @@ from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 
 from .helpers import compute_rent_and_shock_inputs
+from .handlers import (
+    AlphaTargetParams,
+    GerminateParams,
+    HandlerContext,
+    PruneParams,
+    get_handler,
+)
 from .parallel_env_state import ParallelEnvState
 from esper.simic.vectorized_types import (
     ActionMaskFlags,
@@ -327,6 +331,110 @@ class ActionExecutionResult:
     post_action_masks: list[dict[str, torch.Tensor]]
 
 
+def _build_lifecycle_mutation_context(
+    *,
+    batch_idx: int,
+    epoch: int,
+    env_idx: int,
+    op_action: int,
+    target_slot: str,
+    observation_hash: str,
+    topology: str,
+) -> LifecycleMutationCausalContext:
+    """Create stable morphology proposal/verdict/mutation identity for one action."""
+    base = f"morph-b{batch_idx}-e{epoch}-env{env_idx}-{target_slot}-op{op_action}"
+    digest = hashlib.sha256(base.encode("utf-8")).digest()
+    rng_seed = int.from_bytes(digest[:8], byteorder="big", signed=False)
+    return LifecycleMutationCausalContext(
+        action_id=base,
+        proposal_id=f"{base}-proposal",
+        verdict_id=f"{base}-verdict",
+        mutation_id=f"{base}-mutation",
+        observation_hash=observation_hash,
+        rng_stream=f"simic.lifecycle.env{env_idx}",
+        rng_seed=rng_seed,
+        topology=topology,
+        slot_id=target_slot,
+        operation=LifecycleOp(op_action).name,
+    )
+
+
+def _observation_hash(observation: torch.Tensor) -> str:
+    """Return a stable content hash for the observation used by a lifecycle action."""
+    obs_cpu = observation.detach().to(device="cpu", dtype=torch.float32).contiguous()
+    digest = hashlib.sha256(obs_cpu.numpy().tobytes()).hexdigest()[:16]
+    return f"obs-{digest}"
+
+
+def _build_morphology_causal_log_payload(
+    *,
+    phase: MorphologyCausalLogPhase,
+    context: LifecycleMutationCausalContext,
+    env_idx: int,
+    blueprint_id: str | None,
+    governor_approved: bool | None = None,
+    governor_reason: str | None = None,
+    governor_blocked_factor: str | None = None,
+    watch_window_evidence: float | None = None,
+    linked_event_id: str | None = None,
+) -> MorphologyCausalLogPayload:
+    return MorphologyCausalLogPayload(
+        phase=phase,
+        env_id=env_idx,
+        slot_id=context.slot_id,
+        operation=context.operation,
+        action_id=context.action_id,
+        proposal_id=context.proposal_id,
+        verdict_id=context.verdict_id,
+        mutation_id=context.mutation_id,
+        observation_hash=context.observation_hash,
+        rng_stream=context.rng_stream,
+        rng_seed=context.rng_seed,
+        topology=context.topology,
+        blueprint_id=blueprint_id,
+        governor_approved=governor_approved,
+        governor_reason=governor_reason,
+        governor_blocked_factor=governor_blocked_factor,
+        watch_window_evidence=watch_window_evidence,
+        linked_event_id=linked_event_id,
+    )
+
+
+def _build_rollback_causal_log_payload(
+    *,
+    batch_idx: int,
+    epoch: int,
+    env_idx: int,
+    op_action: int,
+    target_slot: str,
+    topology: str,
+    observation_hash: str,
+    reason: str,
+    loss_at_panic: float | None,
+    blueprint_id: str | None = None,
+) -> MorphologyCausalLogPayload:
+    context = _build_lifecycle_mutation_context(
+        batch_idx=batch_idx,
+        epoch=epoch,
+        env_idx=env_idx,
+        op_action=op_action,
+        target_slot=target_slot,
+        observation_hash=observation_hash,
+        topology=topology,
+    )
+    return _build_morphology_causal_log_payload(
+        phase="rollback",
+        context=context,
+        env_idx=env_idx,
+        blueprint_id=blueprint_id,
+        governor_approved=False,
+        governor_reason=reason,
+        governor_blocked_factor="rollback",
+        watch_window_evidence=loss_at_panic,
+        linked_event_id=context.mutation_id,
+    )
+
+
 def execute_actions(
     *,
     context: ActionExecutionContext,
@@ -462,8 +570,6 @@ def execute_actions(
         target_slot = action_spec.target_slot
         slot_is_enabled = action_spec.slot_is_enabled
         action_for_reward = action_spec.action_for_reward
-        blend_algorithm_id = action_spec.blend_algorithm_id
-        alpha_algorithm = action_spec.alpha_algorithm
         alpha_target = action_spec.alpha_target
 
         action_success = False
@@ -510,6 +616,33 @@ def execute_actions(
                 ),
                 severity="warning",
             ))
+            rollback_blueprint_id = (
+                BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
+            )
+            rollback_payload = _build_rollback_causal_log_payload(
+                batch_idx=batch_idx,
+                epoch=epoch,
+                env_idx=env_idx,
+                op_action=op_action,
+                target_slot=target_slot,
+                topology=task_spec.topology if task_spec.topology is not None else "unknown",
+                observation_hash=_observation_hash(states_batch_normalized[env_idx]),
+                reason=panic_reason or "unknown",
+                loss_at_panic=panic_loss,
+                blueprint_id=rollback_blueprint_id,
+            )
+            rollback_phases: tuple[tuple[MorphologyCausalLogPhase, str], ...] = (
+                ("rollback", "Morphology rollback causal log"),
+                ("cooldown", "Morphology rollback cooldown"),
+                ("audit", "Morphology rollback audit"),
+            )
+            for rollback_phase, message in rollback_phases:
+                emitters[env_idx].emit(TelemetryEvent(
+                    event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                    data=replace(rollback_payload, phase=rollback_phase),
+                    severity="warning",
+                    message=message,
+                ))
 
             action_outcome.rollback_occurred = True
             action_outcome.action_success = False
@@ -579,6 +712,8 @@ def execute_actions(
         )
 
         mutation_allowed = True
+        morphology_context: LifecycleMutationCausalContext | None = None
+        morphology_blueprint_id: str | None = None
         if slot_is_enabled and op_action in (
             OP_GERMINATE,
             OP_FOSSILIZE,
@@ -586,6 +721,15 @@ def execute_actions(
             OP_SET_ALPHA_TARGET,
             OP_ADVANCE,
         ):
+            morphology_context = _build_lifecycle_mutation_context(
+                batch_idx=batch_idx,
+                epoch=epoch,
+                env_idx=env_idx,
+                op_action=op_action,
+                target_slot=target_slot,
+                observation_hash=_observation_hash(states_batch_normalized[env_idx]),
+                topology=task_spec.topology if task_spec.topology is not None else "unknown",
+            )
             preflight_alpha_speed_steps = None
             preflight_alpha_curve = None
             if op_action in (OP_PRUNE, OP_SET_ALPHA_TARGET):
@@ -596,6 +740,18 @@ def execute_actions(
             preflight_blueprint_id = (
                 BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
             )
+            morphology_blueprint_id = preflight_blueprint_id
+            emitters[env_idx].emit(TelemetryEvent(
+                event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                data=_build_morphology_causal_log_payload(
+                    phase="proposal",
+                    context=morphology_context,
+                    env_idx=env_idx,
+                    blueprint_id=preflight_blueprint_id,
+                ),
+                severity="debug",
+                message="Morphology proposal",
+            ))
             preflight_verdict = env_state.governor.preflight_lifecycle_mutation(
                 operation=LifecycleOp(op_action),
                 slot_id=target_slot,
@@ -611,11 +767,22 @@ def execute_actions(
                 max_seeds=effective_max_seeds,
                 active_seed_count=model.total_seeds(),
                 cooldown_epochs_remaining=0,
-                event_id=(
-                    f"batch{batch_idx}_epoch{epoch}_env{env_idx}_"
-                    f"op{op_action}_slot{target_slot}"
-                ),
+                event_id=morphology_context.proposal_id,
             )
+            emitters[env_idx].emit(TelemetryEvent(
+                event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                data=_build_morphology_causal_log_payload(
+                    phase="verdict",
+                    context=morphology_context,
+                    env_idx=env_idx,
+                    blueprint_id=preflight_blueprint_id,
+                    governor_approved=preflight_verdict.approved,
+                    governor_reason=preflight_verdict.reason,
+                    governor_blocked_factor=preflight_verdict.blocked_factor,
+                ),
+                severity="debug" if preflight_verdict.approved else "warning",
+                message="Morphology governor verdict",
+            ))
             if not preflight_verdict.approved:
                 action_spec.action_valid_for_reward = False
                 action_spec.action_for_reward = LifecycleOp.WAIT
@@ -896,184 +1063,148 @@ def execute_actions(
         with lifecycle_ctx:
             if slot_is_enabled and mutation_allowed:
                 slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
-                if op_action == OP_GERMINATE and model.seed_slots[target_slot].state is None:
-                    env_state.acc_at_germination[target_slot] = env_state.val_acc
-                    env_state.escrow_credit[target_slot] = 0.0
-                    blueprint_id = BLUEPRINT_IDS[blueprint_action]
-                    assert blueprint_id is not None, (
-                        "NULL blueprint should not reach germination"
-                    )
-                    model.germinate_seed(
-                        blueprint_id,
-                        f"ep{episodes_completed + env_idx}_env{env_idx}_seed_{env_state.seeds_created}",
-                        slot=target_slot,
-                        blend_algorithm_id=blend_algorithm_id,
-                        blend_tempo_epochs=TEMPO_TO_EPOCHS[TempoAction(tempo_action)],
-                        alpha_algorithm=alpha_algorithm,
-                        alpha_target=alpha_target,
-                    )
-                    env_state.init_obs_v3_slot_tracking(target_slot)
-                    env_state.seeds_created += 1
-                    env_state.germinate_count += 1  # TELE-610
-                    env_state.seed_optimizers.pop(target_slot, None)
-                    action_success = True
-                elif op_action == OP_FOSSILIZE:
-                    action_success = context.fossilize_active_seed(model, target_slot)
-                    if action_success:
-                        env_state.seeds_fossilized += 1
-                        env_state.fossilize_count += 1  # TELE-610
-                        if seed_info is not None and (
-                            seed_info.total_improvement
-                            >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
-                        ):
-                            env_state.contributing_fossilized += 1
-                        env_state.acc_at_germination.pop(target_slot, None)
-
-                        # Compute temporally-discounted hindsight credit for scaffolds
-                        beneficiary_improvement = (
-                            seed_info.total_improvement if seed_info else 0.0
+                if morphology_context is not None:
+                    slot_obj.set_pending_morphology_context(morphology_context)
+                    emitters[env_idx].emit(TelemetryEvent(
+                        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                        data=_build_morphology_causal_log_payload(
+                            phase="mutation",
+                            context=morphology_context,
+                            env_idx=env_idx,
+                            blueprint_id=morphology_blueprint_id,
+                            governor_approved=True,
+                            governor_reason="approved",
+                            linked_event_id=morphology_context.mutation_id,
+                        ),
+                        severity="debug",
+                        message="Morphology mutation dispatch",
+                    ))
+                handler_ctx = HandlerContext(
+                    env_idx=env_idx,
+                    slot_id=target_slot,
+                    env_state=env_state,
+                    model=model,
+                    slot=slot_obj,
+                    seed_state=seed_state,
+                    epoch=epoch,
+                    max_epochs=max_epochs,
+                    episodes_completed=episodes_completed,
+                )
+                try:
+                    handler = get_handler(op_action)
+                    if op_action == OP_GERMINATE:
+                        handler_result = handler(
+                            handler_ctx,
+                            GerminateParams(
+                                blueprint_idx=blueprint_action,
+                                style_idx=style_action,
+                                tempo_idx=tempo_action,
+                                alpha_target=alpha_target,
+                            ),
                         )
-                        if beneficiary_improvement > 0:
-                            # Use outer loop epoch variable (not per-env counter)
-                            current_epoch = epoch
-                            total_credit = 0.0
-                            scaffold_count = 0
-                            total_delay = 0
-
-                            # Find all scaffolds that boosted this beneficiary
-                            for (
-                                scaffold_slot,
-                                boosts,
-                            ) in env_state.scaffold_boost_ledger.items():
-                                for (
-                                    boost_given,
-                                    beneficiary_slot,
-                                    epoch_of_boost,
-                                ) in boosts:
-                                    if (
-                                        beneficiary_slot == target_slot
-                                        and boost_given > 0
-                                    ):
-                                        # Temporal discount: credit decays with distance
-                                        delay = current_epoch - epoch_of_boost
-                                        discount = DEFAULT_GAMMA**delay
-
-                                        # Compute discounted hindsight credit
-                                        raw_credit = compute_scaffold_hindsight_credit(
-                                            boost_given=boost_given,
-                                            beneficiary_improvement=beneficiary_improvement,
-                                            credit_weight=HINDSIGHT_CREDIT_WEIGHT,
-                                        )
-                                        total_credit += raw_credit * discount
-                                        scaffold_count += 1
-                                        total_delay += delay
-
-                            # Cap total credit to prevent runaway values
-                            total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
-
-                            env_state.pending_hindsight_credit += total_credit
-
-                            # Track scaffold metrics for telemetry (per-environment)
+                    elif op_action == OP_FOSSILIZE:
+                        handler_result = handler(
+                            handler_ctx,
+                            seed_info,
+                            context.fossilize_active_seed,
+                        )
+                        if handler_result.success:
                             if collect_reward_summary:
                                 summary = reward_summary_accum[env_idx]
-                                summary.scaffold_count += scaffold_count
-                                summary.scaffold_delay_total += total_delay
-
-                            # Clear this beneficiary from all ledgers (it's now fossilized)
-                            for scaffold_slot in list(
-                                env_state.scaffold_boost_ledger.keys()
+                                summary.scaffold_count += int(
+                                    handler_result.telemetry["scaffold_count"]
+                                )
+                                summary.scaffold_delay_total += (
+                                    handler_result.telemetry["avg_scaffold_delay"]
+                                    * handler_result.telemetry["scaffold_count"]
+                                )
+                            # Collect drip state for BASIC_PLUS mode post-fossilization
+                            # accountability. new_drip_state is created in compute_basic_reward
+                            # when action=FOSSILIZE; add it only after fossilization succeeds.
+                            if (
+                                reward_components is not None
+                                and reward_components.new_drip_state is not None
                             ):
-                                env_state.scaffold_boost_ledger[scaffold_slot] = [
-                                    (b, ben, e)
-                                    for (b, ben, e) in env_state.scaffold_boost_ledger[
-                                        scaffold_slot
-                                    ]
-                                    if ben != target_slot
-                                ]
-                                if not env_state.scaffold_boost_ledger[scaffold_slot]:
-                                    del env_state.scaffold_boost_ledger[scaffold_slot]
-
-                        # B8-DRL-02 FIX: Clean up seed optimizer after fossilization
-                        # (was missing - memory leak for fossilized seed optimizers)
-                        env_state.seed_optimizers.pop(target_slot, None)
-
-                        # BUG FIX: Trigger governor snapshot after fossilization
-                        # Without this, a rollback between fossilization and the next
-                        # periodic snapshot (every 5 epochs) produces an incoherent state:
-                        # - Fossilized seed weights not in snapshot (excluded when TRAINING)
-                        # - Fossilized seeds can't be pruned during rollback
-                        # - Result: host reverts but fossilized seed keeps stale weights
-                        # The snapshot must be taken OUTSIDE the CUDA stream context,
-                        # so we set a flag here and take the snapshot later.
-                        env_state.needs_governor_snapshot = True
-
-                        # Collect drip state for BASIC_PLUS mode post-fossilization accountability
-                        # new_drip_state is created in compute_basic_reward when action=FOSSILIZE;
-                        # we only add it to tracking if the fossilization actually succeeded.
-                        if (
-                            reward_components is not None
-                            and reward_components.new_drip_state is not None
-                        ):
-                            env_state.fossilized_drip_states.append(
-                                reward_components.new_drip_state
-                            )
-                elif (
-                    op_action == OP_PRUNE
-                    and model.has_active_seed_in_slot(target_slot)
-                    and seed_state is not None
-                    and seed_state.stage
-                    in (
-                        SeedStage.GERMINATED,
-                        SeedStage.TRAINING,
-                        SeedStage.BLENDING,
-                        SeedStage.HOLDING,
+                                env_state.fossilized_drip_states.append(
+                                    reward_components.new_drip_state
+                                )
+                    elif op_action == OP_PRUNE:
+                        handler_result = handler(
+                            handler_ctx,
+                            PruneParams(
+                                alpha_speed_idx=alpha_speed_action,
+                                alpha_curve_idx=alpha_curve_action,
+                            ),
+                            seed_info,
+                        )
+                    elif op_action == OP_SET_ALPHA_TARGET:
+                        handler_result = handler(
+                            handler_ctx,
+                            AlphaTargetParams(
+                                alpha_target_idx=alpha_target_action,
+                                alpha_speed_idx=alpha_speed_action,
+                                alpha_curve_idx=alpha_curve_action,
+                                style_idx=style_action,
+                            ),
+                        )
+                    elif op_action in (OP_ADVANCE, OP_WAIT):
+                        handler_result = handler(handler_ctx)
+                    else:
+                        raise ValueError(f"Unsupported lifecycle operation: {op_action}")
+                finally:
+                    slot_obj.clear_pending_morphology_context()
+                action_success = handler_result.success
+                if morphology_context is not None:
+                    emitters[env_idx].emit(TelemetryEvent(
+                        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                        data=_build_morphology_causal_log_payload(
+                            phase="watch",
+                            context=morphology_context,
+                            env_idx=env_idx,
+                            blueprint_id=morphology_blueprint_id,
+                            governor_approved=True,
+                            governor_reason="approved",
+                            watch_window_evidence=env_state.val_loss,
+                            linked_event_id=morphology_context.mutation_id,
+                        ),
+                        severity="debug",
+                        message="Morphology watch evidence",
+                    ))
+                    terminal_phase: MorphologyCausalLogPhase = (
+                        "fossilization"
+                        if op_action == OP_FOSSILIZE and handler_result.success
+                        else "commit"
                     )
-                    # BUG-020 fix: enforce MIN_PRUNE_AGE at execution gate
-                    and seed_info is not None
-                    and seed_info.seed_age_epochs >= MIN_PRUNE_AGE
-                ):
-                    speed_steps = ALPHA_SPEED_TO_STEPS[
-                        AlphaSpeedAction(alpha_speed_action)
-                    ]
-                    curve_action_obj = AlphaCurveAction(alpha_curve_action)
-                    curve = curve_action_obj.to_curve()
-                    steepness = curve_action_obj.to_steepness()
-
-                    # Schedule prune: force alpha to 0 with requested speed/curve.
-                    action_success = slot_obj.schedule_prune(
-                        steps=speed_steps,
-                        curve=curve,
-                        steepness=steepness,
-                        initiator="policy",
-                    )
-                    if action_success:
-                        env_state.prune_count += 1  # TELE-610
-                elif op_action == OP_SET_ALPHA_TARGET and seed_state is not None:
-                    speed_steps = ALPHA_SPEED_TO_STEPS[
-                        AlphaSpeedAction(alpha_speed_action)
-                    ]
-                    curve_action_obj = AlphaCurveAction(alpha_curve_action)
-                    curve = curve_action_obj.to_curve()
-                    steepness = curve_action_obj.to_steepness()
-                    action_success = slot_obj.set_alpha_target(
-                        alpha_target=alpha_target,
-                        steps=speed_steps,
-                        curve=curve,
-                        steepness=steepness,
-                        alpha_algorithm=alpha_algorithm,
-                        initiator="policy",
-                    )
-                elif op_action == OP_ADVANCE and seed_state is not None:
-                    if seed_state.stage in (
-                        SeedStage.GERMINATED,
-                        SeedStage.TRAINING,
-                        SeedStage.BLENDING,
-                    ):
-                        gate_result = slot_obj.advance_stage()
-                        action_success = gate_result.passed
-                elif op_action == OP_WAIT:
-                    # WAIT is always a valid no-op for enabled slots.
-                    action_success = True
+                    emitters[env_idx].emit(TelemetryEvent(
+                        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                        data=_build_morphology_causal_log_payload(
+                            phase=terminal_phase,
+                            context=morphology_context,
+                            env_idx=env_idx,
+                            blueprint_id=morphology_blueprint_id,
+                            governor_approved=True,
+                            governor_reason="approved",
+                            watch_window_evidence=env_state.val_loss,
+                            linked_event_id=morphology_context.mutation_id,
+                        ),
+                        severity="debug",
+                        message="Morphology commit",
+                    ))
+                    emitters[env_idx].emit(TelemetryEvent(
+                        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                        data=_build_morphology_causal_log_payload(
+                            phase="audit",
+                            context=morphology_context,
+                            env_idx=env_idx,
+                            blueprint_id=morphology_blueprint_id,
+                            governor_approved=True,
+                            governor_reason="approved",
+                            watch_window_evidence=env_state.val_loss,
+                            linked_event_id=morphology_context.mutation_id,
+                        ),
+                        severity="debug",
+                        message="Morphology audit",
+                    ))
             elif op_action == OP_WAIT:
                 action_success = True
 

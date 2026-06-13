@@ -224,9 +224,12 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "q_spread": 0.0,
         # Per-head stats (optional but expected by emitter loop)
         "head_entropies": {},
-        "head_grad_norms": {},
+        "head_grad_norms": {"value": [0.4]},
         "head_learnable_fractions": {head: [1.0] for head in HEAD_NAMES},
-        "head_gradient_states": {head: ["finite"] for head in HEAD_NAMES},
+        "head_gradient_states": {
+            **{head: ["finite"] for head in HEAD_NAMES},
+            "value": ["finite"],
+        },
     }
     base.update(overrides)
     return base
@@ -892,6 +895,82 @@ def test_aggregate_ppo_metrics_special_reductions_and_head_merging():
         "value": [0.7],
         "other": [3.0],
     }
+
+
+def test_aggregate_ppo_metrics_reduces_proof_fields_explicitly():
+    """Proof-critical PPO fields must not fall through generic first-value merging."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {
+            "ppo_update_performed": True,
+            "finiteness_gate_skip_count": 1,
+            "finiteness_gate_failures": [{"epoch": 0, "sources": ["value"]}],
+            "head_gradient_states": {
+                "op": ["finite"],
+                "value": ["missing"],
+            },
+            "head_learnable_fractions": {
+                "op": [1.0],
+                "value": [0.0],
+            },
+            "head_nan_detected": {"op": False, "value": True},
+            "head_inf_detected": {"op": False, "value": False},
+            "usable_actor_timesteps": 8,
+            "forced_step_ratio": 0.25,
+            "d5_pre_norm_advantage_std": 0.2,
+            "advantage_std_floored": False,
+            "op_q_values": (1.0, 2.0),
+            "op_valid_mask": (True, False),
+            "ratio_diagnostic": {"representative": "first"},
+        },
+        {
+            "ppo_update_performed": False,
+            "finiteness_gate_skip_count": 2,
+            "finiteness_gate_failures": [{"epoch": 1, "sources": ["log_prob"]}],
+            "head_gradient_states": {
+                "op": ["nonfinite"],
+                "value": ["not_learnable"],
+            },
+            "head_learnable_fractions": {
+                "op": [0.5],
+                "value": [0.0],
+            },
+            "head_nan_detected": {"op": True, "value": False},
+            "head_inf_detected": {"op": False, "value": True},
+            "usable_actor_timesteps": 5,
+            "forced_step_ratio": 0.75,
+            "d5_pre_norm_advantage_std": 0.4,
+            "advantage_std_floored": True,
+            "op_q_values": (3.0, 4.0),
+            "op_valid_mask": (False, True),
+            "ratio_diagnostic": {"representative": "second"},
+        },
+    ])
+
+    assert metrics["ppo_update_performed"] is True
+    assert metrics["finiteness_gate_skip_count"] == 3
+    assert metrics["finiteness_gate_failures"] == [
+        {"epoch": 0, "sources": ["value"]},
+        {"epoch": 1, "sources": ["log_prob"]},
+    ]
+    assert metrics["head_gradient_states"] == {
+        "op": ["finite", "nonfinite"],
+        "value": ["missing", "not_learnable"],
+    }
+    assert metrics["head_learnable_fractions"] == {
+        "op": [1.0, 0.5],
+        "value": [0.0, 0.0],
+    }
+    assert metrics["head_nan_detected"] == {"op": True, "value": True}
+    assert metrics["head_inf_detected"] == {"op": False, "value": True}
+    assert metrics["usable_actor_timesteps"] == 13
+    assert metrics["forced_step_ratio"] == pytest.approx(0.5)
+    assert metrics["d5_pre_norm_advantage_std"] == pytest.approx(0.3)
+    assert metrics["advantage_std_floored"] is True
+    assert metrics["op_q_values"] == (1.0, 2.0)
+    assert metrics["op_valid_mask"] == (True, False)
+    assert metrics["ratio_diagnostic"] == {"representative": "first"}
 
 
 def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():

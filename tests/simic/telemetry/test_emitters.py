@@ -120,8 +120,12 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "head_learnable_fractions": {
             head: [1.0] for head in HEAD_NAMES
         },
+        "head_grad_norms": {
+            "value": [0.4],
+        },
         "head_gradient_states": {
-            head: ["finite"] for head in HEAD_NAMES
+            **{head: ["finite"] for head in HEAD_NAMES},
+            "value": ["finite"],
         },
     }
     base.update(overrides)
@@ -237,6 +241,47 @@ def test_emit_ppo_update_event_includes_value_stats():
     assert payload.value_std == 1.2
     assert payload.value_min == 2.1
     assert payload.value_max == 9.8
+
+
+@pytest.mark.parametrize(
+    ("gradient_state", "grad_norm"),
+    [
+        ("finite", 0.75),
+        ("missing", math.nan),
+        ("nonfinite", math.nan),
+        ("not_learnable", math.nan),
+    ],
+)
+def test_emit_ppo_update_event_includes_value_head_gradient_state(
+    gradient_state: str,
+    grad_norm: float,
+) -> None:
+    """PPO telemetry must expose value-head gradient health for the critic."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            head_grad_norms={"value": [grad_norm]},
+            head_gradient_states={
+                **{head: ["finite"] for head in HEAD_NAMES},
+                "value": [gradient_state],
+            },
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    if math.isfinite(grad_norm):
+        assert payload.head_value_grad_norm == pytest.approx(grad_norm)
+    else:
+        assert math.isnan(payload.head_value_grad_norm)
+    assert payload.head_value_gradient_state == gradient_state
 
 
 def test_emit_ppo_update_event_sets_dataloader_wait_ratio() -> None:

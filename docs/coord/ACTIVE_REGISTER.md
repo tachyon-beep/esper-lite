@@ -43,6 +43,7 @@ The practical sequencing is:
 | `esper-lite-d2c74e7031` | bug | `confirmed` | Missing counterfactual contribution falls back to non-causal host drift | `tamiyo/policy/features.py` | Missing causal contribution should use neutral value plus explicit missing/freshness signal, not host drift. |
 | `esper-lite-08e18c5ed8` | bug | `confirmed` | Blueprint shape probe accepts non-tensor outputs | `kasmina/slot.py` | Germination smoke test should reject non-tensor blueprint outputs before shape validation. |
 | `esper-lite-a0c50bbe15` | bug | `confirmed` | Blueprint registry identity is not hardened against duplicate or unknown IDs | `kasmina/blueprints` | Duplicate blueprint registrations and unknown blueprint IDs should fail loudly rather than degrade into ambiguous identity. |
+| `esper-lite-bd0b82e670` | task | `closed` | Complete causal morphology log beyond preflight identity | `kasmina/simic/tolaria/leyline` | Closed with code evidence: Leyline requires joinable causal-log payload fields; Simic emits proposal → verdict → mutation → watch → commit/fossilization → audit and rollback → cooldown → audit rows; Karn exposes `morphology_causal_log` for proof queries. |
 
 ### P1 Acceptance Shape
 
@@ -51,6 +52,7 @@ The practical sequencing is:
 - Tamiyo cannot see missing active-slot telemetry or host drift as healthy causal evidence.
 - Kasmina rejects malformed blueprint outputs at germination.
 - Blueprint identity is deterministic enough that later proof packets can name what actually happened.
+- Morphology event identity is end-to-end traceable across proposal, verdict, mutation, watch-window evidence, rollback, and fossilization surfaces.
 
 ---
 
@@ -58,10 +60,10 @@ The practical sequencing is:
 
 | ID | Type | Status | Title | Component | Evidence / Expected Outcome |
 | --- | --- | --- | --- | --- | --- |
-| `esper-lite-8f008c76ba` | feature | `proposed` | Growth events are not replay-identifiable or RNG-isolated | `kasmina/simic/leyline` | Growth records should carry event/action IDs, observation hashes, RNG identity, topology, slot, blueprint, and governor verdict. |
-| `esper-lite-f6d8e49701` | feature | `proposed` | Tolaria governor is loss-only and mean/std based | `tolaria/governor.py` | Add a fuller morphogenesis governor surface around the watchdog: pre-flight, watch, commit, rollback, cooldown, and audit. |
+| `esper-lite-8f008c76ba` | feature | `done` | Growth events are not replay-identifiable or RNG-isolated | `kasmina/simic/leyline` | Growth/lifecycle rows now carry stable action/proposal/verdict/mutation IDs, observation hash, RNG stream/seed, topology, slot, blueprint, and governor verdict fields. |
+| `esper-lite-f6d8e49701` | feature | `done` | Tolaria governor is loss-only and mean/std based | `tolaria/governor.py` | Tolaria preflight now emits structured verdict inputs/blocked factors; Simic records watch, commit/fossilization, rollback, cooldown, and audit phases in the causal log around the watchdog. |
 | `esper-lite-3032cb39f8` | bug | `confirmed` | Rollback penalty signal is coarsely attributed and may wash out | `simic/agent/rollout_buffer.py` | Rollback transitions need typed severity, proposal/action ID, and watch-window evidence so catastrophic signals stay visible. |
-| `esper-lite-45a64bfb36` | feature | `proposed` | Telemetry event UUIDs are not a causal morphology log | `leyline/telemetry.py` | Generic UUIDs are not enough; morphology needs a causal log from proposal through verdict, mutation, watch, rollback, and fossilization. |
+| `esper-lite-45a64bfb36` | feature | `done` | Telemetry event UUIDs are not a causal morphology log | `leyline/telemetry.py` | `MORPHOLOGY_CAUSAL_LOG` rows now provide a joinable proposal/verdict/mutation/watch/terminal audit trail with rollback/cooldown/audit rows and Karn query coverage. |
 | `esper-lite-7431b05440` | bug | `confirmed` | Reward and decision telemetry can report misleading action success or entropy | `simic/rewards/reward_telemetry.py` | Reward telemetry should not claim action success before execution; entropy should be real or explicitly unavailable. |
 | `esper-lite-c170aa1198` | task | `open` | Lifecycle handler refactor is not wired into production | `simic/training/handlers` | Production should have one authoritative lifecycle execution path; wire handlers in or delete the unused abstraction. |
 | `esper-lite-1d0c51a2ff` | bug | `confirmed` | SIMPLIFIED reward lacks structural rent but can be read as economy evidence | `simic/rewards/contribution.py` | Add structural cost to proof-grade reward modes or label `SIMPLIFIED` as diagnostic-only for economy claims. |
@@ -131,6 +133,7 @@ The practical sequencing is:
 
 - The P1 bugs are confirmed and actionable.
 - The Simic/Tamiyo training-loop review tickets are labeled `from-architecture-review` in Filigree.
-- The feature tickets are proposed and should be reviewed/promoted before implementation.
+- The remaining proposed feature tickets should be reviewed/promoted before implementation.
+- The causal morphology log follow-up `esper-lite-bd0b82e670` is closed; the older P2 causal-log/replay/governor tickets have matching Filigree evidence comments from the 2026-06-13 code pass.
 - The parent work package remains `defined`; start the package only when an agent is ready to own the whole slice.
 - This register should be refreshed whenever any listed Filigree ticket changes status, priority, parentage, or scope.

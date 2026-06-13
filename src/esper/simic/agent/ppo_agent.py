@@ -1160,8 +1160,10 @@ class PPOAgent:
 
                 # Collect all head norms as tensors (no .item() yet)
                 head_norm_tensors: list[torch.Tensor] = []
-                for head_module in head_modules:
-                    params_with_grad = [p for p in head_module.parameters() if p.grad is not None]
+                for head_name, head_module in zip(head_names, head_modules):
+                    head_params = list(head_module.parameters())
+                    head_has_trainable_params = any(p.requires_grad for p in head_params)
+                    params_with_grad = [p for p in head_params if p.grad is not None]
                     if params_with_grad:
                         has_nonfinite_grad = any(
                             not torch.isfinite(p.grad).all() for p in params_with_grad
@@ -1175,9 +1177,9 @@ class PPOAgent:
                         # 0.0 would hide the bug (No Bug-Hiding Patterns rule)
                         # NaN signals missing data and will surface in telemetry
                         norm_t = torch.tensor(float("nan"), device=self.device)
-                        grad_state = "missing"
+                        grad_state = "missing" if head_has_trainable_params else "not_learnable"
                     head_norm_tensors.append(norm_t)
-                    head_gradient_state_history[head_names[len(head_norm_tensors) - 1]].append(grad_state)
+                    head_gradient_state_history[head_name].append(grad_state)
 
                 all_norms = torch.stack(head_norm_tensors)
                 for head_name, grad_norm in zip(head_names, all_norms):

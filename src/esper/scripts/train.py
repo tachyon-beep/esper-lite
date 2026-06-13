@@ -385,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
             "escrow-vs-basic",
         ],
         default=None,
-        help="True A/B test: train separate policies on separate GPUs",
+        help="Sequential reward-mode A/B: train separate policies on separate GPUs",
     )
 
     # === Tamiyo Training Scale ===

@@ -44,7 +44,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Callable, ClassVar, Generator, TYPE_CHECKING
+from typing import Any, Callable, ClassVar, Generator, TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
@@ -53,6 +53,7 @@ from esper.kasmina.blend_ops import blend_gate, blend_multiply
 from esper.kasmina.isolation import GradientHealthMonitor, blend_with_isolation, ste_forward
 from esper.kasmina.alpha_controller import AlphaController
 from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve, AlphaMode
+from esper.leyline.lifecycle_mutation import LifecycleMutationCausalContext
 
 from esper.leyline import (
     # Lifecycle
@@ -1088,6 +1089,7 @@ class SeedSlot(nn.Module):
         self.telemetry_lifecycle_only: bool = False
         self.telemetry_inner_epoch: int | None = None
         self.telemetry_global_epoch: int | None = None
+        self._pending_morphology_context: LifecycleMutationCausalContext | None = None
         # Auto-forward gates: stage transitions can be advanced automatically by step_epoch()
         # when the corresponding gate passes (configured by Simic TrainingConfig).
         self.auto_forward_gates: frozenset[GateLevel] = frozenset()
@@ -2619,6 +2621,17 @@ class SeedSlot(nn.Module):
             return 0.0
         return float(ratio)
 
+    def set_pending_morphology_context(
+        self,
+        context: LifecycleMutationCausalContext,
+    ) -> None:
+        """Attach causal mutation identity to the next lifecycle telemetry event."""
+        self._pending_morphology_context = context
+
+    def clear_pending_morphology_context(self) -> None:
+        """Clear pending causal mutation identity after lifecycle handler dispatch."""
+        self._pending_morphology_context = None
+
     def _emit_telemetry(
         self,
         event_type: TelemetryEventType,
@@ -2640,6 +2653,25 @@ class SeedSlot(nn.Module):
             return
         if self.fast_mode and not self.telemetry_lifecycle_only:
             return
+        if (
+            self._pending_morphology_context is not None
+            and event_type
+            in (
+                TelemetryEventType.SEED_GERMINATED,
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                TelemetryEventType.SEED_FOSSILIZED,
+                TelemetryEventType.SEED_PRUNED,
+            )
+        ):
+            context = self._pending_morphology_context
+            data = replace(
+                cast(Any, data),
+                morphology_proposal_id=context.proposal_id,
+                morphology_verdict_id=context.verdict_id,
+                morphology_mutation_id=context.mutation_id,
+                rng_stream=context.rng_stream,
+                rng_seed=context.rng_seed,
+            )
 
         event = TelemetryEvent(
             event_type=event_type,

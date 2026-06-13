@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     import torch.nn as nn
 
     from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve
+    from esper.leyline.lifecycle_mutation import LifecycleMutationCausalContext
     from esper.leyline.schemas import GateResult
     from esper.leyline.schemas import GateLevel
     from esper.leyline.stages import SeedStage
@@ -181,6 +182,17 @@ class SeedSlotProtocol(Protocol):
         initiator: str = "policy",
     ) -> bool:
         """Retarget alpha to a non-zero target from HOLD mode."""
+        ...
+
+    def set_pending_morphology_context(
+        self,
+        context: "LifecycleMutationCausalContext",
+    ) -> None:
+        """Attach causal mutation identity to the next lifecycle telemetry event."""
+        ...
+
+    def clear_pending_morphology_context(self) -> None:
+        """Clear any pending causal mutation identity."""
         ...
 
     @contextmanager

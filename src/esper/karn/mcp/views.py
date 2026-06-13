@@ -65,7 +65,9 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.clip_ratio')::DOUBLE as clip_ratio,
             json_extract(data, '$.param_budget')::INTEGER as param_budget,
             json_extract_string(data, '$.policy_device') as policy_device,
-            json_extract(data, '$.host_params')::INTEGER as host_params
+            json_extract(data, '$.host_params')::INTEGER as host_params,
+            json_extract_string(data, '$.proof_baseline_mode') as proof_baseline_mode,
+            json_extract_string(data, '$.proof_baseline_pair_id') as proof_baseline_pair_id
         FROM raw_events
         WHERE event_type = 'TRAINING_STARTED'
     """,
@@ -156,6 +158,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.head_alpha_speed_grad_norm')::DOUBLE as head_alpha_speed_grad_norm,
             json_extract(data, '$.head_alpha_curve_grad_norm')::DOUBLE as head_alpha_curve_grad_norm,
             json_extract(data, '$.head_op_grad_norm')::DOUBLE as head_op_grad_norm,
+            json_extract(data, '$.head_value_grad_norm')::DOUBLE as head_value_grad_norm,
             -- Per-head learnability diagnostics
             json_extract(data, '$.head_slot_learnable_fraction')::DOUBLE as head_slot_learnable_fraction,
             json_extract(data, '$.head_blueprint_learnable_fraction')::DOUBLE as head_blueprint_learnable_fraction,
@@ -172,7 +175,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.head_alpha_target_gradient_state') as head_alpha_target_gradient_state,
             json_extract_string(data, '$.head_alpha_speed_gradient_state') as head_alpha_speed_gradient_state,
             json_extract_string(data, '$.head_alpha_curve_gradient_state') as head_alpha_curve_gradient_state,
-            json_extract_string(data, '$.head_op_gradient_state') as head_op_gradient_state
+            json_extract_string(data, '$.head_op_gradient_state') as head_op_gradient_state,
+            json_extract_string(data, '$.head_value_gradient_state') as head_value_gradient_state
         FROM raw_events
         WHERE event_type = 'PPO_UPDATE_COMPLETED'
     """,
@@ -247,7 +251,12 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.epochs_total')::INTEGER as epochs_total,
             json_extract_string(data, '$.reason') as reason,
             json_extract_string(data, '$.initiator') as initiator,
-            json_extract(data, '$.auto_pruned')::BOOLEAN as auto_pruned
+            json_extract(data, '$.auto_pruned')::BOOLEAN as auto_pruned,
+            json_extract_string(data, '$.morphology_proposal_id') as morphology_proposal_id,
+            json_extract_string(data, '$.morphology_verdict_id') as morphology_verdict_id,
+            json_extract_string(data, '$.morphology_mutation_id') as morphology_mutation_id,
+            json_extract_string(data, '$.rng_stream') as rng_stream,
+            json_extract(data, '$.rng_seed')::BIGINT as rng_seed
         FROM raw_events
         WHERE event_type IN (
             'SEED_GERMINATED',
@@ -255,6 +264,37 @@ VIEW_DEFINITIONS: dict[str, str] = {
             'SEED_FOSSILIZED',
             'SEED_PRUNED'
         )
+    """,
+    "morphology_causal_log": """
+        CREATE OR REPLACE VIEW morphology_causal_log AS
+        SELECT
+            event_id,
+            timestamp,
+            run_dir,
+            group_id,
+            epoch,
+            severity,
+            message,
+            json_extract_string(data, '$.phase') as phase,
+            json_extract(data, '$.env_id')::INTEGER as env_id,
+            json_extract_string(data, '$.slot_id') as slot_id,
+            json_extract_string(data, '$.operation') as operation,
+            json_extract_string(data, '$.action_id') as action_id,
+            json_extract_string(data, '$.proposal_id') as proposal_id,
+            json_extract_string(data, '$.verdict_id') as verdict_id,
+            json_extract_string(data, '$.mutation_id') as mutation_id,
+            json_extract_string(data, '$.observation_hash') as observation_hash,
+            json_extract_string(data, '$.rng_stream') as rng_stream,
+            json_extract(data, '$.rng_seed')::BIGINT as rng_seed,
+            json_extract_string(data, '$.topology') as topology,
+            json_extract_string(data, '$.blueprint_id') as blueprint_id,
+            json_extract(data, '$.governor_approved')::BOOLEAN as governor_approved,
+            json_extract_string(data, '$.governor_reason') as governor_reason,
+            json_extract_string(data, '$.governor_blocked_factor') as governor_blocked_factor,
+            json_extract(data, '$.watch_window_evidence')::DOUBLE as watch_window_evidence,
+            json_extract_string(data, '$.linked_event_id') as linked_event_id
+        FROM raw_events
+        WHERE event_type = 'MORPHOLOGY_CAUSAL_LOG'
     """,
     "decisions": """
         CREATE OR REPLACE VIEW decisions AS

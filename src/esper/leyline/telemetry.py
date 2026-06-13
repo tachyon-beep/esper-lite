@@ -99,6 +99,7 @@ class TelemetryEventType(Enum):
 
     # === Governor Events (Tolaria) ===
     GOVERNOR_ROLLBACK = auto()        # Emergency rollback executed
+    MORPHOLOGY_CAUSAL_LOG = auto()    # Proposal/verdict/mutation/watch causal log row
 
     # === Training Progress Events ===
     TRAINING_STARTED = auto()         # Training run initialized
@@ -464,6 +465,10 @@ class TrainingStartedPayload:
     compile_backend: str | None = None
     compile_mode: str | None = None
 
+    # Proof-control identity for blueprint-health baseline cohorts.
+    proof_baseline_mode: str | None = None
+    proof_baseline_pair_id: str | None = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainingStartedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -501,6 +506,12 @@ class TrainingStartedPayload:
             compile_enabled=data.get("compile_enabled", False),
             compile_backend=data.get("compile_backend"),
             compile_mode=data.get("compile_mode"),
+            proof_baseline_mode=data["proof_baseline_mode"]
+            if "proof_baseline_mode" in data
+            else None,
+            proof_baseline_pair_id=data["proof_baseline_pair_id"]
+            if "proof_baseline_pair_id" in data
+            else None,
         )
 
 
@@ -758,6 +769,7 @@ class PPOUpdatePayload:
     head_alpha_speed_grad_norm: float | None = None
     head_alpha_curve_grad_norm: float | None = None
     head_op_grad_norm: float | None = None
+    head_value_grad_norm: float | None = None
     head_style_entropy: float | None = None
     head_tempo_entropy: float | None = None
     head_alpha_target_entropy: float | None = None
@@ -785,6 +797,7 @@ class PPOUpdatePayload:
     head_alpha_speed_gradient_state: str | None = None
     head_alpha_curve_gradient_state: str | None = None
     head_op_gradient_state: str | None = None
+    head_value_gradient_state: str | None = None
 
     # Per-head PPO ratio max (Policy V2 - multi-head ratio explosion detection)
     # Individual head ratios can look healthy while joint ratio exceeds clip range
@@ -946,6 +959,7 @@ class PPOUpdatePayload:
             head_alpha_speed_grad_norm=data.get("head_alpha_speed_grad_norm"),
             head_alpha_curve_grad_norm=data.get("head_alpha_curve_grad_norm"),
             head_op_grad_norm=data.get("head_op_grad_norm"),
+            head_value_grad_norm=data.get("head_value_grad_norm"),
             head_style_entropy=data.get("head_style_entropy"),
             head_tempo_entropy=data.get("head_tempo_entropy"),
             head_alpha_target_entropy=data.get("head_alpha_target_entropy"),
@@ -969,6 +983,7 @@ class PPOUpdatePayload:
             head_alpha_speed_gradient_state=data.get("head_alpha_speed_gradient_state"),
             head_alpha_curve_gradient_state=data.get("head_alpha_curve_gradient_state"),
             head_op_gradient_state=data.get("head_op_gradient_state"),
+            head_value_gradient_state=data.get("head_value_gradient_state"),
             # OPTIONAL: Per-head ratio max (only for factored policies, defaults to 1.0).
             head_slot_ratio_max=data.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=data.get("head_blueprint_ratio_max", 1.0),
@@ -1110,6 +1125,11 @@ class SeedGerminatedPayload:
     epochs_in_stage: int = 0
     blend_tempo_epochs: int = 5
     alpha_curve: str = "LINEAR"
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedGerminatedPayload":
@@ -1129,6 +1149,17 @@ class SeedGerminatedPayload:
             has_exploding=data.get("has_exploding", False),
             epochs_in_stage=data.get("epochs_in_stage", 0),
             blend_tempo_epochs=data.get("blend_tempo_epochs", 5),
+            morphology_proposal_id=data["morphology_proposal_id"]
+            if "morphology_proposal_id" in data
+            else None,
+            morphology_verdict_id=data["morphology_verdict_id"]
+            if "morphology_verdict_id" in data
+            else None,
+            morphology_mutation_id=data["morphology_mutation_id"]
+            if "morphology_mutation_id" in data
+            else None,
+            rng_stream=data["rng_stream"] if "rng_stream" in data else None,
+            rng_seed=data["rng_seed"] if "rng_seed" in data else None,
         )
 
 
@@ -1160,6 +1191,11 @@ class SeedStageChangedPayload:
     # Alpha curve - always present (policy always samples), but only causally
     # relevant during BLENDING. See simic/agent/advantages.py for causal masking.
     alpha_curve: str = "LINEAR"
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedStageChangedPayload":
@@ -1180,6 +1216,17 @@ class SeedStageChangedPayload:
             grad_ratio=data.get("grad_ratio", 0.0),
             has_vanishing=data.get("has_vanishing", False),
             has_exploding=data.get("has_exploding", False),
+            morphology_proposal_id=data["morphology_proposal_id"]
+            if "morphology_proposal_id" in data
+            else None,
+            morphology_verdict_id=data["morphology_verdict_id"]
+            if "morphology_verdict_id" in data
+            else None,
+            morphology_mutation_id=data["morphology_mutation_id"]
+            if "morphology_mutation_id" in data
+            else None,
+            rng_stream=data["rng_stream"] if "rng_stream" in data else None,
+            rng_seed=data["rng_seed"] if "rng_seed" in data else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1201,6 +1248,11 @@ class SeedStageChangedPayload:
             "has_vanishing": self.has_vanishing,
             "has_exploding": self.has_exploding,
             "alpha_curve": self.alpha_curve,
+            "morphology_proposal_id": self.morphology_proposal_id,
+            "morphology_verdict_id": self.morphology_verdict_id,
+            "morphology_mutation_id": self.morphology_mutation_id,
+            "rng_stream": self.rng_stream,
+            "rng_seed": self.rng_seed,
         }
 
 
@@ -1228,6 +1280,11 @@ class SeedFossilizedPayload:
     epochs_total: int = 0
     counterfactual: float | None = None
     blending_delta: float | None = None  # Accuracy change during blending stage
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedFossilizedPayload":
@@ -1246,6 +1303,17 @@ class SeedFossilizedPayload:
             # OPTIONAL: Counterfactual/blending analysis (None = not computed).
             counterfactual=data.get("counterfactual"),
             blending_delta=data.get("blending_delta"),
+            morphology_proposal_id=data["morphology_proposal_id"]
+            if "morphology_proposal_id" in data
+            else None,
+            morphology_verdict_id=data["morphology_verdict_id"]
+            if "morphology_verdict_id" in data
+            else None,
+            morphology_mutation_id=data["morphology_mutation_id"]
+            if "morphology_mutation_id" in data
+            else None,
+            rng_stream=data["rng_stream"] if "rng_stream" in data else None,
+            rng_seed=data["rng_seed"] if "rng_seed" in data else None,
         )
 
 
@@ -1274,6 +1342,11 @@ class SeedPrunedPayload:
     counterfactual: float | None = None
     blending_delta: float | None = None  # Accuracy change during blending stage
     initiator: str = "policy"  # Who initiated the prune: "policy", "governor", "auto"
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedPrunedPayload":
@@ -1294,6 +1367,17 @@ class SeedPrunedPayload:
             blending_delta=data.get("blending_delta"),
             # OPTIONAL: Initiator context (defaults to policy).
             initiator=data.get("initiator", "policy"),
+            morphology_proposal_id=data["morphology_proposal_id"]
+            if "morphology_proposal_id" in data
+            else None,
+            morphology_verdict_id=data["morphology_verdict_id"]
+            if "morphology_verdict_id" in data
+            else None,
+            morphology_mutation_id=data["morphology_mutation_id"]
+            if "morphology_mutation_id" in data
+            else None,
+            rng_stream=data["rng_stream"] if "rng_stream" in data else None,
+            rng_seed=data["rng_seed"] if "rng_seed" in data else None,
         )
 
 
@@ -1964,6 +2048,82 @@ GovernorPanicReason = Literal[
 ]
 
 
+MorphologyCausalLogPhase = Literal[
+    "proposal",
+    "verdict",
+    "mutation",
+    "watch",
+    "commit",
+    "rollback",
+    "fossilization",
+    "cooldown",
+    "audit",
+]
+
+
+@dataclass(slots=True, frozen=True)
+class MorphologyCausalLogPayload:
+    """Joinable causal log row for one lifecycle action.
+
+    Each row repeats the stable identity fields so telemetry consumers can join
+    proposal, governor verdict, mutation dispatch, watch evidence, and terminal
+    outcomes without relying on generic event UUIDs.
+    """
+
+    phase: MorphologyCausalLogPhase
+    env_id: int
+    slot_id: str
+    operation: str
+    action_id: str
+    proposal_id: str
+    verdict_id: str
+    mutation_id: str
+    observation_hash: str
+    rng_stream: str
+    rng_seed: int
+    topology: str
+    blueprint_id: str | None
+    governor_approved: bool | None = None
+    governor_reason: str | None = None
+    governor_blocked_factor: str | None = None
+    watch_window_evidence: float | None = None
+    linked_event_id: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MorphologyCausalLogPayload":
+        """Parse from dict. Raises KeyError on missing required identity fields."""
+        return cls(
+            phase=data["phase"],
+            env_id=data["env_id"],
+            slot_id=data["slot_id"],
+            operation=data["operation"],
+            action_id=data["action_id"],
+            proposal_id=data["proposal_id"],
+            verdict_id=data["verdict_id"],
+            mutation_id=data["mutation_id"],
+            observation_hash=data["observation_hash"],
+            rng_stream=data["rng_stream"],
+            rng_seed=data["rng_seed"],
+            topology=data["topology"],
+            blueprint_id=data["blueprint_id"],
+            governor_approved=data["governor_approved"]
+            if "governor_approved" in data
+            else None,
+            governor_reason=data["governor_reason"]
+            if "governor_reason" in data
+            else None,
+            governor_blocked_factor=data["governor_blocked_factor"]
+            if "governor_blocked_factor" in data
+            else None,
+            watch_window_evidence=data["watch_window_evidence"]
+            if "watch_window_evidence" in data
+            else None,
+            linked_event_id=data["linked_event_id"]
+            if "linked_event_id" in data
+            else None,
+        )
+
+
 @dataclass(slots=True, frozen=True)
 class GovernorRollbackPayload:
     """Payload for GOVERNOR_ROLLBACK telemetry events.
@@ -2046,6 +2206,7 @@ TelemetryPayload = (
     | PerformanceDegradationPayload
     | EpisodeOutcomePayload
     | GovernorRollbackPayload
+    | MorphologyCausalLogPayload
 )
 
 

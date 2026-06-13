@@ -176,60 +176,214 @@ def _calculate_value_warmup_steps(
     return value_warmup_batches * max(1, ppo_updates_per_batch)
 
 
+_PPO_MEAN_REDUCED_METRICS = frozenset({
+    "policy_loss",
+    "value_loss",
+    "entropy_floor_penalty",
+    "approx_kl",
+    "clip_fraction",
+    "clip_fraction_positive",
+    "clip_fraction_negative",
+    "explained_variance",
+    "entropy",
+    "ratio_mean",
+    "ratio_std",
+    "gradient_cv",
+    "forced_step_ratio",
+    "value_mean",
+    "return_mean",
+    "return_std",
+    "value_target_scale",
+    "pre_norm_advantage_mean",
+    "pre_norm_advantage_std",
+    "d5_pre_norm_advantage_std",
+    "advantage_mean",
+    "advantage_std",
+    "advantage_skewness",
+    "advantage_kurtosis",
+    "advantage_positive_ratio",
+    "v_return_correlation",
+    "td_error_mean",
+    "td_error_std",
+    "bellman_error",
+    "return_p10",
+    "return_p50",
+    "return_p90",
+    "return_variance",
+    "return_skewness",
+    "cuda_memory_allocated_gb",
+    "cuda_memory_reserved_gb",
+    "cuda_memory_peak_gb",
+    "cuda_memory_fragmentation",
+    "throughput_step_time_ms_sum",
+    "throughput_dataloader_wait_ms_sum",
+    "log_prob_min",
+    "log_prob_max",
+    "q_variance",
+    "q_spread",
+    "lstm_h_l2_total",
+    "lstm_c_l2_total",
+    "lstm_h_rms",
+    "lstm_c_rms",
+    "lstm_h_env_rms_mean",
+    "lstm_c_env_rms_mean",
+    "lstm_h_max",
+    "lstm_c_max",
+    "aux_contribution_loss",
+    "effective_aux_coef",
+    "aux_pred_variance",
+    "aux_explained_variance",
+    "aux_pred_target_correlation",
+})
+
+_PPO_MAX_REDUCED_METRICS = frozenset({
+    "ratio_max",
+    "value_max",
+    "value_std",
+    "pre_clip_grad_norm",
+    "lstm_h_env_rms_max",
+    "lstm_c_env_rms_max",
+})
+
+_PPO_MIN_REDUCED_METRICS = frozenset({
+    "ratio_min",
+    "value_min",
+    "early_stop_epoch",
+})
+
+_PPO_SUM_REDUCED_METRICS = frozenset({
+    "finiteness_gate_skip_count",
+    "usable_actor_timesteps",
+    "nan_grad_count",
+    "inf_grad_count",
+    "dead_layers",
+    "exploding_layers",
+})
+
+_PPO_ANY_REDUCED_METRICS = frozenset({
+    "ppo_update_performed",
+    "advantage_std_floored",
+    "lstm_has_nan",
+    "lstm_has_inf",
+})
+
+_PPO_FIRST_REDUCED_METRICS = frozenset({
+    "op_q_values",
+    "op_valid_mask",
+    "ratio_diagnostic",
+    "layer_gradient_health",
+    "conditional_head_entropies",
+})
+
+_PPO_APPEND_REDUCED_METRICS = frozenset({
+    "finiteness_gate_failures",
+})
+
+_PPO_HEAD_SERIES_MAX_REDUCED_METRICS = frozenset({
+    "head_entropies",
+    "head_grad_norms",
+})
+
+_PPO_HEAD_SERIES_APPEND_REDUCED_METRICS = frozenset({
+    "head_learnable_fractions",
+})
+
+_PPO_HEAD_STATE_APPEND_REDUCED_METRICS = frozenset({
+    "head_gradient_states",
+})
+
+_PPO_HEAD_BOOL_OR_REDUCED_METRICS = frozenset({
+    "head_nan_detected",
+    "head_inf_detected",
+})
+
+
+def _aggregate_head_series_max(values: list[Any]) -> dict[str, list[float]]:
+    merged: dict[str, float] = {}
+    for update_dict in values:
+        for head, head_values in update_dict.items():
+            max_val = max(head_values)
+            if head not in merged or max_val > merged[head]:
+                merged[head] = max_val
+    return {head: [value] for head, value in merged.items()}
+
+
+def _aggregate_head_series_append(values: list[Any]) -> dict[str, list[Any]]:
+    merged: dict[str, list[Any]] = {}
+    for update_dict in values:
+        for head, head_values in update_dict.items():
+            if head not in merged:
+                merged[head] = []
+            merged[head].extend(head_values)
+    return merged
+
+
+def _aggregate_head_states(values: list[Any]) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for update_dict in values:
+        for head, states in update_dict.items():
+            if head not in merged:
+                merged[head] = []
+            merged[head].extend(states)
+    return merged
+
+
+def _aggregate_head_bool_or(values: list[Any]) -> dict[str, bool]:
+    merged: dict[str, bool] = {}
+    for update_dict in values:
+        for head, flag in update_dict.items():
+            merged[head] = bool(flag) or (head in merged and merged[head])
+    return merged
+
+
+def _aggregate_list_append(values: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    for update_list in values:
+        merged.extend(update_list)
+    return merged
+
+
 def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, Any]:
-    """Aggregate metrics across multiple PPO updates for a single batch."""
+    """Aggregate metrics across multiple PPO updates using declared reducers."""
     if not update_metrics:
         return {}
 
     aggregated: dict[str, Any] = {}
-    keys = {k for metrics in update_metrics for k in metrics.keys()}
+    keys = {key for metrics in update_metrics for key in metrics}
     for key in keys:
-        values: list[Any] = [
-            metrics.get(key)
-            for metrics in update_metrics
-            if key in metrics and metrics.get(key) is not None
-        ]
+        values: list[Any] = []
+        for metrics in update_metrics:
+            if key in metrics:
+                value = metrics[key]  # type: ignore[literal-required]
+                if value is not None:
+                    values.append(value)
         if not values:
             continue
-        if key == "ratio_max" or key.endswith("_ratio_max"):
-            # All ratio max fields (ratio_max, head_*_ratio_max, joint_ratio_max)
-            # should take the maximum across PPO updates, not average
-            aggregated[key] = max(values)
-        elif key == "ratio_min":
-            aggregated[key] = min(values)
-        elif key == "value_min":
-            aggregated[key] = min(values)
-        elif key == "value_max":
-            aggregated[key] = max(values)
-        elif key == "value_mean":
-            # Average of means across environments
+
+        if key in _PPO_MEAN_REDUCED_METRICS:
             aggregated[key] = sum(values) / len(values)
-        elif key == "value_std":
-            # Cannot simply average std - take max as conservative approximation
-            # (proper solution requires pooled variance with means, but max ensures
-            # we don't underestimate variance which could mask instability)
+        elif key in _PPO_MAX_REDUCED_METRICS or key.endswith("_ratio_max"):
             aggregated[key] = max(values)
-        elif key == "early_stop_epoch":
+        elif key in _PPO_MIN_REDUCED_METRICS:
             aggregated[key] = min(values)
-        elif key in ("head_entropies", "head_grad_norms"):
-            # Dict[head_name, List[float]] - merge lists from multiple PPO updates
-            # Take max per-head value across all updates (conservative for monitoring)
-            merged: dict[str, float] = {}
-            for update_dict in values:
-                if isinstance(update_dict, dict):
-                    for head, head_values in update_dict.items():
-                        if isinstance(head_values, list) and head_values:
-                            max_val = max(head_values)
-                            if head not in merged or max_val > merged[head]:
-                                merged[head] = max_val
-            # Return in format emitter expects: dict[head, list[float]]
-            aggregated[key] = {h: [v] for h, v in merged.items()}
-        elif isinstance(values[0], dict):
+        elif key in _PPO_SUM_REDUCED_METRICS:
+            aggregated[key] = sum(values)
+        elif key in _PPO_ANY_REDUCED_METRICS:
+            aggregated[key] = any(values)
+        elif key in _PPO_FIRST_REDUCED_METRICS:
             aggregated[key] = values[0]
-        elif isinstance(values[0], (int, float)):
-            aggregated[key] = sum(values) / len(values)
+        elif key in _PPO_APPEND_REDUCED_METRICS:
+            aggregated[key] = _aggregate_list_append(values)
+        elif key in _PPO_HEAD_SERIES_MAX_REDUCED_METRICS:
+            aggregated[key] = _aggregate_head_series_max(values)
+        elif key in _PPO_HEAD_SERIES_APPEND_REDUCED_METRICS:
+            aggregated[key] = _aggregate_head_series_append(values)
+        elif key in _PPO_HEAD_STATE_APPEND_REDUCED_METRICS:
+            aggregated[key] = _aggregate_head_states(values)
+        elif key in _PPO_HEAD_BOOL_OR_REDUCED_METRICS:
+            aggregated[key] = _aggregate_head_bool_or(values)
         else:
-            aggregated[key] = values[0]
+            raise KeyError(f"No PPO metric reducer declared for '{key}'")
     return aggregated
 
 
@@ -514,6 +668,8 @@ def train_ppo_vectorized(
     torch_profiler_profile_memory: bool = False,
     torch_profiler_with_stack: bool = False,
     torch_profiler_summary: bool = False,
+    proof_baseline_mode: str | None = None,
+    proof_baseline_pair_id: str | None = None,
 ) -> tuple[PPOAgent, list[dict[str, Any]]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -952,6 +1108,8 @@ def train_ppo_vectorized(
                 compile_mode=agent.compile_mode
                 if agent.compile_mode != "off"
                 else None,
+                proof_baseline_mode=proof_baseline_mode,
+                proof_baseline_pair_id=proof_baseline_pair_id,
             ),
         )
     )

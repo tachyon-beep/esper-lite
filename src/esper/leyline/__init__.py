@@ -318,7 +318,17 @@ from esper.leyline.factored_actions import (
     TempoAction,
     get_action_head_sizes,
 )
-from esper.leyline.lifecycle_mutation import LifecycleMutationVerdict
+from esper.leyline.lifecycle_mutation import (
+    LifecycleMutationCausalContext,
+    LifecycleMutationHealthSnapshot,
+    LifecycleMutationVerdict,
+)
+from esper.leyline.proof_baselines import (
+    REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES,
+    ProofBaselineCohort,
+    ProofBaselineMode,
+    ProofBaselinePlan,
+)
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
 
@@ -735,6 +745,8 @@ from esper.leyline.telemetry import (
     PerformanceDegradationPayload,
     EpisodeOutcomePayload,
     GovernorRollbackPayload,
+    MorphologyCausalLogPhase,
+    MorphologyCausalLogPayload,
     GovernorPanicReason,
 )
 
@@ -856,6 +868,12 @@ __all__ = [
     "compute_availability_masks",
     "LifecycleOp",
     "LifecycleMutationVerdict",
+    "LifecycleMutationCausalContext",
+    "LifecycleMutationHealthSnapshot",
+    "ProofBaselineCohort",
+    "ProofBaselineMode",
+    "ProofBaselinePlan",
+    "REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
     "NUM_ALPHA_SPEEDS",
@@ -1045,6 +1063,8 @@ __all__ = [
     "PerformanceDegradationPayload",
     "EpisodeOutcomePayload",
     "GovernorRollbackPayload",
+    "MorphologyCausalLogPhase",
+    "MorphologyCausalLogPayload",
     "GovernorPanicReason",
 
     # Alpha controller

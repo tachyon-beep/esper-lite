@@ -90,6 +90,46 @@ def test_epoch_completed_payload_accepts_null_observation_stats() -> None:
     assert payload.observation_stats is None
 
 
+def test_morphology_causal_log_payload_requires_joinable_identity() -> None:
+    """Morphology causal logs must join proposal, verdict, mutation, watch, and terminal evidence."""
+    from esper.leyline.telemetry import MorphologyCausalLogPayload
+
+    payload = MorphologyCausalLogPayload.from_dict(
+        {
+            "phase": "watch",
+            "env_id": 2,
+            "slot_id": "r0c0",
+            "operation": "GERMINATE",
+            "action_id": "morph-b3-e4-env2-r0c0-op1",
+            "proposal_id": "morph-b3-e4-env2-r0c0-op1-proposal",
+            "verdict_id": "morph-b3-e4-env2-r0c0-op1-verdict",
+            "mutation_id": "morph-b3-e4-env2-r0c0-op1-mutation",
+            "observation_hash": "obs-abc123",
+            "rng_stream": "simic.lifecycle.env2",
+            "rng_seed": 123456789,
+            "topology": "cnn",
+            "blueprint_id": "conv_light",
+            "governor_approved": True,
+            "governor_reason": "approved",
+            "governor_blocked_factor": None,
+            "watch_window_evidence": 1.25,
+            "linked_event_id": "rollback-1",
+        }
+    )
+
+    assert payload.phase == "watch"
+    assert payload.action_id == "morph-b3-e4-env2-r0c0-op1"
+    assert payload.proposal_id.endswith("-proposal")
+    assert payload.verdict_id.endswith("-verdict")
+    assert payload.mutation_id.endswith("-mutation")
+    assert payload.observation_hash == "obs-abc123"
+    assert payload.rng_stream == "simic.lifecycle.env2"
+    assert payload.rng_seed == 123456789
+    assert payload.governor_approved is True
+    assert payload.watch_window_evidence == 1.25
+    assert payload.linked_event_id == "rollback-1"
+
+
 # =============================================================================
 # PPOUpdatePayload Extensions (per UX specialist enhancements plan)
 # =============================================================================

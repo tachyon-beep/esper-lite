@@ -28,6 +28,7 @@ def test_view_definitions_exist():
         "run_confounders",
         "episode_outcomes",
         "shapley_computed",
+        "morphology_causal_log",
     }
     assert set(VIEW_DEFINITIONS.keys()) == expected
 
@@ -71,6 +72,99 @@ def test_raw_events_includes_filename_and_run_dir(tmp_path):
     assert extracted_run_dir == "telemetry_2025-01-01_000000"
     assert filename.endswith("/telemetry_2025-01-01_000000/events.jsonl") or filename.endswith(
         "\\telemetry_2025-01-01_000000\\events.jsonl"
+    )
+
+
+def test_morphology_causal_log_view_extracts_joinable_fields(tmp_path):
+    """morphology_causal_log exposes stable action identity and proof evidence."""
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "causal-1",
+        "event_type": "MORPHOLOGY_CAUSAL_LOG",
+        "timestamp": "2026-06-13T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 7,
+        "group_id": "default",
+        "message": "Morphology watch evidence",
+        "data": {
+            "phase": "watch",
+            "env_id": 0,
+            "slot_id": "r0c0",
+            "operation": "GERMINATE",
+            "action_id": "morph-b1-e7-env0-r0c0-op1",
+            "proposal_id": "morph-b1-e7-env0-r0c0-op1-proposal",
+            "verdict_id": "morph-b1-e7-env0-r0c0-op1-verdict",
+            "mutation_id": "morph-b1-e7-env0-r0c0-op1-mutation",
+            "observation_hash": "obs-abc123",
+            "rng_stream": "simic.lifecycle.env0",
+            "rng_seed": 12345,
+            "topology": "cnn",
+            "blueprint_id": "conv_l",
+            "governor_approved": True,
+            "governor_reason": "approved",
+            "governor_blocked_factor": None,
+            "watch_window_evidence": 1.25,
+            "linked_event_id": "morph-b1-e7-env0-r0c0-op1-mutation",
+        },
+        "severity": "debug",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            run_dir,
+            epoch,
+            phase,
+            env_id,
+            slot_id,
+            operation,
+            action_id,
+            proposal_id,
+            verdict_id,
+            mutation_id,
+            observation_hash,
+            rng_stream,
+            rng_seed,
+            topology,
+            blueprint_id,
+            governor_approved,
+            governor_reason,
+            governor_blocked_factor,
+            watch_window_evidence,
+            linked_event_id
+        FROM morphology_causal_log
+        """
+    ).fetchone()
+
+    assert row == (
+        "test_run",
+        7,
+        "watch",
+        0,
+        "r0c0",
+        "GERMINATE",
+        "morph-b1-e7-env0-r0c0-op1",
+        "morph-b1-e7-env0-r0c0-op1-proposal",
+        "morph-b1-e7-env0-r0c0-op1-verdict",
+        "morph-b1-e7-env0-r0c0-op1-mutation",
+        "obs-abc123",
+        "simic.lifecycle.env0",
+        12345,
+        "cnn",
+        "conv_l",
+        True,
+        "approved",
+        None,
+        1.25,
+        "morph-b1-e7-env0-r0c0-op1-mutation",
     )
 
 
@@ -306,6 +400,7 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "head_alpha_speed_grad_norm": 1.6,
             "head_alpha_curve_grad_norm": 1.7,
             "head_op_grad_norm": 1.8,
+            "head_value_grad_norm": 1.9,
             "head_slot_learnable_fraction": 0.25,
             "head_blueprint_learnable_fraction": 0.0,
             "head_style_learnable_fraction": 0.5,
@@ -322,6 +417,7 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "head_alpha_speed_gradient_state": "finite",
             "head_alpha_curve_gradient_state": "finite",
             "head_op_gradient_state": "finite",
+            "head_value_gradient_state": "finite",
         },
         "severity": "info",
     }
@@ -340,13 +436,15 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             policy_loss,
             head_slot_entropy,
             head_op_grad_norm,
+            head_value_grad_norm,
             head_blueprint_learnable_fraction,
-            head_blueprint_gradient_state
+            head_blueprint_gradient_state,
+            head_value_gradient_state
         FROM ppo_updates
         """
     ).fetchone()
 
-    assert row == (42, "A", 7, 3, 0.1, 0.9, 1.8, 0.0, "not_learnable")
+    assert row == (42, "A", 7, 3, 0.1, 0.9, 1.8, 1.9, 0.0, "not_learnable", "finite")
 
 
 def test_run_confounders_view_surfaces_numerical_instability(tmp_path):
@@ -446,6 +544,11 @@ def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
                 "epochs_in_stage": 0,
                 "blend_tempo_epochs": 5,
                 "alpha_curve": "LINEAR",
+                "morphology_proposal_id": "morph-b1-e2-env0-r0c0-op1-proposal",
+                "morphology_verdict_id": "morph-b1-e2-env0-r0c0-op1-verdict",
+                "morphology_mutation_id": "morph-b1-e2-env0-r0c0-op1-mutation",
+                "rng_stream": "simic.lifecycle.env0",
+                "rng_seed": 42000,
             },
             "severity": "info",
         },
@@ -470,6 +573,11 @@ def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
                 "has_vanishing": False,
                 "has_exploding": False,
                 "alpha_curve": "LINEAR",
+                "morphology_proposal_id": "morph-b1-e3-env0-r0c0-op5-proposal",
+                "morphology_verdict_id": "morph-b1-e3-env0-r0c0-op5-verdict",
+                "morphology_mutation_id": "morph-b1-e3-env0-r0c0-op5-mutation",
+                "rng_stream": "simic.lifecycle.env0",
+                "rng_seed": 42001,
             },
             "severity": "info",
         },
@@ -493,6 +601,11 @@ def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
                 "counterfactual": None,
                 "blending_delta": None,
                 "initiator": "policy",
+                "morphology_proposal_id": "morph-b1-e4-env0-r0c0-op3-proposal",
+                "morphology_verdict_id": "morph-b1-e4-env0-r0c0-op3-verdict",
+                "morphology_mutation_id": "morph-b1-e4-env0-r0c0-op3-mutation",
+                "rng_stream": "simic.lifecycle.env0",
+                "rng_seed": 42002,
             },
             "severity": "info",
         },
@@ -504,16 +617,31 @@ def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
 
     rows = conn.execute(
         """
-        SELECT event_type, env_id, blueprint_id, params, grad_ratio, from_stage, to_stage, reason, initiator
+        SELECT
+            event_type, env_id, blueprint_id, params, grad_ratio, from_stage, to_stage,
+            reason, initiator, morphology_proposal_id, morphology_verdict_id,
+            morphology_mutation_id, rng_stream, rng_seed
         FROM seed_lifecycle
         ORDER BY event_type
         """
     ).fetchall()
 
     assert rows == [
-        ("SEED_GERMINATED", 0, "conv_l", 1024, 0.75, None, None, None, None),
-        ("SEED_PRUNED", 0, "conv_l", None, None, None, None, "policy_prune", "policy"),
-        ("SEED_STAGE_CHANGED", 0, None, None, 0.7, "TRAINING", "BLENDING", None, None),
+        (
+            "SEED_GERMINATED", 0, "conv_l", 1024, 0.75, None, None, None, None,
+            "morph-b1-e2-env0-r0c0-op1-proposal", "morph-b1-e2-env0-r0c0-op1-verdict",
+            "morph-b1-e2-env0-r0c0-op1-mutation", "simic.lifecycle.env0", 42000,
+        ),
+        (
+            "SEED_PRUNED", 0, "conv_l", None, None, None, None, "policy_prune", "policy",
+            "morph-b1-e4-env0-r0c0-op3-proposal", "morph-b1-e4-env0-r0c0-op3-verdict",
+            "morph-b1-e4-env0-r0c0-op3-mutation", "simic.lifecycle.env0", 42002,
+        ),
+        (
+            "SEED_STAGE_CHANGED", 0, None, None, 0.7, "TRAINING", "BLENDING", None, None,
+            "morph-b1-e3-env0-r0c0-op5-proposal", "morph-b1-e3-env0-r0c0-op5-verdict",
+            "morph-b1-e3-env0-r0c0-op5-mutation", "simic.lifecycle.env0", 42001,
+        ),
     ]
 
 

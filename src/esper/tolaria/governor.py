@@ -26,6 +26,7 @@ from esper.leyline import (
     MIN_GOVERNOR_HISTORY_SAMPLES,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
+    LifecycleMutationHealthSnapshot,
     LifecycleMutationVerdict,
     LifecycleOp,
     SeedStage,
@@ -105,20 +106,43 @@ class TolariaGovernor:
         event_id: str,
     ) -> LifecycleMutationVerdict:
         """Approve or veto a lifecycle mutation before Simic applies side effects."""
+        health_snapshot = LifecycleMutationHealthSnapshot(
+            operation=operation.name,
+            slot_id=slot_id,
+            blueprint_id=blueprint_id,
+            alpha_target=alpha_target,
+            alpha_speed_steps=alpha_speed_steps,
+            alpha_curve=alpha_curve,
+            val_loss=val_loss,
+            val_accuracy=val_accuracy,
+            seed_stage=seed_stage.name if seed_stage is not None else None,
+            total_params=total_params,
+            effective_seed_params=effective_seed_params,
+            max_seeds=max_seeds,
+            active_seed_count=active_seed_count,
+            cooldown_epochs_remaining=cooldown_epochs_remaining,
+            event_id=event_id,
+        )
         if not math.isfinite(val_loss):
             return LifecycleMutationVerdict(
                 approved=False,
                 reason=f"nonfinite validation loss before {operation.name}: {val_loss}",
+                blocked_factor="val_loss_finite",
+                health_snapshot=health_snapshot,
             )
         if not math.isfinite(val_accuracy):
             return LifecycleMutationVerdict(
                 approved=False,
                 reason=f"nonfinite validation accuracy before {operation.name}: {val_accuracy}",
+                blocked_factor="val_accuracy_finite",
+                health_snapshot=health_snapshot,
             )
         if cooldown_epochs_remaining < 0:
             return LifecycleMutationVerdict(
                 approved=False,
                 reason=f"negative cooldown for {slot_id} on {event_id}",
+                blocked_factor="cooldown_nonnegative",
+                health_snapshot=health_snapshot,
             )
         if max_seeds > 0 and active_seed_count > max_seeds:
             return LifecycleMutationVerdict(
@@ -127,21 +151,29 @@ class TolariaGovernor:
                     f"active seed count {active_seed_count} exceeds max_seeds "
                     f"{max_seeds} on {event_id}"
                 ),
+                blocked_factor="active_seed_capacity",
+                health_snapshot=health_snapshot,
             )
         if operation == LifecycleOp.GERMINATE and blueprint_id is None:
             return LifecycleMutationVerdict(
                 approved=False,
                 reason=f"germination proposal missing blueprint on {event_id}",
+                blocked_factor="blueprint_present",
+                health_snapshot=health_snapshot,
             )
         if operation == LifecycleOp.GERMINATE and seed_stage is not None:
             return LifecycleMutationVerdict(
                 approved=False,
                 reason=f"germination proposal targets occupied slot {slot_id}",
+                blocked_factor="slot_empty_for_germination",
+                health_snapshot=health_snapshot,
             )
         if operation == LifecycleOp.SET_ALPHA_TARGET and alpha_target is None:
             return LifecycleMutationVerdict(
                 approved=False,
                 reason=f"alpha retarget proposal missing alpha_target on {event_id}",
+                blocked_factor="alpha_target_present",
+                health_snapshot=health_snapshot,
             )
         if operation in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE) and (
             alpha_speed_steps is None or alpha_curve is None
@@ -149,9 +181,15 @@ class TolariaGovernor:
             return LifecycleMutationVerdict(
                 approved=False,
                 reason=f"alpha schedule proposal incomplete on {event_id}",
+                blocked_factor="alpha_schedule_complete",
+                health_snapshot=health_snapshot,
             )
 
-        return LifecycleMutationVerdict(approved=True, reason="approved")
+        return LifecycleMutationVerdict(
+            approved=True,
+            reason="approved",
+            health_snapshot=health_snapshot,
+        )
 
     def snapshot(self) -> None:
         """Save Last Known Good state to CPU memory to reduce GPU memory pressure.

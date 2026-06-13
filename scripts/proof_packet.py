@@ -10,6 +10,7 @@ from typing import Any
 import duckdb
 
 from esper.karn.mcp.views import create_views
+from esper.simic.training.proof_baselines import missing_required_baseline_modes
 
 
 LEARNABILITY_COLUMNS: tuple[str, ...] = (
@@ -29,6 +30,8 @@ LEARNABILITY_COLUMNS: tuple[str, ...] = (
     "head_alpha_speed_gradient_state",
     "head_alpha_curve_gradient_state",
     "head_op_gradient_state",
+    "head_value_grad_norm",
+    "head_value_gradient_state",
 )
 
 
@@ -52,7 +55,11 @@ def _missing_learnability_query() -> str:
     """
 
 
-def build_proof_packet(telemetry_dir: str) -> str:
+def build_proof_packet(
+    telemetry_dir: str,
+    *,
+    require_blueprint_health_baselines: bool = False,
+) -> str:
     """Build a markdown proof packet from telemetry."""
     conn = duckdb.connect(":memory:")
     try:
@@ -72,6 +79,18 @@ def build_proof_packet(telemetry_dir: str) -> str:
                 max_batches
             FROM runs
             ORDER BY started_at, run_dir, group_id
+            """,
+        )
+        baseline_rows = _rows(
+            conn,
+            """
+            SELECT
+                proof_baseline_mode,
+                COUNT(*) AS run_count
+            FROM runs
+            WHERE proof_baseline_mode IS NOT NULL
+            GROUP BY proof_baseline_mode
+            ORDER BY proof_baseline_mode
             """,
         )
         lifecycle_rows = _rows(
@@ -130,7 +149,18 @@ def build_proof_packet(telemetry_dir: str) -> str:
     finally:
         conn.close()
 
-    verdict = "BLOCKED" if blocking_confounders or missing_learnability else "REVIEW"
+    observed_baseline_modes = tuple(row["proof_baseline_mode"] for row in baseline_rows)
+    missing_baselines = (
+        missing_required_baseline_modes(observed_baseline_modes)
+        if require_blueprint_health_baselines
+        else ()
+    )
+
+    verdict = (
+        "BLOCKED"
+        if blocking_confounders or missing_learnability or missing_baselines
+        else "REVIEW"
+    )
     lines = [
         "# Reward-Efficiency Proof Packet",
         "",
@@ -213,6 +243,24 @@ def build_proof_packet(telemetry_dir: str) -> str:
     else:
         lines.append("- PPO updates include per-head learnability telemetry.")
 
+    lines.extend(["", "## Blueprint-Health Baselines", ""])
+    if require_blueprint_health_baselines:
+        if baseline_rows:
+            for row in baseline_rows:
+                lines.append(
+                    "- "
+                    f"`{row['proof_baseline_mode']}`: runs={row['run_count']}"
+                )
+        else:
+            lines.append("- No proof baseline cohort identity found in run metadata.")
+        if missing_baselines:
+            for mode in missing_baselines:
+                lines.append(f"- BLOCKING missing required proof baseline `{mode}`")
+        else:
+            lines.append("- All required blueprint-health proof baselines are present.")
+    else:
+        lines.append("- Blueprint-health baseline gate was not requested.")
+
     lines.extend(["", "## Lifecycle Efficiency", ""])
     if lifecycle_rows:
         for row in lifecycle_rows:
@@ -255,9 +303,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate Esper proof packet markdown")
     parser.add_argument("--telemetry-dir", required=True, help="Telemetry root containing */events.jsonl")
     parser.add_argument("--output", required=True, help="Markdown output path")
+    parser.add_argument(
+        "--require-blueprint-health-baselines",
+        action="store_true",
+        help="Block proof verdicts unless all blueprint-health baseline cohorts are present",
+    )
     args = parser.parse_args()
 
-    packet = build_proof_packet(args.telemetry_dir)
+    packet = build_proof_packet(
+        args.telemetry_dir,
+        require_blueprint_health_baselines=args.require_blueprint_health_baselines,
+    )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(packet)
