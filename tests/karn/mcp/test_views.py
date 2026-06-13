@@ -513,6 +513,97 @@ def test_run_confounders_view_surfaces_numerical_instability(tmp_path):
     )
 
 
+def test_run_confounders_view_surfaces_integrity_confounders(tmp_path):
+    """run_confounders must surface rollback, reward-hacking, and degradation
+    as proof-blocking confounders (KARN-PROOF-002)."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    events = [
+        {
+            "event_id": "rollback-1",
+            "event_type": "GOVERNOR_ROLLBACK",
+            "timestamp": datetime.now().isoformat(),
+            "epoch": 5,
+            "group_id": "treatment",
+            "data": {
+                "env_id": 1,
+                "device": "cpu",
+                "reason": "governor_nan",
+                "episode_idx": 5,
+            },
+            "severity": "error",
+        },
+        {
+            "event_id": "hack-1",
+            "event_type": "REWARD_HACKING_SUSPECTED",
+            "timestamp": datetime.now().isoformat(),
+            "epoch": 6,
+            "group_id": "treatment",
+            "data": {
+                "pattern": "attribution_ratio",
+                "slot_id": "r0c0",
+                "seed_id": "seed-1",
+                "seed_contribution": 0.9,
+                "total_improvement": 0.1,
+                "ratio": 9.0,
+                "threshold": 2.0,
+            },
+            "severity": "warning",
+        },
+        {
+            "event_id": "degrade-1",
+            "event_type": "PERFORMANCE_DEGRADATION",
+            "timestamp": datetime.now().isoformat(),
+            "epoch": 7,
+            "group_id": "treatment",
+            "data": {
+                "env_id": 2,
+                "current_acc": 40.0,
+                "rolling_avg_acc": 80.0,
+                "drop_percent": 50.0,
+                "threshold_percent": 20.0,
+                "episode_idx": 7,
+            },
+            "severity": "warning",
+        },
+    ]
+    events_file.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    rows = conn.execute(
+        """
+        SELECT event_type, proof_blocking, detail, episode
+        FROM run_confounders
+        ORDER BY event_type
+        """
+    ).fetchall()
+
+    by_type = {row[0]: row for row in rows}
+    assert set(by_type) == {
+        "GOVERNOR_ROLLBACK",
+        "REWARD_HACKING_SUSPECTED",
+        "PERFORMANCE_DEGRADATION",
+    }
+    # All three must be proof-blocking.
+    for row in rows:
+        assert row[1] is True, f"{row[0]} should be proof_blocking"
+
+    # Each surfaces a human-readable detail (never a bare NULL).
+    assert "governor_nan" in by_type["GOVERNOR_ROLLBACK"][2]
+    assert "attribution_ratio" in by_type["REWARD_HACKING_SUSPECTED"][2]
+    assert "performance degradation" in by_type["PERFORMANCE_DEGRADATION"][2]
+
+    # episode is coalesced from $.episode_idx for rollback/degradation.
+    assert by_type["GOVERNOR_ROLLBACK"][3] == 5
+    assert by_type["PERFORMANCE_DEGRADATION"][3] == 7
+
+
 def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
     """seed_lifecycle view should align with typed seed lifecycle payload schemas."""
     from datetime import datetime

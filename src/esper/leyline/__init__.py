@@ -789,7 +789,7 @@ from esper.leyline.task_config import TaskConfig
 from esper.leyline.reward_config import LossRewardConfig
 
 # Episode outcome (cross-subsystem Pareto analysis)
-from esper.leyline.episode_outcome import EpisodeOutcome
+from esper.leyline.episode_outcome import EpisodeOutcome, MAX_PARAM_RATIO_REF
 
 # Output protocol (telemetry backend contract)
 from esper.leyline.output_protocol import OutputBackend
@@ -1098,6 +1098,7 @@ __all__ = [
 
     # Episode outcome (Pareto analysis)
     "EpisodeOutcome",
+    "MAX_PARAM_RATIO_REF",
 
     # Output protocol (telemetry backends)
     "OutputBackend",

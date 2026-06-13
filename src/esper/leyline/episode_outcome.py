@@ -18,20 +18,35 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Worst-acceptable param_ratio for Pareto hypervolume reference points.
+# param_ratio is the growth multiple total/host (1.0 = no growth). The reference
+# (worst-case) point sits at 2.0 = the model has doubled in size; episodes whose
+# growth meets or exceeds this contribute nothing to the dominated hypervolume.
+MAX_PARAM_RATIO_REF: float = 2.0
+
+
 @dataclass(frozen=True)
 class EpisodeOutcome:
     """Multi-objective outcome for Pareto analysis.
 
     Captures the key metrics we're optimizing:
     - final_accuracy: Task performance (higher = better)
-    - param_ratio: Parameter efficiency (lower = better)
+    - param_ratio: Parameter growth ratio (lower = better)
     - stability_score: Training stability (higher = better)
     """
 
     env_id: int
     episode_idx: int
     final_accuracy: float
-    param_ratio: float  # total_params / host_params
+    # param_ratio = total_params / host_params. This is the single canonical
+    # semantic for the field across producer (simic), contract (leyline), Karn
+    # views/SQL, Pareto analysis, and the proof packet. It is a growth multiple,
+    # NOT an overage:
+    #   1.0 = no growth (total == host)
+    #   1.2 = 20% growth (total is 1.2x the host)
+    # "minimize" therefore means "prefer less parameter growth"; accuracy ROI is
+    # final_accuracy / param_ratio (accuracy per unit of grown model size).
+    param_ratio: float
     num_fossilized: int
     num_contributing_fossilized: int  # Seeds that contributed to learning
     episode_reward: float  # Total reward for the episode
@@ -50,7 +65,7 @@ class EpisodeOutcome:
         - stability_score
 
         Objectives (lower is better):
-        - param_ratio
+        - param_ratio (growth multiple total/host; 1.0 = no growth)
         """
         # Check: self >= other on all objectives
         geq_accuracy = self.final_accuracy >= other.final_accuracy
@@ -84,4 +99,4 @@ class EpisodeOutcome:
         }
 
 
-__all__ = ["EpisodeOutcome"]
+__all__ = ["EpisodeOutcome", "MAX_PARAM_RATIO_REF"]

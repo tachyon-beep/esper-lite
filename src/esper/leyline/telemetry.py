@@ -2021,7 +2021,8 @@ class EpisodeOutcomePayload:
 
     Captures multi-objective outcomes for Pareto analysis:
     - final_accuracy: Task performance (higher = better)
-    - param_ratio: Parameter efficiency (lower = better)
+    - param_ratio: Parameter growth ratio total_params / host_params
+      (lower = better; 1.0 = no growth, 1.2 = 20% growth)
     - stability_score: Training stability (higher = better)
 
     Note: env_id may be -1 when emitted from slots (Kasmina), which don't
@@ -2033,7 +2034,7 @@ class EpisodeOutcomePayload:
     env_id: int  # -1 = sentinel (replaced by emit_with_env_context)
     episode_idx: int
     final_accuracy: float
-    param_ratio: float  # total_params / host_params
+    param_ratio: float  # total_params / host_params; 1.0 = no growth, 1.2 = 20% growth
     num_fossilized: int
     num_contributing_fossilized: int  # Seeds that contributed to learning
     episode_reward: float  # Total reward for the episode

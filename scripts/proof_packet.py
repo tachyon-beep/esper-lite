@@ -9,7 +9,7 @@ from typing import Any
 
 import duckdb
 
-from esper.karn.mcp.views import create_views
+from esper.karn.mcp.views import create_views, scan_ingestion_integrity
 from esper.simic.training.proof_baselines import missing_required_baseline_modes
 
 
@@ -61,6 +61,11 @@ def build_proof_packet(
     require_blueprint_health_baselines: bool = False,
 ) -> str:
     """Build a markdown proof packet from telemetry."""
+    # FAIL CLOSED on ingestion corruption: the raw_events view ingests with
+    # ignore_errors=true, silently dropping malformed JSONL. Scan the files
+    # independently first so a corrupt line cannot vanish from the proof.
+    ingestion = scan_ingestion_integrity(telemetry_dir)
+
     conn = duckdb.connect(":memory:")
     try:
         create_views(conn, telemetry_dir)
@@ -156,9 +161,25 @@ def build_proof_packet(
         else ()
     )
 
+    # FAIL CLOSED gates: a proof packet must not assign a continue/revise/stop
+    # verdict when the proof-critical telemetry is absent or corrupt. Missing runs
+    # or outcomes mean there is nothing to prove; ingestion corruption means the
+    # evidence we DO see may be incomplete.
+    has_event_files = bool(runs) or bool(roi_rows) or not ingestion.is_clean
+    missing_runs = not runs
+    missing_outcomes = not roi_rows
+    ingestion_blocking = not ingestion.is_clean
+
     verdict = (
         "BLOCKED"
-        if blocking_confounders or missing_learnability or missing_baselines
+        if (
+            blocking_confounders
+            or missing_learnability
+            or missing_baselines
+            or ingestion_blocking
+            or missing_runs
+            or missing_outcomes
+        )
         else "REVIEW"
     )
     lines = [
@@ -167,9 +188,32 @@ def build_proof_packet(
         f"- Telemetry dir: `{telemetry_dir}`",
         f"- Verdict: `{verdict}`",
         "",
-        "## Cohorts",
+        "## Ingestion Integrity",
         "",
     ]
+
+    if not has_event_files:
+        lines.append(
+            "- BLOCKING empty telemetry: no `events.jsonl` files were found, so "
+            "there is no evidence to support a proof verdict."
+        )
+    elif ingestion_blocking:
+        lines.append(
+            "- BLOCKING malformed telemetry: "
+            f"{ingestion.malformed_count} JSONL line(s) failed to parse and were "
+            "silently dropped by ingestion. The proof cannot be trusted while "
+            "telemetry is corrupt."
+        )
+        for bad in ingestion.malformed_lines:
+            lines.append(
+                "  - "
+                f"run `{bad.run_dir}` file `{bad.file}` line {bad.line_number}: "
+                f"`{bad.snippet}`"
+            )
+    else:
+        lines.append("- All telemetry JSONL lines parsed successfully.")
+
+    lines.extend(["", "## Cohorts", ""])
 
     if runs:
         for row in runs:
@@ -181,7 +225,10 @@ def build_proof_packet(
                 f"episode_length={row['max_epochs']}"
             )
     else:
-        lines.append("- No `TRAINING_STARTED` events found.")
+        lines.append(
+            "- BLOCKING no `TRAINING_STARTED` events found: without run metadata "
+            "the proof cannot identify cohorts or reproduce the experiment."
+        )
 
     lines.extend(["", "## Reproduction Commands", ""])
     if runs:
@@ -284,7 +331,10 @@ def build_proof_packet(
                 f"mean_param_ratio={row['mean_param_ratio']}, mean_accuracy_roi={row['mean_accuracy_roi']}"
             )
     else:
-        lines.append("- No `EPISODE_OUTCOME` events found.")
+        lines.append(
+            "- BLOCKING no `EPISODE_OUTCOME` events found: there are no reward / "
+            "accuracy outcomes to compare, so no ROI verdict can be drawn."
+        )
 
     lines.extend(["", "## Decision", ""])
     if verdict == "BLOCKED":

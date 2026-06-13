@@ -20,7 +20,7 @@ def extract_pareto_frontier(outcomes: list["EpisodeOutcome"]) -> list["EpisodeOu
 
     Objectives considered:
     - final_accuracy: maximize
-    - param_ratio: minimize
+    - param_ratio: minimize (growth multiple total/host; 1.0 = no growth)
     - stability_score: maximize
 
     Args:
@@ -63,6 +63,8 @@ def compute_hypervolume_2d(
     Args:
         frontier: List of Pareto-optimal outcomes
         ref_point: (min_accuracy, max_param_ratio) - worst acceptable values.
+            param_ratio is the growth multiple total/host (1.0 = no growth), so
+            max_param_ratio is a growth ceiling above 1.0 (MAX_PARAM_RATIO_REF).
             Points at or below min_accuracy are excluded from the calculation.
 
     Returns:

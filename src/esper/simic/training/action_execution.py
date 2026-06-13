@@ -1542,8 +1542,7 @@ def execute_actions(
                 env_id=env_idx,
                 episode_idx=episodes_completed + env_idx,
                 final_accuracy=env_state.val_acc,
-                param_ratio=(model.total_params - host_params_baseline)
-                / max(1, host_params_baseline),
+                param_ratio=model.total_params / max(1, host_params_baseline),
                 num_fossilized=env_state.seeds_fossilized,
                 num_contributing_fossilized=env_state.contributing_fossilized,
                 episode_reward=env_total_rewards[env_idx],

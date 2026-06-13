@@ -5,8 +5,11 @@ Breaking changes to TelemetryEvent.data fields may require view updates.
 """
 from __future__ import annotations
 
-import duckdb
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
+
+import duckdb
 
 VIEW_DEFINITIONS: dict[str, str] = {
     "raw_events": """
@@ -525,23 +528,40 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.env_id')::INTEGER as env_id,
             event_type,
             json_extract_string(data, '$.anomaly_type') as anomaly_type,
-            json_extract(data, '$.episode')::INTEGER as episode,
+            -- episode: numerical/gradient anomalies carry $.episode; rollback and
+            -- degradation carry $.episode_idx; coalesce so every confounder
+            -- surfaces an episode index when one exists.
+            COALESCE(
+                json_extract(data, '$.episode')::INTEGER,
+                json_extract(data, '$.episode_idx')::INTEGER
+            ) as episode,
             json_extract(data, '$.batch')::INTEGER as batch,
             json_extract(data, '$.inner_epoch')::INTEGER as inner_epoch,
             json_extract(data, '$.total_episodes')::INTEGER as total_episodes,
-            json_extract_string(data, '$.detail') as detail,
-            CASE
-                WHEN event_type IN (
-                    'VALUE_COLLAPSE_DETECTED',
-                    'RATIO_EXPLOSION_DETECTED',
-                    'RATIO_COLLAPSE_DETECTED',
-                    'GRADIENT_ANOMALY',
-                    'GRADIENT_PATHOLOGY_DETECTED',
-                    'NUMERICAL_INSTABILITY_DETECTED'
-                )
-                THEN true
-                ELSE false
-            END as proof_blocking
+            -- detail: anomaly events ship $.detail; the proof-integrity confounders
+            -- ship their own descriptive fields. Build a human-readable detail per
+            -- event class so the proof ledger never prints a bare NULL.
+            CASE event_type
+                WHEN 'GOVERNOR_ROLLBACK' THEN
+                    'governor rollback: ' ||
+                    COALESCE(json_extract_string(data, '$.reason'), 'unknown reason')
+                WHEN 'REWARD_HACKING_SUSPECTED' THEN
+                    'reward hacking suspected (' ||
+                    COALESCE(json_extract_string(data, '$.pattern'), 'unknown pattern') ||
+                    ') slot=' || COALESCE(json_extract_string(data, '$.slot_id'), '?') ||
+                    ' seed=' || COALESCE(json_extract_string(data, '$.seed_id'), '?')
+                WHEN 'PERFORMANCE_DEGRADATION' THEN
+                    'performance degradation: drop ' ||
+                    COALESCE(json_extract_string(data, '$.drop_percent'), '?') ||
+                    '% (threshold ' ||
+                    COALESCE(json_extract_string(data, '$.threshold_percent'), '?') || '%)'
+                ELSE json_extract_string(data, '$.detail')
+            END as detail,
+            -- Every event surfaced by this view is a proof confounder and blocks
+            -- the proof verdict. Numerical/gradient pathologies, governor
+            -- rollbacks, reward-hacking suspicion, and performance degradation all
+            -- invalidate a clean reward-efficiency comparison.
+            true as proof_blocking
         FROM raw_events
         WHERE event_type IN (
             'VALUE_COLLAPSE_DETECTED',
@@ -549,7 +569,10 @@ VIEW_DEFINITIONS: dict[str, str] = {
             'RATIO_COLLAPSE_DETECTED',
             'GRADIENT_ANOMALY',
             'GRADIENT_PATHOLOGY_DETECTED',
-            'NUMERICAL_INSTABILITY_DETECTED'
+            'NUMERICAL_INSTABILITY_DETECTED',
+            'GOVERNOR_ROLLBACK',
+            'REWARD_HACKING_SUSPECTED',
+            'PERFORMANCE_DEGRADATION'
         )
     """,
     "episode_outcomes": """
@@ -658,6 +681,75 @@ def telemetry_has_event_files(telemetry_dir: str) -> bool:
     """Return True if the telemetry directory contains any events.jsonl files."""
     telemetry_path = Path(telemetry_dir)
     return any(telemetry_path.glob("*/events.jsonl"))
+
+
+@dataclass(frozen=True)
+class MalformedLine:
+    """A single malformed (non-JSON) line discovered in telemetry ingestion."""
+
+    run_dir: str
+    file: str
+    line_number: int  # 1-based line number within the file
+    snippet: str  # truncated raw content for human triage
+
+
+@dataclass(frozen=True)
+class IngestionIntegrity:
+    """Result of scanning telemetry JSONL files for malformed lines.
+
+    The raw_events DuckDB view ingests with ignore_errors=true, which silently
+    drops malformed rows. For a proof packet that must FAIL CLOSED, silent drops
+    are unacceptable: a single corrupt line could be the very EPISODE_OUTCOME or
+    confounder that would have changed the verdict. This scan re-reads the files
+    independently of DuckDB and surfaces every line that is not valid JSON so the
+    proof packet can BLOCK on ingestion corruption.
+    """
+
+    malformed_lines: list[MalformedLine] = field(default_factory=list)
+
+    @property
+    def malformed_count(self) -> int:
+        return len(self.malformed_lines)
+
+    @property
+    def is_clean(self) -> bool:
+        return not self.malformed_lines
+
+
+def _snippet(raw: str, *, limit: int = 120) -> str:
+    stripped = raw.rstrip("\n")
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[:limit] + "…"
+
+
+def scan_ingestion_integrity(telemetry_dir: str) -> IngestionIntegrity:
+    """Scan every events.jsonl line for JSON validity.
+
+    Blank lines (whitespace only) are ignored — they are not data and DuckDB's
+    newline-delimited reader skips them too. Every other line that fails to parse
+    as JSON is recorded with its file and 1-based line number.
+    """
+    telemetry_path = Path(telemetry_dir)
+    malformed: list[MalformedLine] = []
+    for events_file in sorted(telemetry_path.glob("*/events.jsonl")):
+        run_dir = events_file.parent.name
+        with events_file.open("r", encoding="utf-8") as handle:
+            for line_number, raw in enumerate(handle, start=1):
+                if not raw.strip():
+                    continue
+                try:
+                    json.loads(raw)
+                except json.JSONDecodeError:
+                    malformed.append(
+                        MalformedLine(
+                            run_dir=run_dir,
+                            file=str(events_file),
+                            line_number=line_number,
+                            snippet=_snippet(raw),
+                        )
+                    )
+    return IngestionIntegrity(malformed_lines=malformed)
 
 
 def _create_empty_raw_events_view(conn: duckdb.DuckDBPyConnection) -> None:

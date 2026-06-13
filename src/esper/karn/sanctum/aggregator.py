@@ -52,6 +52,7 @@ from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 from esper.leyline import (
     DEFAULT_EPISODE_LENGTH,
     DEFAULT_GAMMA,
+    MAX_PARAM_RATIO_REF,
     TrainingStartedPayload,
     AnomalyDetectedPayload,
     EpochCompletedPayload,
@@ -1966,7 +1967,9 @@ class SanctumAggregator:
             return 0.0
 
         frontier = extract_pareto_frontier(self._episode_outcomes)
-        ref_point = (0.0, 1.0)  # (min_accuracy, max_param_ratio)
+        # param_ratio is the growth multiple total/host (1.0 = no growth), so the
+        # worst-acceptable param_ratio is a growth ceiling above 1.0, not 1.0.
+        ref_point = (0.0, MAX_PARAM_RATIO_REF)  # (min_accuracy, max_param_ratio)
         return compute_hypervolume_2d(frontier, ref_point)
 
     def compute_reward_health(self) -> RewardHealthData:
