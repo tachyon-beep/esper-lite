@@ -73,13 +73,13 @@ morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──�
 | Status | Count | Notes |
 |--------|-------|-------|
 | 🔴 Critical | 0 | New governor-integrity issues are high-priority proof blockers, not active Tier 0 mainline breakage |
-| Completed | 15 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch |
-| Ready | 12 | Implementation-ready plans |
+| Completed | 16 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) |
+| Ready | 11 | Implementation-ready plans |
 | In Progress | 1 | phase3-tinystories (85%) |
 | Planning | 10 | Active design workspaces, including governor-integrity, PPO oracle sandbox, and proof baseline controls |
 | Concept | 3 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
-| **Total Active** | **30** |
+| **Total Active** | **29** |
 
 ---
 
@@ -108,7 +108,7 @@ morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──�
 | telemetry-domain-sep | Telemetry Domain Separation | ready | high | L | medium | ~30% done (3/9 DRL fields), no event renaming |
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
 | blueprint-compiler | Blueprint Compiler (Phase 3 only) | ready | high | XL | medium | 0% - Correctly deferred until entropy stable |
-| training-perf-master | Training Pipeline Performance (Simic+Tolaria) | ready | high | L | medium | Drafted 2026-06-13 from multi-agent profiling+review; 5 phases (allocator/AMP-BF16/sync-removal/stream-pool/compile). Phase 0 (expandable_segments + TF32 + empty_cache removal) is near-zero-risk and unblocks 92%-frag runs on the 16GB cards. CRITICAL-1: rollout must be BF16 with the update |
+| training-perf-master | Training Pipeline Performance (Simic+Tolaria) | completed | high | L | medium | EXECUTED 2026-06-14 (→ completed/). Phase 0 (allocator/TF32/fragprobe), Phase 1 all 6 incl. CRITICAL-1 BLOCKER (FP32 masked-logit seam + BF16 symmetry, V0 joint_ratio<1e-3 GPU-validated) + sync folds, Phase 2 (FRAGMETRIC telemetry + stream pool + fenced del; CUDA_LAUNCH_BLOCKING clean, bit-identical val_acc), Phase 3 (DYN + pinned SNAP; GATE compile-works-without-sanctum validated). Deliberate calls: P2-RESET NO-GO (retries=0/ooms=0, frag cured), P3-HOST off (gated on RESET), P3-CLONE deferred (esper-lite-472b6477d2). Also deferred: op-sampler (esper-lite-05b4113bc1), carry-clamp (esper-lite-9827eb6bfe). Pending: real-run A/B wall-clock + TUI compile narrowing |
 
 ### Tier 2: Medium Priority (Next 2 Weeks)
 
