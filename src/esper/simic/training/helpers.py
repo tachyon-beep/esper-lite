@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import random
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, cast
 
 import torch
@@ -51,6 +52,26 @@ from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
 
 logger = logging.getLogger(__name__)
+
+
+def policy_amp_context(amp_enabled: bool, resolved_amp_dtype: torch.dtype | None):
+    """Autocast context for the PPO POLICY path (rollout sampling + bootstrap + update).
+
+    Both legs of the PPO importance ratio MUST share ONE precision decision or the ratio
+    becomes biased (CRITICAL-1). Routing every policy-path call through this single factory
+    makes that symmetry structural, not coincidental.
+
+    Precision policy: BF16 when (and only when) BF16 is the resolved AMP dtype; FP32
+    (``nullcontext``) otherwise -- INCLUDING the FP16 / pre-Ampere case. The PPO policy
+    optimizer wires NO GradScaler (the GradScaler is host-model-training-only), so an FP16
+    policy forward would underflow on the unscaled backward. Falling back to FP32 on
+    non-BF16 hardware is exactly the pre-P1-BF16 behavior (the policy update was always
+    FP32 then), so this is a correctness fix, not a degradation -- the host model still
+    trains FP16+GradScaler independently.
+    """
+    if amp_enabled and resolved_amp_dtype == torch.bfloat16 and torch.cuda.is_available():
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    return nullcontext()
 
 
 class _HasSeedParameters(Protocol):

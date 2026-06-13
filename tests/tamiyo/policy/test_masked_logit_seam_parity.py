@@ -12,6 +12,7 @@ the PPO importance ratio is unbiased even when the backbone runs in BF16.
         weights (the CRITICAL-1 symmetry falsifier).
 """
 
+import pytest
 import torch
 from torch.distributions import Categorical
 
@@ -213,3 +214,55 @@ def test_v2_cross_path_log_prob_symmetry_stochastic_op():
         log_probs_eval["op"][:, 0], res.log_probs["op"], rtol=1e-4, atol=1e-5,
         msg="stochastic-op ratio asymmetry (CRITICAL-1 regression)",
     )
+
+
+# --- V0: BF16-regime epoch-0 joint-ratio ~ 1 (CRITICAL-1 shipping gate, GPU) ----------
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="V0 BF16 gate requires CUDA")
+def test_v0_bf16_epoch0_joint_ratio_approx_one():
+    """The CRITICAL-1 falsifier in the SHIPPING precision: roll out under BF16 autocast,
+    store old_log_probs, then evaluate_actions under the SAME BF16 autocast on UNCHANGED
+    weights. The PPO joint ratio exp(sum_heads(new_lp - old_lp)) must be ~1 at epoch 0.
+
+    Before the rollout FP32 seam this diverged by ~7.8e-3/head; with the symmetric seam it
+    must hold to <1e-3 on the joint ratio. Run on cuda:0 (cuda:1 may be occupied).
+    """
+    device = torch.device("cuda:0")
+    torch.manual_seed(13)
+    slot_config = SlotConfig.default()
+    num_slots = len(slot_config.slot_ids)
+    policy = FactoredRecurrentActorCritic(state_dim=64, slot_config=slot_config).to(device)
+    policy.eval()
+
+    batch = 12
+    state = torch.randn(batch, 64, device=device)
+    blueprint_indices = torch.full((batch, num_slots), -1, dtype=torch.long, device=device)
+    floor = {"op": 0.05, "blueprint": 0.1, "tempo": 0.1}
+
+    # Rollout leg under BF16 autocast (the shipping regime).
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16), torch.inference_mode():
+        res = policy.get_action(
+            state, blueprint_indices, deterministic=False, probability_floor=floor
+        )
+    old_lp = {k: v.clone() for k, v in res.log_probs.items()}
+    actions_seq = {k: v.clone().unsqueeze(1) for k, v in res.actions.items()}
+
+    # Update leg under the SAME BF16 autocast, unchanged weights.
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        new_lp, _, _, _, _ = policy.evaluate_actions(
+            state.unsqueeze(1),
+            blueprint_indices.unsqueeze(1),
+            actions_seq,
+            probability_floor=floor,
+        )
+
+    # old_log_probs must be FP32 (the seam), proving no BF16 storage leak.
+    for k, v in old_lp.items():
+        assert v.dtype == torch.float32, f"old_log_prob[{k}] is {v.dtype}, expected float32"
+
+    # Joint ratio per sample = exp(sum_heads (new_lp - old_lp)).
+    delta = torch.zeros(batch, device=device)
+    for k in old_lp:
+        delta = delta + (new_lp[k][:, 0].float() - old_lp[k].float())
+    joint_ratio = torch.exp(delta)
+    max_dev = (joint_ratio - 1.0).abs().max().item()
+    assert max_dev < 1e-3, f"epoch-0 joint_ratio deviates by {max_dev:.2e} (>1e-3): biased ratio"

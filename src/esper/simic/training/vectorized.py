@@ -34,7 +34,6 @@ import threading
 from typing import Any, cast
 
 import torch
-import torch.amp as torch_amp
 import torch.nn as nn
 
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
@@ -82,6 +81,7 @@ from esper.simic.rewards import (
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.simic.telemetry.emitters import VectorizedEmitter
 from .env_factory import EnvFactoryContext
+from .helpers import policy_amp_context
 from .parallel_env_state import ParallelEnvState
 from .vectorized_trainer import VectorizedPPOTrainer
 
@@ -431,10 +431,10 @@ def _run_ppo_updates(
 
     for update_idx in range(updates_to_run):
         clear_buffer = update_idx == updates_to_run - 1
-        if use_amp and torch.cuda.is_available() and amp_dtype is not None:
-            with torch_amp.autocast(device_type="cuda", dtype=amp_dtype):  # type: ignore[attr-defined]
-                metrics = agent.update(clear_buffer=clear_buffer)
-        else:
+        # P1-BF16: the PPO policy update runs under the SAME shared policy-AMP context as
+        # the rollout legs (CRITICAL-1 symmetry, enforced structurally). BF16-or-FP32 only
+        # -- never unscaled FP16, since the policy optimizer wires no GradScaler.
+        with policy_amp_context(use_amp, amp_dtype):
             metrics = agent.update(clear_buffer=clear_buffer)
         if metrics:
             update_metrics.append(metrics)
@@ -1296,7 +1296,11 @@ def train_ppo_vectorized(
             else:
                 resolved_amp_dtype = torch.float16
                 use_grad_scaler = True
-                _logger.info("AMP using FP16 with GradScaler (pre-Ampere GPU)")
+                _logger.info(
+                    "AMP using FP16 with GradScaler for host-model training (pre-Ampere GPU). "
+                    "The PPO policy path runs in FP32 (policy_amp_context): the policy optimizer "
+                    "has no GradScaler, so FP16 there would underflow."
+                )
         else:
             raise ValueError(f"Invalid amp_dtype: {amp_dtype}")
 

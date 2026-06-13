@@ -1198,7 +1198,11 @@ class FactoredRecurrentActorCritic(nn.Module):
         features = self.feature_net(state_with_bp)
         lstm_out, new_hidden = self.lstm(features, hidden)
 
-        # Soft clamp cell state (same as forward)
+        # Soft-clamp the reconstruction-leg cell state. NOTE: forward() (the rollout leg)
+        # REMOVED its clamp (it killed gradients at the boundary), so this is an asymmetry:
+        # if |c| ever approaches ~50 the rollout and reconstruction carry trajectories
+        # diverge (recurrent-PPO staleness amplifier). Tracked separately; watch max
+        # lstm_c_rms over the full horizon. BF16's noisier forward marginally raises the risk.
         h, c = new_hidden
         c = torch.tanh(c / 50.0) * 50.0
         new_hidden = (h, c)

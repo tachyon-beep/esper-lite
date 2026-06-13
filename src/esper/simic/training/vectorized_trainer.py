@@ -39,6 +39,7 @@ from esper.utils.data import augment_cifar10_batch
 
 from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
+from .helpers import policy_amp_context
 from .counterfactual_eval import process_fused_val_batch
 from .env_factory import (
     EnvFactoryContext,
@@ -393,6 +394,14 @@ class VectorizedPPOTrainer:
         torch_profiler_summary = self.torch_profiler_summary
         gpu_preload_augment = self.gpu_preload_augment
         resolved_amp_dtype = self.resolved_amp_dtype
+
+        def rollout_autocast():
+            # P1-BF16 (CRITICAL-1): rollout get_action must run under the SAME policy-AMP
+            # context as the PPO update (_run_ppo_updates), so old_log_probs and the update's
+            # log_probs share one precision decision -> unbiased importance ratio. Both legs
+            # call the single shared factory, so the symmetry is structural, not coincidental.
+            return policy_amp_context(self.amp_enabled, resolved_amp_dtype)
+
         env_factory = self.env_factory
         compiled_loss_and_correct = self.compiled_loss_and_correct
         action_execution_context = self.action_execution_context
@@ -1501,15 +1510,18 @@ class VectorizedPPOTrainer:
                                 env_c = init_c[:, env_idx : env_idx + 1, :].clone()
                                 pre_step_hiddens.append((env_h, env_c))
 
-                    # get_action returns ActionResult dataclass
-                    action_result = agent.policy.get_action(
-                        states_batch_normalized,
-                        blueprint_indices=blueprint_indices_batch,
-                        masks=masks_batch,
-                        hidden=batched_lstm_hidden,
-                        deterministic=False,
-                        probability_floor=agent.probability_floor,
-                    )
+                    # get_action returns ActionResult dataclass.
+                    # P1-BF16: wrap in the SAME BF16 autocast as the PPO update so the
+                    # stored old_log_probs share the BF16 backbone (unbiased ratio).
+                    with rollout_autocast():
+                        action_result = agent.policy.get_action(
+                            states_batch_normalized,
+                            blueprint_indices=blueprint_indices_batch,
+                            masks=masks_batch,
+                            hidden=batched_lstm_hidden,
+                            deterministic=False,
+                            probability_floor=agent.probability_floor,
+                        )
                     actions_dict = action_result.action
                     head_log_probs = action_result.log_prob
                     values_tensor = action_result.value
@@ -1678,7 +1690,9 @@ class VectorizedPPOTrainer:
                             [m["slot_by_op"] for m in all_post_action_masks]
                         ).to(device)
 
-                        with torch.inference_mode():
+                        # P1-BF16: bootstrap value under the same BF16 autocast as the
+                        # update, so Q(s,op) used in GAE is precision-consistent.
+                        with rollout_autocast(), torch.inference_mode():
                             bootstrap_result = agent.policy.get_action(
                                 post_action_features_normalized,
                                 blueprint_indices=post_action_bp_indices,

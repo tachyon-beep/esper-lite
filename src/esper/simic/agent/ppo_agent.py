@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
-import torch.amp as torch_amp
 import torch.nn as nn
 
 from .rollout_buffer import TamiyoRolloutBuffer
@@ -821,34 +820,24 @@ class PPOAgent:
                 "alpha_curve": data["alpha_curve_masks"],
                 "op": data["op_masks"],
             }
-            # B11-PT-01 FIX: Run evaluate_actions outside autocast context.
-            # When PPO update runs under AMP autocast, the network forward pass
-            # produces float16 logits and LSTM states. Even though MaskedCategorical
-            # upcasts logits to float32 for the distribution math, this is not
-            # sufficient - the full forward pass must run in float32 for stable
-            # gradient computation. This is standard practice in RL with AMP:
-            # run the policy evaluation in float32, keep backbone/feature extraction in AMP.
-            # Device can be str ("cpu", "cuda:0") or torch.device - normalize to type string
-            device_type = str(self.device).split(":")[0]
-            with torch_amp.autocast(device_type=device_type, enabled=False):  # type: ignore[attr-defined]
-                # Cast inputs to float32 to ensure entire forward pass is float32
-                # NOTE: initial_hidden_h/c are detached tensors from rollout collection.
-                # This is CORRECT for recurrent PPO:
-                # 1. We use them as starting points for LSTM reconstruction
-                # 2. The LSTM forward pass produces new, gradient-enabled hidden states
-                # 3. BPTT happens within the reconstructed sequence, not through initial_hidden
-                # See rollout_buffer.py lines 377-378 for detach() calls.
-                hidden_h = data["initial_hidden_h"].float()
-                hidden_c = data["initial_hidden_c"].float()
-                result = self.policy.evaluate_actions(
-                    data["states"].float(),
-                    data["blueprint_indices"],
-                    actions,
-                    masks,
-                    hidden=(hidden_h, hidden_c),
-                    probability_floor=self.probability_floor,
-                    aux_stop_gradient=self.aux_stop_gradient,
-                )
+            # P1-BF16: evaluate_actions runs UNDER the BF16 autocast established by
+            # _run_ppo_updates (vectorized.py). The LSTM + heads compute in BF16; the
+            # log_softmax / log_prob / entropy / floor are upcast to FP32 at the masked-
+            # logits seam (P1-EVAL), so ratios/KL stay precision-stable and SYMMETRIC with
+            # the rollout's old_log_probs (which apply the identical FP32 seam). BF16 has
+            # FP32 exponent range, so no GradScaler is required.
+            # NOTE: initial_hidden_h/c are detached rollout tensors used as BPTT starting
+            # points; BPTT happens within the reconstructed sequence, not through them
+            # (see rollout_buffer.py detach() calls).
+            result = self.policy.evaluate_actions(
+                data["states"],
+                data["blueprint_indices"],
+                actions,
+                masks,
+                hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
+                probability_floor=self.probability_floor,
+                aux_stop_gradient=self.aux_stop_gradient,
+            )
             log_probs = result.log_prob
             values = result.value
             entropy = result.entropy

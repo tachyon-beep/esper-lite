@@ -665,11 +665,11 @@ class MaskedCategorical:
             _validate_logits(logits)
 
         self.mask = mask
-        # Upcast logits to float32 for numerical stability.
-        # Under AMP, logits may arrive as float16/bfloat16. The log_softmax in
-        # Categorical can produce numerically unstable results in reduced precision.
-        # This is defensive - the main fix is in ppo_agent.py which runs evaluate_actions
-        # outside autocast. But this upcast provides belt-and-suspenders safety.
+        # FP32 seam: logits may arrive BF16 under autocast; upcast so the masked-logit
+        # softmax/log_softmax (and the floor) run in FP32 -- the SAME seam the rollout and
+        # update legs apply via the shared module-level helpers (P1-EVAL). MaskedCategorical
+        # is now used only for telemetry op-probs; the PPO hot path scores through the
+        # helpers directly (no Categorical construction).
         logits_f32 = logits.float()
         self.masked_logits = logits_f32.masked_fill(~mask, MASKED_LOGIT_VALUE)
 
