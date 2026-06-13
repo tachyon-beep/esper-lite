@@ -190,11 +190,16 @@ class SeedTelemetry:
     blueprint_id: str = ""
     layer_id: str = ""
 
-    # Health signals (lightweight, always collected)
-    gradient_norm: float = 0.0
-    gradient_health: float = 1.0  # 0-1, higher is healthier
-    has_vanishing: bool = False
-    has_exploding: bool = False
+    # Health signals.
+    # These are NOT-MEASURED by default (None). A fresh seed, or one synced via
+    # the fallback path that has no gradient stats, leaves these None. None means
+    # "gradient health was never measured" and MUST NOT be treated as healthy by
+    # any gate or feature encoder. Only an actual gradient collection populates
+    # them. See: KTS-001.
+    gradient_norm: float | None = None
+    gradient_health: float | None = None  # 0-1, higher is healthier; None = not measured
+    has_vanishing: bool | None = None  # None = not measured
+    has_exploding: bool | None = None  # None = not measured
 
     # Progress signals
     accuracy: float = 0.0  # percentage (0-100)
@@ -229,6 +234,15 @@ class SeedTelemetry:
     # Always present because policy always samples a curve; causal relevance
     # is handled by advantage masking in simic/agent/advantages.py.
     alpha_curve: str = "LINEAR"
+
+    @property
+    def gradient_measured(self) -> bool:
+        """True iff gradient health was actually measured (not the unmeasured default).
+
+        Gates and quality checks must require this before trusting gradient_health
+        or has_exploding: an unmeasured seed is NOT healthy by default (KTS-001).
+        """
+        return self.gradient_health is not None
 
     def to_features(self) -> list[float]:
         """Convert to 26-dim feature vector for RL policies.
@@ -265,11 +279,19 @@ class SeedTelemetry:
             from esper.leyline.stage_schema import NUM_STAGES
             stage_one_hot = [0.0] * NUM_STAGES
 
+        # Unmeasured gradient health (None) encodes as 0.0 here: absence is NOT
+        # healthy evidence. This mirrors tamiyo/policy/features.py, which treats
+        # missing telemetry as gradient_health=0.0 for an active slot.
+        gradient_norm = 0.0 if self.gradient_norm is None else self.gradient_norm
+        gradient_health = 0.0 if self.gradient_health is None else self.gradient_health
+        has_vanishing = bool(self.has_vanishing)  # None -> False
+        has_exploding = bool(self.has_exploding)  # None -> False
+
         return stage_one_hot + [
-            min(self.gradient_norm, _GRADIENT_NORM_MAX) / _GRADIENT_NORM_MAX,
-            self.gradient_health,
-            float(self.has_vanishing),
-            float(self.has_exploding),
+            min(gradient_norm, _GRADIENT_NORM_MAX) / _GRADIENT_NORM_MAX,
+            gradient_health,
+            float(has_vanishing),
+            float(has_exploding),
             min(self.epochs_in_stage, _EPOCHS_IN_STAGE_MAX) / _EPOCHS_IN_STAGE_MAX,
             self.accuracy / 100.0,
             max(-1.0, min(1.0, self.accuracy_delta / _ACCURACY_DELTA_SCALE)),
@@ -1581,7 +1603,10 @@ class AnalyticsSnapshotPayload:
     alpha_algorithm: str | None = None
     alpha_algorithm_selected: str | None = None
     action_success: bool | None = None
-    # Per-head mask flags (True = action was forced by mask)
+    # Per-head FORCED flags. True = the head had effectively NO choice: a single
+    # valid candidate remained (e.g. WAIT-only on the op head). Ordinary
+    # restrictions that still leave two or more valid candidates do NOT set this;
+    # the head retained real agency. See vectorized_trainer._forced_head_flags.
     op_masked: bool | None = None
     slot_masked: bool | None = None
     blueprint_masked: bool | None = None

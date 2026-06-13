@@ -455,7 +455,11 @@ def test_batch_obs_to_features_gradient_health_tracking():
     gradient_health_prev_idx = 23 + 27  # = 50
     assert abs(obs[0, gradient_health_prev_idx].item() - 0.75) < 1e-6
 
-    # Test with no tracked health (missing tracking is not healthy evidence)
+    # Test with no tracked health: missing tracking is "no evidence yet"
+    # (UNKNOWN), NOT a measured value. TPD-003 requires this to be encoded as
+    # the out-of-band UNKNOWN sentinel, distinct from a measured unhealthy 0.0.
+    from esper.tamiyo.policy.features import OBS_V3_UNKNOWN_SENTINEL
+
     batch_env_states = [_make_mock_parallel_env_state()]
 
     obs, _ = batch_obs_to_features(
@@ -467,7 +471,7 @@ def test_batch_obs_to_features_gradient_health_tracking():
         max_epochs=MAX_EPOCHS,
     )
 
-    assert obs[0, gradient_health_prev_idx].item() == 0.0
+    assert obs[0, gradient_health_prev_idx].item() == OBS_V3_UNKNOWN_SENTINEL
 
 
 def test_batch_obs_to_features_counterfactual_freshness():
@@ -509,9 +513,17 @@ def test_batch_obs_to_features_counterfactual_freshness():
             f"epochs={epochs}: expected {expected}, got {obs[0, cf_fresh_idx].item()}"
 
 
-def test_batch_obs_to_features_missing_counterfactual_tracking_is_stale():
-    """Missing counterfactual tracking must not look freshly measured."""
-    from esper.tamiyo.policy.features import batch_obs_to_features
+def test_batch_obs_to_features_missing_counterfactual_tracking_is_unknown():
+    """Missing counterfactual tracking is "no evidence yet" (UNKNOWN), not fresh.
+
+    TPD-003: absence must encode the out-of-band UNKNOWN sentinel so the policy
+    never reads a never-measured seed as freshly measured (1.0) or even as a
+    measured stale value (0.0).
+    """
+    from esper.tamiyo.policy.features import (
+        OBS_V3_UNKNOWN_SENTINEL,
+        batch_obs_to_features,
+    )
     from esper.leyline.slot_config import SlotConfig
     import torch
 
@@ -531,12 +543,20 @@ def test_batch_obs_to_features_missing_counterfactual_tracking_is_stale():
     )
 
     cf_fresh_idx = 23 + 29
-    assert obs[0, cf_fresh_idx].item() == 0.0
+    assert obs[0, cf_fresh_idx].item() == OBS_V3_UNKNOWN_SENTINEL
 
 
 def test_batch_obs_to_features_missing_counterfactual_contribution_is_neutral():
-    """Missing causal contribution must not fall back to host drift."""
-    from esper.tamiyo.policy.features import batch_obs_to_features
+    """Missing causal contribution must not fall back to host drift.
+
+    The contribution field (index 12) is neutral 0.0 when no causal
+    contribution exists. Separately, missing counterfactual-freshness tracking
+    (index 29) encodes the UNKNOWN sentinel, not a measured freshness (TPD-003).
+    """
+    from esper.tamiyo.policy.features import (
+        OBS_V3_UNKNOWN_SENTINEL,
+        batch_obs_to_features,
+    )
     from esper.leyline.slot_config import SlotConfig
     import torch
 
@@ -559,7 +579,7 @@ def test_batch_obs_to_features_missing_counterfactual_contribution_is_neutral():
     contribution_idx = 23 + 12
     cf_fresh_idx = 23 + 29
     assert obs[0, contribution_idx].item() == 0.0
-    assert obs[0, cf_fresh_idx].item() == 0.0
+    assert obs[0, cf_fresh_idx].item() == OBS_V3_UNKNOWN_SENTINEL
 
 
 def test_batch_obs_to_features_dynamic_slots():
@@ -1120,8 +1140,15 @@ def test_extract_slot_features_v3_defaults_when_telemetry_absent():
 
 
 def test_extract_slot_features_v3_missing_counterfactual_contribution_is_neutral():
-    """Scalar extraction must not substitute host drift for missing causal contribution."""
-    from esper.tamiyo.policy.features import _extract_slot_features_v3
+    """Scalar extraction must not substitute host drift for missing causal contribution.
+
+    Contribution (index 12) is neutral 0.0 with no causal evidence; missing
+    counterfactual-freshness tracking (index 29) encodes UNKNOWN (TPD-003).
+    """
+    from esper.tamiyo.policy.features import (
+        OBS_V3_UNKNOWN_SENTINEL,
+        _extract_slot_features_v3,
+    )
 
     report = _make_mock_seed_state_report("r0c0", improvement=2.5)
     report.metrics.counterfactual_contribution = None
@@ -1135,7 +1162,7 @@ def test_extract_slot_features_v3_missing_counterfactual_contribution_is_neutral
     )
 
     assert slot_features[12].item() == 0.0
-    assert slot_features[29].item() == 0.0
+    assert slot_features[29].item() == OBS_V3_UNKNOWN_SENTINEL
 
 
 def test_batch_obs_to_features_uses_safe_defaults_when_seed_telemetry_missing():
@@ -1212,9 +1239,13 @@ def test_batch_obs_to_features_rejects_non_finite_gradient_health_prev():
         )
 
 
-@pytest.mark.parametrize("bad_health", [None, float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("bad_health", [float("nan"), float("inf"), float("-inf")])
 def test_batch_obs_to_features_rejects_malformed_gradient_health(bad_health):
-    """Present telemetry with malformed gradient_health should fail fast."""
+    """Present telemetry with NaN/inf gradient_health should fail fast.
+
+    None is NOT malformed — it is the legitimate "unmeasured" state (KTS-001),
+    covered by test_batch_obs_to_features_encodes_unmeasured_gradient_health.
+    """
     from esper.leyline.slot_config import SlotConfig
     from esper.tamiyo.policy.features import batch_obs_to_features
 
@@ -1232,6 +1263,36 @@ def test_batch_obs_to_features_rejects_malformed_gradient_health(bad_health):
             device=device,
             max_epochs=MAX_EPOCHS,
         )
+
+
+def test_batch_obs_to_features_encodes_unmeasured_gradient_health():
+    """Unmeasured gradient_health (None) encodes as 0.0 — not healthy, not rejected.
+
+    A just-germinated active slot legitimately has telemetry present but gradient
+    health not yet measured (None). That must encode as 0.0 ("not healthy
+    evidence", matching the missing-telemetry branch), NOT raise and NOT 1.0.
+    """
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import batch_obs_to_features
+
+    slot_config = SlotConfig.default()
+    device = torch.device("cpu")
+    report = _make_mock_seed_state_report("r0c0")
+    assert report.telemetry is not None
+    report.telemetry.gradient_health = None
+
+    obs, _ = batch_obs_to_features(
+        batch_signals=[_make_mock_training_signals()],
+        batch_slot_reports=[{"r0c0": report}],
+        batch_env_states=[_make_mock_parallel_env_state()],
+        slot_config=slot_config,
+        device=device,
+        max_epochs=MAX_EPOCHS,
+    )
+
+    slot_offset = 23  # 23 base dims
+    assert torch.isfinite(obs).all()
+    assert obs[0, slot_offset + 24].item() == 0.0  # unmeasured is not healthy
 
 
 def test_device_cached_one_hot_tables_are_stable_on_cpu():
@@ -1268,3 +1329,89 @@ def test_vectorized_one_hot_encoders_handle_inactive_slots():
     assert op_one_hot.shape == (2, NUM_OPS)
     assert op_one_hot[0, 0].item() == 1.0
     assert op_one_hot[1, -1].item() == 1.0
+
+
+# =============================================================================
+# TPD-003: Pre-evidence Obs V3 diagnostics must encode UNKNOWN, not healthy/fresh
+# =============================================================================
+
+
+def test_unknown_sentinel_is_outside_measured_ranges():
+    """The UNKNOWN sentinel must not collide with any measured diagnostic value.
+
+    Measured gradient_health_prev lies in [0, 1]; measured counterfactual
+    freshness (DEFAULT_GAMMA ** n) lies in (0, 1] with stale limit 0.0. The
+    sentinel must be outside both so the encoder distinguishes "no evidence
+    yet" from any real reading.
+    """
+    from esper.tamiyo.policy.features import OBS_V3_UNKNOWN_SENTINEL
+
+    assert OBS_V3_UNKNOWN_SENTINEL < 0.0
+    assert not (0.0 <= OBS_V3_UNKNOWN_SENTINEL <= 1.0)
+
+
+def test_previous_gradient_health_missing_encodes_unknown_not_unhealthy():
+    """A slot with no recorded gradient health encodes UNKNOWN, distinct from a
+    measured fully-unhealthy reading of 0.0 (TPD-003)."""
+    from esper.tamiyo.policy.features import (
+        OBS_V3_UNKNOWN_SENTINEL,
+        _previous_gradient_health,
+    )
+
+    # No evidence yet (just germinated) -> UNKNOWN sentinel.
+    assert _previous_gradient_health({}, "r0c0") == OBS_V3_UNKNOWN_SENTINEL
+
+    # A measured fully-unhealthy reading is 0.0, which is NOT the UNKNOWN value.
+    assert _previous_gradient_health({"r0c0": 0.0}, "r0c0") == 0.0
+    assert 0.0 != OBS_V3_UNKNOWN_SENTINEL
+
+    # A measured healthy reading passes through unchanged.
+    assert _previous_gradient_health({"r0c0": 1.0}, "r0c0") == 1.0
+
+
+def test_counterfactual_freshness_missing_encodes_unknown_not_fresh():
+    """A slot with no recorded counterfactual encodes UNKNOWN, distinct from a
+    measured fresh reading of 1.0 (TPD-003)."""
+    from esper.leyline import DEFAULT_GAMMA
+    from esper.tamiyo.policy.features import (
+        OBS_V3_UNKNOWN_SENTINEL,
+        _counterfactual_freshness,
+    )
+
+    # No evidence yet (just germinated) -> UNKNOWN sentinel, NOT fresh (1.0).
+    assert _counterfactual_freshness({}, "r0c0") == OBS_V3_UNKNOWN_SENTINEL
+    assert OBS_V3_UNKNOWN_SENTINEL != 1.0
+
+    # A just-measured counterfactual (epochs_since == 0) is fresh == 1.0.
+    assert _counterfactual_freshness({"r0c0": 0}, "r0c0") == 1.0
+
+    # A measured-but-aged counterfactual decays within (0, 1].
+    aged = _counterfactual_freshness({"r0c0": 10}, "r0c0")
+    assert aged == DEFAULT_GAMMA ** 10
+    assert 0.0 < aged < 1.0
+
+
+def test_just_germinated_slot_observation_distinguishes_unknown_from_measured():
+    """End-to-end at the env_state level: a just-germinated seed's tracking is
+    absent, so the feature encoder reads UNKNOWN for both pre-evidence
+    diagnostics rather than healthy/fresh (TPD-003)."""
+    from esper.tamiyo.policy.features import (
+        OBS_V3_UNKNOWN_SENTINEL,
+        _counterfactual_freshness,
+        _previous_gradient_health,
+    )
+
+    # Simulate the env_state tracking dicts immediately after germination:
+    # init_obs_v3_slot_tracking leaves the slot ABSENT (UNKNOWN).
+    grad_health_prev: dict[str, float] = {}
+    epochs_since_cf: dict[str, int] = {}
+
+    assert _previous_gradient_health(grad_health_prev, "r0c0") == OBS_V3_UNKNOWN_SENTINEL
+    assert _counterfactual_freshness(epochs_since_cf, "r0c0") == OBS_V3_UNKNOWN_SENTINEL
+
+    # After a real gradient-health reading and a real counterfactual are
+    # recorded, the same slot now encodes the measured values, not UNKNOWN.
+    grad_health_prev["r0c0"] = 0.9
+    epochs_since_cf["r0c0"] = 0
+    assert _previous_gradient_health(grad_health_prev, "r0c0") == 0.9
+    assert _counterfactual_freshness(epochs_since_cf, "r0c0") == 1.0

@@ -134,20 +134,22 @@ def test_obs_v3_slot_tracking_init_and_clear(case) -> None:
     slots, init_slots, clear_slots = case
     env, _, _, _ = _make_env(slots)
 
+    # TPD-003: init_obs_v3_slot_tracking resets a just-germinated slot to
+    # UNKNOWN, which is encoded as ABSENCE of an entry (not a fake healthy/fresh
+    # value). Pre-seed stale values so we can prove init removes them.
     for slot_id in init_slots:
+        env.gradient_health_prev[slot_id] = 0.5
+        env.epochs_since_counterfactual[slot_id] = 7
         env.init_obs_v3_slot_tracking(slot_id)
 
     for slot_id in clear_slots:
         env.clear_obs_v3_slot_tracking(slot_id)
 
+    # Neither init nor clear ever leaves an entry behind: every slot stays
+    # UNKNOWN (absent) because no measured evidence was recorded.
     for slot_id in slots:
-        should_exist = slot_id in init_slots and slot_id not in clear_slots
-        if should_exist:
-            assert env.gradient_health_prev[slot_id] == pytest.approx(1.0)
-            assert env.epochs_since_counterfactual[slot_id] == 0
-        else:
-            assert slot_id not in env.gradient_health_prev
-            assert slot_id not in env.epochs_since_counterfactual
+        assert slot_id not in env.gradient_health_prev
+        assert slot_id not in env.epochs_since_counterfactual
 
-    assert set(env.gradient_health_prev.keys()).issubset(set(slots))
-    assert set(env.epochs_since_counterfactual.keys()).issubset(set(slots))
+    assert env.gradient_health_prev == {}
+    assert env.epochs_since_counterfactual == {}

@@ -1254,14 +1254,18 @@ def execute_actions(
                 report = slot_reports_for_env[slot_id]
                 if report.telemetry is not None:
                     health_val = report.telemetry.gradient_health
-                    # Fail-fast if gradient_health contains NaN/inf
-                    # This would poison observation features and crash get_action()
-                    if not math.isfinite(health_val):
-                        raise ValueError(
-                            f"NaN/inf gradient_health from telemetry for slot {slot_id}: "
-                            f"{health_val}. Check materialize_grad_stats() or sync_telemetry()."
-                        )
-                    env_state.gradient_health_prev[slot_id] = health_val
+                    # Unmeasured gradient health (None) stays ABSENT from the
+                    # tracking dict so it encodes as UNKNOWN (Obs V3 sentinel),
+                    # never a fabricated measured value (KTS-001/TPD-003). Only a
+                    # measured value is stored; NaN/inf is still a real bug that
+                    # would poison observation features and crash get_action().
+                    if health_val is not None:
+                        if not math.isfinite(health_val):
+                            raise ValueError(
+                                f"NaN/inf gradient_health from telemetry for slot {slot_id}: "
+                                f"{health_val}. Check materialize_grad_stats() or sync_telemetry()."
+                            )
+                        env_state.gradient_health_prev[slot_id] = health_val
 
                 # Obs V3: Increment epochs since last counterfactual measurement
                 # This is reset to 0 when counterfactual_contribution is updated (see line ~2191)

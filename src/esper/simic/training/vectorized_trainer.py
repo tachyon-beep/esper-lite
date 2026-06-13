@@ -78,6 +78,24 @@ def _pair_index_accs_for_active_slots(
     }
 
 
+def compute_forced_head_flags(
+    masks_batch: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Compute per-head FORCED flags for decision telemetry.
+
+    A head is FORCED only when a single valid candidate remains, i.e. the agent
+    had no real choice (e.g. WAIT-only on the op head). A head that still has two
+    or more valid candidates is NOT forced, even if some candidates were
+    restricted by the mask. This is the contract for AnalyticsSnapshotPayload's
+    per-head ``*_masked`` flags: "forced" means no agency, not "any candidate
+    masked".
+    """
+    return {
+        key: masks_batch[key].sum(dim=-1) <= 1  # [num_envs] bool tensor
+        for key in HEAD_NAMES
+    }
+
+
 def _masked_op_probs_for_telemetry(
     *,
     op_logits: torch.Tensor,
@@ -1296,7 +1314,9 @@ class VectorizedPPOTrainer:
 
                         # Fallback: sync telemetry for active seeds that didn't get gradient stats
                         # This ensures accuracy_delta is always populated from metrics.improvement_since_stage_start
-                        # Gradient parameters are omitted - sync_telemetry leaves gradient fields at defaults
+                        # Gradient parameters are omitted - sync_telemetry leaves gradient fields
+                        # UNMEASURED (None). KTS-001: an unmeasured seed must NOT look
+                        # healthy; permissive G2 denies it until real gradient stats arrive.
                         for slot_id in slots:
                             if slot_id in synced_slot_ids:
                                 continue
@@ -1459,10 +1479,11 @@ class VectorizedPPOTrainer:
                     # Batch compute mask stats for telemetry
                     masked_np: np.ndarray | None = None  # [num_heads, num_envs]
                     if ops_telemetry_enabled:
-                        masked_batch = {
-                            key: ~masks_batch[key].all(dim=-1)  # [num_envs] bool tensor
-                            for key in HEAD_NAMES
-                        }
+                        # FORCED, not "any-masked": a head is forced only when a
+                        # single valid candidate remains (no real choice). Heads
+                        # that still have >=2 valid candidates retain agency even
+                        # though some candidates were restricted.
+                        masked_batch = compute_forced_head_flags(masks_batch)
                         masked_stacked = torch.stack(
                             [masked_batch[name] for name in HEAD_NAMES]
                         )

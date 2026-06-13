@@ -275,12 +275,23 @@ class TestResetEpisodeState:
 class TestObsV3SlotTracking:
     """Tests for Obs V3 per-slot tracking methods."""
 
-    def test_init_obs_v3_slot_tracking(self, env_state: ParallelEnvState) -> None:
-        """init_obs_v3_slot_tracking sets default values."""
+    def test_init_obs_v3_slot_tracking_resets_to_unknown(
+        self, env_state: ParallelEnvState
+    ) -> None:
+        """init_obs_v3_slot_tracking leaves a just-germinated slot UNKNOWN.
+
+        TPD-003: a freshly germinated seed has no measured gradient-health or
+        counterfactual evidence, so init must NOT seed healthy/fresh values.
+        UNKNOWN is encoded as ABSENCE; any stale entry from a prior occupant of
+        the recycled slot id is removed.
+        """
+        env_state.gradient_health_prev["slot_0"] = 0.5
+        env_state.epochs_since_counterfactual["slot_0"] = 7
+
         env_state.init_obs_v3_slot_tracking("slot_0")
 
-        assert env_state.gradient_health_prev["slot_0"] == 1.0
-        assert env_state.epochs_since_counterfactual["slot_0"] == 0
+        assert "slot_0" not in env_state.gradient_health_prev
+        assert "slot_0" not in env_state.epochs_since_counterfactual
 
     def test_clear_obs_v3_slot_tracking(self, env_state: ParallelEnvState) -> None:
         """clear_obs_v3_slot_tracking removes slot entries."""

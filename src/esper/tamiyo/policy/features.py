@@ -43,14 +43,34 @@ from esper.leyline.stage_schema import (
 
 # HOT PATH: ONLY leyline imports allowed!
 
+# Obs V3 "no evidence yet" sentinel for pre-measurement diagnostics.
+#
+# A freshly germinated seed has not yet been observed: no gradient-health
+# reading and no counterfactual measurement exist. Encoding such a slot as
+# healthy/fresh would teach the policy positive evidence the system has never
+# observed (TPD-003). Instead, absence of tracking is encoded as this sentinel,
+# which lies OUTSIDE the measured range of both diagnostics so the encoder
+# genuinely distinguishes "unknown" from any real reading:
+#   - gradient_health_prev: measured health is clamped to [0, 1];
+#   - counterfactual_fresh: DEFAULT_GAMMA ** n is in (0, 1] for finite n >= 0,
+#     and the stale limit is 0.0.
+# -1.0 collides with neither range and preserves the float32 tensor contract.
+OBS_V3_UNKNOWN_SENTINEL: float = -1.0
+
 
 def _counterfactual_freshness(
     epochs_since_counterfactual: dict[str, int],
     slot_id: str,
 ) -> float:
-    """Return freshness with missing tracking treated as stale, never fresh."""
+    """Return counterfactual freshness, or the UNKNOWN sentinel when no
+    measurement has ever been recorded for the slot.
+
+    Missing tracking means "no counterfactual evidence yet" (e.g. a just
+    germinated seed), which is distinct from a measured stale value (0.0) and
+    from a measured fresh value (1.0). It is encoded as OBS_V3_UNKNOWN_SENTINEL.
+    """
     if slot_id not in epochs_since_counterfactual:
-        return 0.0
+        return OBS_V3_UNKNOWN_SENTINEL
     epochs_since_cf = epochs_since_counterfactual[slot_id]
     return DEFAULT_GAMMA ** epochs_since_cf
 
@@ -59,19 +79,30 @@ def _previous_gradient_health(
     gradient_health_prev: dict[str, float],
     slot_id: str,
 ) -> float:
-    """Return previous gradient health with missing active-slot tracking as unhealthy."""
+    """Return previous-epoch gradient health, or the UNKNOWN sentinel when no
+    gradient-health reading has ever been recorded for the slot.
+
+    Missing tracking means "no gradient-health evidence yet" (e.g. a just
+    germinated seed). Measured health lies in [0, 1], so it must NOT be encoded
+    as 0.0 (which is a measured "fully unhealthy" reading); it is encoded as
+    OBS_V3_UNKNOWN_SENTINEL instead.
+    """
     if slot_id not in gradient_health_prev:
-        return 0.0
+        return OBS_V3_UNKNOWN_SENTINEL
     return gradient_health_prev[slot_id]
 
 
 def _validated_gradient_health(value: float | None, slot_id: str) -> float:
-    """Return finite current gradient health or fail the typed telemetry contract."""
+    """Encode current gradient health for the observation.
+
+    Unmeasured gradient health (``None``) encodes as ``0.0`` — absence is NOT
+    healthy evidence, matching the missing-telemetry branch (KTS-001). A seed
+    whose gradient stats have not been measured yet (e.g. just germinated) is a
+    legitimate, not a malformed, state. A materialized tensor or a NaN/inf value
+    is still a real telemetry bug and fails fast.
+    """
     if value is None:
-        raise ValueError(
-            f"Missing gradient_health for active slot {slot_id}. "
-            "This indicates malformed seed telemetry."
-        )
+        return 0.0
     if isinstance(value, torch.Tensor):
         raise ValueError(
             f"gradient_health for slot {slot_id} must be a materialized scalar, "

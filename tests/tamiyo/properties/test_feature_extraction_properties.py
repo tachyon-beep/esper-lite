@@ -21,7 +21,13 @@ from esper.leyline.signals import TrainingMetrics, TrainingSignals
 from esper.leyline.stages import SeedStage
 from esper.leyline.telemetry import SeedTelemetry
 from esper.leyline.slot_config import SlotConfig
-from esper.tamiyo.policy.features import _pad_history, batch_obs_to_features, symlog, symlog_tensor
+from esper.tamiyo.policy.features import (
+    OBS_V3_UNKNOWN_SENTINEL,
+    _pad_history,
+    batch_obs_to_features,
+    symlog,
+    symlog_tensor,
+)
 
 pytestmark = pytest.mark.property
 
@@ -347,10 +353,12 @@ def test_batch_obs_to_features_shape_and_core_invariants(batch) -> None:
             assert -1.0 <= improvement_norm <= 1.0
             assert -1.0 <= velocity_norm <= 1.0
 
+            # TPD-003: a missing entry encodes UNKNOWN (no evidence yet),
+            # distinct from any measured reading.
             expected_prev = (
                 env_state.gradient_health_prev[slot_id]
                 if slot_id in env_state.gradient_health_prev
-                else 0.0
+                else OBS_V3_UNKNOWN_SENTINEL
             )
             assert obs[env_idx, slot_offset + 27].item() == pytest.approx(expected_prev)
 
@@ -359,5 +367,5 @@ def test_batch_obs_to_features_shape_and_core_invariants(batch) -> None:
                     slot_id
                 ]
             else:
-                expected_freshness = 0.0
+                expected_freshness = OBS_V3_UNKNOWN_SENTINEL
             assert obs[env_idx, slot_offset + 29].item() == pytest.approx(expected_freshness)

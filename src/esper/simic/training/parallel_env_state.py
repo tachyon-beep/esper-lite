@@ -129,13 +129,19 @@ class ParallelEnvState:
     last_action_op: int = 0  # LifecycleOp.WAIT.value, avoid lambda for slots=True
 
     # === Obs V3 Gradient Health Tracking (Phase 2a½) ===
-    # Maps slot_id -> previous epoch's gradient_health value
-    # Initial value for new slots: 1.0 (assume healthy)
+    # Maps slot_id -> previous epoch's gradient_health value.
+    # A slot is ABSENT until a real gradient-health reading is recorded; absence
+    # encodes "no evidence yet" (UNKNOWN), not a value (see TPD-003 and
+    # features._previous_gradient_health). A newly germinated seed therefore has
+    # no entry here until its first measured gradient_health arrives.
     gradient_health_prev: dict[str, float] = field(default_factory=dict)
 
     # === Obs V3 Counterfactual Freshness Tracking (Phase 2a½) ===
-    # Maps slot_id -> epochs since last counterfactual measurement
-    # Initial value for new slots: 0 (fresh when slot germinates)
+    # Maps slot_id -> epochs since last counterfactual measurement.
+    # A slot is ABSENT until a real counterfactual is measured; absence encodes
+    # "no evidence yet" (UNKNOWN), not freshness (see TPD-003 and
+    # features._counterfactual_freshness). A newly germinated seed therefore has
+    # no entry here until its first counterfactual measurement.
     epochs_since_counterfactual: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -251,10 +257,11 @@ class ParallelEnvState:
         self.last_action_success = True  # No prior action to fail
         self.last_action_op = LifecycleOp.WAIT.value  # Neutral op
 
-        # Clear Obs V3 per-slot tracking (Phase 2a½)
-        # These are populated per-slot when seeds germinate:
-        # - gradient_health_prev[slot_id] = 1.0 (assume healthy)
-        # - epochs_since_counterfactual[slot_id] = 0 (fresh)
+        # Clear Obs V3 per-slot tracking (Phase 2a½).
+        # These dicts stay EMPTY for slots with no measured evidence yet; entries
+        # appear only when a real gradient-health / counterfactual reading is
+        # recorded. Absence is encoded as UNKNOWN by the feature encoder, so a
+        # just germinated seed is never observed as healthy/fresh (TPD-003).
         self.gradient_health_prev.clear()
         self.epochs_since_counterfactual.clear()
 
@@ -272,9 +279,18 @@ class ParallelEnvState:
             self.zero_accumulators()
 
     def init_obs_v3_slot_tracking(self, slot_id: str) -> None:
-        """Initialize Obs V3 per-slot tracking for a newly germinated seed."""
-        self.gradient_health_prev[slot_id] = 1.0
-        self.epochs_since_counterfactual[slot_id] = 0
+        """Reset Obs V3 per-slot tracking for a newly germinated seed to UNKNOWN.
+
+        A freshly germinated seed has produced no gradient-health reading and no
+        counterfactual measurement, so its diagnostics must encode "no evidence
+        yet" rather than healthy/fresh (TPD-003). The UNKNOWN state is the
+        ABSENCE of an entry: the feature encoder maps a missing slot to the
+        out-of-band UNKNOWN sentinel (see features.py). This call therefore
+        removes any stale entry left by a previous occupant of the slot id
+        instead of seeding a fake positive value.
+        """
+        self.gradient_health_prev.pop(slot_id, None)
+        self.epochs_since_counterfactual.pop(slot_id, None)
 
     def clear_obs_v3_slot_tracking(self, slot_id: str) -> None:
         """Clear Obs V3 per-slot tracking when a slot becomes empty."""

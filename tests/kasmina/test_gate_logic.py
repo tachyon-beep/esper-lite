@@ -654,7 +654,11 @@ class TestG2PermissiveSafetyGate:
         assert any("gradient_health_low" in check for check in result.checks_failed)
 
     def test_permissive_g2_requires_all_safety_conditions(self):
-        """Permissive G2 requires ALL safety conditions, not just one."""
+        """Permissive G2 requires ALL safety conditions, not just one.
+
+        Exploding gradients are a hard safety failure: even with epochs satisfied
+        and gradient health measured, exploding gradients deny the gate.
+        """
         gates = QualityGates(permissive=True)
         state = SeedState(
             seed_id="test",
@@ -662,20 +666,22 @@ class TestG2PermissiveSafetyGate:
             stage=SeedStage.TRAINING,
         )
 
-        # Only epochs pass
+        # Epochs pass and gradient health was measured, but gradients are exploding.
         state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
         state.telemetry = SeedTelemetry(
             seed_id="test",
             blueprint_id="noop",
-            gradient_health=0.3,  # Low health
-            has_exploding=True,  # AND exploding
+            gradient_health=0.3,  # Low (measured) health
+            has_exploding=True,  # AND exploding -> hard fail
         )
 
         result = gates.check_gate(state, SeedStage.BLENDING)
 
         assert not result.passed
-        # Should have multiple failures
-        assert len(result.checks_failed) >= 2
+        # Exploding gradients short-circuit the safety gate.
+        assert "exploding_gradients" in result.checks_failed
+        # Epochs were satisfied, so that check is not in the failure set.
+        assert not any("insufficient_training" in c for c in result.checks_failed)
 
     def test_permissive_g2_fails_without_telemetry(self):
         """Permissive G2 must not treat absent telemetry as safe."""
@@ -694,7 +700,51 @@ class TestG2PermissiveSafetyGate:
         result = gates.check_gate(state, SeedStage.BLENDING)
 
         assert not result.passed
-        assert "gradient_health_missing" in result.checks_failed
+        assert "gradient_health_not_measured" in result.checks_failed
+
+    def test_permissive_g2_fails_when_gradients_unmeasured(self):
+        """KTS-001: a fresh/fallback-synced seed with NO gradient stats is denied.
+
+        Telemetry exists (epochs counted, accuracy synced) but gradient health
+        was never measured (the default). The gate must NOT treat unmeasured
+        gradients as healthy.
+        """
+        gates = QualityGates(permissive=True)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.TRAINING,
+        )
+        state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
+        # Telemetry present, but gradient fields never measured (fresh / fallback sync).
+        state.telemetry = SeedTelemetry(seed_id="test", blueprint_id="noop")
+        assert state.telemetry.gradient_measured is False
+
+        result = gates.check_gate(state, SeedStage.BLENDING)
+
+        assert not result.passed
+        assert "gradient_health_not_measured" in result.checks_failed
+
+    def test_permissive_g2_passes_with_measured_healthy_gradients(self):
+        """KTS-001: a seed with measured-healthy gradients still passes permissive G2."""
+        gates = QualityGates(permissive=True)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.TRAINING,
+        )
+        state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
+        state.telemetry = SeedTelemetry(
+            seed_id="test",
+            blueprint_id="noop",
+            gradient_health=DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING + 0.1,
+            has_exploding=False,
+        )
+        assert state.telemetry.gradient_measured is True
+
+        result = gates.check_gate(state, SeedStage.BLENDING)
+
+        assert result.passed
 
     def test_permissive_g2_min_epochs_increased_to_10(self):
         """Verify DEFAULT_MIN_BLENDING_EPOCHS is now 10 (not 3).

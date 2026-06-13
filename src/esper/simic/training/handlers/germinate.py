@@ -111,7 +111,12 @@ def execute_germinate(ctx: HandlerContext, params: GerminateParams) -> HandlerRe
         alpha_target=params.alpha_target,
     )
 
-    # Initialize Obs V3 slot tracking for the new seed
+    # Reset Obs V3 slot tracking for the new seed to UNKNOWN.
+    # A just germinated seed has no measured gradient-health or counterfactual
+    # evidence yet, so its diagnostics must encode "no evidence" rather than
+    # healthy/fresh (TPD-003). init_obs_v3_slot_tracking clears any stale entry
+    # so the feature encoder reads the slot as UNKNOWN until real evidence
+    # is recorded.
     ctx.env_state.init_obs_v3_slot_tracking(ctx.slot_id)
 
     # Update episode counters

@@ -442,9 +442,11 @@ class SeedState:
         SeedMetrics remains the source of truth for accuracy/epoch data.
 
         Gradient parameters are optional - when None, gradient-related telemetry
-        fields are left at their default values (no gradient data available).
-        This separates the concern of accuracy telemetry (always available)
-        from gradient telemetry (only when gradient stats are collected).
+        fields are left UNMEASURED (None), NOT reset to a healthy value. This
+        separates the concern of accuracy telemetry (always available) from
+        gradient telemetry (only when gradient stats are collected). A seed that
+        has never had gradients measured stays unmeasured, and gates depending on
+        gradient health (permissive G2) deny it until real stats arrive (KTS-001).
 
         IMPORTANT: accuracy_delta is stage-aware:
         - TRAINING/GERMINATED (alpha=0): Always 0.0 because seed cannot affect output
@@ -815,21 +817,27 @@ class QualityGates:
             # Check 2: No exploding gradients (HARD REQUIREMENT)
             # Exploding gradients indicate unbounded dynamics that will compound
             # catastrophically when the seed's alpha is ramped up during blending.
+            #
+            # KTS-001: Gradient health must have been ACTUALLY MEASURED. A fresh
+            # seed, or one synced via the fallback path with no gradient stats,
+            # has unmeasured (None) gradient telemetry and is NOT healthy by
+            # default. Unmeasured gradients fail the safety gate outright.
             telemetry = state.telemetry
-            if telemetry is None:
-                checks_failed.append("gradient_health_missing")
+            if telemetry is None or not telemetry.gradient_measured:
+                checks_failed.append("gradient_health_not_measured")
                 exploding_ok = False
                 gradient_health_ok = False
             elif telemetry.has_exploding:
                 checks_failed.append("exploding_gradients")
                 exploding_ok = False
+                # Health is moot when gradients are exploding: deny.
+                gradient_health_ok = False
             else:
                 checks_passed.append("no_exploding_gradients")
                 exploding_ok = True
 
-            # Check 3: Gradient health above safety threshold
-            # Low gradient health indicates the seed may destabilize the host.
-            if telemetry is not None:
+                # Check 3: Gradient health above safety threshold.
+                # Low gradient health indicates the seed may destabilize the host.
                 health = telemetry.gradient_health
                 if health >= self.min_gradient_health_for_blending:
                     checks_passed.append(f"gradient_health_{health:.2f}")
@@ -1548,12 +1556,12 @@ class SeedSlot(nn.Module):
                         # Optional gradient health fields
                         grad_ratio=self._telemetry_grad_ratio(),
                         has_vanishing=(
-                            self.state.telemetry.has_vanishing
+                            bool(self.state.telemetry.has_vanishing)
                             if self.state.telemetry and self.state.telemetry.epoch > 0
                             else False
                         ),
                         has_exploding=(
-                            self.state.telemetry.has_exploding
+                            bool(self.state.telemetry.has_exploding)
                             if self.state.telemetry and self.state.telemetry.epoch > 0
                             else False
                         ),
@@ -1636,12 +1644,12 @@ class SeedSlot(nn.Module):
         alpha_curve_name = self.state.alpha_controller.alpha_curve.name
         grad_ratio = self._telemetry_grad_ratio()
         has_vanishing = (
-            self.state.telemetry.has_vanishing
+            bool(self.state.telemetry.has_vanishing)
             if self.state.telemetry and self.state.telemetry.epoch > 0
             else False
         )
         has_exploding = (
-            self.state.telemetry.has_exploding
+            bool(self.state.telemetry.has_exploding)
             if self.state.telemetry and self.state.telemetry.epoch > 0
             else False
         )
@@ -1765,12 +1773,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -1847,12 +1855,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -2489,12 +2497,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -2534,12 +2542,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -2575,12 +2583,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),

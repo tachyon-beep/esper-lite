@@ -147,9 +147,18 @@ class VectorizedEmitter:
                     "accuracy_delta": report.telemetry.accuracy_delta,
                     "epochs_in_stage": report.telemetry.epochs_in_stage,
                     "alpha": report.telemetry.alpha,
-                    "grad_ratio": report.telemetry.gradient_health,
-                    "has_vanishing": report.telemetry.has_vanishing,
-                    "has_exploding": report.telemetry.has_exploding,
+                    # Karn SeedState types these float/bool; unmeasured gradient
+                    # health (None) encodes as 0.0 / False (no anomaly), matching
+                    # the leyline to_features convention (KTS-001). Distinguishing
+                    # unmeasured from measured-zero in the Karn UI is tracked
+                    # separately (UI-004).
+                    "grad_ratio": (
+                        report.telemetry.gradient_health
+                        if report.telemetry.gradient_health is not None
+                        else 0.0
+                    ),
+                    "has_vanishing": bool(report.telemetry.has_vanishing),
+                    "has_exploding": bool(report.telemetry.has_exploding),
                     # Inter-slot interaction metrics (from SeedMetrics - always present via default_factory)
                     # Note: These are zero for n>3 seeds due to factorial complexity limits
                     "contribution_velocity": report.metrics.contribution_velocity,
