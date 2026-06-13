@@ -1896,6 +1896,19 @@ class VectorizedPPOTrainer:
                             num_ooms=alloc_stats["num_ooms"],
                         )
 
+                # P2-DEL: the batch's telemetry consumers (on_batch_completed, the P2-FRAGMETRIC
+                # emit) have read env_states. Sync each persistent stream so no async kernel still
+                # references the model/optimizer tensors we are about to drop, then release the
+                # refs so the caching allocator can reuse their segments next batch. At LOOP-BODY
+                # indent (NOT inside `if hub:`) so the fence + release run even with telemetry off.
+                # Never empty_cache() here (governor.py NOTE: it fights expandable_segments).
+                for env_state in env_states:
+                    if env_state.stream is not None:
+                        env_state.stream.synchronize()
+                # Drop the list AND the loop variable: a dangling `env_state` would pin the
+                # last env's model/optimizer for another batch, defeating the segment release.
+                del env_states, env_state
+
                 batch_summary = BatchSummary(
                     batch=batch_idx + 1,
                     episodes=batch_epoch_id,

@@ -110,6 +110,9 @@ def configure_slot_telemetry(
 @dataclass(frozen=True)
 class EnvFactoryContext:
     env_device_map: list[str]
+    # P2-STREAMPOOL: one persistent CUDA stream per env (None on CPU), built once and
+    # reused every batch. The list is never mutated (frozen blocks rebind, not mutation).
+    env_streams: list["torch.cuda.Stream | None"]
     create_model: Callable[..., Any]
     task_spec: TaskSpec
     slots: list[str]
@@ -187,13 +190,12 @@ def create_env_state(
         weight_decay=5e-4,
     )
 
-    # Create CUDA stream for this environment
+    # P2-STREAMPOOL: reuse this env's persistent stream from the pool instead of minting a
+    # fresh torch.cuda.Stream every batch. Per-batch creation stranded ~1800 dead streams'
+    # allocator segments over a run (the caching allocator keeps per-stream free pools); a
+    # stable stream keeps segments reusable. env_device_obj is still needed below (AMP scaler).
     env_device_obj = torch.device(env_device)
-    stream = (
-        torch.cuda.Stream(device=env_device_obj)  # type: ignore[no-untyped-call]
-        if env_device_obj.type == "cuda"
-        else None
-    )
+    stream = context.env_streams[env_idx]
 
     augment_generator = None
     augment_buffers = None
