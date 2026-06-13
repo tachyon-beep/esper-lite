@@ -104,7 +104,7 @@ The core reward signal, computed from counterfactual `seed_contribution`:
 # For positive contribution with progress:
 if seed_contribution >= 0 and progress > 0:
     if seed_contribution >= progress:
-        attributed = formula(progress, seed_contribution)  # geometric/harmonic/minimum
+        attributed = formula(progress, seed_contribution)  # harmonic/minimum
     else:
         attributed = seed_contribution
 
@@ -121,8 +121,7 @@ elif seed_contribution < 0:
 
 | Formula | Equation | Character |
 |---------|----------|-----------|
-| `geometric` | `√(progress × contribution)` | Rewards host drift (legacy) |
-| `harmonic` | `2pc/(p+c)` | Dominated by smaller value (recommended) |
+| `harmonic` | `2pc/(p+c)` | Dominated by smaller value (default) |
 | `minimum` | `min(progress, contribution)` | Very conservative |
 
 **Proxy Fallback**: When `seed_contribution` is unavailable but `acc_delta > 0`:
@@ -659,7 +658,7 @@ R_attr = w_c × f(progress, contribution) × d_sigmoid × d_timing + r_ratio
 
 where:
 - w_c = contribution_weight (1.0)
-- f() = attribution formula (geometric/harmonic/minimum)
+- f() = attribution formula (harmonic/minimum)
 - d_sigmoid = 1 / (1 + exp(-k × total_improvement)) for negative improvement
 - d_timing = floor + (1 - floor) × (epoch / warmup) for early germination
 - r_ratio = ratio penalty for hacking patterns

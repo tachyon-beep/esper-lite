@@ -299,10 +299,9 @@ class ContributionRewardConfig:
 
     # === D3: Attribution formula variant ===
     # Controls how progress and seed_contribution combine into attributed value.
-    # - "geometric": sqrt(progress * contribution) - rewards host drift, legacy default
     # - "harmonic": 2*p*c/(p+c) - dominated by smaller value, anti-gaming (recommended)
     # - "minimum": min(progress, contribution) - very conservative
-    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "harmonic"
+    attribution_formula: Literal["harmonic", "minimum"] = "harmonic"
 
     # === Drip Reward Configuration (BASIC_PLUS mode) ===
     # Post-fossilization accountability: drip reward paid over remaining epochs
@@ -1289,30 +1288,30 @@ def _compute_timing_discount(
 def _compute_attributed_value(
     progress: float,
     seed_contribution: float,
-    formula: Literal["geometric", "harmonic", "minimum"],
+    formula: Literal["harmonic", "minimum"],
 ) -> float:
     """Compute attributed value using the specified formula.
 
     Args:
         progress: Accuracy improvement since germination (val_acc - acc_at_germination)
         seed_contribution: Counterfactual contribution of the seed
-        formula: One of "geometric", "harmonic", "minimum"
+        formula: One of "harmonic", "minimum"
 
     Returns:
         Attributed value combining progress and contribution
 
     Formulas:
-        - geometric: sqrt(progress * contribution) - rewards host drift
         - harmonic: 2*p*c/(p+c) - dominated by smaller value, anti-gaming
         - minimum: min(progress, contribution) - very conservative
+
+    The "geometric" mean sqrt(progress * contribution) was removed: it inflates
+    reward with host drift (the larger `progress` term pulls the mean up), which
+    is exactly the confound the counterfactual design exists to eliminate.
     """
     if progress <= 0 or seed_contribution <= 0:
         return 0.0
 
-    if formula == "geometric":
-        return math.sqrt(progress * seed_contribution)
-
-    elif formula == "harmonic":
+    if formula == "harmonic":
         # Harmonic mean: 2ab/(a+b), dominated by smaller value
         # Guard against division by near-zero when both values are tiny
         return 2 * progress * seed_contribution / max(progress + seed_contribution, 1e-8)

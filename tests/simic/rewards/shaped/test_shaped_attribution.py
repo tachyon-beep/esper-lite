@@ -44,7 +44,7 @@ def test_shaped_negative_counterfactual_is_immediate_penalty() -> None:
     assert reward == pytest.approx(-1.0)
 
 
-def test_shaped_geometric_mean_when_contribution_exceeds_progress() -> None:
+def test_shaped_harmonic_mean_when_contribution_exceeds_progress() -> None:
     config = shaped_config()
 
     reward, components = compute_contribution_reward(
@@ -59,9 +59,9 @@ def test_shaped_geometric_mean_when_contribution_exceeds_progress() -> None:
         return_components=True,
     )
 
-    # sqrt(progress * contribution) = sqrt(4 * 9) = 6.0
-    assert components.bounded_attribution == pytest.approx(6.0)
-    assert reward == pytest.approx(6.0)
+    # harmonic mean: 2*p*c/(p+c) = 2*4*9/(4+9) = 72/13 ≈ 5.538
+    assert components.bounded_attribution == pytest.approx(72 / 13)
+    assert reward == pytest.approx(72 / 13)
 
 
 def test_shaped_caps_at_contribution_when_contribution_below_progress() -> None:
@@ -478,19 +478,6 @@ def test_attribution_formula_config_default() -> None:
     assert config.attribution_formula == "harmonic"
 
 
-def test_compute_attributed_geometric_mean() -> None:
-    """D3-Attribution: Geometric mean formula (current behavior)."""
-    from esper.simic.rewards.contribution import _compute_attributed_value
-
-    # sqrt(4 * 9) = 6.0
-    result = _compute_attributed_value(
-        progress=4.0,
-        seed_contribution=9.0,
-        formula="geometric",
-    )
-    assert result == pytest.approx(6.0)
-
-
 def test_compute_attributed_harmonic_mean() -> None:
     """D3-Attribution: Harmonic mean dominated by smaller value."""
     from esper.simic.rewards.contribution import _compute_attributed_value
@@ -528,37 +515,14 @@ def test_compute_attributed_minimum() -> None:
     assert result == pytest.approx(4.0)
 
 
-def test_compute_attributed_harmonic_vs_geometric_with_large_progress() -> None:
-    """D3-Attribution: Harmonic much lower than geometric when progress >> contribution.
-
-    This is the key anti-gaming property: when a seed claims credit for
-    massive host drift (progress=29) with small actual contribution (0.5),
-    harmonic mean gives much less credit than geometric mean.
-    """
-    from esper.simic.rewards.contribution import _compute_attributed_value
-
-    progress = 29.0  # Host improved 29pp since germination
-    contribution = 0.5  # Seed only contributed 0.5pp
-
-    geometric = _compute_attributed_value(progress, contribution, "geometric")
-    harmonic = _compute_attributed_value(progress, contribution, "harmonic")
-
-    # Geometric: sqrt(29 * 0.5) ≈ 3.81
-    assert geometric == pytest.approx(3.807, rel=0.01)
-
-    # Harmonic: 2 * 29 * 0.5 / (29 + 0.5) = 29 / 29.5 ≈ 0.98
-    assert harmonic == pytest.approx(0.983, rel=0.01)
-
-    # Harmonic is ~4x lower for this gaming scenario
-    assert harmonic < geometric * 0.3
-
-
 def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
-    """D3-Attribution: Harmonic formula gives less credit when contribution exceeds progress.
+    """D3-Attribution: Harmonic formula is more conservative than minimum when contribution exceeds progress.
 
     When seed_contribution >= progress, the bounded formula is applied.
-    Harmonic mean is more conservative than geometric mean when values differ.
-    This tests that the attribution_formula config is wired into compute_contribution_reward.
+    Harmonic mean is dominated by the smaller value, giving less credit than
+    a naive sum would. This tests that the attribution_formula config is wired
+    into compute_contribution_reward and that the conservative "minimum" option
+    is bounded below by the harmonic mean.
     """
     from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
     from esper.simic.rewards.types import SeedInfo
@@ -575,10 +539,10 @@ def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
         rent_weight=0.0,
     )
 
-    # Config with geometric formula (default)
-    config_geometric = ContributionRewardConfig(
+    # Config with the conservative minimum formula
+    config_minimum = ContributionRewardConfig(
         contribution_weight=1.0,
-        attribution_formula="geometric",
+        attribution_formula="minimum",
         disable_timing_discount=True,
         disable_pbrs=True,
         disable_terminal_reward=True,
@@ -602,7 +566,7 @@ def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
     # Scenario: contribution >= progress triggers bounded formula
     # progress = 70.0 - 66.0 = 4.0, contribution = 9.0
     # Formula applied because 9.0 >= 4.0
-    _, components_geo = compute_contribution_reward(
+    _, components_min = compute_contribution_reward(
         action=LifecycleOp.WAIT,
         seed_contribution=9.0,  # Exceeds progress
         val_acc=70.0,
@@ -610,7 +574,7 @@ def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
         epoch=55,
         max_epochs=150,
         acc_at_germination=66.0,  # progress = 4.0
-        config=config_geometric,
+        config=config_minimum,
         return_components=True,
     )
 
@@ -626,10 +590,10 @@ def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
         return_components=True,
     )
 
-    # Geometric: sqrt(4 * 9) = 6.0
+    # minimum: min(4, 9) = 4.0
     # Harmonic: 2 * 4 * 9 / (4 + 9) = 72 / 13 ≈ 5.54
-    assert components_geo.bounded_attribution == pytest.approx(6.0, rel=0.01)
+    assert components_min.bounded_attribution == pytest.approx(4.0, rel=0.01)
     assert components_harm.bounded_attribution == pytest.approx(72 / 13, rel=0.01)
 
-    # Harmonic is lower (more conservative) than geometric
-    assert components_harm.bounded_attribution < components_geo.bounded_attribution
+    # Minimum is the most conservative (lowest) bound
+    assert components_min.bounded_attribution < components_harm.bounded_attribution

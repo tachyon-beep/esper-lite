@@ -293,9 +293,9 @@ OBSERVATION_AVAILABLE
     │       │
     │       ├─► seed_contribution < 0 ──► TOXIC_PENALTY (negative attribution)
     │       │
-    │       ├─► seed_contribution >= progress ──► GEOMETRIC_MEAN
+    │       ├─► seed_contribution >= progress ──► HARMONIC_MEAN
     │       │       │
-    │       │       └─► sqrt(progress * contribution)
+    │       │       └─► 2 * progress * contribution / (progress + contribution)
     │       │
     │       └─► seed_contribution < progress ──► CAPPED_ATTRIBUTION
     │               │

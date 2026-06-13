@@ -35,7 +35,7 @@ def shaped_config(
     germinate_cost: float = 0.0,
     set_alpha_target_cost: float = 0.0,
     disable_timing_discount: bool = True,  # D3: default disabled for isolated tests
-    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "geometric",  # D3
+    attribution_formula: Literal["harmonic", "minimum"] = "harmonic",  # D3
     germination_warmup_epochs: int = 10,  # D3
     germination_discount_floor: float = 0.4,  # D3
 ) -> ContributionRewardConfig:

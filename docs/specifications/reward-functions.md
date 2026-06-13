@@ -132,8 +132,7 @@ else:
 
 | Formula | Calculation | Behavior |
 |---------|-------------|----------|
-| `geometric` | `sqrt(progress * contribution)` | Rewards host drift (legacy) |
-| `harmonic` | `2*p*c/(p+c)` | Dominated by smaller value (recommended) |
+| `harmonic` | `2*p*c/(p+c)` | Dominated by smaller value (default) |
 | `minimum` | `min(progress, contribution)` | Very conservative |
 
 **Attribution Discount** (anti-gaming):
@@ -747,7 +746,7 @@ class ContributionRewardConfig:
     disable_timing_discount: bool = False
 
     # === D3: Attribution Formula ===
-    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "harmonic"
+    attribution_formula: Literal["harmonic", "minimum"] = "harmonic"
 ```
 
 ### LossRewardConfig (Full)

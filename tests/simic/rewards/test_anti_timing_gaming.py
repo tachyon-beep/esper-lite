@@ -9,8 +9,6 @@ The anti-gaming formula (harmonic/timing discount) applies when:
 When contribution < progress, attribution is simply capped at contribution.
 """
 
-import math
-
 import pytest
 
 from esper.leyline import LifecycleOp, SeedStage
@@ -43,10 +41,10 @@ class TestAntiTimingGamingIntegration:
             disable_timing_discount=False,
         )
 
-        # Baseline configuration (pre-D3 behavior)
+        # Baseline configuration (harmonic formula, no timing discount)
         config_baseline = ContributionRewardConfig(
             contribution_weight=1.0,
-            attribution_formula="geometric",
+            attribution_formula="harmonic",
             disable_timing_discount=True,
         )
 
@@ -91,13 +89,13 @@ class TestAntiTimingGamingIntegration:
         )
 
         # Expected calculations:
-        # Baseline (geometric): sqrt(5 * 30) = sqrt(150) ~ 12.25
+        # Baseline (harmonic, no timing discount): 2 * 5 * 30 / (5 + 30) = 300/35 ~ 8.57
         # D3 Harmonic: 2 * 5 * 30 / (5 + 30) = 300/35 ~ 8.57
         # D3 Timing: epoch 2, warmup 10, floor 0.4
         #   discount = 0.4 + (1.0 - 0.4) * (2/10) = 0.4 + 0.12 = 0.52
         # D3 Combined: 8.57 * 0.52 ~ 4.46
 
-        expected_baseline = math.sqrt(5 * 30)  # ~12.25
+        expected_baseline = 2 * 5 * 30 / (5 + 30)  # ~8.57 (harmonic, no discount)
         expected_harmonic = 2 * 5 * 30 / (5 + 30)  # ~8.57
         expected_discount = 0.4 + (1.0 - 0.4) * (2 / 10)  # 0.52
         expected_d3 = expected_harmonic * expected_discount  # ~4.46
@@ -106,9 +104,10 @@ class TestAntiTimingGamingIntegration:
         assert comp_d3.bounded_attribution == pytest.approx(expected_d3, rel=0.01)
         assert comp_d3.timing_discount == pytest.approx(expected_discount, rel=0.01)
 
-        # D3 reduces attribution significantly for this gaming scenario
+        # The timing discount reduces attribution for this early-germination scenario.
+        # reduction = baseline / d3 = 8.57 / 4.46 ~ 1.92 (= 1 / discount = 1 / 0.52)
         reduction_factor = comp_baseline.bounded_attribution / comp_d3.bounded_attribution
-        assert reduction_factor > 2.5, f"Expected >2.5x reduction, got {reduction_factor:.2f}x"
+        assert reduction_factor > 1.8, f"Expected >1.8x reduction, got {reduction_factor:.2f}x"
 
     def test_fossilized_seed_regression_is_accounted_after_peak(self) -> None:
         """Post-fossilization negative contribution must debit drip reward."""
@@ -210,7 +209,7 @@ class TestAntiTimingGamingIntegration:
             return_components=True,
         )
 
-        # When contribution and progress are close, harmonic ~ geometric
+        # When contribution and progress are close, harmonic ~ their average
         # Harmonic: 2 * 8 * 10 / (8 + 10) = 160 / 18 ~ 8.89
         # Timing discount: epoch 50 >= warmup 10 -> discount = 1.0
         # Total: 8.89 * 1.0 = 8.89
@@ -269,7 +268,7 @@ class TestAntiTimingGamingIntegration:
             contribution_weight=1.0,
             germination_warmup_epochs=10,
             germination_discount_floor=0.4,
-            attribution_formula="geometric",
+            attribution_formula="harmonic",
             disable_timing_discount=False,
         )
 
