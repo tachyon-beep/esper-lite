@@ -221,12 +221,23 @@ def reset_random_seeds(request):
 
     # Skip torch import if test is marked with no_torch_seeding
     # (prevents issues with import isolation tests that delete sys.modules)
+    _mc_validate_prev = None
     if "no_torch_seeding" not in request.keywords:
         import torch
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
+        # Test isolation: the training process sets MaskedCategorical.validate=False
+        # (P1-VALID, vectorized.py) as a process-global; capture + restore it around each
+        # test so a training-exercising test cannot leak validate=False into later tests
+        # that assert the True default.
+        from esper.tamiyo.policy.action_masks import MaskedCategorical
+        _mc_validate_prev = MaskedCategorical.validate
 
     yield  # Test runs here
+
+    if _mc_validate_prev is not None:
+        from esper.tamiyo.policy.action_masks import MaskedCategorical
+        MaskedCategorical.validate = _mc_validate_prev
 
     # Cleanup after test (if needed)
