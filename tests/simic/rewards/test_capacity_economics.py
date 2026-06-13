@@ -1,12 +1,11 @@
 """D2 Capacity Economics: Tests for slot saturation prevention.
 
 These tests verify the D2 capacity economics feature which prevents early slot
-saturation through occupancy rent and first-germinate bonus.
+saturation through occupancy rent on active and fossilized seeds.
 
-Bug fixed (2025-01-08): n_active_seeds and seeds_germinated_this_episode were
-not wired through the reward pipeline, causing:
-1. Occupancy rent to only count fossilized seeds (active seeds escaped the cost)
-2. First-germinate bonus to fire on EVERY germinate action, not just the first
+Bug fixed (2025-01-08): n_active_seeds was not wired through the reward
+pipeline, causing occupancy rent to only count fossilized seeds (active seeds
+escaped the cost).
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ def capacity_config(
     seed_occupancy_cost: float = 0.01,
     free_slots: int = 1,
     fossilized_maintenance_cost: float = 0.002,
-    first_germinate_bonus: float = 0.2,
 ) -> ContributionRewardConfig:
     """Config that isolates D2 capacity economics from other reward components."""
     return ContributionRewardConfig(
@@ -48,7 +46,6 @@ def capacity_config(
         seed_occupancy_cost=seed_occupancy_cost,
         free_slots=free_slots,
         fossilized_maintenance_cost=fossilized_maintenance_cost,
-        first_germinate_bonus=first_germinate_bonus,
     )
 
 
@@ -146,73 +143,6 @@ class TestOccupancyRent:
         assert reward == pytest.approx(-0.15)
 
 
-class TestFirstGerminateBonus:
-    """Tests for one-time first-germination bonus that breaks 'do nothing' symmetry."""
-
-    def test_first_germinate_gets_bonus(self) -> None:
-        """First germination in an episode receives the one-time bonus."""
-        config = capacity_config(first_germinate_bonus=0.5)
-
-        reward, components = compute_contribution_reward(
-            action=LifecycleOp.GERMINATE,
-            seed_contribution=None,
-            val_acc=50.0,
-            seed_info=None,  # No existing seed
-            epoch=1,
-            max_epochs=10,
-            config=config,
-            return_components=True,
-            seeds_germinated_this_episode=0,  # FIRST germination
-        )
-
-        assert components.first_germinate_bonus == pytest.approx(0.5)
-        assert reward == pytest.approx(0.5)
-
-    def test_second_germinate_no_bonus(self) -> None:
-        """Second germination does NOT receive the bonus.
-
-        Bug fixed (2025-01-08): Previously seeds_germinated_this_episode was
-        not wired, so it defaulted to 0 and every germinate got the bonus.
-        """
-        config = capacity_config(first_germinate_bonus=0.5)
-
-        reward, components = compute_contribution_reward(
-            action=LifecycleOp.GERMINATE,
-            seed_contribution=None,
-            val_acc=50.0,
-            seed_info=None,
-            epoch=1,
-            max_epochs=10,
-            config=config,
-            return_components=True,
-            seeds_germinated_this_episode=1,  # NOT the first
-        )
-
-        assert components.first_germinate_bonus == 0.0
-        assert reward == pytest.approx(0.0)
-
-    def test_subsequent_germinates_no_bonus(self) -> None:
-        """No bonus for third, fourth, etc. germinations."""
-        config = capacity_config(first_germinate_bonus=0.5)
-
-        for prev_germinates in [2, 3, 5, 10]:
-            reward, components = compute_contribution_reward(
-                action=LifecycleOp.GERMINATE,
-                seed_contribution=None,
-                val_acc=50.0,
-                seed_info=None,
-                epoch=1,
-                max_epochs=10,
-                config=config,
-                return_components=True,
-                seeds_germinated_this_episode=prev_germinates,
-            )
-
-            assert components.first_germinate_bonus == 0.0, (
-                f"Should not get bonus when seeds_germinated={prev_germinates}"
-            )
-
-
 class TestContributionRewardInputsWiring:
     """Tests verifying the fix wires D2 fields through compute_reward()."""
 
@@ -241,51 +171,6 @@ class TestContributionRewardInputsWiring:
 
         # 3 active * 0.1 cost = 0.3 rent
         assert components.occupancy_rent == pytest.approx(0.3)
-
-    def test_compute_reward_passes_seeds_germinated_this_episode(self) -> None:
-        """compute_reward() correctly passes seeds_germinated_this_episode."""
-        config = capacity_config(first_germinate_bonus=0.5)
-
-        # First germinate should get bonus
-        inputs_first = ContributionRewardInputs(
-            action=LifecycleOp.GERMINATE,
-            seed_contribution=None,
-            val_acc=50.0,
-            seed_info=None,
-            epoch=1,
-            max_epochs=10,
-            total_params=1000,
-            host_params=500,
-            acc_at_germination=None,
-            acc_delta=0.0,
-            config=config,
-            return_components=True,
-            seeds_germinated_this_episode=0,
-        )
-
-        reward_first, components_first = compute_reward(inputs_first)
-        assert components_first.first_germinate_bonus == pytest.approx(0.5)
-
-        # Second germinate should NOT get bonus
-        inputs_second = ContributionRewardInputs(
-            action=LifecycleOp.GERMINATE,
-            seed_contribution=None,
-            val_acc=50.0,
-            seed_info=None,
-            epoch=1,
-            max_epochs=10,
-            total_params=1000,
-            host_params=500,
-            acc_at_germination=None,
-            acc_delta=0.0,
-            config=config,
-            return_components=True,
-            seeds_germinated_this_episode=1,  # Field must be wired
-        )
-
-        reward_second, components_second = compute_reward(inputs_second)
-        assert components_second.first_germinate_bonus == 0.0
-
 
 class TestCapacityEconomicsRLImplications:
     """Tests for RL-specific implications of capacity economics."""
@@ -336,45 +221,6 @@ class TestCapacityEconomicsRLImplications:
 
         # Fossilized also has maintenance cost
         assert high_fossilized.fossilized_rent == pytest.approx(5 * 0.01)
-
-    def test_first_germinate_bonus_breaks_do_nothing_symmetry(self) -> None:
-        """First germinate bonus should make GERMINATE preferable to WAIT at start.
-
-        Without this bonus, an agent could learn to always WAIT because there's
-        no immediate reward for taking the first action.
-        """
-        config = capacity_config(first_germinate_bonus=0.2)
-
-        # WAIT action
-        wait_reward, _ = compute_contribution_reward(
-            action=LifecycleOp.WAIT,
-            seed_contribution=None,
-            val_acc=50.0,
-            seed_info=None,
-            epoch=1,
-            max_epochs=10,
-            config=config,
-            return_components=True,
-            seeds_germinated_this_episode=0,
-        )
-
-        # GERMINATE action (first one)
-        germinate_reward, _ = compute_contribution_reward(
-            action=LifecycleOp.GERMINATE,
-            seed_contribution=None,
-            val_acc=50.0,
-            seed_info=None,
-            epoch=1,
-            max_epochs=10,
-            config=config,
-            return_components=True,
-            seeds_germinated_this_episode=0,
-        )
-
-        # First GERMINATE should be more rewarding than WAIT
-        assert germinate_reward > wait_reward
-        assert germinate_reward == pytest.approx(0.2)
-        assert wait_reward == pytest.approx(0.0)
 
     def test_pruned_seeds_excluded_from_n_active_seeds(self) -> None:
         """PRUNED seeds should NOT count toward n_active_seeds for occupancy rent.

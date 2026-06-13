@@ -285,11 +285,9 @@ class ContributionRewardConfig:
     # - seed_occupancy_cost: Per-epoch cost per seed above free_slots threshold
     # - free_slots: First N slots incur no occupancy rent (encourages some activity)
     # - fossilized_maintenance_cost: Per-epoch cost per fossilized seed (they still consume capacity)
-    # - first_germinate_bonus: One-time bonus for first germination (breaks "do nothing" symmetry)
     seed_occupancy_cost: float = 0.01
     free_slots: int = 1
     fossilized_maintenance_cost: float = 0.002
-    first_germinate_bonus: float = 0.2
 
     # === D3: Anti-Timing-Gaming (early germination discount) ===
     # Seeds germinated before warmup period receive discounted attribution.
@@ -399,7 +397,6 @@ def compute_contribution_reward(
     escrow_credit_prev: float = 0.0,
     # D2: Capacity economics parameters
     n_active_seeds: int = 0,
-    seeds_germinated_this_episode: int = 0,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant)."""
     if config is None:
@@ -691,7 +688,6 @@ def compute_contribution_reward(
     # must count against the free_slots threshold until D3 (audit) creates proper incentives.
     occupancy_rent = 0.0
     fossilized_rent = 0.0
-    first_germ_bonus = 0.0
 
     # Occupancy rent for occupied slots above free_slots threshold
     # n_occupied includes both active AND fossilized seeds (they all consume slots)
@@ -706,16 +702,9 @@ def compute_contribution_reward(
         fossilized_rent = config.fossilized_maintenance_cost * num_fossilized_seeds
         reward -= fossilized_rent
 
-    # First-germination bonus (breaks "do nothing" symmetry)
-    # One-time bonus when agent takes first germination action
-    if action == LifecycleOp.GERMINATE and seeds_germinated_this_episode == 0:
-        first_germ_bonus = config.first_germinate_bonus
-        reward += first_germ_bonus
-
     if components:
         components.occupancy_rent = occupancy_rent
         components.fossilized_rent = fossilized_rent
-        components.first_germinate_bonus = first_germ_bonus
         components.n_active_seeds = n_active_seeds
 
     action_shaping = 0.0

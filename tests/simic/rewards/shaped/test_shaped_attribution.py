@@ -383,7 +383,6 @@ def test_shaped_timing_discount_reduces_early_germination_attribution() -> None:
         disable_terminal_reward=True,
         disable_anti_gaming=True,
         rent_weight=0.0,
-        first_germinate_bonus=0.0,
     )
 
     # Seed germinated at epoch 2, now at epoch 20
@@ -438,7 +437,6 @@ def test_shaped_timing_discount_disabled_gives_full_credit() -> None:
         disable_terminal_reward=True,
         disable_anti_gaming=True,
         rent_weight=0.0,
-        first_germinate_bonus=0.0,
     )
 
     seed = SeedInfo(
@@ -575,7 +573,6 @@ def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
         disable_terminal_reward=True,
         disable_anti_gaming=True,
         rent_weight=0.0,
-        first_germinate_bonus=0.0,
     )
 
     # Config with geometric formula (default)
@@ -587,7 +584,6 @@ def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
         disable_terminal_reward=True,
         disable_anti_gaming=True,
         rent_weight=0.0,
-        first_germinate_bonus=0.0,
     )
 
     seed = SeedInfo(

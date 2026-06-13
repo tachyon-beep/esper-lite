@@ -74,7 +74,6 @@ class RewardComponentsTelemetry:
     # D2: Capacity Economics (slot saturation prevention)
     occupancy_rent: float = 0.0  # Per-epoch cost for seeds above free_slots threshold
     fossilized_rent: float = 0.0  # Per-epoch maintenance cost for fossilized seeds
-    first_germinate_bonus: float = 0.0  # One-time bonus for first germination (breaks "do nothing" symmetry)
     n_active_seeds: int = 0  # Count of active seeds (for diagnostics)
 
     # D3: Anti-Timing-Gaming (early germination discount)
@@ -143,7 +142,6 @@ class RewardComponentsTelemetry:
             # D2: Capacity economics (shaping terms)
             - self.occupancy_rent  # Already negative in reward, store as positive
             - self.fossilized_rent  # Already negative in reward, store as positive
-            + self.first_germinate_bonus
         )
         return abs(shaped) / abs(self.total_reward)
 
@@ -192,7 +190,6 @@ class RewardComponentsTelemetry:
             # D2: Capacity economics
             "occupancy_rent": self.occupancy_rent,
             "fossilized_rent": self.fossilized_rent,
-            "first_germinate_bonus": self.first_germinate_bonus,
             "n_active_seeds": self.n_active_seeds,
             # D3: Anti-timing-gaming
             "timing_discount": self.timing_discount,
@@ -255,7 +252,6 @@ class RewardComponentsTelemetry:
             # D2: Capacity economics
             occupancy_rent=float(data["occupancy_rent"]),  # type: ignore[arg-type]
             fossilized_rent=float(data["fossilized_rent"]),  # type: ignore[arg-type]
-            first_germinate_bonus=float(data["first_germinate_bonus"]),  # type: ignore[arg-type]
             n_active_seeds=int(data["n_active_seeds"]),  # type: ignore[arg-type]
             # D3: Anti-timing-gaming
             timing_discount=float(data["timing_discount"]),  # type: ignore[arg-type]

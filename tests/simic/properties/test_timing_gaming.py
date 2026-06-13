@@ -117,7 +117,6 @@ def test_combined_fixes_reduce_gaming_incentive(inputs):
         disable_terminal_reward=True,
         disable_anti_gaming=True,
         rent_weight=0.0,
-        first_germinate_bonus=0.0,
     )
 
     config_baseline = ContributionRewardConfig(
@@ -128,7 +127,6 @@ def test_combined_fixes_reduce_gaming_incentive(inputs):
         disable_terminal_reward=True,
         disable_anti_gaming=True,
         rent_weight=0.0,
-        first_germinate_bonus=0.0,
     )
 
     seed = SeedInfo(

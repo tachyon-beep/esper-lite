@@ -893,7 +893,6 @@ def execute_actions(
             reward_inputs.seed_id = seed_id
             # D2: Capacity Economics (slot saturation prevention)
             reward_inputs.n_active_seeds = n_active_seeds
-            reward_inputs.seeds_germinated_this_episode = env_state.germinate_count
 
             # Drip reward parameters (BASIC_PLUS mode: post-fossilization accountability)
             # Pass existing drip states and build contributions from counterfactual baselines

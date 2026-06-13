@@ -86,7 +86,6 @@ class TestRewardComposition:
             # D2 capacity economics
             - components.occupancy_rent  # Subtracted: slots above threshold incur cost
             - components.fossilized_rent  # Subtracted: maintenance cost for fossilized seeds
-            + components.first_germinate_bonus  # Added: breaks "do nothing" symmetry
         )
 
         assert abs(component_sum - reward) < 1e-6, (

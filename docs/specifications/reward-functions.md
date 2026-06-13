@@ -106,7 +106,6 @@ R_shaped = bounded_attribution
          + alpha_shock
          - occupancy_rent
          - fossilized_rent
-         + first_germinate_bonus
          + action_shaping
          + terminal_bonus
 ```
@@ -256,17 +255,12 @@ occupancy_rent = seed_occupancy_cost * excess_occupied
 
 # Fossilized maintenance
 fossilized_rent = fossilized_maintenance_cost * num_fossilized_seeds
-
-# First germination bonus (breaks "do nothing" symmetry)
-if action == GERMINATE and seeds_germinated_this_episode == 0:
-    first_germ_bonus = first_germinate_bonus
 ```
 
 **Default Values:**
 - `seed_occupancy_cost = 0.01`
 - `free_slots = 1`
 - `fossilized_maintenance_cost = 0.002`
-- `first_germinate_bonus = 0.2`
 
 #### 3.9 Action Shaping
 
@@ -746,7 +740,6 @@ class ContributionRewardConfig:
     seed_occupancy_cost: float = 0.01
     free_slots: int = 1
     fossilized_maintenance_cost: float = 0.002
-    first_germinate_bonus: float = 0.2
 
     # === D3: Timing Discount ===
     germination_warmup_epochs: int = 10
@@ -793,7 +786,6 @@ class LossRewardConfig:
 | alpha_shock | SHAPED, ESCROW | [-cap, 0] | Alpha oscillation penalty |
 | occupancy_rent | SHAPED, ESCROW | [0, ∞) | Slot saturation prevention |
 | fossilized_rent | SHAPED, ESCROW | [0, ∞) | Frozen compute cost |
-| first_germinate_bonus | SHAPED, ESCROW | 0 or 0.2 | Break "do nothing" symmetry |
 | action_shaping | SHAPED, ESCROW | varies | Action-specific costs/bonuses |
 | terminal_bonus | SHAPED, ESCROW, SIMPLIFIED | [0, ∞) | Episode-end accuracy reward |
 | sparse_reward | SPARSE, MINIMAL | [-scale, +scale] | Terminal-only ground truth |
@@ -858,7 +850,6 @@ class RewardComponentsTelemetry:
     alpha_shock: float
     occupancy_rent: float
     fossilized_rent: float
-    first_germinate_bonus: float
     n_active_seeds: int
 
     # Terminal

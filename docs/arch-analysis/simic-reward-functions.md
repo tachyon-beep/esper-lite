@@ -92,7 +92,6 @@ R_total = bounded_attribution
         + alpha_shock
         - occupancy_rent
         - fossilized_rent
-        + first_germinate_bonus
         + action_shaping
         + terminal_bonus
 ```
@@ -179,10 +178,6 @@ occupancy_rent = seed_occupancy_cost * excess_occupied  # 0.01 per excess slot
 
 # Fossilized maintenance rent
 fossilized_rent = fossilized_maintenance_cost * num_fossilized_seeds  # 0.002 per fossil
-
-# First germination bonus (breaks "do nothing" symmetry)
-if action == GERMINATE and seeds_germinated_this_episode == 0:
-    first_germ_bonus = 0.2
 ```
 
 #### Alpha Shock Penalty
@@ -642,7 +637,6 @@ The `RewardComponentsTelemetry` dataclass captures all reward components for deb
 | `action_shaping` | Per-action bonuses/penalties |
 | `terminal_bonus` | Episode completion reward |
 | `fossilize_terminal_bonus` | Fossil count reward (tanh-saturated) |
-| `first_germinate_bonus` | Symmetry-breaking for first germination |
 
 ### Diagnostic Metric
 
@@ -768,7 +762,6 @@ R_escrow = delta
 | `seed_occupancy_cost` | 0.01 | D2: Per-slot excess cost |
 | `free_slots` | 1 | D2: Rent-free slots |
 | `fossilized_maintenance_cost` | 0.002 | D2: Per-fossil maintenance |
-| `first_germinate_bonus` | 0.2 | D2: First germ bonus |
 | `germination_warmup_epochs` | 10 | D3: Warmup period |
 | `germination_discount_floor` | 0.4 | D3: Min discount factor |
 | `disable_timing_discount` | False | D3: Ablation flag |

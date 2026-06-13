@@ -76,8 +76,6 @@ def shaped_config(
         fossilize_noncontributing_penalty=0.0,
         early_prune_threshold=0,
         early_prune_penalty=0.0,
-        # D2 capacity economics - disable for isolated SHAPED tests
-        first_germinate_bonus=0.0,
         # D3 timing discount - disable for isolated SHAPED tests
         disable_timing_discount=disable_timing_discount,
         attribution_formula=attribution_formula,
