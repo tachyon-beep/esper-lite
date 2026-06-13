@@ -34,13 +34,17 @@ class TestExportJsonl:
         assert count >= 1
         assert output_file.exists()
 
-        # Verify it's valid JSON
+        # Verify it's valid JSON. First record is the proof-status header;
+        # the context record follows.
         with open(output_file) as f:
-            line = f.readline()
-            data = json.loads(line)  # Should not raise
-            assert data["type"] == "context"
+            first = json.loads(f.readline())
+            assert first["type"] == "proof_status"
+            assert first["data"]["proof_grade"] is False
+
+            context = json.loads(f.readline())
+            assert context["type"] == "context"
             # timestamp should be serialized as ISO string
-            assert "timestamp" in data["data"]
+            assert "timestamp" in context["data"]
 
     def test_export_handles_path_objects(self, tmp_path: Path):
         """export_jsonl correctly serializes Path objects."""

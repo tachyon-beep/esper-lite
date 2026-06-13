@@ -268,6 +268,12 @@ class KarnCollector:
             self._handle_anomaly_event(event, event_type)
         elif event_type == "ANALYTICS_SNAPSHOT":
             self._handle_analytics_snapshot(event)
+        else:
+            # Families the reduced store schema does not model — notably the
+            # proof-critical EPISODE_OUTCOME / GOVERNOR_ROLLBACK /
+            # MORPHOLOGY_CAUSAL_LOG. Record them so the live store reports
+            # non-proof-grade (KARN-PROOF-005) instead of silently dropping them.
+            self.store.record_unsupported_event(event_type)
 
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event - auto-initialize episode AND first epoch."""
