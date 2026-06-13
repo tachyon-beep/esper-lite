@@ -266,6 +266,57 @@ def test_evaluate_actions_returns_contributions():
     assert pred_contributions.shape == (batch_size, seq_len, num_slots)
 
 
+def test_evaluate_actions_does_not_clamp_cell_state():
+    """evaluate_actions must NOT soft-clamp the returned cell state.
+
+    Regression for esper-lite-b5781c5c5b: the reconstruction (update) leg previously
+    applied ``c = torch.tanh(c / 50.0) * 50.0``, forcing |c| strictly below 50, while
+    forward() (the rollout leg) applies no such clamp. That asymmetry (a) masked a
+    genuine cell-state explosion in compute_lstm_health telemetry (which reads the
+    returned hidden) and (b) was a latent BPTT trap if sequence chunking were ever
+    introduced. With a large injected initial cell state, the returned cell state must
+    retain magnitude well above 50 — the removed clamp would have capped it below 50.
+    """
+    torch.manual_seed(0)
+    slot_config = SlotConfig.default()
+    num_slots = len(slot_config.slot_ids)
+
+    policy = FactoredRecurrentActorCritic(state_dim=128, slot_config=slot_config)
+
+    batch_size = 2
+    seq_len = 1
+
+    states = torch.zeros(batch_size, seq_len, 128)
+    blueprint_indices = torch.randint(-1, 13, (batch_size, seq_len, num_slots))
+
+    actions = {
+        "op": torch.randint(0, policy.num_ops, (batch_size, seq_len)),
+        "slot": torch.randint(0, num_slots, (batch_size, seq_len)),
+        "blueprint": torch.randint(0, policy.num_blueprints, (batch_size, seq_len)),
+        "style": torch.randint(0, policy.num_styles, (batch_size, seq_len)),
+        "tempo": torch.randint(0, policy.num_tempo, (batch_size, seq_len)),
+        "alpha_target": torch.randint(0, policy.num_alpha_targets, (batch_size, seq_len)),
+        "alpha_speed": torch.randint(0, policy.num_alpha_speeds, (batch_size, seq_len)),
+        "alpha_curve": torch.randint(0, policy.num_alpha_curves, (batch_size, seq_len)),
+    }
+
+    # Inject an initial cell state far above the old |c| < 50 clamp ceiling.
+    h0, c0 = policy.get_initial_hidden(batch_size, torch.device("cpu"))
+    c_big = torch.full_like(c0, 5000.0)
+
+    _, _, _, hidden_out, _ = policy.evaluate_actions(
+        states,
+        blueprint_indices,
+        actions,
+        hidden=(h0, c_big),
+        aux_stop_gradient=True,
+    )
+
+    _, c_out = hidden_out
+    # The removed clamp tanh(c/50)*50 would force |c_out| strictly below 50.
+    assert c_out.abs().max().item() > 50.0
+
+
 def test_evaluate_actions_aux_stop_gradient_true():
     """evaluate_actions with aux_stop_gradient=True detaches LSTM output for contributions."""
     slot_config = SlotConfig.default()
