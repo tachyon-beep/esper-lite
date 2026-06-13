@@ -104,6 +104,31 @@ def _pair_index_accs_for_active_slots(
     }
 
 
+def _pair_interaction_index(
+    pair_acc: float,
+    solo_on_a: float,
+    solo_on_b: float,
+    all_off_acc: float,
+) -> float:
+    """Second-order interaction index I_ij = f({i,j}) - f({i}) - f({j}) + f(empty).
+
+    All four terms MUST share single-coalition-ON semantics:
+      - ``pair_acc``    = f({i,j})  (only slots i, j enabled),
+      - ``solo_on_a/b`` = f({i}) / f({j})  (only that one slot enabled),
+      - ``all_off_acc`` = f(empty)  (all seeds disabled).
+
+    Passing leave-one-out accuracies (f(N\\{i}), "everyone but i") for the solo
+    terms corrupts the index: leave-one-out and solo-ON agree ONLY in the purely
+    additive (no-interaction) regime -- exactly the regime the index exists to
+    detect deviation from -- so the mixed quantity has no clean game-theoretic
+    meaning and its sign/magnitude do not track true synergy when seeds overlap.
+
+    Returns 0.0 for additive (non-interacting) seeds, positive for synergy
+    (the coalition beats the sum of its parts) and negative for antagonism.
+    """
+    return pair_acc - solo_on_a - solo_on_b + all_off_acc
+
+
 def compute_forced_head_flags(
     masks_batch: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
@@ -1180,11 +1205,16 @@ class VectorizedPPOTrainer:
                             if all_off_acc is None:
                                 all_off_acc = min(baseline_accs[i].values())
                             for (slot_a, slot_b), pair_acc in pair_accs[i].items():
-                                # Solo accuracies MUST exist - active_slots derived from baseline_accs keys
-                                solo_a = baseline_accs[i][slot_a]
-                                solo_b = baseline_accs[i][slot_b]
-                                # I_ij = f({i,j}) - f({i}) - f({j}) + f(empty)
-                                interaction = pair_acc - solo_a - solo_b + all_off_acc
+                                # I_ij requires single-seed-ON accuracies f({i}):
+                                # solo_on_accs holds "only this slot enabled" (f({i})),
+                                # NOT baseline_accs' leave-one-out (f(N\{i})), which would
+                                # corrupt the index when seeds interact. solo_on accs exist
+                                # for every active slot (kind="solo_on"), so indexing is safe.
+                                solo_on_a = solo_on_accs[i][slot_a]
+                                solo_on_b = solo_on_accs[i][slot_b]
+                                interaction = _pair_interaction_index(
+                                    pair_acc, solo_on_a, solo_on_b, all_off_acc
+                                )
 
                                 # Track positive synergy in scaffold boost ledger for hindsight credit
                                 if interaction > 0:
