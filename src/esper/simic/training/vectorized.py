@@ -69,6 +69,7 @@ from esper.simic.telemetry import (
     collect_per_layer_gradients,
 )
 from esper.simic.control import RunningMeanStd, RewardNormalizer
+from esper.tamiyo.policy.action_masks import MaskedCategorical
 from esper.tamiyo.policy.features import get_feature_size
 from esper.simic.agent import PPOAgent
 from esper.simic.agent.types import PPOUpdateMetrics
@@ -974,6 +975,13 @@ def train_ppo_vectorized(
         effective_compile_mode = compile_mode
     else:
         effective_compile_mode = compile_mode if not quiet_analytics else "off"
+
+    # P1-VALID: disable MaskedCategorical's per-head .any()/.isnan() validation in the
+    # TRAINING process. Those force CPU syncs + @torch.compiler.disable graph breaks on the
+    # hot path (rollout get_action and evaluate_actions). NaN/Inf logits are caught by the PPO
+    # finiteness gate; empty masks by the folded sync-free guard in evaluate_actions. This is
+    # the documented `validate` toggle, not a shim -- dev/eval/CI processes keep validate=True.
+    MaskedCategorical.validate = False
 
     # Create or resume PPO agent
     if resume_path:

@@ -1276,6 +1276,13 @@ class FactoredRecurrentActorCritic(nn.Module):
             "op": op_logits,
         }
 
+        # P1-VALID: accumulate an empty-mask flag across heads (sync-free). With
+        # MaskedCategorical.validate=False in training, the per-head validation below is off;
+        # the PPO finiteness gate does NOT catch empty masks (uniform-over-invalid log_probs
+        # are finite), so this single folded check (one sync after the loop) preserves the
+        # empty-mask invariant on the action-construction path.
+        empty_mask_flag = torch.zeros((), dtype=torch.bool, device=device)
+
         for key in HEAD_NAMES:
             logits = head_logits[key]  # [batch, seq_len, action_dim]
             action = actions[key]  # [batch, seq_len]
@@ -1356,12 +1363,24 @@ class FactoredRecurrentActorCritic(nn.Module):
                 masked_logits = _apply_floor_to_logits(masked_logits, mask_flat, min_prob)
             log_probs[key] = _masked_log_prob(masked_logits, action_flat).reshape(batch, seq)
             entropy[key] = _normalized_entropy_from_masked_logits(masked_logits, mask_flat).reshape(batch, seq)
-            # Validation moved off the hot tensor ops; honors MaskedCategorical.validate
-            # so dev/eval still fails loud on empty masks / nonfinite logits (P1-VALID
-            # keeps a separate sync-free empty-mask guard in the training process).
+            # Sync-free per-head accumulation of the empty-mask flag (post-canonicalization).
+            empty_mask_flag = empty_mask_flag | (~mask_flat.any(dim=-1)).any()
+            # Detailed per-head validation stays in dev/eval (validate=True); it also covers
+            # nonfinite logits, which in training are caught downstream by the finiteness gate.
             if MaskedCategorical.validate:
                 _validate_action_mask(mask_flat)
                 _validate_logits(logits_flat)
+
+        # P1-VALID training-path guard: a single sync, evaluated only when the per-head
+        # validation is disabled (validate=True already raised per head above). Short-circuit
+        # keeps the happy path sync-free in dev too.
+        if not MaskedCategorical.validate and bool(empty_mask_flag):
+            raise InvalidStateMachineError(
+                "evaluate_actions: an action head has no valid actions post-canonicalization "
+                "(empty mask) with MaskedCategorical.validate=False. The PPO finiteness gate "
+                "does not catch empty masks (uniform-over-invalid log_probs are finite). "
+                "Likely a Kasmina state-machine bug producing an all-masked head."
+            )
 
         return log_probs, value, entropy, new_hidden, pred_contributions
 

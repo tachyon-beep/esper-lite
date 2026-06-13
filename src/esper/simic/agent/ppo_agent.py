@@ -881,34 +881,50 @@ class PPOAgent:
             nonfinite_found = False
             nonfinite_sources: list[str] = []
 
-            # Check new log_probs - separate NaN from Inf per head
-            # Fast path: only drill down when isfinite fails (preserves 0 syncs in happy path)
-            for key in HEAD_NAMES:
-                lp = log_probs[key]
-                if not torch.isfinite(lp).all():
-                    # Slow path: distinguish NaN from Inf
-                    if torch.isnan(lp).any():
-                        head_nan_detected[key] = True
-                        nonfinite_sources.append(f"log_probs[{key}]: NaN detected")
-                    if torch.isinf(lp).any():
-                        head_inf_detected[key] = True
-                        nonfinite_sources.append(f"log_probs[{key}]: Inf detected")
-                    nonfinite_found = True
+            # P1-SYNC: ONE fused finiteness reduction across all heads' new+old log_probs and
+            # values (was up to 17 separate .all() GPU->CPU syncs on the happy path). new
+            # log_probs are FP32 (the P1-EVAL seam); old log_probs are FP32 because the rollout
+            # buffer is FP32-allocated (rollout_buffer.py) regardless of rollout autocast. We
+            # .float() both stacks defensively so a future dtype change cannot desync the stack.
+            # On failure we drill into the per-head attribution slow path VERBATIM, so
+            # head_nan_detected / head_inf_detected / nonfinite_sources are byte-identical.
+            new_lp_stack = torch.stack([log_probs[k].float() for k in HEAD_NAMES])
+            old_lp_stack = torch.stack(
+                [data[f"{k}_log_probs"][valid_mask].float() for k in HEAD_NAMES]
+            )
+            all_finite = (
+                torch.isfinite(new_lp_stack).all()
+                & torch.isfinite(old_lp_stack).all()
+                & torch.isfinite(values).all()
+            )
+            if not bool(all_finite):  # single sync; per-head drill-down only on failure
+                # Check new log_probs - separate NaN from Inf per head
+                for key in HEAD_NAMES:
+                    lp = log_probs[key]
+                    if not torch.isfinite(lp).all():
+                        # Slow path: distinguish NaN from Inf
+                        if torch.isnan(lp).any():
+                            head_nan_detected[key] = True
+                            nonfinite_sources.append(f"log_probs[{key}]: NaN detected")
+                        if torch.isinf(lp).any():
+                            head_inf_detected[key] = True
+                            nonfinite_sources.append(f"log_probs[{key}]: Inf detected")
+                        nonfinite_found = True
 
-            # Check old log_probs (stored as "{key}_log_probs" in data dict)
-            for key in HEAD_NAMES:
-                old_key = f"{key}_log_probs"
-                old_lp = data[old_key][valid_mask]
-                if not torch.isfinite(old_lp).all():
-                    nonfinite_count = (~torch.isfinite(old_lp)).sum()
-                    nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
-                    nonfinite_found = True
+                # Check old log_probs (stored as "{key}_log_probs" in data dict)
+                for key in HEAD_NAMES:
+                    old_key = f"{key}_log_probs"
+                    old_lp = data[old_key][valid_mask]
+                    if not torch.isfinite(old_lp).all():
+                        nonfinite_count = (~torch.isfinite(old_lp)).sum()
+                        nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
+                        nonfinite_found = True
 
-            # Check values
-            if not torch.isfinite(values).all():
-                nonfinite_count = (~torch.isfinite(values)).sum()
-                nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
-                nonfinite_found = True
+                # Check values
+                if not torch.isfinite(values).all():
+                    nonfinite_count = (~torch.isfinite(values)).sum()
+                    nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
+                    nonfinite_found = True
 
             if nonfinite_found:
                 logger.warning(
@@ -1215,11 +1231,20 @@ class PPOAgent:
                     head_gradient_state_history[head_name].append(grad_state)
 
                 all_norms = torch.stack(head_norm_tensors)
+                # P1-SYNC: batch the per-head learnable-fraction == 0 compare into ONE sync
+                # (was one .item() per head). Stack each head's latest fraction, materialize
+                # once, then index. Preserves the "not_learnable" relabel bit-for-bit.
+                lf_heads = [hn for hn in head_names if hn in head_learnable_fraction_history]
+                if lf_heads:
+                    lf_is_zero = (
+                        torch.stack([head_learnable_fraction_history[hn][-1] for hn in lf_heads])
+                        == 0.0
+                    ).tolist()  # single sync
+                    lf_zero = dict(zip(lf_heads, lf_is_zero))
+                else:
+                    lf_zero = {}
                 for head_name, grad_norm in zip(head_names, all_norms):
-                    if (
-                        head_name in head_learnable_fraction_history
-                        and head_learnable_fraction_history[head_name][-1].item() == 0.0
-                    ):
+                    if head_name in lf_zero and lf_zero[head_name]:
                         head_gradient_state_history[head_name][-1] = "not_learnable"
                     head_grad_norm_history[head_name].append(grad_norm)
 
