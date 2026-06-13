@@ -91,6 +91,24 @@ def _masked_op_probs_for_telemetry(
     return MaskedCategorical(op_logits, op_mask, min_prob=op_min_prob).probs
 
 
+def _check_vitals_before_snapshot(
+    env_state: Any,
+    *,
+    epoch: int,
+    val_loss: float,
+) -> bool:
+    """Check governor state before blessing the current weights as rollback-safe."""
+    is_panic = env_state.governor.check_vital_signs(val_loss)
+    if is_panic:
+        return True
+
+    if epoch % 5 == 0 or env_state.needs_governor_snapshot:
+        env_state.governor.snapshot()
+        env_state.needs_governor_snapshot = False
+
+    return False
+
+
 @dataclass
 class VectorizedPPOTrainer:
     agent: Any
@@ -1161,15 +1179,12 @@ class VectorizedPPOTrainer:
                             env_state.host_max_acc, env_state.val_acc
                         )
 
-                        # Governor watchdog: snapshot when loss is stable (every 5 epochs)
-                        # Also snapshot immediately after fossilization to prevent incoherent rollback
-                        # (see BUG FIX comment in OP_FOSSILIZE handling above)
-                        if epoch % 5 == 0 or env_state.needs_governor_snapshot:
-                            env_state.governor.snapshot()
-                            env_state.needs_governor_snapshot = False
-
-                        # Governor watchdog: check vital signs after validation
-                        is_panic = env_state.governor.check_vital_signs(val_loss)
+                        # Governor watchdog: check vital signs before blessing a snapshot.
+                        is_panic = _check_vitals_before_snapshot(
+                            env_state,
+                            epoch=epoch,
+                            val_loss=val_loss,
+                        )
                         if is_panic:
                             governor_panic_envs.append(env_idx)
 
@@ -1439,9 +1454,6 @@ class VectorizedPPOTrainer:
                         "alpha_curve",
                     )
                     head_confidences_cpu: np.ndarray | None = None  # [8, num_envs]
-
-                    # NOTE: Entropy is not available during action sampling (only during PPO evaluation).
-                    # All entropy fields will be 0.0 until we add entropy computation to get_action().
                     head_entropies_cpu: np.ndarray | None = None
 
                     if ops_telemetry_enabled and head_log_probs:
@@ -1452,6 +1464,16 @@ class VectorizedPPOTrainer:
                         # Single exp + detach + transfer
                         head_confidences_cpu = (
                             torch.exp(stacked_log_probs).detach().cpu().numpy()
+                        )
+                        if action_result.head_entropies is None:
+                            raise RuntimeError(
+                                "Policy action result is missing per-head rollout entropy"
+                            )
+                        stacked_head_entropies = torch.stack(
+                            [action_result.head_entropies[h] for h in _HEAD_NAMES_FOR_TELEM]
+                        )
+                        head_entropies_cpu = (
+                            stacked_head_entropies.detach().cpu().numpy()
                         )
 
                     action_result_bundle = execute_actions(

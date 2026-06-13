@@ -542,12 +542,16 @@ class SeedState:
             alpha_velocity = 0.0
         else:
             alpha_velocity = (controller.alpha_target - controller.alpha_start) / alpha_steps_total
+        if self.blueprint_id not in BLUEPRINT_ID_TO_INDEX:
+            raise ValueError(
+                f"Unknown blueprint_id {self.blueprint_id!r}; cannot encode observation index"
+            )
 
         return SeedStateReport(
             seed_id=self.seed_id,
             slot_id=self.slot_id,
             blueprint_id=self.blueprint_id,
-            blueprint_index=BLUEPRINT_ID_TO_INDEX.get(self.blueprint_id, -1),
+            blueprint_index=BLUEPRINT_ID_TO_INDEX[self.blueprint_id],
             stage=self.stage,
             previous_stage=self.previous_stage,
             previous_epochs_in_stage=self.previous_epochs_in_stage,
@@ -811,7 +815,11 @@ class QualityGates:
             # Exploding gradients indicate unbounded dynamics that will compound
             # catastrophically when the seed's alpha is ramped up during blending.
             telemetry = state.telemetry
-            if telemetry is not None and telemetry.has_exploding:
+            if telemetry is None:
+                checks_failed.append("gradient_health_missing")
+                exploding_ok = False
+                gradient_health_ok = False
+            elif telemetry.has_exploding:
                 checks_failed.append("exploding_gradients")
                 exploding_ok = False
             else:
@@ -820,11 +828,11 @@ class QualityGates:
 
             # Check 3: Gradient health above safety threshold
             # Low gradient health indicates the seed may destabilize the host.
-            gradient_health_ok = True  # Default to OK if no telemetry
             if telemetry is not None:
                 health = telemetry.gradient_health
                 if health >= self.min_gradient_health_for_blending:
                     checks_passed.append(f"gradient_health_{health:.2f}")
+                    gradient_health_ok = True
                 else:
                     checks_failed.append(
                         f"gradient_health_low_{health:.2f}_need_{self.min_gradient_health_for_blending:.2f}"
@@ -1380,7 +1388,12 @@ class SeedSlot(nn.Module):
             self.seed.eval()
             with torch.no_grad():
                 seed_out = self.seed(shape_probe)
-            if isinstance(seed_out, torch.Tensor) and seed_out.shape != expected_shape:
+            if not torch.is_tensor(seed_out):
+                raise AssertionError(
+                    f"Seed '{blueprint_id}' must return torch.Tensor during shape probe; "
+                    f"got {type(seed_out).__name__}"
+                )
+            if seed_out.shape != expected_shape:
                 raise AssertionError(
                     f"Seed '{blueprint_id}' changed shape: "
                     f"{seed_out.shape} vs {expected_shape}"

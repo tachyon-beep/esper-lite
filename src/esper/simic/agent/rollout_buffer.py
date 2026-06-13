@@ -42,6 +42,10 @@ from esper.leyline import (
 from esper.leyline.slot_config import SlotConfig
 
 
+ROLLBACK_TRANSITION_NONE: int = 0
+ROLLBACK_TRANSITION_GOVERNOR: int = 1
+
+
 class TamiyoRolloutStep(NamedTuple):
     """Single transition for factored recurrent actor-critic.
 
@@ -174,6 +178,12 @@ class TamiyoRolloutBuffer:
     # D5: Forced-step tracking for slot saturation diagnostics
     forced_actions: torch.Tensor = field(init=False)
 
+    # Rollback attribution metadata. Zero values mean "not a rollback transition".
+    rollback_transition_types: torch.Tensor = field(init=False)
+    rollback_severity: torch.Tensor = field(init=False)
+    rollback_triggering_action_ids: torch.Tensor = field(init=False)
+    rollback_watch_window_evidence: torch.Tensor = field(init=False)
+
     # Phase 2.1: Auxiliary supervision targets for contribution prediction
     # Ground truth from counterfactual measurements (stored at measurement timesteps only)
     # DRL Expert: Only valid at timesteps where has_fresh_contribution=True
@@ -286,6 +296,17 @@ class TamiyoRolloutBuffer:
 
         # D5: Track forced steps (where agent has no choice - only WAIT valid)
         self.forced_actions = torch.zeros(n, m, dtype=torch.bool, device=device)
+
+        # Rollback attribution metadata
+        self.rollback_transition_types = torch.zeros(n, m, dtype=torch.long, device=device)
+        self.rollback_severity = torch.zeros(n, m, device=device)
+        self.rollback_triggering_action_ids = torch.full(
+            (n, m),
+            -1,
+            dtype=torch.long,
+            device=device,
+        )
+        self.rollback_watch_window_evidence = torch.zeros(n, m, device=device)
 
         # Phase 2.1: Auxiliary supervision targets for contribution prediction
         # Ground truth from counterfactual - only valid at measurement timesteps
@@ -664,6 +685,10 @@ class TamiyoRolloutBuffer:
             "initial_hidden_c": self.hidden_c[:, 0, :, :].permute(1, 0, 2).contiguous().to(device, non_blocking=nb),
             # D5: Forced steps for slot saturation diagnostics
             "forced_actions": self.forced_actions.to(device, non_blocking=nb),
+            "rollback_transition_types": self.rollback_transition_types.to(device, non_blocking=nb),
+            "rollback_severity": self.rollback_severity.to(device, non_blocking=nb),
+            "rollback_triggering_action_ids": self.rollback_triggering_action_ids.to(device, non_blocking=nb),
+            "rollback_watch_window_evidence": self.rollback_watch_window_evidence.to(device, non_blocking=nb),
             # Phase 2.1: Auxiliary supervision for contribution prediction
             # contribution_targets: [num_envs, max_steps, num_slots] ground truth per slot
             # contribution_mask: [num_envs, max_steps, num_slots] bool - active slots
@@ -705,8 +730,20 @@ class TamiyoRolloutBuffer:
         # When new transitions are added, they'll start with fresh hidden states.
         self.hidden_h[env_id].zero_()
         self.hidden_c[env_id].zero_()
+        self.rollback_transition_types[env_id].zero_()
+        self.rollback_severity[env_id].zero_()
+        self.rollback_triggering_action_ids[env_id].fill_(-1)
+        self.rollback_watch_window_evidence[env_id].zero_()
 
-    def mark_terminal_with_penalty(self, env_id: int, penalty: float) -> bool:
+    def mark_terminal_with_penalty(
+        self,
+        env_id: int,
+        penalty: float,
+        *,
+        severity: float | None = None,
+        triggering_action_id: int | None = None,
+        watch_window_evidence: float | None = None,
+    ) -> bool:
         """Mark the last transition as terminal with penalty reward.
 
         Used when governor rollback occurs - the last action led to catastrophic
@@ -720,6 +757,12 @@ class TamiyoRolloutBuffer:
         Args:
             env_id: Environment index
             penalty: Reward to assign (typically negative death penalty)
+            severity: Rollback severity on the raw governor scale. Defaults to
+                abs(penalty) when omitted.
+            triggering_action_id: Stable action/proposal identifier for the
+                transition that caused rollback. Defaults to effective op action.
+            watch_window_evidence: Numeric evidence from the rollback watch
+                window. Defaults to abs(penalty) when omitted.
 
         Returns:
             True if a transition was modified, False if env had no transitions
@@ -735,6 +778,14 @@ class TamiyoRolloutBuffer:
         self.rewards[env_id, last_idx] = penalty
         self.dones[env_id, last_idx] = True
         self.truncated[env_id, last_idx] = False  # True terminal, not truncation
+        self.rollback_transition_types[env_id, last_idx] = ROLLBACK_TRANSITION_GOVERNOR
+        self.rollback_severity[env_id, last_idx] = abs(penalty) if severity is None else severity
+        if triggering_action_id is None:
+            triggering_action_id = int(self.effective_op_actions[env_id, last_idx].item())
+        self.rollback_triggering_action_ids[env_id, last_idx] = triggering_action_id
+        self.rollback_watch_window_evidence[env_id, last_idx] = (
+            abs(penalty) if watch_window_evidence is None else watch_window_evidence
+        )
         return True
 
     def __len__(self) -> int:

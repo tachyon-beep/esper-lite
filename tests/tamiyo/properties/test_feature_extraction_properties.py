@@ -350,16 +350,14 @@ def test_batch_obs_to_features_shape_and_core_invariants(batch) -> None:
             expected_prev = (
                 env_state.gradient_health_prev[slot_id]
                 if slot_id in env_state.gradient_health_prev
-                else 1.0
+                else 0.0
             )
             assert obs[env_idx, slot_offset + 27].item() == pytest.approx(expected_prev)
 
-            expected_epochs_since_cf = (
-                env_state.epochs_since_counterfactual[slot_id]
-                if slot_id in env_state.epochs_since_counterfactual
-                else 0
-            )
-            assert obs[env_idx, slot_offset + 29].item() == pytest.approx(
-                DEFAULT_GAMMA ** expected_epochs_since_cf
-            )
-
+            if slot_id in env_state.epochs_since_counterfactual:
+                expected_freshness = DEFAULT_GAMMA ** env_state.epochs_since_counterfactual[
+                    slot_id
+                ]
+            else:
+                expected_freshness = 0.0
+            assert obs[env_idx, slot_offset + 29].item() == pytest.approx(expected_freshness)

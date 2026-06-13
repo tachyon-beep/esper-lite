@@ -47,6 +47,8 @@ class TestFinitenessGateAggregation:
             head_entropies={},
             conditional_head_entropies={},  # Entropy only when head is causally relevant
             head_grad_norms={},
+            head_learnable_fractions={},
+            head_gradient_states={},
             head_nan_detected={},
             head_inf_detected={},
             lstm_health_history=defaultdict(list),
@@ -81,6 +83,8 @@ class TestFinitenessGateAggregation:
             head_entropies={},
             conditional_head_entropies={},
             head_grad_norms={},
+            head_learnable_fractions={},
+            head_gradient_states={},
             head_nan_detected={},
             head_inf_detected={},
             lstm_health_history=defaultdict(list),

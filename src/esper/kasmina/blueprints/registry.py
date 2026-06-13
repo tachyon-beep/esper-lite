@@ -69,6 +69,8 @@ class BlueprintRegistry:
 
         def decorator(factory: BlueprintFactory) -> BlueprintFactory:
             key = f"{topology}:{name}"
+            if key in cls._blueprints:
+                raise ValueError(f"Blueprint {name!r} already registered for topology {topology!r}")
             cls._blueprints[key] = BlueprintSpec(
                 name=name,
                 topology=topology,
@@ -88,7 +90,7 @@ class BlueprintRegistry:
         ensure_loaded(topology)
         return sorted(
             [s for s in cls._blueprints.values() if s.topology == topology],
-            key=lambda s: s.param_estimate,
+            key=lambda s: (s.param_estimate, s.name),
         )
 
     @classmethod

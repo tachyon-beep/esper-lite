@@ -214,7 +214,7 @@ class WebSocketOutput:
             shutdown_event: Event signaled by close() to trigger graceful shutdown
         """
         try:
-            from websockets.server import serve  # type: ignore[import-not-found]  # no stubs
+            from websockets.server import serve  # type: ignore[attr-defined]  # no stubs
         except ImportError:
             _logger.error(
                 "websockets not installed. Install with: pip install esper-lite[dashboard]"

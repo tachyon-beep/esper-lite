@@ -8,20 +8,27 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from esper.leyline import EpisodeOutcome
+from esper.leyline import EpisodeOutcome, TelemetryEventType
 from esper.simic.training.ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 
 
 class _StubBuffer:
     def __init__(self, length: int = 5) -> None:
         self.length = length
-        self.penalty_calls: list[tuple[int, float]] = []
+        self.penalty_calls: list[tuple[int, float, float, float]] = []
 
     def __len__(self) -> int:
         return self.length
 
-    def mark_terminal_with_penalty(self, env_id: int, penalty: float) -> bool:
-        self.penalty_calls.append((env_id, penalty))
+    def mark_terminal_with_penalty(
+        self,
+        env_id: int,
+        penalty: float,
+        *,
+        severity: float,
+        watch_window_evidence: float,
+    ) -> bool:
+        self.penalty_calls.append((env_id, penalty, severity, watch_window_evidence))
         return True
 
 
@@ -31,7 +38,15 @@ class _StubAgent:
         self.entropy_coef = 0.01
 
 
-def _make_coordinator(*, run_ppo_updates_fn):
+class _CaptureHub:
+    def __init__(self) -> None:
+        self.events = []
+
+    def emit(self, event) -> None:
+        self.events.append(event)
+
+
+def _make_coordinator(*, run_ppo_updates_fn, hub=None):
     return PPOCoordinator(
         agent=_StubAgent(),
         config=PPOCoordinatorConfig(
@@ -45,7 +60,7 @@ def _make_coordinator(*, run_ppo_updates_fn):
         anomaly_detector=SimpleNamespace(),
         env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
         reward_family_enum=SimpleNamespace(value="dense"),
-        hub=None,
+        hub=hub,
         telemetry_config=None,
         group_id="test-group",
         run_ppo_updates_fn=run_ppo_updates_fn,
@@ -124,7 +139,7 @@ def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     )
 
     assert rollback_envs == [0]
-    assert coordinator.agent.buffer.penalty_calls == [(0, -10.0)]
+    assert coordinator.agent.buffer.penalty_calls == [(0, -10.0, 10.0, 10.0)]
     assert env_total_rewards == [-9.0]
     assert episode_history[0].episode_reward == 100.0
     assert episode_history[1].episode_reward == -9.0
@@ -176,6 +191,44 @@ def test_check_finiteness_gate_ignores_non_finiteness_skip_without_gradient_step
 
     assert consecutive_failures == 0
     assert should_continue is True
+
+
+def test_check_finiteness_gate_emits_proof_blocking_anomaly_on_repeated_failures():
+    """Repeated PPO finiteness failures should surface as a run-level governor signal."""
+    hub = _CaptureHub()
+    coordinator = _make_coordinator(
+        run_ppo_updates_fn=lambda **_kwargs: {},
+        hub=hub,
+    )
+    metrics = {
+        "ppo_update_performed": False,
+        "finiteness_gate_skip_count": 2,
+        "finiteness_gate_failures": [
+            {
+                "epoch": 0,
+                "sources": [
+                    "log_probs[op]: NaN detected",
+                    "values: Inf detected",
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(RuntimeError, match="consecutive updates skipped"):
+        coordinator.check_finiteness_gate(
+            metrics=metrics,
+            consecutive_finiteness_failures=2,
+        )
+
+    assert metrics["run_governor_signal"] == "ppo_finiteness_failure"
+    assert metrics["run_governor_status"] == "halted"
+    assert len(hub.events) == 1
+    event = hub.events[0]
+    assert event.event_type == TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED
+    assert event.severity == "error"
+    assert event.data.anomaly_type == "ppo_finiteness_failure"
+    assert "log_probs[op]: NaN detected" in event.data.detail
+    assert "values: Inf detected" in event.data.detail
 
 
 @pytest.mark.parametrize("bad_norm", [float("nan"), float("inf"), float("-inf")])

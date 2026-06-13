@@ -129,6 +129,7 @@ class LSTMPolicyBundle:
             value=result.values,
             hidden=result.hidden,
             op_logits=result.op_logits,
+            head_entropies=result.head_entropies,
         )
 
     def forward(

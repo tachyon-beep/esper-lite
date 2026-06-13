@@ -66,6 +66,7 @@ class GetActionResult:
         op_logits: Raw masked logits for op head [batch, num_ops].
             Only populated if return_op_logits=True, otherwise None.
             Use F.softmax(op_logits, dim=-1) to get action probabilities.
+        head_entropies: Dict of normalized entropy per factored head [batch].
     """
 
     actions: dict[str, torch.Tensor]
@@ -74,6 +75,7 @@ class GetActionResult:
     hidden: tuple[torch.Tensor, torch.Tensor]
     sampled_op: torch.Tensor
     op_logits: torch.Tensor | None = None
+    head_entropies: dict[str, torch.Tensor] | None = None
 
 
 class _ForwardOutput(TypedDict):
@@ -861,6 +863,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             # Sample from each head using MaskedCategorical for safety
             actions: dict[str, torch.Tensor] = {}
             log_probs: dict[str, torch.Tensor] = {}
+            head_entropies: dict[str, torch.Tensor] = {}
 
             masks = {
                 "slot": slot_mask[:, 0, :] if slot_mask is not None else None,
@@ -957,6 +960,24 @@ class FactoredRecurrentActorCritic(nn.Module):
                 new_logits = torch.log(safe_probs)
                 return torch.where(mask, new_logits, torch.full_like(new_logits, MASKED_LOGIT_VALUE))
 
+            def _normalized_entropy_from_masked_logits(
+                masked_logits: torch.Tensor,
+                mask: torch.Tensor,
+            ) -> torch.Tensor:
+                logits_f32 = masked_logits.float()
+                probs = F.softmax(logits_f32, dim=-1)
+                log_probs_all = F.log_softmax(logits_f32, dim=-1)
+                raw_entropy = -(probs * log_probs_all * mask.float()).sum(dim=-1)
+                num_valid = mask.sum(dim=-1).clamp(min=1)
+                max_entropy = torch.log(num_valid.float())
+                safe_max_entropy = torch.where(
+                    num_valid > 1,
+                    max_entropy,
+                    torch.ones_like(max_entropy),
+                )
+                normalized = raw_entropy / safe_max_entropy.clamp(min=1e-8)
+                return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)
+
             def _sample_head(
                 key: str,
                 *,
@@ -987,6 +1008,11 @@ class FactoredRecurrentActorCritic(nn.Module):
                 min_prob = probability_floor.get(key) if probability_floor else None
                 if min_prob is not None and min_prob > 0:
                     masked_logits = _apply_floor_to_logits(masked_logits, mask, min_prob)
+
+                head_entropies[key] = _normalized_entropy_from_masked_logits(
+                    masked_logits,
+                    mask,
+                )
 
                 if deterministic:
                     action = masked_logits.argmax(dim=-1)
@@ -1031,6 +1057,11 @@ class FactoredRecurrentActorCritic(nn.Module):
             op_min_prob = probability_floor.get("op") if probability_floor else None
             if op_min_prob is not None and op_min_prob > 0:
                 op_masked_logits = _apply_floor_to_logits(op_masked_logits, op_mask, op_min_prob)
+
+            head_entropies["op"] = _normalized_entropy_from_masked_logits(
+                op_masked_logits,
+                op_mask,
+            )
 
             if deterministic:
                 # Deterministic mode (bootstrap/eval): use argmax
@@ -1169,6 +1200,7 @@ class FactoredRecurrentActorCritic(nn.Module):
 
             # Conditionally capture op_logits for telemetry (Decision Snapshot)
             op_logits_out = head_logits["op"] if return_op_logits else None
+            ordered_head_entropies = {head: head_entropies[head] for head in HEAD_NAMES}
 
             return GetActionResult(
                 actions=actions,
@@ -1177,6 +1209,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 hidden=new_hidden,
                 sampled_op=sampled_op,
                 op_logits=op_logits_out,
+                head_entropies=ordered_head_entropies,
             )
 
     def evaluate_actions(

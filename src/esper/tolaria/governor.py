@@ -26,6 +26,8 @@ from esper.leyline import (
     MIN_GOVERNOR_HISTORY_SAMPLES,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
+    LifecycleMutationVerdict,
+    LifecycleOp,
     SeedStage,
 )
 from esper.leyline.telemetry import GovernorPanicReason
@@ -82,6 +84,74 @@ class TolariaGovernor:
         self.random_guess_loss = random_guess_loss if random_guess_loss is not None else math.log(10)
         # Capture an initial snapshot so rollback is always possible, even on first panic
         self.snapshot()
+
+    def preflight_lifecycle_mutation(
+        self,
+        *,
+        operation: LifecycleOp,
+        slot_id: str,
+        blueprint_id: str | None,
+        alpha_target: float | None,
+        alpha_speed_steps: int | None,
+        alpha_curve: str | None,
+        val_loss: float,
+        val_accuracy: float,
+        seed_stage: SeedStage | None,
+        total_params: int,
+        effective_seed_params: float,
+        max_seeds: int,
+        active_seed_count: int,
+        cooldown_epochs_remaining: int,
+        event_id: str,
+    ) -> LifecycleMutationVerdict:
+        """Approve or veto a lifecycle mutation before Simic applies side effects."""
+        if not math.isfinite(val_loss):
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"nonfinite validation loss before {operation.name}: {val_loss}",
+            )
+        if not math.isfinite(val_accuracy):
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"nonfinite validation accuracy before {operation.name}: {val_accuracy}",
+            )
+        if cooldown_epochs_remaining < 0:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"negative cooldown for {slot_id} on {event_id}",
+            )
+        if max_seeds > 0 and active_seed_count > max_seeds:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=(
+                    f"active seed count {active_seed_count} exceeds max_seeds "
+                    f"{max_seeds} on {event_id}"
+                ),
+            )
+        if operation == LifecycleOp.GERMINATE and blueprint_id is None:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"germination proposal missing blueprint on {event_id}",
+            )
+        if operation == LifecycleOp.GERMINATE and seed_stage is not None:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"germination proposal targets occupied slot {slot_id}",
+            )
+        if operation == LifecycleOp.SET_ALPHA_TARGET and alpha_target is None:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"alpha retarget proposal missing alpha_target on {event_id}",
+            )
+        if operation in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE) and (
+            alpha_speed_steps is None or alpha_curve is None
+        ):
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"alpha schedule proposal incomplete on {event_id}",
+            )
+
+        return LifecycleMutationVerdict(approved=True, reason="approved")
 
     def snapshot(self) -> None:
         """Save Last Known Good state to CPU memory to reduce GPU memory pressure.
@@ -488,4 +558,4 @@ class TolariaGovernor:
         self.snapshot()
 
 
-__all__ = ["TolariaGovernor", "GovernorReport"]
+__all__ = ["TolariaGovernor", "GovernorReport", "LifecycleMutationVerdict"]

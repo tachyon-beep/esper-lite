@@ -192,6 +192,43 @@ def test_germinate_cnn_shape_mismatch_raises_assertion():
         BlueprintRegistry.unregister("cnn", "__test_bad_cnn_shape__")
 
 
+def test_germinate_cnn_non_tensor_output_raises_assertion():
+    """CNN blueprints must return tensors during germination shape probes."""
+    from esper.kasmina.slot import SeedSlot
+    from esper.kasmina.blueprints import BlueprintRegistry
+    from esper.tamiyo.policy.features import TaskConfig
+
+    @BlueprintRegistry.register(
+        name="__test_bad_cnn_non_tensor__",
+        topology="cnn",
+        param_estimate=1,
+        description="test-only: deliberately returns a tuple",
+    )
+    def _bad_cnn_blueprint(dim: int) -> nn.Module:
+        class BadCNNSeed(nn.Module):
+            def __init__(self, channels: int):
+                super().__init__()
+                self.channels = channels
+
+            def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+                return (x, x)
+
+        return BadCNNSeed(dim)
+
+    try:
+        config = TaskConfig.for_cifar10()
+        slot = SeedSlot(
+            slot_id="block2_post",
+            channels=64,
+            task_config=config,
+        )
+
+        with pytest.raises(AssertionError, match="must return torch.Tensor"):
+            slot.germinate("__test_bad_cnn_non_tensor__", "cnn-bad-seed")
+    finally:
+        BlueprintRegistry.unregister("cnn", "__test_bad_cnn_non_tensor__")
+
+
 def test_germinate_transformer_shape_mismatch_raises_assertion():
     """Transformer blueprints that change embedding dim must fail germinate."""
     from esper.kasmina.slot import SeedSlot
@@ -327,7 +364,7 @@ def test_seed_state_report_includes_telemetry_fields():
 
     state = SeedState(
         seed_id="seed-1",
-        blueprint_id="bp-1",
+        blueprint_id="norm",
         slot_id="r0c1",
         stage=SeedStage.TRAINING,
         metrics=metrics,
@@ -340,6 +377,19 @@ def test_seed_state_report_includes_telemetry_fields():
     assert report.metrics.host_param_count == 456
     assert report.metrics.current_alpha == 0.5
     assert report.metrics.alpha_ramp_step == 7
+
+
+def test_seed_state_report_rejects_unknown_blueprint_id():
+    """Unknown blueprint IDs must fail instead of becoming sentinel observation indices."""
+    state = SeedState(
+        seed_id="seed-1",
+        blueprint_id="unknown-blueprint",
+        slot_id="r0c1",
+        stage=SeedStage.TRAINING,
+    )
+
+    with pytest.raises(ValueError, match="Unknown blueprint_id"):
+        state.to_report()
 
 
 class TestShapeProbeCacheDeviceTransfer:

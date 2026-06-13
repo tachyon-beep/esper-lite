@@ -318,6 +318,7 @@ from esper.leyline.factored_actions import (
     TempoAction,
     get_action_head_sizes,
 )
+from esper.leyline.lifecycle_mutation import LifecycleMutationVerdict
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
 
@@ -854,6 +855,7 @@ __all__ = [
     "compute_causal_masks",
     "compute_availability_masks",
     "LifecycleOp",
+    "LifecycleMutationVerdict",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
     "NUM_ALPHA_SPEEDS",

@@ -10,6 +10,7 @@ from torch import nn
 from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot
 from esper.leyline import (
     GovernorRollbackPayload,
+    HEAD_NAMES,
     NUM_OPS,
     TelemetryEvent,
     TelemetryEventType,
@@ -116,6 +117,12 @@ def _make_mandatory_metrics(**overrides) -> dict:
         # Throughput metrics (mandatory for dataloader wait ratio)
         "throughput_step_time_ms_sum": 100.0,
         "throughput_dataloader_wait_ms_sum": 20.0,
+        "head_learnable_fractions": {
+            head: [1.0] for head in HEAD_NAMES
+        },
+        "head_gradient_states": {
+            head: ["finite"] for head in HEAD_NAMES
+        },
     }
     base.update(overrides)
     return base

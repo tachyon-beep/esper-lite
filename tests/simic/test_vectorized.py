@@ -11,7 +11,7 @@ import pytest
 import torch
 from unittest.mock import Mock, MagicMock, patch
 
-from esper.leyline import NUM_OPS, SeedStage, TelemetryEvent, TelemetryEventType
+from esper.leyline import HEAD_NAMES, NUM_OPS, SeedStage, TelemetryEvent, TelemetryEventType
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.telemetry import SeedGerminatedPayload
 from esper.simic.telemetry import AnomalyReport
@@ -225,6 +225,8 @@ def _make_mandatory_metrics(**overrides) -> dict:
         # Per-head stats (optional but expected by emitter loop)
         "head_entropies": {},
         "head_grad_norms": {},
+        "head_learnable_fractions": {head: [1.0] for head in HEAD_NAMES},
+        "head_gradient_states": {head: ["finite"] for head in HEAD_NAMES},
     }
     base.update(overrides)
     return base

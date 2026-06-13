@@ -98,7 +98,8 @@ class RewardMode(Enum):
     BASIC_PLUS: BASIC + post-fossilization drip reward (accountability for fossilized seeds)
     SPARSE: Terminal-only ground truth (accuracy - param_cost)
     MINIMAL: Sparse + early-prune penalty only
-    SIMPLIFIED: DRL Expert recommended - PBRS + intervention cost + terminal only
+    SIMPLIFIED: Diagnostic-only PBRS + intervention cost + terminal reward.
+        It omits structural rent and is not blueprint-economy evidence.
     """
 
     SHAPED = "shaped"
@@ -344,6 +345,11 @@ class ContributionRewardConfig:
     def default() -> "ContributionRewardConfig":
         """Return default configuration."""
         return ContributionRewardConfig()
+
+    @property
+    def supports_blueprint_economy_evidence(self) -> bool:
+        """Whether this reward mode can support "complexity pays rent" claims."""
+        return self.reward_mode != RewardMode.SIMPLIFIED
 
 
 # Default config singleton (avoid repeated allocations)
@@ -1075,9 +1081,15 @@ def compute_basic_reward(
     # means the seed is still helping; negative means it's hurting.
     # Asymmetric clipping prevents death spirals while rewarding sustained value.
     drip_this_epoch = 0.0
-    if fossilized_drip_states and fossilized_contributions:
+    if fossilized_drip_states:
+        if fossilized_contributions is None:
+            raise ValueError("Missing fossilized contribution measurements for drip reward")
         for drip_state in fossilized_drip_states:
-            contribution = fossilized_contributions.get(drip_state.seed_id, 0.0)
+            if drip_state.seed_id not in fossilized_contributions:
+                raise ValueError(
+                    f"Missing fossilized contribution for seed {drip_state.seed_id}"
+                )
+            contribution = fossilized_contributions[drip_state.seed_id]
             epoch_drip = drip_state.compute_epoch_drip(
                 current_contribution=contribution,
                 max_drip=config.max_drip_per_epoch,

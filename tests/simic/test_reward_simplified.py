@@ -23,6 +23,15 @@ def test_simplified_mode_string_conversion():
     assert mode == RewardMode.SIMPLIFIED
 
 
+def test_simplified_mode_is_not_blueprint_economy_evidence():
+    """SIMPLIFIED is diagnostic-only and cannot prove complexity pays rent."""
+    simplified = ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED)
+    shaped = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
+
+    assert simplified.supports_blueprint_economy_evidence is False
+    assert shaped.supports_blueprint_economy_evidence is True
+
+
 class TestComputeSimplifiedReward:
     """Tests for the simplified 3-component reward."""
 

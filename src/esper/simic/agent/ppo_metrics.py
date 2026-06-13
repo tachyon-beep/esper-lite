@@ -31,6 +31,8 @@ class PPOUpdateMetricsBuilder:
     head_entropies: dict[str, list[torch.Tensor]]
     conditional_head_entropies: dict[str, list[torch.Tensor]]  # Entropy only when head is causally relevant
     head_grad_norms: dict[str, list[torch.Tensor]]
+    head_learnable_fractions: dict[str, list[torch.Tensor]]
+    head_gradient_states: dict[str, list[str]]
     head_nan_detected: dict[str, bool]
     head_inf_detected: dict[str, bool]
     lstm_health_history: dict[str, list[float | bool]]
@@ -127,6 +129,13 @@ class PPOUpdateMetricsBuilder:
         }
         aggregated_result["head_grad_norms"] = {
             key: [val.item() for val in values] for key, values in self.head_grad_norms.items()
+        }
+        aggregated_result["head_learnable_fractions"] = {
+            key: [val.item() for val in values]
+            for key, values in self.head_learnable_fractions.items()
+        }
+        aggregated_result["head_gradient_states"] = {
+            key: list(values) for key, values in self.head_gradient_states.items()
         }
 
         log_prob_min = self.log_prob_min_across_epochs

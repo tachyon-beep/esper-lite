@@ -122,6 +122,8 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_entropies: dict[str, list[float]]  # Per-head, per-epoch
     conditional_head_entropies: dict[str, list[float]]  # Entropy when head is causally relevant
     head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
+    head_learnable_fractions: dict[str, list[float]]  # Per-head, per-epoch learnable fraction
+    head_gradient_states: dict[str, list[str]]  # finite, missing, nonfinite, or not_learnable
     ratio_diagnostic: dict[str, Any]
     # Q-values (Policy V2 op-conditioned critic)
     op_q_values: tuple[float, ...]

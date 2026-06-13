@@ -9,6 +9,7 @@ from esper.leyline import (
     AlphaTargetAction,
     BlueprintAction,
     GerminationStyle,
+    HEAD_NAMES,
     LifecycleOp,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
@@ -313,6 +314,66 @@ def test_irrelevant_heads_forced_to_defaults_when_wait():
     assert (result.actions["alpha_target"] == int(AlphaTargetAction.FULL)).all()
     assert (result.actions["alpha_speed"] == int(AlphaSpeedAction.INSTANT)).all()
     assert (result.actions["alpha_curve"] == int(AlphaCurveAction.LINEAR)).all()
+
+
+def test_get_action_reports_rollout_entropy_for_all_heads():
+    """Rollout sampling should export entropy for every factored action head."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(2, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3))
+
+    slot_mask = torch.tensor(
+        [
+            [True, False, True],
+            [False, True, True],
+        ],
+        dtype=torch.bool,
+    )
+    blueprint_mask = torch.ones(2, NUM_BLUEPRINTS, dtype=torch.bool)
+    blueprint_mask[:, int(BlueprintAction.NOOP)] = False
+
+    result = net.get_action(
+        state,
+        bp_idx,
+        deterministic=True,
+        slot_mask=slot_mask,
+        blueprint_mask=blueprint_mask,
+        probability_floor={"blueprint": 0.10, "tempo": 0.10},
+    )
+
+    assert tuple(result.head_entropies) == HEAD_NAMES
+    for entropy in result.head_entropies.values():
+        assert entropy.shape == (2,)
+        assert torch.isfinite(entropy).all()
+        assert (entropy >= 0).all()
+        assert (entropy <= 1.01).all()
+
+
+def test_get_action_entropy_reflects_canonicalized_forced_heads_when_wait():
+    """Forced/canonicalized rollout heads should report zero entropy, not placeholders."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(3, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (3, 3))
+
+    op_mask = torch.zeros(3, NUM_OPS, dtype=torch.bool)
+    op_mask[:, LifecycleOp.WAIT] = True
+
+    result = net.get_action(
+        state,
+        bp_idx,
+        deterministic=True,
+        op_mask=op_mask,
+        slot_mask=torch.ones(3, 3, dtype=torch.bool),
+        blueprint_mask=torch.ones(3, NUM_BLUEPRINTS, dtype=torch.bool),
+        style_mask=torch.ones(3, NUM_STYLES, dtype=torch.bool),
+        tempo_mask=torch.ones(3, NUM_TEMPO, dtype=torch.bool),
+        alpha_target_mask=torch.ones(3, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        alpha_speed_mask=torch.ones(3, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        alpha_curve_mask=torch.ones(3, NUM_ALPHA_CURVES, dtype=torch.bool),
+    )
+
+    for head in HEAD_NAMES:
+        assert torch.equal(result.head_entropies[head], torch.zeros(3))
 
 
 def test_slot_forced_to_first_valid_choice_when_wait():

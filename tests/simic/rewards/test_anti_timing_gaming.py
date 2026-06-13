@@ -19,6 +19,7 @@ from esper.simic.rewards import (
     ContributionRewardConfig,
     SeedInfo,
 )
+from esper.simic.rewards.contribution import FossilizedSeedDripState, compute_basic_reward
 
 
 class TestAntiTimingGamingIntegration:
@@ -108,6 +109,68 @@ class TestAntiTimingGamingIntegration:
         # D3 reduces attribution significantly for this gaming scenario
         reduction_factor = comp_baseline.bounded_attribution / comp_d3.bounded_attribution
         assert reduction_factor > 2.5, f"Expected >2.5x reduction, got {reduction_factor:.2f}x"
+
+    def test_fossilized_seed_regression_is_accounted_after_peak(self) -> None:
+        """Post-fossilization negative contribution must debit drip reward."""
+        config = ContributionRewardConfig(
+            drip_fraction=0.7,
+            max_drip_per_epoch=0.1,
+            negative_drip_ratio=0.5,
+        )
+        drip_state = FossilizedSeedDripState(
+            seed_id="regressed-seed",
+            slot_id="r0c0",
+            fossilize_epoch=20,
+            max_epochs=150,
+            drip_total=1.0,
+            drip_scale=0.05,
+        )
+
+        _, _, _, _, _, _, drip_this_epoch = compute_basic_reward(
+            acc_delta=0.0,
+            effective_seed_params=0,
+            total_params=100_000,
+            host_params=100_000,
+            config=config,
+            epoch=40,
+            max_epochs=150,
+            seed_info=None,
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            fossilized_drip_states=[drip_state],
+            fossilized_contributions={"regressed-seed": -3.0},
+        )
+
+        assert drip_this_epoch < 0.0
+        assert drip_state.drip_paid == pytest.approx(drip_this_epoch)
+
+    def test_fossilized_drip_requires_current_counterfactual_measurement(self) -> None:
+        """Missing fossilized contribution is not equivalent to zero contribution."""
+        config = ContributionRewardConfig(drip_fraction=0.7)
+        drip_state = FossilizedSeedDripState(
+            seed_id="missing-measurement",
+            slot_id="r0c0",
+            fossilize_epoch=20,
+            max_epochs=150,
+            drip_total=1.0,
+            drip_scale=0.05,
+        )
+
+        with pytest.raises(ValueError, match="Missing fossilized contribution"):
+            compute_basic_reward(
+                acc_delta=0.0,
+                effective_seed_params=0,
+                total_params=100_000,
+                host_params=100_000,
+                config=config,
+                epoch=40,
+                max_epochs=150,
+                seed_info=None,
+                action=LifecycleOp.WAIT,
+                seed_contribution=None,
+                fossilized_drip_states=[drip_state],
+                fossilized_contributions={},
+            )
 
     def test_legitimate_late_germination_not_penalized(self) -> None:
         """Seeds germinated after warmup with contribution >= progress get full timing credit."""

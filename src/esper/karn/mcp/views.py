@@ -59,6 +59,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.n_envs')::INTEGER as n_envs,
             json_extract(data, '$.n_episodes')::INTEGER as n_episodes,
             json_extract(data, '$.max_epochs')::INTEGER as max_epochs,
+            json_extract(data, '$.max_batches')::INTEGER as max_batches,
             json_extract(data, '$.lr')::DOUBLE as lr,
             json_extract(data, '$.entropy_coef')::DOUBLE as entropy_coef,
             json_extract(data, '$.clip_ratio')::DOUBLE as clip_ratio,
@@ -154,7 +155,24 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.head_alpha_target_grad_norm')::DOUBLE as head_alpha_target_grad_norm,
             json_extract(data, '$.head_alpha_speed_grad_norm')::DOUBLE as head_alpha_speed_grad_norm,
             json_extract(data, '$.head_alpha_curve_grad_norm')::DOUBLE as head_alpha_curve_grad_norm,
-            json_extract(data, '$.head_op_grad_norm')::DOUBLE as head_op_grad_norm
+            json_extract(data, '$.head_op_grad_norm')::DOUBLE as head_op_grad_norm,
+            -- Per-head learnability diagnostics
+            json_extract(data, '$.head_slot_learnable_fraction')::DOUBLE as head_slot_learnable_fraction,
+            json_extract(data, '$.head_blueprint_learnable_fraction')::DOUBLE as head_blueprint_learnable_fraction,
+            json_extract(data, '$.head_style_learnable_fraction')::DOUBLE as head_style_learnable_fraction,
+            json_extract(data, '$.head_tempo_learnable_fraction')::DOUBLE as head_tempo_learnable_fraction,
+            json_extract(data, '$.head_alpha_target_learnable_fraction')::DOUBLE as head_alpha_target_learnable_fraction,
+            json_extract(data, '$.head_alpha_speed_learnable_fraction')::DOUBLE as head_alpha_speed_learnable_fraction,
+            json_extract(data, '$.head_alpha_curve_learnable_fraction')::DOUBLE as head_alpha_curve_learnable_fraction,
+            json_extract(data, '$.head_op_learnable_fraction')::DOUBLE as head_op_learnable_fraction,
+            json_extract_string(data, '$.head_slot_gradient_state') as head_slot_gradient_state,
+            json_extract_string(data, '$.head_blueprint_gradient_state') as head_blueprint_gradient_state,
+            json_extract_string(data, '$.head_style_gradient_state') as head_style_gradient_state,
+            json_extract_string(data, '$.head_tempo_gradient_state') as head_tempo_gradient_state,
+            json_extract_string(data, '$.head_alpha_target_gradient_state') as head_alpha_target_gradient_state,
+            json_extract_string(data, '$.head_alpha_speed_gradient_state') as head_alpha_speed_gradient_state,
+            json_extract_string(data, '$.head_alpha_curve_gradient_state') as head_alpha_curve_gradient_state,
+            json_extract_string(data, '$.head_op_gradient_state') as head_op_gradient_state
         FROM raw_events
         WHERE event_type = 'PPO_UPDATE_COMPLETED'
     """,
@@ -455,6 +473,43 @@ VIEW_DEFINITIONS: dict[str, str] = {
             'NUMERICAL_INSTABILITY_DETECTED',
             'GOVERNOR_ROLLBACK',
             'PLATEAU_DETECTED'
+        )
+    """,
+    "run_confounders": """
+        CREATE OR REPLACE VIEW run_confounders AS
+        SELECT
+            event_id,
+            timestamp,
+            run_dir,
+            group_id,
+            json_extract(data, '$.env_id')::INTEGER as env_id,
+            event_type,
+            json_extract_string(data, '$.anomaly_type') as anomaly_type,
+            json_extract(data, '$.episode')::INTEGER as episode,
+            json_extract(data, '$.batch')::INTEGER as batch,
+            json_extract(data, '$.inner_epoch')::INTEGER as inner_epoch,
+            json_extract(data, '$.total_episodes')::INTEGER as total_episodes,
+            json_extract_string(data, '$.detail') as detail,
+            CASE
+                WHEN event_type IN (
+                    'VALUE_COLLAPSE_DETECTED',
+                    'RATIO_EXPLOSION_DETECTED',
+                    'RATIO_COLLAPSE_DETECTED',
+                    'GRADIENT_ANOMALY',
+                    'GRADIENT_PATHOLOGY_DETECTED',
+                    'NUMERICAL_INSTABILITY_DETECTED'
+                )
+                THEN true
+                ELSE false
+            END as proof_blocking
+        FROM raw_events
+        WHERE event_type IN (
+            'VALUE_COLLAPSE_DETECTED',
+            'RATIO_EXPLOSION_DETECTED',
+            'RATIO_COLLAPSE_DETECTED',
+            'GRADIENT_ANOMALY',
+            'GRADIENT_PATHOLOGY_DETECTED',
+            'NUMERICAL_INSTABILITY_DETECTED'
         )
     """,
     "episode_outcomes": """

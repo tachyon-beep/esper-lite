@@ -677,8 +677,8 @@ class TestG2PermissiveSafetyGate:
         # Should have multiple failures
         assert len(result.checks_failed) >= 2
 
-    def test_permissive_g2_passes_without_telemetry(self):
-        """Permissive G2 should pass if no telemetry (defaults to safe)."""
+    def test_permissive_g2_fails_without_telemetry(self):
+        """Permissive G2 must not treat absent telemetry as safe."""
         gates = QualityGates(permissive=True)
         state = SeedState(
             seed_id="test",
@@ -688,12 +688,13 @@ class TestG2PermissiveSafetyGate:
 
         # Meet epochs requirement
         state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
-        # No telemetry - should default to "safe" for gradient checks
+        # No telemetry - active training slot has no gradient safety evidence
         state.telemetry = None
 
         result = gates.check_gate(state, SeedStage.BLENDING)
 
-        assert result.passed  # Should pass with defaults
+        assert not result.passed
+        assert "gradient_health_missing" in result.checks_failed
 
     def test_permissive_g2_min_epochs_increased_to_10(self):
         """Verify DEFAULT_MIN_BLENDING_EPOCHS is now 10 (not 3).

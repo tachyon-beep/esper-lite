@@ -735,6 +735,8 @@ class PPOAgent:
         # Initialize conditional entropy tracking (P3-2: entropy only when head is causally relevant)
         # This is the true exploration signal for sparse heads like blueprint/tempo
         conditional_head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
+        head_learnable_fraction_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
+        head_gradient_state_history: dict[str, list[str]] = {head: [] for head in HEAD_NAMES + ("value",)}
 
         # LSTM health tracking (TELE-340)
         lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
@@ -934,12 +936,19 @@ class PPOAgent:
             # Track conditional entropy (P3-2): entropy only when head is causally relevant
             # This is the true exploration signal for sparse heads like blueprint/tempo.
             # head_masks[key] indicates whether that head affects the gradient for each timestep.
+            unforced_mask = ~forced_mask
+            learnable_denominator = valid_mask.sum().float().clamp(min=1)
             for key in HEAD_NAMES:
                 mask = head_masks[key].float()
                 n_relevant = mask.sum().clamp(min=1)
                 # Conditional mean: sum(entropy * mask) / count(mask)
                 conditional_ent = (entropy[key] * mask).sum() / n_relevant
                 conditional_head_entropy_history[key].append(conditional_ent)
+                action_choice_mask = masks[key][valid_mask].sum(dim=-1) > 1
+                learnable_mask = head_masks[key] & action_choice_mask & unforced_mask
+                head_learnable_fraction_history[key].append(
+                    learnable_mask.sum().float() / learnable_denominator
+                )
 
             # Compute per-head ratios
             old_log_probs = {
@@ -1154,18 +1163,29 @@ class PPOAgent:
                 for head_module in head_modules:
                     params_with_grad = [p for p in head_module.parameters() if p.grad is not None]
                     if params_with_grad:
+                        has_nonfinite_grad = any(
+                            not torch.isfinite(p.grad).all() for p in params_with_grad
+                        )
                         norm_t = torch.linalg.vector_norm(
                             torch.stack([torch.linalg.vector_norm(p.grad) for p in params_with_grad])
                         )
+                        grad_state = "nonfinite" if has_nonfinite_grad else "finite"
                     else:
                         # BUG FIX: Use NaN to signal "no gradient data" instead of 0.0
                         # 0.0 would hide the bug (No Bug-Hiding Patterns rule)
                         # NaN signals missing data and will surface in telemetry
                         norm_t = torch.tensor(float("nan"), device=self.device)
+                        grad_state = "missing"
                     head_norm_tensors.append(norm_t)
+                    head_gradient_state_history[head_names[len(head_norm_tensors) - 1]].append(grad_state)
 
                 all_norms = torch.stack(head_norm_tensors)
                 for head_name, grad_norm in zip(head_names, all_norms):
+                    if (
+                        head_name in head_learnable_fraction_history
+                        and head_learnable_fraction_history[head_name][-1].item() == 0.0
+                    ):
+                        head_gradient_state_history[head_name][-1] = "not_learnable"
                     head_grad_norm_history[head_name].append(grad_norm)
 
                 # Gradient CV: coefficient of variation = std/|mean| (per DRL expert)
@@ -1261,6 +1281,8 @@ class PPOAgent:
             head_entropies=head_entropy_history,
             conditional_head_entropies=conditional_head_entropy_history,
             head_grad_norms=head_grad_norm_history,
+            head_learnable_fractions=head_learnable_fraction_history,
+            head_gradient_states=head_gradient_state_history,
             head_nan_detected=head_nan_detected,
             head_inf_detected=head_inf_detected,
             lstm_health_history=lstm_health_history,

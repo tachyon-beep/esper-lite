@@ -334,6 +334,53 @@ class TestEntropyFloorIntegration:
 
         assert losses.entropy_floor_penalty.item() == pytest.approx(0.0)
 
+    def test_zero_availability_head_reports_not_learnable(self) -> None:
+        """A zero-learnability action head should be explicit in PPO metrics."""
+        from collections import defaultdict
+
+        from esper.simic.agent.ppo_metrics import PPOUpdateMetricsBuilder
+
+        metrics = defaultdict(list)
+        metrics["ratio_max"].append(torch.tensor(1.0))
+        metrics["ratio_min"].append(torch.tensor(1.0))
+        metrics["finiteness_gate_failures"] = []
+
+        builder = PPOUpdateMetricsBuilder(
+            metrics=metrics,
+            finiteness_failures=metrics["finiteness_gate_failures"],
+            epochs_completed=1,
+            head_entropies={"blueprint": [torch.tensor(0.0)]},
+            conditional_head_entropies={"blueprint": [torch.tensor(0.0)]},
+            head_grad_norms={"blueprint": [torch.tensor(float("nan"))]},
+            head_learnable_fractions={"blueprint": [torch.tensor(0.0)]},
+            head_gradient_states={"blueprint": ["not_learnable"]},
+            head_nan_detected={"blueprint": False},
+            head_inf_detected={"blueprint": False},
+            lstm_health_history=defaultdict(list),
+            log_prob_min_across_epochs=torch.tensor(0.0),
+            log_prob_max_across_epochs=torch.tensor(0.0),
+            head_ratio_max_across_epochs={"blueprint": torch.tensor(1.0)},
+            joint_ratio_max_across_epochs=torch.tensor(1.0),
+            value_func_metrics={
+                "v_return_correlation": 0.0,
+                "td_error_mean": 0.0,
+                "td_error_std": 0.0,
+                "bellman_error": 0.0,
+                "return_p10": 0.0,
+                "return_p50": 0.0,
+                "return_p90": 0.0,
+                "return_variance": 0.0,
+                "return_skewness": 0.0,
+            },
+            cuda_memory_metrics={},
+            head_names=("blueprint",),
+        )
+
+        result = builder.finalize().metrics
+
+        assert result["head_learnable_fractions"]["blueprint"] == [0.0]
+        assert result["head_gradient_states"]["blueprint"] == ["not_learnable"]
+
 
 class TestPenaltySchedule:
     """Tests for three-phase penalty schedule in PPOAgent.

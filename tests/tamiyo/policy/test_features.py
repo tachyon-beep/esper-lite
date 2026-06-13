@@ -455,7 +455,7 @@ def test_batch_obs_to_features_gradient_health_tracking():
     gradient_health_prev_idx = 23 + 27  # = 50
     assert abs(obs[0, gradient_health_prev_idx].item() - 0.75) < 1e-6
 
-    # Test with no tracked health (should default to 1.0)
+    # Test with no tracked health (missing tracking is not healthy evidence)
     batch_env_states = [_make_mock_parallel_env_state()]
 
     obs, _ = batch_obs_to_features(
@@ -467,7 +467,7 @@ def test_batch_obs_to_features_gradient_health_tracking():
         max_epochs=MAX_EPOCHS,
     )
 
-    assert abs(obs[0, gradient_health_prev_idx].item() - 1.0) < 1e-6
+    assert obs[0, gradient_health_prev_idx].item() == 0.0
 
 
 def test_batch_obs_to_features_counterfactual_freshness():
@@ -507,6 +507,59 @@ def test_batch_obs_to_features_counterfactual_freshness():
         expected = DEFAULT_GAMMA ** epochs
         assert abs(obs[0, cf_fresh_idx].item() - expected) < 1e-4, \
             f"epochs={epochs}: expected {expected}, got {obs[0, cf_fresh_idx].item()}"
+
+
+def test_batch_obs_to_features_missing_counterfactual_tracking_is_stale():
+    """Missing counterfactual tracking must not look freshly measured."""
+    from esper.tamiyo.policy.features import batch_obs_to_features
+    from esper.leyline.slot_config import SlotConfig
+    import torch
+
+    slot_config = SlotConfig.default()
+    device = torch.device("cpu")
+    batch_signals = [_make_mock_training_signals()]
+    batch_slot_reports = [{"r0c0": _make_mock_seed_state_report("r0c0")}]
+    batch_env_states = [_make_mock_parallel_env_state(epochs_since_counterfactual={})]
+
+    obs, _ = batch_obs_to_features(
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
+    )
+
+    cf_fresh_idx = 23 + 29
+    assert obs[0, cf_fresh_idx].item() == 0.0
+
+
+def test_batch_obs_to_features_missing_counterfactual_contribution_is_neutral():
+    """Missing causal contribution must not fall back to host drift."""
+    from esper.tamiyo.policy.features import batch_obs_to_features
+    from esper.leyline.slot_config import SlotConfig
+    import torch
+
+    slot_config = SlotConfig.default()
+    device = torch.device("cpu")
+    batch_signals = [_make_mock_training_signals()]
+    report = _make_mock_seed_state_report("r0c0", improvement=2.5)
+    report.metrics.counterfactual_contribution = None
+    assert report.metrics.improvement_since_stage_start == 2.5
+
+    obs, _ = batch_obs_to_features(
+        batch_signals,
+        [{"r0c0": report}],
+        [_make_mock_parallel_env_state(epochs_since_counterfactual={})],
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
+    )
+
+    contribution_idx = 23 + 12
+    cf_fresh_idx = 23 + 29
+    assert obs[0, contribution_idx].item() == 0.0
+    assert obs[0, cf_fresh_idx].item() == 0.0
 
 
 def test_batch_obs_to_features_dynamic_slots():
@@ -1039,7 +1092,7 @@ def test_extract_base_features_v3_includes_action_feedback_and_normalization():
 
 
 def test_extract_slot_features_v3_defaults_when_telemetry_absent():
-    """Missing per-seed telemetry must not introduce NaNs or garbage defaults."""
+    """Missing per-seed telemetry must not look like healthy gradient evidence."""
     from esper.tamiyo.policy.features import _extract_slot_features_v3
 
     report = _make_mock_seed_state_report("r0c0", gradient_health=0.25, epochs_total=7)
@@ -1061,13 +1114,32 @@ def test_extract_slot_features_v3_defaults_when_telemetry_absent():
     assert torch.isfinite(slot_features).all()
     # Telemetry merged (indices 23-26): gradient_norm, gradient_health, has_vanishing, has_exploding
     assert slot_features[23].item() == 0.0  # gradient_norm default
-    assert slot_features[24].item() == 1.0  # gradient_health default
+    assert slot_features[24].item() == 0.0  # missing telemetry is not healthy
     assert slot_features[25].item() == 0.0
     assert slot_features[26].item() == 0.0
 
 
+def test_extract_slot_features_v3_missing_counterfactual_contribution_is_neutral():
+    """Scalar extraction must not substitute host drift for missing causal contribution."""
+    from esper.tamiyo.policy.features import _extract_slot_features_v3
+
+    report = _make_mock_seed_state_report("r0c0", improvement=2.5)
+    report.metrics.counterfactual_contribution = None
+    assert report.metrics.improvement_since_stage_start == 2.5
+
+    slot_features = _extract_slot_features_v3(
+        slot_report=report,
+        env_state=_make_mock_parallel_env_state(epochs_since_counterfactual={}),
+        slot_id="r0c0",
+        max_epochs=MAX_EPOCHS,
+    )
+
+    assert slot_features[12].item() == 0.0
+    assert slot_features[29].item() == 0.0
+
+
 def test_batch_obs_to_features_uses_safe_defaults_when_seed_telemetry_missing():
-    """batch_obs_to_features should produce stable obs even when seed telemetry is absent."""
+    """batch_obs_to_features should not report missing telemetry as healthy."""
     from esper.leyline.slot_config import SlotConfig
     from esper.tamiyo.policy.features import batch_obs_to_features
 
@@ -1091,7 +1163,7 @@ def test_batch_obs_to_features_uses_safe_defaults_when_seed_telemetry_missing():
     assert obs.shape[0] == 1
     assert torch.isfinite(obs).all()
     assert obs[0, slot_offset + 23].item() == 0.0  # gradient_norm
-    assert obs[0, slot_offset + 24].item() == 1.0  # gradient_health
+    assert obs[0, slot_offset + 24].item() == 0.0  # missing telemetry is not healthy
 
 
 def test_batch_obs_to_features_zeroes_non_finite_gradient_norm():

@@ -81,6 +81,96 @@ if TYPE_CHECKING:
     from esper.nissa import BlueprintAnalytics
 
 
+@dataclass(slots=True, frozen=True)
+class FreshContributionTargets:
+    """Counterfactual contribution targets plus proof freshness status."""
+
+    has_fresh_contribution: bool
+    contribution_targets: torch.Tensor | None
+    contribution_mask: torch.Tensor | None
+    stale_slots: tuple[str, ...] = ()
+    missing_tracking_slots: tuple[str, ...] = ()
+
+
+def build_fresh_contribution_targets(
+    *,
+    env_state: ParallelEnvState,
+    baseline_accs: dict[str, float],
+    slot_config: SlotConfig,
+    device: torch.device | str,
+) -> FreshContributionTargets:
+    """Build rollout contribution targets only from current counterfactual evidence."""
+    if not baseline_accs:
+        return FreshContributionTargets(
+            has_fresh_contribution=False,
+            contribution_targets=None,
+            contribution_mask=None,
+        )
+
+    stale_slots: list[str] = []
+    missing_tracking_slots: list[str] = []
+    for slot_id in baseline_accs:
+        if slot_id not in env_state.epochs_since_counterfactual:
+            missing_tracking_slots.append(slot_id)
+            continue
+        if env_state.epochs_since_counterfactual[slot_id] != 0:
+            stale_slots.append(slot_id)
+
+    if stale_slots or missing_tracking_slots:
+        return FreshContributionTargets(
+            has_fresh_contribution=False,
+            contribution_targets=None,
+            contribution_mask=None,
+            stale_slots=tuple(stale_slots),
+            missing_tracking_slots=tuple(missing_tracking_slots),
+        )
+
+    num_slots = slot_config.num_slots
+    contribution_targets = torch.zeros(num_slots, device=device)
+    contribution_mask = torch.zeros(num_slots, dtype=torch.bool, device=device)
+
+    for slot_id, baseline_acc in baseline_accs.items():
+        slot_idx = slot_config.index_for_slot_id(slot_id)
+        contribution = env_state.val_acc - baseline_acc
+        contribution_targets[slot_idx] = contribution
+        contribution_mask[slot_idx] = True
+
+    return FreshContributionTargets(
+        has_fresh_contribution=True,
+        contribution_targets=contribution_targets,
+        contribution_mask=contribution_mask,
+    )
+
+
+def _build_decision_head_telemetry(
+    *,
+    head_confidences_cpu: np.ndarray | None,
+    head_entropies_cpu: np.ndarray | None,
+    env_idx: int,
+) -> HeadTelemetry | None:
+    """Build per-head decision telemetry only when entropy evidence is present."""
+    if head_confidences_cpu is None or head_entropies_cpu is None:
+        return None
+    return HeadTelemetry(
+        op_confidence=float(head_confidences_cpu[0, env_idx]),
+        slot_confidence=float(head_confidences_cpu[1, env_idx]),
+        blueprint_confidence=float(head_confidences_cpu[2, env_idx]),
+        style_confidence=float(head_confidences_cpu[3, env_idx]),
+        tempo_confidence=float(head_confidences_cpu[4, env_idx]),
+        alpha_target_confidence=float(head_confidences_cpu[5, env_idx]),
+        alpha_speed_confidence=float(head_confidences_cpu[6, env_idx]),
+        curve_confidence=float(head_confidences_cpu[7, env_idx]),
+        op_entropy=float(head_entropies_cpu[0, env_idx]),
+        slot_entropy=float(head_entropies_cpu[1, env_idx]),
+        blueprint_entropy=float(head_entropies_cpu[2, env_idx]),
+        style_entropy=float(head_entropies_cpu[3, env_idx]),
+        tempo_entropy=float(head_entropies_cpu[4, env_idx]),
+        alpha_target_entropy=float(head_entropies_cpu[5, env_idx]),
+        alpha_speed_entropy=float(head_entropies_cpu[6, env_idx]),
+        curve_entropy=float(head_entropies_cpu[7, env_idx]),
+    )
+
+
 _HEAD_NAME_TO_IDX: dict[str, int] = {name: idx for idx, name in enumerate(HEAD_NAMES)}
 _HEAD_SLOT_IDX = _HEAD_NAME_TO_IDX["slot"]
 _HEAD_BLUEPRINT_IDX = _HEAD_NAME_TO_IDX["blueprint"]
@@ -376,11 +466,6 @@ def execute_actions(
         alpha_algorithm = action_spec.alpha_algorithm
         alpha_target = action_spec.alpha_target
 
-        # Use op name for action counting
-        env_state.action_counts[action_spec.action_for_reward.name] = (
-            env_state.action_counts.get(action_spec.action_for_reward.name, 0) + 1
-        )
-
         action_success = False
 
         # Governor rollback
@@ -426,12 +511,63 @@ def execute_actions(
                 severity="warning",
             ))
 
-        action_outcome.rollback_occurred = env_rollback_occurred[env_idx]
+            action_outcome.rollback_occurred = True
+            action_outcome.action_success = False
+            action_outcome.reward_raw = 0.0
+            action_outcome.reward_normalized = 0.0
+            action_outcome.truncated = False
+            env_state.last_action_success = False
+            env_state.last_action_op = OP_WAIT
+            env_state.episode_rewards.append(0.0)
 
-        # Compute reward
+            agent.buffer.add(
+                env_id=env_idx,
+                state=states_batch_normalized[env_idx].detach(),
+                blueprint_indices=blueprint_indices_batch[env_idx].detach(),
+                slot_action=slot_action,
+                blueprint_action=blueprint_action,
+                style_action=style_action,
+                tempo_action=tempo_action,
+                alpha_target_action=alpha_target_action,
+                alpha_speed_action=alpha_speed_action,
+                alpha_curve_action=alpha_curve_action,
+                op_action=op_action,
+                effective_op_action=OP_WAIT,
+                slot_log_prob=slot_log_probs_batch[env_idx],
+                blueprint_log_prob=blueprint_log_probs_batch[env_idx],
+                style_log_prob=style_log_probs_batch[env_idx],
+                tempo_log_prob=tempo_log_probs_batch[env_idx],
+                alpha_target_log_prob=alpha_target_log_probs_batch[env_idx],
+                alpha_speed_log_prob=alpha_speed_log_probs_batch[env_idx],
+                alpha_curve_log_prob=alpha_curve_log_probs_batch[env_idx],
+                op_log_prob=op_log_probs_batch[env_idx],
+                value=value,
+                reward=0.0,
+                done=True,
+                slot_mask=slot_by_op_masks_batch[env_idx, OP_WAIT],
+                blueprint_mask=blueprint_masks_batch[env_idx],
+                style_mask=style_masks_batch[env_idx],
+                tempo_mask=tempo_masks_batch[env_idx],
+                alpha_target_mask=alpha_target_masks_batch[env_idx],
+                alpha_speed_mask=alpha_speed_masks_batch[env_idx],
+                alpha_curve_mask=alpha_curve_masks_batch[env_idx],
+                op_mask=op_masks_batch[env_idx],
+                hidden_h=pre_step_hiddens[env_idx][0].detach(),
+                hidden_c=pre_step_hiddens[env_idx][1].detach(),
+                truncated=False,
+                bootstrap_value=0.0,
+                forced_step=forced_batch_cpu[env_idx],
+                contribution_targets=None,
+                contribution_mask=None,
+                has_fresh_contribution=False,
+            )
+            agent.buffer.end_episode(env_id=env_idx)
+            continue
+
+        action_outcome.rollback_occurred = False
+
         scoreboard = analytics._get_scoreboard(env_idx)
         host_params = scoreboard.host_params
-
         effective_seed_params, alpha_delta_sq_sum = compute_rent_and_shock_inputs(
             model=model,
             slot_ids=slots,
@@ -442,6 +578,56 @@ def execute_actions(
             prev_slot_params=env_state.prev_slot_params,
         )
 
+        mutation_allowed = True
+        if slot_is_enabled and op_action in (
+            OP_GERMINATE,
+            OP_FOSSILIZE,
+            OP_PRUNE,
+            OP_SET_ALPHA_TARGET,
+            OP_ADVANCE,
+        ):
+            preflight_alpha_speed_steps = None
+            preflight_alpha_curve = None
+            if op_action in (OP_PRUNE, OP_SET_ALPHA_TARGET):
+                preflight_alpha_speed_steps = ALPHA_SPEED_TO_STEPS[
+                    AlphaSpeedAction(alpha_speed_action)
+                ]
+                preflight_alpha_curve = AlphaCurveAction(alpha_curve_action).name
+            preflight_blueprint_id = (
+                BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
+            )
+            preflight_verdict = env_state.governor.preflight_lifecycle_mutation(
+                operation=LifecycleOp(op_action),
+                slot_id=target_slot,
+                blueprint_id=preflight_blueprint_id,
+                alpha_target=alpha_target if op_action == OP_SET_ALPHA_TARGET else None,
+                alpha_speed_steps=preflight_alpha_speed_steps,
+                alpha_curve=preflight_alpha_curve,
+                val_loss=env_state.val_loss,
+                val_accuracy=env_state.val_acc,
+                seed_stage=seed_state.stage if seed_state is not None else None,
+                total_params=model.total_params,
+                effective_seed_params=effective_seed_params,
+                max_seeds=effective_max_seeds,
+                active_seed_count=model.total_seeds(),
+                cooldown_epochs_remaining=0,
+                event_id=(
+                    f"batch{batch_idx}_epoch{epoch}_env{env_idx}_"
+                    f"op{op_action}_slot{target_slot}"
+                ),
+            )
+            if not preflight_verdict.approved:
+                action_spec.action_valid_for_reward = False
+                action_spec.action_for_reward = LifecycleOp.WAIT
+                action_for_reward = LifecycleOp.WAIT
+                mutation_allowed = False
+
+        # Use op name for action counting only after rollback has ceded this step.
+        env_state.action_counts[action_spec.action_for_reward.name] = (
+            env_state.action_counts[action_spec.action_for_reward.name] + 1
+        )
+
+        # Compute reward
         seed_contribution = None
         if target_slot in baseline_accs[env_idx]:
             seed_contribution = (
@@ -708,7 +894,7 @@ def execute_actions(
             torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
         )
         with lifecycle_ctx:
-            if slot_is_enabled:
+            if slot_is_enabled and mutation_allowed:
                 slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
                 if op_action == OP_GERMINATE and model.seed_slots[target_slot].state is None:
                     env_state.acc_at_germination[target_slot] = env_state.val_acc
@@ -896,6 +1082,8 @@ def execute_actions(
                 env_state.successful_action_counts.get(action_for_reward.name, 0) + 1
             )
         action_outcome.action_success = action_success
+        if reward_components is not None:
+            reward_components.action_success = action_success
 
         # Obs V3: Update action feedback state for next timestep's feature extraction
         env_state.last_action_success = action_success
@@ -994,44 +1182,11 @@ def execute_actions(
                         entropy_sum -= p * math.log(p)
                 decision_entropy = entropy_sum
 
-            # Build HeadTelemetry for this env (typed dataclass, not raw dict)
-            head_telem: HeadTelemetry | None = None
-            if head_confidences_cpu is not None:
-                head_telem = HeadTelemetry(
-                    op_confidence=float(head_confidences_cpu[0, env_idx]),
-                    slot_confidence=float(head_confidences_cpu[1, env_idx]),
-                    blueprint_confidence=float(head_confidences_cpu[2, env_idx]),
-                    style_confidence=float(head_confidences_cpu[3, env_idx]),
-                    tempo_confidence=float(head_confidences_cpu[4, env_idx]),
-                    alpha_target_confidence=float(head_confidences_cpu[5, env_idx]),
-                    alpha_speed_confidence=float(head_confidences_cpu[6, env_idx]),
-                    curve_confidence=float(head_confidences_cpu[7, env_idx]),
-                    # Entropy (0.0 if not available)
-                    op_entropy=float(head_entropies_cpu[0, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    slot_entropy=float(head_entropies_cpu[1, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    blueprint_entropy=float(head_entropies_cpu[2, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    style_entropy=float(head_entropies_cpu[3, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    tempo_entropy=float(head_entropies_cpu[4, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    alpha_target_entropy=float(head_entropies_cpu[5, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    alpha_speed_entropy=float(head_entropies_cpu[6, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    curve_entropy=float(head_entropies_cpu[7, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                )
+            head_telem = _build_decision_head_telemetry(
+                head_confidences_cpu=head_confidences_cpu,
+                head_entropies_cpu=head_entropies_cpu,
+                env_idx=env_idx,
+            )
 
             emitters[env_idx].on_last_action(
                 epoch=epoch,
@@ -1067,22 +1222,15 @@ def execute_actions(
         # contribution = val_acc - baseline_acc (positive = slot helps)
         # DRL Expert: Only set has_fresh_contribution=True when counterfactual measured
         env_baseline_accs = baseline_accs[env_idx]
-        has_fresh_contribution = len(env_baseline_accs) > 0
-        contribution_targets_tensor: torch.Tensor | None = None
-        contribution_mask_tensor: torch.Tensor | None = None
-
-        if has_fresh_contribution:
-            # Build contribution tensor in slot_config order
-            num_slots = slot_config.num_slots
-            contribution_targets_tensor = torch.zeros(num_slots, device=device)
-            contribution_mask_tensor = torch.zeros(num_slots, dtype=torch.bool, device=device)
-
-            for slot_id, baseline_acc in env_baseline_accs.items():
-                slot_idx = slot_config.index_for_slot_id(slot_id)
-                # contribution = how much accuracy drops when this slot is disabled
-                contribution = env_state.val_acc - baseline_acc
-                contribution_targets_tensor[slot_idx] = contribution
-                contribution_mask_tensor[slot_idx] = True
+        fresh_contribution = build_fresh_contribution_targets(
+            env_state=env_state,
+            baseline_accs=env_baseline_accs,
+            slot_config=slot_config,
+            device=device,
+        )
+        has_fresh_contribution = fresh_contribution.has_fresh_contribution
+        contribution_targets_tensor = fresh_contribution.contribution_targets
+        contribution_mask_tensor = fresh_contribution.contribution_mask
 
         step_idx = agent.buffer.step_counts[env_idx]
         agent.buffer.add(

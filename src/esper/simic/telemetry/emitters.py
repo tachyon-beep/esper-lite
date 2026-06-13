@@ -779,6 +779,19 @@ def compute_grad_norm_surrogate(module: nn.Module) -> float:
     return float(total_norm.item())
 
 
+def _aggregate_head_gradient_state(states: list[str]) -> str:
+    """Aggregate per-epoch gradient state into one proof-facing state."""
+    if "nonfinite" in states:
+        return "nonfinite"
+    if "missing" in states:
+        return "missing"
+    if "finite" in states:
+        return "finite"
+    if states and all(state == "not_learnable" for state in states):
+        return "not_learnable"
+    raise ValueError(f"Unknown or empty head gradient state list: {states}")
+
+
 def aggregate_layer_gradient_health(
     layer_stats: list[LayerGradientStats],
 ) -> dict[str, int | float | dict[str, float]]:
@@ -873,6 +886,16 @@ def emit_ppo_update_event(
             avg_grad_norm = sum(values) / len(values)  # Fail on empty list
             head_grad_norms_avg[f"head_{head}_grad_norm"] = avg_grad_norm
 
+    # Proof-critical learnability fields are mandatory for PPO updates.
+    head_learnable_fractions_avg = {}
+    for head, values in metrics["head_learnable_fractions"].items():
+        avg_learnable_fraction = sum(values) / len(values)  # Fail on empty list
+        head_learnable_fractions_avg[f"head_{head}_learnable_fraction"] = avg_learnable_fraction
+
+    head_gradient_states = {}
+    for head, states in metrics["head_gradient_states"].items():
+        head_gradient_states[f"head_{head}_gradient_state"] = _aggregate_head_gradient_state(states)
+
     step_time_ms_sum = metrics["throughput_step_time_ms_sum"]
     dataloader_wait_ms_sum = metrics["throughput_dataloader_wait_ms_sum"]
     # When updates are skipped (empty buffer / finiteness gate), step time can be 0.
@@ -956,6 +979,22 @@ def emit_ppo_update_event(
             head_alpha_speed_entropy=head_entropies_avg.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=head_entropies_avg.get("head_alpha_curve_entropy"),
             head_op_entropy=head_entropies_avg.get("head_op_entropy"),
+            head_slot_learnable_fraction=head_learnable_fractions_avg["head_slot_learnable_fraction"],
+            head_blueprint_learnable_fraction=head_learnable_fractions_avg["head_blueprint_learnable_fraction"],
+            head_style_learnable_fraction=head_learnable_fractions_avg["head_style_learnable_fraction"],
+            head_tempo_learnable_fraction=head_learnable_fractions_avg["head_tempo_learnable_fraction"],
+            head_alpha_target_learnable_fraction=head_learnable_fractions_avg["head_alpha_target_learnable_fraction"],
+            head_alpha_speed_learnable_fraction=head_learnable_fractions_avg["head_alpha_speed_learnable_fraction"],
+            head_alpha_curve_learnable_fraction=head_learnable_fractions_avg["head_alpha_curve_learnable_fraction"],
+            head_op_learnable_fraction=head_learnable_fractions_avg["head_op_learnable_fraction"],
+            head_slot_gradient_state=head_gradient_states["head_slot_gradient_state"],
+            head_blueprint_gradient_state=head_gradient_states["head_blueprint_gradient_state"],
+            head_style_gradient_state=head_gradient_states["head_style_gradient_state"],
+            head_tempo_gradient_state=head_gradient_states["head_tempo_gradient_state"],
+            head_alpha_target_gradient_state=head_gradient_states["head_alpha_target_gradient_state"],
+            head_alpha_speed_gradient_state=head_gradient_states["head_alpha_speed_gradient_state"],
+            head_alpha_curve_gradient_state=head_gradient_states["head_alpha_curve_gradient_state"],
+            head_op_gradient_state=head_gradient_states["head_op_gradient_state"],
             # Per-head ratio max (Policy V2 - multi-head ratio explosion detection)
             head_slot_ratio_max=metrics.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=metrics.get("head_blueprint_ratio_max", 1.0),

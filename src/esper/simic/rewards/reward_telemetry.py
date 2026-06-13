@@ -13,8 +13,10 @@ if TYPE_CHECKING:
     from esper.simic.rewards.contribution import FossilizedSeedDripState
 
 
-def _parse_bool_field(value: float | int | str | bool | None, field_name: str) -> bool:
+def _parse_bool_field(value: float | int | str | bool | None, field_name: str) -> bool | None:
     """Parse serialized boolean telemetry without truthiness coercion."""
+    if value is None:
+        return None
     if type(value) is bool:
         return value
     if type(value) is str:
@@ -87,7 +89,7 @@ class RewardComponentsTelemetry:
 
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
-    action_success: bool = True
+    action_success: bool | None = None
     seed_stage: int | None = None
     epoch: int = 0
     val_acc: float = 0.0

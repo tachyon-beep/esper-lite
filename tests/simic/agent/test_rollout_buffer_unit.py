@@ -341,6 +341,34 @@ class TestMarkTerminalWithPenalty:
 
         assert buffer.rewards[0, 4].item() == -10.0
 
+    def test_records_rollback_attribution_metadata(self) -> None:
+        """Rollback penalties must retain causal metadata for PPO diagnostics."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=10,
+            state_dim=64,
+        )
+        self._add_steps(buffer, 0, 5)
+
+        buffer.mark_terminal_with_penalty(
+            0,
+            penalty=-2.5,
+            severity=7.0,
+            triggering_action_id=3,
+            watch_window_evidence=42.0,
+        )
+
+        assert buffer.rollback_transition_types[0, 4].item() == 1
+        assert buffer.rollback_severity[0, 4].item() == 7.0
+        assert buffer.rollback_triggering_action_ids[0, 4].item() == 3
+        assert buffer.rollback_watch_window_evidence[0, 4].item() == 42.0
+
+        batch = buffer.get_batched_sequences()
+        assert batch["rollback_transition_types"][0, 4].item() == 1
+        assert batch["rollback_severity"][0, 4].item() == 7.0
+        assert batch["rollback_triggering_action_ids"][0, 4].item() == 3
+        assert batch["rollback_watch_window_evidence"][0, 4].item() == 42.0
+
     def test_returns_false_for_empty_env(self) -> None:
         """Returns False if env has no transitions."""
         buffer = TamiyoRolloutBuffer(

@@ -25,6 +25,7 @@ def test_view_definitions_exist():
         "reward_calibration",
         "batch_stats",
         "anomalies",
+        "run_confounders",
         "episode_outcomes",
         "shapley_computed",
     }
@@ -305,6 +306,22 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "head_alpha_speed_grad_norm": 1.6,
             "head_alpha_curve_grad_norm": 1.7,
             "head_op_grad_norm": 1.8,
+            "head_slot_learnable_fraction": 0.25,
+            "head_blueprint_learnable_fraction": 0.0,
+            "head_style_learnable_fraction": 0.5,
+            "head_tempo_learnable_fraction": 0.0,
+            "head_alpha_target_learnable_fraction": 0.5,
+            "head_alpha_speed_learnable_fraction": 0.25,
+            "head_alpha_curve_learnable_fraction": 0.25,
+            "head_op_learnable_fraction": 1.0,
+            "head_slot_gradient_state": "finite",
+            "head_blueprint_gradient_state": "not_learnable",
+            "head_style_gradient_state": "finite",
+            "head_tempo_gradient_state": "not_learnable",
+            "head_alpha_target_gradient_state": "finite",
+            "head_alpha_speed_gradient_state": "finite",
+            "head_alpha_curve_gradient_state": "finite",
+            "head_op_gradient_state": "finite",
         },
         "severity": "info",
     }
@@ -322,12 +339,80 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             batch,
             policy_loss,
             head_slot_entropy,
-            head_op_grad_norm
+            head_op_grad_norm,
+            head_blueprint_learnable_fraction,
+            head_blueprint_gradient_state
         FROM ppo_updates
         """
     ).fetchone()
 
-    assert row == (42, "A", 7, 3, 0.1, 0.9, 1.8)
+    assert row == (42, "A", 7, 3, 0.1, 0.9, 1.8, 0.0, "not_learnable")
+
+
+def test_run_confounders_view_surfaces_numerical_instability(tmp_path):
+    """run_confounders should expose proof-blocking anomaly payload facts."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "anomaly-1",
+        "event_type": "NUMERICAL_INSTABILITY_DETECTED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 12,
+        "group_id": "treatment",
+        "message": "ignored by ledger",
+        "data": {
+            "anomaly_type": "numerical_instability",
+            "env_id": 2,
+            "episode": 12,
+            "batch": 3,
+            "inner_epoch": 7,
+            "total_episodes": 100,
+            "detail": "nonfinite policy loss",
+        },
+        "severity": "error",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            run_dir,
+            group_id,
+            env_id,
+            event_type,
+            anomaly_type,
+            episode,
+            batch,
+            inner_epoch,
+            total_episodes,
+            detail,
+            proof_blocking
+        FROM run_confounders
+        """
+    ).fetchone()
+
+    assert row == (
+        "test_run",
+        "treatment",
+        2,
+        "NUMERICAL_INSTABILITY_DETECTED",
+        "numerical_instability",
+        12,
+        3,
+        7,
+        100,
+        "nonfinite policy loss",
+        True,
+    )
 
 
 def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):

@@ -290,7 +290,7 @@ class OverwatchBackend:
                             ]
 
             # Start broadcaster task on app startup
-            @app.on_event("startup")  # type: ignore[untyped-decorator]
+            @app.on_event("startup")
             async def start_broadcaster() -> None:
                 asyncio.create_task(broadcaster_loop())
 
@@ -334,7 +334,7 @@ class OverwatchBackend:
             app.router.routes.append(WebSocketRoute("/ws", websocket_endpoint))
 
             # Serve index.html at root
-            @app.get("/")  # type: ignore[untyped-decorator]
+            @app.get("/")
             async def serve_index() -> FileResponse | Response:
                 index_path = self._static_path / "index.html"
                 if not index_path.exists():

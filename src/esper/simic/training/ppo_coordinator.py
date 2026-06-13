@@ -19,6 +19,12 @@ from typing import TYPE_CHECKING, Any, Callable
 import numpy as np
 import torch
 
+from esper.leyline import (
+    AnomalyDetectedPayload,
+    TelemetryEvent,
+    TelemetryEventType,
+)
+
 if TYPE_CHECKING:
     from esper.simic.agent import PPOAgent
     from esper.simic.control import RewardNormalizer
@@ -121,7 +127,12 @@ class PPOCoordinator:
             # Use normalize_only to avoid polluting running stats with rare outliers.
             penalty = env_states[env_idx].governor.get_punishment_reward()
             normalized_penalty = self.reward_normalizer.normalize_only(penalty)
-            self.agent.buffer.mark_terminal_with_penalty(env_idx, normalized_penalty)
+            self.agent.buffer.mark_terminal_with_penalty(
+                env_idx,
+                normalized_penalty,
+                severity=abs(penalty),
+                watch_window_evidence=abs(penalty),
+            )
             # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).
             # Buffer gets normalized_penalty (for PPO training stability).
             # Telemetry gets raw penalty (for cross-run comparability).
@@ -234,6 +245,11 @@ class PPOCoordinator:
 
             # All epochs skipped due to non-finite values
             consecutive_finiteness_failures += 1
+            metrics["run_governor_signal"] = "ppo_finiteness_failure"
+            metrics["run_governor_finiteness_streak"] = consecutive_finiteness_failures
+            metrics["run_governor_status"] = (
+                "halted" if consecutive_finiteness_failures >= 3 else "degraded"
+            )
             self.logger.warning(
                 f"PPO update skipped (all {skip_count} epochs hit finiteness gate). "
                 f"Consecutive failures: {consecutive_finiteness_failures}/3"
@@ -241,15 +257,54 @@ class PPOCoordinator:
 
             # Escalate after 3 consecutive failures (DRL best practice)
             if consecutive_finiteness_failures >= 3:
+                self._emit_finiteness_failure_anomaly(
+                    metrics=metrics,
+                    consecutive_finiteness_failures=consecutive_finiteness_failures,
+                )
                 raise RuntimeError(
                     f"PPO training failed: {consecutive_finiteness_failures} consecutive updates "
                     "skipped due to non-finite values. Check policy/value network outputs for NaN. "
-                    f"Last failure: {metrics.get('finiteness_gate_failures')}"
+                    f"Last failure: {metrics['finiteness_gate_failures']}"
                 )
             return consecutive_finiteness_failures, False
 
         # Reset counter on successful update
         return 0, True
+
+    def _emit_finiteness_failure_anomaly(
+        self,
+        *,
+        metrics: dict[str, Any],
+        consecutive_finiteness_failures: int,
+    ) -> None:
+        """Emit proof-blocking telemetry for repeated PPO finiteness failures."""
+        if self.hub is None:
+            return
+
+        failures = metrics["finiteness_gate_failures"]
+        sources: list[str] = []
+        for failure in failures:
+            sources.extend(failure["sources"])
+        detail = (
+            "PPO finiteness gate halted run after "
+            f"{consecutive_finiteness_failures} consecutive skipped updates: "
+            + "; ".join(sources)
+        )
+        self.hub.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+                data=AnomalyDetectedPayload(
+                    anomaly_type="ppo_finiteness_failure",
+                    episode=0,
+                    batch=0,
+                    inner_epoch=self.config.max_epochs,
+                    total_episodes=self.config.total_env_episodes,
+                    detail=detail,
+                ),
+                severity="error",
+                group_id=self.group_id,
+            )
+        )
 
     def check_gradient_drift(
         self,

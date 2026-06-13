@@ -12,10 +12,13 @@ Key invariants:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import torch
 
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent.rollout_buffer import TamiyoRolloutBuffer
+from esper.simic.training.action_execution import build_fresh_contribution_targets
 
 
 class TestContributionPropagationUnit:
@@ -67,6 +70,26 @@ class TestContributionPropagationUnit:
         has_fresh_contribution = len(baseline_accs) > 0
 
         assert has_fresh_contribution is True
+
+    def test_stale_counterfactual_is_not_marked_fresh(self) -> None:
+        """A baseline value with stale freshness tracking must fail closed."""
+        slot_config = SlotConfig.default()
+        env_state = SimpleNamespace(
+            val_acc=80.0,
+            epochs_since_counterfactual={"r0c0": 2},
+        )
+
+        result = build_fresh_contribution_targets(
+            env_state=env_state,
+            baseline_accs={"r0c0": 75.0},
+            slot_config=slot_config,
+            device=torch.device("cpu"),
+        )
+
+        assert result.has_fresh_contribution is False
+        assert result.contribution_targets is None
+        assert result.contribution_mask is None
+        assert result.stale_slots == ("r0c0",)
 
 
 class TestBufferStorageIntegration:

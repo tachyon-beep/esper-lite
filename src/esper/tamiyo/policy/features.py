@@ -44,6 +44,27 @@ from esper.leyline.stage_schema import (
 # HOT PATH: ONLY leyline imports allowed!
 
 
+def _counterfactual_freshness(
+    epochs_since_counterfactual: dict[str, int],
+    slot_id: str,
+) -> float:
+    """Return freshness with missing tracking treated as stale, never fresh."""
+    if slot_id not in epochs_since_counterfactual:
+        return 0.0
+    epochs_since_cf = epochs_since_counterfactual[slot_id]
+    return DEFAULT_GAMMA ** epochs_since_cf
+
+
+def _previous_gradient_health(
+    gradient_health_prev: dict[str, float],
+    slot_id: str,
+) -> float:
+    """Return previous gradient health with missing active-slot tracking as unhealthy."""
+    if slot_id not in gradient_health_prev:
+        return 0.0
+    return gradient_health_prev[slot_id]
+
+
 # =============================================================================
 # Symlog Transform for LSTM Saturation Prevention
 # =============================================================================
@@ -256,10 +277,10 @@ def _extract_slot_features_v3(
     # Current alpha (1 dim)
     current_alpha = slot_report.metrics.current_alpha
 
-    # Improvement - use counterfactual contribution if available, else improvement_since_stage_start (1 dim)
+    # Improvement - causal counterfactual contribution only (1 dim)
     contribution = slot_report.metrics.counterfactual_contribution
     if contribution is None:
-        contribution = slot_report.metrics.improvement_since_stage_start
+        contribution = 0.0
     contribution_norm = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
 
     # Contribution velocity (1 dim) - raw velocity, not fossilize lookahead
@@ -304,15 +325,17 @@ def _extract_slot_features_v3(
         has_vanishing = 1.0 if slot_report.telemetry.has_vanishing else 0.0
         has_exploding = 1.0 if slot_report.telemetry.has_exploding else 0.0
     else:
-        # Default values when telemetry not available (shouldn't happen in Obs V3)
+        # Missing telemetry is not healthy evidence for an active slot.
         gradient_norm = 0.0
-        gradient_health = 1.0  # Assume healthy
+        gradient_health = 0.0
         has_vanishing = 0.0
         has_exploding = 0.0
 
     # gradient_health_prev (1 dim) - from env_state tracking
-    # Default to 1.0 (healthy) if not yet tracked for this slot
-    gradient_health_prev = env_state.gradient_health_prev.get(slot_id, 1.0)
+    gradient_health_prev = _previous_gradient_health(
+        env_state.gradient_health_prev,
+        slot_id,
+    )
     # Fail-fast if NaN was stored in gradient_health_prev (indicates upstream bug)
     if not math.isfinite(gradient_health_prev):
         raise ValueError(
@@ -330,8 +353,10 @@ def _extract_slot_features_v3(
     # counterfactual_fresh (1 dim) - gamma-matched decay
     # DEFAULT_GAMMA ** epochs_since_counterfactual
     # With DEFAULT_GAMMA=0.995, signal stays >0.5 for ~138 epochs
-    epochs_since_cf = env_state.epochs_since_counterfactual.get(slot_id, 0)
-    counterfactual_fresh = DEFAULT_GAMMA ** epochs_since_cf
+    counterfactual_fresh = _counterfactual_freshness(
+        env_state.epochs_since_counterfactual,
+        slot_id,
+    )
 
     # seed_age_norm (1 dim) - normalize to [0, 1] using runtime max_epochs.
     # This exposes prune-age gating and distinguishes "new vs old" seeds even
@@ -693,10 +718,10 @@ def batch_obs_to_features(
             # Current alpha (1 dim)
             obs[env_idx, slot_offset + 11] = report.metrics.current_alpha
 
-            # Improvement (1 dim)
+            # Improvement (1 dim) - causal counterfactual contribution only
             contribution = report.metrics.counterfactual_contribution
             if contribution is None:
-                contribution = report.metrics.improvement_since_stage_start
+                contribution = 0.0
             contribution_norm = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
             obs[env_idx, slot_offset + 12] = contribution_norm
 
@@ -735,14 +760,17 @@ def batch_obs_to_features(
                 obs[env_idx, slot_offset + 25] = 1.0 if report.telemetry.has_vanishing else 0.0
                 obs[env_idx, slot_offset + 26] = 1.0 if report.telemetry.has_exploding else 0.0
             else:
-                # Default values when telemetry not available
+                # Missing telemetry is not healthy evidence for an active slot.
                 obs[env_idx, slot_offset + 23] = 0.0
-                obs[env_idx, slot_offset + 24] = 1.0  # Assume healthy
+                obs[env_idx, slot_offset + 24] = 0.0
                 obs[env_idx, slot_offset + 25] = 0.0
                 obs[env_idx, slot_offset + 26] = 0.0
 
             # gradient_health_prev (1 dim)
-            gradient_health_prev = env_state.gradient_health_prev.get(slot_id, 1.0)
+            gradient_health_prev = _previous_gradient_health(
+                env_state.gradient_health_prev,
+                slot_id,
+            )
             if not math.isfinite(gradient_health_prev):
                 raise ValueError(
                     f"NaN/inf in gradient_health_prev for slot {slot_id}. "
@@ -756,8 +784,10 @@ def batch_obs_to_features(
             obs[env_idx, slot_offset + 28] = min(float(epochs_in_stage), max_epochs_den) / max_epochs_den
 
             # counterfactual_fresh (1 dim)
-            epochs_since_cf = env_state.epochs_since_counterfactual.get(slot_id, 0)
-            obs[env_idx, slot_offset + 29] = DEFAULT_GAMMA ** epochs_since_cf
+            obs[env_idx, slot_offset + 29] = _counterfactual_freshness(
+                env_state.epochs_since_counterfactual,
+                slot_id,
+            )
 
             # seed_age_norm (1 dim)
             seed_age = report.metrics.epochs_total

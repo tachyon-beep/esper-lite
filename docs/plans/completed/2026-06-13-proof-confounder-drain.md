@@ -21,7 +21,7 @@
 # Plan Metadata
 id: proof-confounder-drain
 title: Proof Confounder Drain
-type: planning
+type: completed
 created: 2026-06-13
 updated: 2026-06-13
 owner: Codex
@@ -43,10 +43,13 @@ blocks:
   - phase3-tinystories validation
   - counterfactual-oracle
 
-status_notes: Draft work-package plan. Needs specialist review before promotion to ready. Current branch has concurrent Karn/Overwatch UX edits, so execution should wait for those to land or use an isolated worktree.
-percent_complete: 0
+status_notes: Implementation complete on `confounder-drain`. Baseline captured; run-level confounder ledger, action-head learnability telemetry, stale counterfactual fail-closed behavior, BASIC_PLUS drip measurement closure, and proof packet generator are implemented and verified. Short dual-A/B rehearsal produced a blocked packet due to value-collapse and gradient-anomaly confounders, so the expensive reward-efficiency exam remains deferred.
+percent_complete: 100
 
-reviewed_by: []
+reviewed_by:
+  - Task 3 learnability read-only reviewer
+  - Task 4 counterfactual freshness read-only reviewer
+  - Task 5 reward-accounting read-only reviewer
 ```
 
 ## Prior Evidence and Product Bet
@@ -62,6 +65,20 @@ The package succeeds if it produces one of three honest outcomes:
 - **Continue:** simplified or another candidate reward mode beats the control on final accuracy and accuracy ROI, with no blocking confounders.
 - **Revise:** the signal is present but still damped, and the proof packet names the next confounder class to fix.
 - **Stop:** the controlled run shows no ROI advantage and no instrumentation blocker plausibly explains the failure.
+
+## Execution Outcome
+
+The package reached the **Revise** outcome for the proof infrastructure rather than a
+reward-efficiency verdict. The short dual-A/B rehearsal generated
+`docs/analysis/2026-06-13-proof-rehearsal.md`, and the packet is correctly
+`BLOCKED` by value-collapse and gradient-anomaly confounders. That means the real
+100-round reward-efficiency exam should not be run as proof yet.
+
+Useful outside-review guidance from Gemini and DeepSeek aligns with the next
+package: prove Kasmina/Tolaria lifecycle mechanics with an oracle or hardcoded
+heuristic before asking PPO to be the verdict, and add a cheap mathematical
+micro-sandbox for Tamiyo/Simic controller learning. Those are follow-on work, not
+changes to this package's implemented acceptance gates.
 
 ## Non-Goals
 

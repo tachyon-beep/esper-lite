@@ -258,6 +258,12 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:4
   owner: John
   reason: vectorized trainer sync point
+- key: src/esper/karn/overwatch/backend.py:_json_serializer:item
+  owner: John
+  reason: Dashboard JSON serialization boundary for NumPy scalar payloads; not a training hot path
+- key: src/esper/karn/overwatch/backend.py:_json_serializer:tolist
+  owner: John
+  reason: Dashboard JSON serialization boundary for NumPy array payloads; not a training hot path
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy:3
   owner: John
   reason: vectorized trainer sync point
