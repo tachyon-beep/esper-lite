@@ -73,6 +73,11 @@ class TolariaGovernor:
         self.death_penalty = death_penalty
         self.loss_history: deque[float] = deque(maxlen=history_window)
         self.last_good_state: dict[str, Any] | None = None
+        # P3-SNAP: persistent pinned host buffers reused across snapshots (one per tensor
+        # key) for fast non_blocking DtoH offload. last_good_state aliases these buffers;
+        # restore() consumes them via load_state_dict (copies OUT), and the training loop is
+        # single-threaded, so the next snapshot's copy_ safely refreshes them.
+        self._pinned_snapshot: dict[str, torch.Tensor] = {}
         self.consecutive_panics: int = 0
         self.min_panics_before_rollback = min_panics_before_rollback
         self._pending_panic: bool = False
@@ -279,17 +284,32 @@ class TolariaGovernor:
         else:
             filtered_state = full_state
 
-        # Store on CPU to save GPU memory (rollback is rare, memory savings are constant)
-        # Use no_grad() to prevent any autograd overhead during state extraction
-        # PERF: For CUDA tensors, .cpu() already allocates a fresh CPU tensor, so
-        # .clone() is redundant. Only clone() for CPU tensors to ensure independence.
+        # Store on CPU to save GPU memory (rollback is rare, memory savings are constant).
+        # P3-SNAP: offload each CUDA tensor into a persistent PINNED host buffer with a
+        # non_blocking copy (DtoH overlaps default-stream compute), then ONE stream sync
+        # BEFORE exposing last_good_state. The post-copy/pre-assignment sync placement is a
+        # mandatory correctness checkpoint (STOP-SNAP): it guarantees every async copy has
+        # landed before the snapshot is observable, so a rollback can never read a half-copied
+        # buffer. The contract above guarantees current_stream == default_stream.
         with torch.no_grad():
-            self.last_good_state = {
-                k: (v.detach().clone() if v.device.type == "cpu" else v.detach().cpu())
-                   if isinstance(v, torch.Tensor)
-                   else copy.deepcopy(v)
-                for k, v in filtered_state.items()
-            }
+            new_state: dict[str, Any] = {}
+            for k, v in filtered_state.items():
+                if isinstance(v, torch.Tensor):
+                    if v.device.type == "cpu":
+                        new_state[k] = v.detach().clone()
+                        continue
+                    buf = self._pinned_snapshot.get(k)  # authorized owned-cache read
+                    if buf is None or buf.shape != v.shape or buf.dtype != v.dtype:
+                        buf = torch.empty_like(v, device="cpu", pin_memory=True)
+                        self._pinned_snapshot[k] = buf
+                    buf.copy_(v.detach(), non_blocking=True)
+                    new_state[k] = buf
+                else:
+                    new_state[k] = copy.deepcopy(v)
+            if device.type == "cuda":
+                # MUST be post-copy, pre-assignment (STOP-SNAP review checkpoint).
+                torch.cuda.current_stream(device).synchronize()
+            self.last_good_state = new_state
 
     def check_vital_signs(self, current_loss: float) -> bool:
         """Check if the system is irreparably damaged.
