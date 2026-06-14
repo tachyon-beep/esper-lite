@@ -1322,7 +1322,9 @@ def train_ppo_vectorized(
     # P2-STREAMPOOL: build one persistent CUDA stream per env up front (None on CPU). Indexed
     # by env_idx to match env_device_map; the list is never mutated after construction.
     env_streams: list["torch.cuda.Stream | None"] = [
-        torch.cuda.Stream(device=torch.device(dev)) if torch.device(dev).type == "cuda" else None
+        torch.cuda.Stream(device=torch.device(dev))  # type: ignore[no-untyped-call]
+        if torch.device(dev).type == "cuda"
+        else None
         for dev in env_device_map
     ]
 

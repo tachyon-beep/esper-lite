@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Callable, cast
 
@@ -420,7 +420,7 @@ class VectorizedPPOTrainer:
         gpu_preload_augment = self.gpu_preload_augment
         resolved_amp_dtype = self.resolved_amp_dtype
 
-        def rollout_autocast():
+        def rollout_autocast() -> AbstractContextManager[None]:
             # P1-BF16 (CRITICAL-1): rollout get_action must run under the SAME policy-AMP
             # context as the PPO update (_run_ppo_updates), so old_log_probs and the update's
             # log_probs share one precision decision -> unbiased importance ratio. Both legs

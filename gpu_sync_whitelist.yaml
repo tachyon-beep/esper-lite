@@ -108,6 +108,9 @@ allow_hits:
 - key: src/esper/simic/agent/ppo_agent.py:PPOAgent.update:item
   owner: John
   reason: D5 metrics - count forced actions per episode for slot saturation diagnostics; once per update
+- key: src/esper/simic/agent/ppo_agent.py:PPOAgent.update:tolist
+  owner: John
+  reason: P1-SYNC telemetry - single batched sync for per-head learnable-fraction==0 relabel (replaced one .item() per head); once per update, not per step
 - key: src/esper/simic/training/action_execution.py:execute_actions:tolist
   owner: John
   reason: Forced action tracking - single GPU-to-CPU sync for forced step flags; batched per-batch not per-step
@@ -324,9 +327,9 @@ allow_hits:
 - key: src/esper/tolaria/governor.py:TolariaGovernor.execute_rollback:cuda_synchronize
   owner: John
   reason: Safety-critical - ensure all CUDA streams complete before load_state_dict; prevents race conditions
-- key: src/esper/tolaria/governor.py:TolariaGovernor.snapshot:cpu
+- key: src/esper/tolaria/governor.py:TolariaGovernor.snapshot:synchronize
   owner: John
-  reason: Memory optimization - move snapshot tensors to CPU to save GPU memory; rare operation, not hot path
+  reason: P3-SNAP correctness checkpoint (STOP-SNAP) - one stream sync after non_blocking pinned-host copies, before last_good_state is observable, so rollback can never read a half-copied buffer; rare operation, not hot path
 - key: src/esper/utils/data.py:SharedGPUBatchIterator.__init__:cuda_synchronize
   owner: John
   reason: Initialization barrier - ensure GPU memory transfers complete before DataLoader creation

@@ -270,9 +270,8 @@ class BlueprintAnalytics(OutputBackend):
                 # A slot culled before germination recorded a blueprint has
                 # blueprint_id=None. Bucket it explicitly under UNKNOWN_BLUEPRINT
                 # rather than crash or coerce it onto a real blueprint's stats.
-                bp_id = event.data.blueprint_id
-                if bp_id is None:
-                    bp_id = UNKNOWN_BLUEPRINT
+                blueprint_id = event.data.blueprint_id
+                bp_id = UNKNOWN_BLUEPRINT if blueprint_id is None else blueprint_id
                 env_id = event.data.env_id
                 if event.seed_id is None:
                     raise ValueError("seed_id required for SEED_PRUNED event")

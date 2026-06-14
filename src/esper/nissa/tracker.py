@@ -362,7 +362,7 @@ class DiagnosticTracker:
             score -= 0.2 * health.vanishing_layers
         if health.exploding_layers > 0:
             score -= 0.3 * health.exploding_layers
-        if norm_collected:
+        if health.norm_variance is not None and health.overall_norm is not None:
             if health.norm_variance > 10:
                 score -= 0.1
             if health.overall_norm < 1e-5:

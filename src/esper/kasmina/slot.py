@@ -839,6 +839,7 @@ class QualityGates:
                 # Check 3: Gradient health above safety threshold.
                 # Low gradient health indicates the seed may destabilize the host.
                 health = telemetry.gradient_health
+                assert health is not None  # gradient_measured (checked above) guarantees a value
                 if health >= self.min_gradient_health_for_blending:
                     checks_passed.append(f"gradient_health_{health:.2f}")
                     gradient_health_ok = True

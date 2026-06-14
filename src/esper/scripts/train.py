@@ -18,7 +18,7 @@ os.environ.setdefault(
 # allocator policy is read at first context creation, so a late set silently does nothing.
 import torch as _t
 
-if _t.cuda.is_initialized():
+if _t.cuda.is_initialized():  # type: ignore[no-untyped-call]
     import warnings
 
     warnings.warn(

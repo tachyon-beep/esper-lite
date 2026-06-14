@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import random
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, cast
 
 import torch
@@ -54,7 +54,9 @@ from esper.utils.loss import compute_task_loss_with_metrics
 logger = logging.getLogger(__name__)
 
 
-def policy_amp_context(amp_enabled: bool, resolved_amp_dtype: torch.dtype | None):
+def policy_amp_context(
+    amp_enabled: bool, resolved_amp_dtype: torch.dtype | None
+) -> AbstractContextManager[None]:
     """Autocast context for the PPO POLICY path (rollout sampling + bootstrap + update).
 
     Both legs of the PPO importance ratio MUST share ONE precision decision or the ratio
