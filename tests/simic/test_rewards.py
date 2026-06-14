@@ -561,13 +561,57 @@ class TestContributionRewardComponents:
 
 
 class TestProxySignalPath:
-    """Tests for the proxy signal path (when seed_contribution is None)."""
+    """Tests for the proxy signal path (when seed_contribution is None).
 
-    def test_positive_acc_delta_gives_reward(self):
-        """Positive acc_delta should give positive bounded_attribution."""
+    The proxy is the low-confidence, pre-counterfactual fallback. It reads the
+    seed's OWN stage-relative improvement (improvement_since_stage_start), NOT
+    host-wide acc_delta, and it only pays once the seed is on the output path
+    (stage >= BLENDING, where alpha is ramping/on). A pre-BLENDING (alpha ~= 0)
+    seed pays nothing -- host progress must not be credited to a seed that is not
+    yet causally contributing. Payment is proxy_contribution_weight (=
+    contribution_weight * proxy_confidence_factor) times the positive improvement.
+    """
+
+    def test_blending_positive_stage_improvement_gives_reward(self):
+        """BLENDING seed with positive stage improvement gets discounted proxy pay."""
         seed_info = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=1.0,
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=1.5,  # Seed-causal, alpha-gated signal
+            total_improvement=1.5,
+            epochs_in_stage=3,
+            seed_params=1000,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=6,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,  # Proxy path (no counterfactual yet)
+            val_acc=65.0,
+            seed_info=seed_info,
+            epoch=8,
+            max_epochs=25,
+            acc_delta=99.0,  # Host drift is IGNORED on the proxy path now
+            return_components=True,
+        )
+
+        # Pays proxy_weight * improvement_since_stage_start, NOT proxy_weight * acc_delta
+        assert components.bounded_attribution > 0, (
+            "Positive stage improvement should give positive attribution"
+        )
+        config = ContributionRewardConfig()
+        expected = config.proxy_contribution_weight * 1.5
+        assert components.bounded_attribution == pytest.approx(expected)
+
+    def test_pre_blending_seed_gets_zero_despite_host_drift(self):
+        """A pre-BLENDING (alpha ~= 0) seed gets zero proxy pay even when host moved.
+
+        This is the anti-confound guard: host-wide accuracy drift must not pay a
+        seed that is not yet causally on the output path.
+        """
+        seed_info = SeedInfo(
+            stage=STAGE_TRAINING,  # Pre-BLENDING: alpha ~= 0
+            improvement_since_stage_start=1.0,  # Even with positive stage signal...
             total_improvement=1.0,
             epochs_in_stage=3,
             seed_params=1000,
@@ -582,27 +626,23 @@ class TestProxySignalPath:
             seed_info=seed_info,
             epoch=5,
             max_epochs=25,
-            acc_delta=1.5,  # Positive delta
+            acc_delta=1.5,  # Host drift -- must NOT pay a pre-BLENDING seed
             return_components=True,
         )
 
-        # Should have positive bounded_attribution from proxy signal
-        assert components.bounded_attribution > 0, "Positive acc_delta should give positive attribution"
-        # Should equal proxy_weight * acc_delta
-        config = ContributionRewardConfig()
-        expected = config.proxy_contribution_weight * 1.5
-        assert components.bounded_attribution == pytest.approx(expected)
+        # Pre-BLENDING => not causally contributing => no proxy attribution
+        assert components.bounded_attribution == 0.0
 
-    def test_negative_acc_delta_gives_zero(self):
-        """Negative acc_delta should give zero bounded_attribution (no penalty)."""
+    def test_negative_stage_improvement_gives_zero(self):
+        """Negative stage improvement gives zero bounded_attribution (no penalty)."""
         seed_info = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=-0.5,
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-0.5,  # Negative stage-relative signal
             total_improvement=-0.5,
             epochs_in_stage=3,
             seed_params=1000,
-            previous_stage=STAGE_GERMINATED,
-            seed_age_epochs=3,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=6,
         )
 
         reward, components = compute_contribution_reward(
@@ -612,23 +652,23 @@ class TestProxySignalPath:
             seed_info=seed_info,
             epoch=5,
             max_epochs=25,
-            acc_delta=-0.5,  # Negative delta
+            acc_delta=2.0,  # Host drift ignored; seed signal is negative
             return_components=True,
         )
 
-        # No penalty for negative delta in proxy path
+        # No penalty for negative stage improvement on the proxy path
         assert components.bounded_attribution == 0.0
 
-    def test_none_acc_delta_gives_zero(self):
-        """None acc_delta should give zero bounded_attribution."""
+    def test_zero_stage_improvement_gives_zero(self):
+        """Zero stage improvement gives zero bounded_attribution."""
         seed_info = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=0.0,
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=0.0,  # No stage-relative gain yet
             total_improvement=0.0,
             epochs_in_stage=3,
             seed_params=1000,
-            previous_stage=STAGE_GERMINATED,
-            seed_age_epochs=3,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=6,
         )
 
         reward, components = compute_contribution_reward(
@@ -638,7 +678,7 @@ class TestProxySignalPath:
             seed_info=seed_info,
             epoch=5,
             max_epochs=25,
-            acc_delta=None,  # No delta provided
+            acc_delta=None,
             return_components=True,
         )
 
@@ -1062,7 +1102,13 @@ class TestHoldingIndecisionPenalty:
 
 
 class TestSeedlessAttribution:
-    """Test that seedless states get zero attribution."""
+    """Attribution is gated on seed PRESENCE, not host accuracy drift.
+
+    Seedless steps (seed_info is None) get zero attribution no matter how much
+    host accuracy moved -- host-only learning must never be credited to a
+    nonexistent seed. A step where a seed exists but has no measured
+    counterfactual yet falls to the discounted proxy path instead.
+    """
 
     def test_seedless_wait_gets_no_attribution(self):
         """WAIT with no seed should get zero attribution, even with positive acc_delta.
@@ -1105,33 +1151,47 @@ class TestSeedlessAttribution:
             f"Seedless germinate should get no attribution: {components.bounded_attribution}"
         )
 
-    def test_pre_blending_seed_requires_counterfactual_for_attribution(self):
-        """Pre-blending seed should not get causal attribution from host drift."""
+    def test_pre_counterfactual_blending_seed_gets_discounted_proxy(self):
+        """A seed ON THE OUTPUT PATH without a counterfactual gets the discounted proxy.
 
-        # Seed exists but in TRAINING (no counterfactual yet)
-        training_seed = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=0.5,
-            total_improvement=0.5,
+        Complement to the seedless cases above: here a seed DOES exist, is causally
+        contributing (stage >= BLENDING, alpha ramping/on), and its clean leave-one-out
+        counterfactual has not been measured yet (seed_contribution is None). The proxy
+        pays a heavily discounted signal driven by the seed's OWN stage-relative
+        improvement (proxy_contribution_weight = contribution_weight *
+        proxy_confidence_factor), NOT host-wide acc_delta. The anti-confound that
+        "host learning must not pay a non-contributing seed" is enforced for the
+        SEEDLESS case (seed_info is None) above, and for the PRE-BLENDING case in
+        TestProxySignalPath.test_pre_blending_seed_gets_zero_despite_host_drift.
+        """
+
+        # Seed exists and is on the output path (BLENDING), counterfactual not yet measured
+        blending_seed = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=2.0,  # Seed-causal, alpha-gated signal
+            total_improvement=2.0,
             epochs_in_stage=2,
-            seed_age_epochs=3,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=6,
         )
 
         _, components = compute_contribution_reward(
             action=LifecycleOp.WAIT,
-            seed_contribution=None,  # No counterfactual yet
+            seed_contribution=None,  # No counterfactual yet -> proxy path
             val_acc=45.0,
-            seed_info=training_seed,  # SEED EXISTS
-            epoch=3,
+            seed_info=blending_seed,  # SEED EXISTS, on output path
+            epoch=6,
             max_epochs=25,
             acc_at_germination=40.0,
-            acc_delta=2.0,  # Positive delta
+            acc_delta=99.0,  # Host drift ignored on the proxy path
             return_components=True,
         )
 
-        assert components.bounded_attribution == 0.0, (
-            f"Pre-blending seed without counterfactual proof should get no attribution: "
-            f"{components.bounded_attribution}"
+        config = ContributionRewardConfig()
+        expected = config.proxy_contribution_weight * 2.0
+        assert components.bounded_attribution == pytest.approx(expected), (
+            f"Pre-counterfactual BLENDING seed should get discounted proxy attribution "
+            f"({expected}): {components.bounded_attribution}"
         )
 
 

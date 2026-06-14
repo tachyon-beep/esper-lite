@@ -568,9 +568,43 @@ def compute_contribution_reward(
                     )
                     bounded_attribution *= timing_discount
         elif seed_info is not None and not seed_is_fossilized:
-            # No counterfactual proof means no causal attribution. Host accuracy
-            # drift can still be useful telemetry, but it must not pay the seed.
-            bounded_attribution = 0.0
+            # Proxy path: a seed exists but its clean leave-one-out counterfactual has
+            # not been measured yet (seed_contribution is None, e.g. before the
+            # all-disabled ablation runs early in a seed's life). We fall back to a
+            # HEAVILY DISCOUNTED, SEED-CAUSAL proxy -- proxy_contribution_weight is
+            # contribution_weight * proxy_confidence_factor (0.3), i.e. the proxy is
+            # treated as only 30% as reliable as a true counterfactual.
+            #
+            # The proxy reads the seed's OWN stage-relative improvement
+            # (improvement_since_stage_start = current_val_acc - acc_at_stage_start),
+            # NOT host-wide acc_delta. Host-wide validation drift is the host
+            # optimiser's progress, not the seed's, and using it would pay a seed for
+            # learning it did not cause -- the exact host-drift confound the
+            # counterfactual design exists to eliminate. The stage-relative signal is
+            # alpha-gated by construction: it only becomes a meaningful causal signal
+            # once the seed is on the output path. We therefore gate the proxy on
+            # stage >= BLENDING (alpha ramping/on); a pre-BLENDING (alpha ~= 0) seed is
+            # not yet causally contributing, so it pays nothing no matter how much the
+            # host moved. Only positive improvement pays; non-positive pays nothing (no
+            # penalty on the proxy path -- without the counterfactual we cannot
+            # causally attribute a regression to the seed either).
+            #
+            # This does NOT touch the counterfactual-PRESENT path (seed_contribution is
+            # not None, above), which keys anti-gaming, the ratio penalty, and
+            # fossilization gates entirely on the clean counterfactual. A real
+            # counterfactual dominates this proxy the moment one is available, and a
+            # truly seedless step (seed_info is None) never reaches this branch, so
+            # host-only learning is still never credited to a nonexistent seed.
+            # improvement_since_stage_start is None before the seed's first
+            # stage-relative measurement (no data yet => no signal to pay); the
+            # holding-indecision gate below uses the same `is not None` distinction.
+            stage_improvement = seed_info.improvement_since_stage_start
+            if (
+                seed_info.stage >= STAGE_BLENDING
+                and stage_improvement is not None
+                and stage_improvement > 0
+            ):
+                bounded_attribution = config.proxy_contribution_weight * stage_improvement
 
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         if seed_info.total_improvement < 0:
