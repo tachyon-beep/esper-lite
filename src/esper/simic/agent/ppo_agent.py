@@ -759,7 +759,23 @@ class PPOAgent:
 
                 # Forward pass to get LSTM output, conditioned on the rollout row's
                 # actual recurrent state (not the initial hidden state).
-                with torch.no_grad():
+                #
+                # AMP-SAFETY (CRITICAL): update() may run under an outer autocast context
+                # (policy_amp_context -> autocast(bf16) for BF16 PPO; the AMP test legs use
+                # autocast(fp16) directly). This no_grad telemetry forward touches EVERY head
+                # Linear (slot/blueprint/.../op/value) BEFORE the gradient-carrying
+                # evaluate_actions forward below. Under autocast, the FIRST forward through a
+                # Linear populates autocast's per-parameter cast-weight CACHE; when that first
+                # touch happens inside no_grad, the cached low-precision weight carries NO
+                # autograd linkage. evaluate_actions then reuses the cached graph-less cast,
+                # so autograd never connects the head logits back to the head nn.Parameters
+                # and the policy/value heads receive None gradients (Sanctum then shows NaN
+                # head grad norms; in production the policy silently stops learning). Running
+                # this pure-FP32, no_grad diagnostic with autocast DISABLED keeps it out of
+                # the training-dtype cast cache, so the real forward establishes the cache
+                # under grad and the head gradients flow. autocast_cache parity is restored.
+                autocast_device_type = torch.device(self.device).type
+                with torch.autocast(device_type=autocast_device_type, enabled=False), torch.no_grad():
                     forward_result = self.policy.network.forward(
                         state=sample_obs,
                         blueprint_indices=sample_blueprints,
@@ -767,16 +783,19 @@ class PPOAgent:
                     )
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 
-                # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
-                # P1-QLOOP: one batched _compute_value call over all ops instead of NUM_OPS
-                # serial launches. lstm_out is [1, 1, hidden]; broadcast over the op axis.
-                op_indices = torch.arange(
-                    NUM_OPS, device=self.device, dtype=torch.long
-                ).reshape(NUM_OPS, 1)
-                lstm_out_rep = lstm_out.expand(NUM_OPS, 1, -1).contiguous()  # [NUM_OPS, 1, hidden]
-                op_q_values = self.policy.network._compute_value(
-                    lstm_out_rep, op_indices
-                ).reshape(NUM_OPS)
+                    # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
+                    # P1-QLOOP: one batched _compute_value call over all ops instead of NUM_OPS
+                    # serial launches. lstm_out is [1, 1, hidden]; broadcast over the op axis.
+                    # Kept inside the autocast(enabled=False) region so the value_head Linear
+                    # is also cached graph-free (the value head is part of the same forward()
+                    # above and trains via the loss below).
+                    op_indices = torch.arange(
+                        NUM_OPS, device=self.device, dtype=torch.long
+                    ).reshape(NUM_OPS, 1)
+                    lstm_out_rep = lstm_out.expand(NUM_OPS, 1, -1).contiguous()  # [NUM_OPS, 1, hidden]
+                    op_q_values = self.policy.network._compute_value(
+                        lstm_out_rep, op_indices
+                    ).reshape(NUM_OPS)
 
                 # Compute Q-variance and Q-spread over valid ops only.
                 valid_q_values = op_q_values[op_mask]
