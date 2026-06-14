@@ -31,6 +31,8 @@ class PPOUpdateMetricsBuilder:
     head_entropies: dict[str, list[torch.Tensor]]
     conditional_head_entropies: dict[str, list[torch.Tensor]]  # Entropy only when head is causally relevant
     head_grad_norms: dict[str, list[torch.Tensor]]
+    head_learnable_fractions: dict[str, list[torch.Tensor]]
+    head_gradient_states: dict[str, list[str]]
     head_nan_detected: dict[str, bool]
     head_inf_detected: dict[str, bool]
     lstm_health_history: dict[str, list[float | bool]]
@@ -38,6 +40,7 @@ class PPOUpdateMetricsBuilder:
     log_prob_max_across_epochs: torch.Tensor
     head_ratio_max_across_epochs: dict[str, torch.Tensor]
     joint_ratio_max_across_epochs: torch.Tensor
+    head_clip_fraction_history: dict[str, list[torch.Tensor]]
     value_func_metrics: ValueFunctionMetricsDict
     cuda_memory_metrics: dict[str, float]
     head_names: tuple[str, ...]
@@ -128,6 +131,13 @@ class PPOUpdateMetricsBuilder:
         aggregated_result["head_grad_norms"] = {
             key: [val.item() for val in values] for key, values in self.head_grad_norms.items()
         }
+        aggregated_result["head_learnable_fractions"] = {
+            key: [val.item() for val in values]
+            for key, values in self.head_learnable_fractions.items()
+        }
+        aggregated_result["head_gradient_states"] = {
+            key: list(values) for key, values in self.head_gradient_states.items()
+        }
 
         log_prob_min = self.log_prob_min_across_epochs
         log_prob_max = self.log_prob_max_across_epochs
@@ -153,6 +163,17 @@ class PPOUpdateMetricsBuilder:
             aggregated_result["joint_ratio_max"] = 1.0
         else:
             aggregated_result["joint_ratio_max"] = self.joint_ratio_max_across_epochs.item()
+
+        # Per-head clip-fraction (factored-PPO trust-region telemetry). Mean across
+        # the epochs that ran, mirroring how the joint clip_fraction is mean-reduced.
+        # Heads with no recorded epochs (e.g. early-stop before loss) report 0.0.
+        for key in self.head_names:
+            clip_key = f"head_{key}_clip_fraction"
+            head_clips = self.head_clip_fraction_history[key]
+            if head_clips:
+                aggregated_result[clip_key] = torch.stack(head_clips).mean().item()  # type: ignore[literal-required]
+            else:
+                aggregated_result[clip_key] = 0.0  # type: ignore[literal-required]
 
         aggregated_result["head_nan_detected"] = self.head_nan_detected
         aggregated_result["head_inf_detected"] = self.head_inf_detected

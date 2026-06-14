@@ -30,9 +30,18 @@ class SeedInfo(NamedTuple):
     # Scaffolding support (Phase 3.1)
     interaction_sum: float = 0.0  # Total synergy with other seeds
     boost_received: float = 0.0  # Strongest single interaction
+    # Clean counterfactual total improvement (val_acc - all_disabled_acc): the total
+    # seed-attributable accuracy gain, free of host drift. The anti-gaming /
+    # fossilization gates key on THIS, not the confounded total_improvement. None when
+    # no all-disabled ablation was measured for the env (gates treat None conservatively).
+    counterfactual_total_improvement: float | None = None
 
     @staticmethod
-    def from_seed_state(seed_state: Any, seed_params: int = 0) -> "SeedInfo | None":
+    def from_seed_state(
+        seed_state: Any,
+        seed_params: int = 0,
+        counterfactual_total_improvement: float | None = None,
+    ) -> "SeedInfo | None":
         """Convert from kasmina.SeedState to SeedInfo.
 
         Args:
@@ -67,6 +76,7 @@ class SeedInfo(NamedTuple):
             seed_age_epochs=seed_age,
             interaction_sum=interaction_sum,
             boost_received=boost_received,
+            counterfactual_total_improvement=counterfactual_total_improvement,
         )
 
 
@@ -104,9 +114,7 @@ class ContributionRewardInputs:
     seed_id: str | None = None
     # D2: Capacity Economics fields (slot saturation prevention)
     # n_active_seeds: Count of seeds in TRAINING/BLENDING/HOLDING stages (not fossilized)
-    # seeds_germinated_this_episode: Count of GERMINATE actions this episode (for first-germinate bonus)
     n_active_seeds: int = 0
-    seeds_germinated_this_episode: int = 0
     # Drip reward fields (BASIC/BASIC_PLUS mode post-fossilization accountability)
     fossilized_drip_states: list[Any] | None = None  # list[FossilizedSeedDripState]
     fossilized_contributions: dict[str, float] | None = None

@@ -39,6 +39,7 @@ from esper.karn.sanctum.schema import (
     ShapleyEstimate,
     SeedLifecycleStats,
     SeedLifecycleEvent,
+    MorphologyCausalLogEntry,
     ObservationStats,
     EpisodeStats,
     compute_entropy_velocity,
@@ -52,7 +53,9 @@ from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 from esper.leyline import (
     DEFAULT_EPISODE_LENGTH,
     DEFAULT_GAMMA,
+    MAX_PARAM_RATIO_REF,
     TrainingStartedPayload,
+    AnomalyDetectedPayload,
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
     PPOUpdatePayload,
@@ -65,6 +68,7 @@ from esper.leyline import (
     AnalyticsSnapshotPayload,
     EpisodeOutcomePayload,
     GovernorRollbackPayload,
+    MorphologyCausalLogPayload,
     TEMPO_NAMES,
 )
 
@@ -203,7 +207,7 @@ class SanctumAggregator:
     _reward_mode: str = ""  # A/B test cohort (shaped, simplified, sparse)
     _current_batch: int = 0  # Current batch index (from BATCH_EPOCH_COMPLETED)
     _batch_avg_accuracy: float = 0.0  # Batch-level average accuracy
-    _batch_rolling_accuracy: float = 0.0  # Rolling average for trend display
+    _batch_rolling_accuracy: float | None = None  # Rolling average for trend display; None = not measured
     _batch_avg_reward: float = 0.0  # Batch average reward
     _batch_total_episodes: int = 0  # Total episodes in run
     _run_config: "RunConfig" = field(default_factory=lambda: RunConfig())
@@ -240,6 +244,12 @@ class SanctumAggregator:
     # Event log
     _event_log: deque[EventLogEntry] = field(default_factory=lambda: deque(maxlen=100))
 
+    # Morphology causal-log rows (from MORPHOLOGY_CAUSAL_LOG events).
+    # Bounded rolling window; most recent last.
+    _morphology_causal_log: deque[MorphologyCausalLogEntry] = field(
+        default_factory=lambda: deque(maxlen=200)
+    )
+
     # Focused env for reward panel
     _focused_env_id: int = 0
 
@@ -269,6 +279,7 @@ class SanctumAggregator:
         """Initialize state."""
         self._envs = {}
         self._event_log = deque(maxlen=self.max_event_log)
+        self._morphology_causal_log = deque(maxlen=200)
         self._tamiyo = TamiyoState()
         self._observation_stats = ObservationStats()  # Updated when telemetry provides stats
         self._vitals = SystemVitals()
@@ -360,6 +371,8 @@ class SanctumAggregator:
             self._handle_episode_outcome(event)
         elif event_type == "GOVERNOR_ROLLBACK":
             self._handle_governor_rollback(event)
+        elif event_type == "MORPHOLOGY_CAUSAL_LOG":
+            self._handle_morphology_causal_log(event)
 
     def get_snapshot(self) -> SanctumSnapshot:
         """Get current SanctumSnapshot.
@@ -712,6 +725,7 @@ class SanctumAggregator:
             seed_lifecycle=seed_lifecycle,
             observation_stats=observation_stats,
             episode_stats=episode_stats,
+            morphology_causal_log=list(self._morphology_causal_log),
             cumulative_germinated=self._cumulative_germinated,
         )
         return copy_snapshot(snapshot)
@@ -936,7 +950,11 @@ class SanctumAggregator:
         if payload.skipped:
             return
 
-        # Mark that we've received PPO data (enables TamiyoBrain display)
+        # Mark that we've received PPO data (enables TamiyoBrain display).
+        # ORDERING IS LOAD-BEARING: this must stay AFTER the skipped-update guard
+        # above. A skipped update carries no health metrics, so the presence flag
+        # must not be set for it — otherwise UI-004's pending gate would show
+        # unmeasured 0.0 defaults as measured values.
         self._tamiyo.ppo_data_received = True
 
         # A/B testing group identification
@@ -1223,6 +1241,11 @@ class SanctumAggregator:
                 slot_id=slot_id,
                 alpha=None,
                 accuracy_delta=None,
+                morphology_proposal_id=germinated_payload.morphology_proposal_id,
+                morphology_verdict_id=germinated_payload.morphology_verdict_id,
+                morphology_mutation_id=germinated_payload.morphology_mutation_id,
+                rng_stream=germinated_payload.rng_stream,
+                rng_seed=germinated_payload.rng_seed,
             ))
 
         elif event_type == "SEED_STAGE_CHANGED" and isinstance(event.data, SeedStageChangedPayload):
@@ -1271,6 +1294,11 @@ class SanctumAggregator:
                 slot_id=slot_id,
                 alpha=stage_changed_payload.alpha,
                 accuracy_delta=None,
+                morphology_proposal_id=stage_changed_payload.morphology_proposal_id,
+                morphology_verdict_id=stage_changed_payload.morphology_verdict_id,
+                morphology_mutation_id=stage_changed_payload.morphology_mutation_id,
+                rng_stream=stage_changed_payload.rng_stream,
+                rng_seed=stage_changed_payload.rng_seed,
             ))
 
         elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
@@ -1290,6 +1318,11 @@ class SanctumAggregator:
             if slot_id not in env.seeds:
                 env.seeds[slot_id] = SeedState(slot_id=slot_id)
             seed = env.seeds[slot_id]
+
+            # Capture the prior stage BEFORE mutating seed.stage, so the
+            # lifecycle event records the real transition (e.g. BLENDING ->
+            # FOSSILIZED) rather than a self-transition.
+            from_stage = seed.stage
 
             # Update from payload
             seed.stage = "FOSSILIZED"
@@ -1318,12 +1351,17 @@ class SanctumAggregator:
             env.lifecycle_events.append(SeedLifecycleEvent(
                 epoch=event.epoch or 0,
                 action="FOSSILIZE",
-                from_stage=seed.stage,
+                from_stage=from_stage,
                 to_stage="FOSSILIZED",
                 blueprint_id=seed.blueprint_id or "unknown",
                 slot_id=slot_id,
                 alpha=seed.alpha,
                 accuracy_delta=fossilized_payload.improvement,
+                morphology_proposal_id=fossilized_payload.morphology_proposal_id,
+                morphology_verdict_id=fossilized_payload.morphology_verdict_id,
+                morphology_mutation_id=fossilized_payload.morphology_mutation_id,
+                rng_stream=fossilized_payload.rng_stream,
+                rng_seed=fossilized_payload.rng_seed,
             ))
 
         elif event_type == "SEED_PRUNED" and isinstance(event.data, SeedPrunedPayload):
@@ -1357,7 +1395,12 @@ class SanctumAggregator:
                 blueprint_id=seed.blueprint_id or "unknown",
                 slot_id=slot_id,
                 alpha=seed.alpha,
-                accuracy_delta=None,
+                accuracy_delta=pruned_payload.improvement,
+                morphology_proposal_id=pruned_payload.morphology_proposal_id,
+                morphology_verdict_id=pruned_payload.morphology_verdict_id,
+                morphology_mutation_id=pruned_payload.morphology_mutation_id,
+                rng_stream=pruned_payload.rng_stream,
+                rng_seed=pruned_payload.rng_seed,
             ))
 
             # Update from payload
@@ -1478,6 +1521,8 @@ class SanctumAggregator:
             total_epochs = self._current_episode * self._max_epochs
             self._vitals.epochs_per_second = total_epochs / elapsed
             self._vitals.batches_per_hour = (self._batches_completed / elapsed) * 3600
+            # Throughput is now a measured quantity (at least one batch completed).
+            self._vitals.throughput_present = True
 
         # Capture best_runs
         n_envs = payload.n_envs
@@ -1959,13 +2004,57 @@ class SanctumAggregator:
             payload.reason,
         )
 
+    def _handle_morphology_causal_log(self, event: "TelemetryEvent") -> None:
+        """Handle MORPHOLOGY_CAUSAL_LOG event - joinable causal-log row.
+
+        Adds a structured MorphologyCausalLogEntry carrying the full causal /
+        identity chain (action/proposal/verdict/mutation IDs, phase, RNG
+        provenance, governor verdict, watch-window evidence, and the linked
+        terminal event) so Overwatch can render and join the lifecycle causal
+        trail without parsing raw event UUIDs.
+        """
+        if not isinstance(event.data, MorphologyCausalLogPayload):
+            raise TypeError(
+                "MORPHOLOGY_CAUSAL_LOG requires MorphologyCausalLogPayload, got "
+                f"{type(event.data).__name__}"
+            )
+
+        payload = event.data
+        env_id = payload.env_id
+        self._ensure_env(env_id)
+
+        self._morphology_causal_log.append(
+            MorphologyCausalLogEntry(
+                phase=payload.phase,
+                env_id=payload.env_id,
+                slot_id=payload.slot_id,
+                operation=payload.operation,
+                action_id=payload.action_id,
+                proposal_id=payload.proposal_id,
+                verdict_id=payload.verdict_id,
+                mutation_id=payload.mutation_id,
+                observation_hash=payload.observation_hash,
+                rng_stream=payload.rng_stream,
+                rng_seed=payload.rng_seed,
+                topology=payload.topology,
+                blueprint_id=payload.blueprint_id,
+                governor_approved=payload.governor_approved,
+                governor_reason=payload.governor_reason,
+                governor_blocked_factor=payload.governor_blocked_factor,
+                watch_window_evidence=payload.watch_window_evidence,
+                linked_event_id=payload.linked_event_id,
+            )
+        )
+
     def _compute_hypervolume(self) -> float:
         """Compute hypervolume indicator from recent episode outcomes."""
         if not self._episode_outcomes:
             return 0.0
 
         frontier = extract_pareto_frontier(self._episode_outcomes)
-        ref_point = (0.0, 1.0)  # (min_accuracy, max_param_ratio)
+        # param_ratio is the growth multiple total/host (1.0 = no growth), so the
+        # worst-acceptable param_ratio is a growth ceiling above 1.0, not 1.0.
+        ref_point = (0.0, MAX_PARAM_RATIO_REF)  # (min_accuracy, max_param_ratio)
         return compute_hypervolume_2d(frontier, ref_point)
 
     def compute_reward_health(self) -> RewardHealthData:
@@ -2042,6 +2131,7 @@ class SanctumAggregator:
         # Generic message + structured metadata based on event type
         metadata: dict[str, str | int | float] = {"event_id": event.event_id}
         env_id: int | None = None
+        episode = self._current_episode
 
         if event_type.startswith("SEED_"):
             if event_type == "SEED_GERMINATED" and isinstance(event.data, SeedGerminatedPayload):
@@ -2105,6 +2195,15 @@ class SanctumAggregator:
                 metadata["episodes"] = event.data.episodes_completed
             else:
                 message = "Batch complete (unknown payload)"
+        elif isinstance(event.data, AnomalyDetectedPayload):
+            message = event.data.anomaly_type.replace("_", " ").capitalize()
+            episode = event.data.episode
+            metadata["anomaly_type"] = event.data.anomaly_type
+            metadata["batch"] = event.data.batch
+            metadata["inner_epoch"] = event.data.inner_epoch
+            metadata["total_episodes"] = event.data.total_episodes
+            if event.data.detail:
+                metadata["detail"] = event.data.detail
         else:
             message = event.message or event_type
 
@@ -2113,7 +2212,7 @@ class SanctumAggregator:
             event_type=event_type,
             env_id=env_id,
             message=message,
-            episode=self._current_episode,
+            episode=episode,
             relative_time=relative_time,
             metadata=metadata,
         ))
@@ -2171,6 +2270,8 @@ class SanctumAggregator:
                     self._vitals.gpu_memory_total_gb = stats0.memory_total_gb
                     self._vitals.gpu_utilization = stats0.utilization
                     self._vitals.gpu_temperature = stats0.temperature
+                    # Real GPU sample landed: the convenience fields are now measured.
+                    self._vitals.gpu_data_present = True
         except ImportError as e:
             _logger.warning("Failed to import torch for GPU vitals: %s", e)
             self._vitals.gpu_stats = {}  # Explicit unavailable state

@@ -20,11 +20,13 @@ def _make_seed_info(
     previous_stage: SeedStage,
     previous_epochs_in_stage: int,
     seed_age_epochs: int,
+    counterfactual_total_improvement: float | None = None,
 ) -> SeedInfo:
+    total_improvement = 0.0
     return SeedInfo(
         stage=stage.value,
         improvement_since_stage_start=0.0,
-        total_improvement=0.0,
+        total_improvement=total_improvement,
         epochs_in_stage=epochs_in_stage,
         seed_params=0,
         previous_stage=previous_stage.value,
@@ -32,6 +34,11 @@ def _make_seed_info(
         seed_age_epochs=seed_age_epochs,
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=(
+            counterfactual_total_improvement
+            if counterfactual_total_improvement is not None
+            else total_improvement
+        ),
     )
 
 
@@ -46,8 +53,6 @@ def test_germinate_wait_prune_cycle_discounted_return_not_positive() -> None:
         pbrs_weight=1.0,
         germinate_cost=0.0,
         prune_cost=0.0,
-        # D2: Disable first-germinate bonus - this test isolates PBRS, not capacity economics
-        first_germinate_bonus=0.0,
     )
 
     # Freeze non-shaping signals so this test only measures PBRS/action shaping.
@@ -155,8 +160,6 @@ def test_germinate_then_immediate_prune_not_profitable() -> None:
         pbrs_weight=1.0,
         germinate_cost=0.0,
         prune_cost=0.0,
-        # D2: Disable first-germinate bonus - this test isolates PBRS, not capacity economics
-        first_germinate_bonus=0.0,
     )
 
     val_acc = 0.0
@@ -209,3 +212,39 @@ def test_germinate_then_immediate_prune_not_profitable() -> None:
         "PBRS farming detected: Germinate→Prune produced positive discounted return "
         f"({discounted_return})"
     )
+
+
+def test_germinate_breaks_do_nothing_symmetry_via_pbrs() -> None:
+    """Removing the flat first-germinate bonus must not kill the symmetry break.
+
+    Regression for esper-lite-17907d3009: the unconditional +0.2 first-germinate
+    bonus was deleted (it paid for the ACTION, not a contribution, and was farmable
+    across episodes). The policy-invariant PBRS germination term
+    (gamma * phi[GERMINATED] - phi[no_seed]) must still make GERMINATE into an empty
+    slot strictly more rewarding than WAIT at the same step, so the agent is not
+    indifferent between acting and doing nothing.
+    """
+    config = ContributionRewardConfig(
+        pbrs_weight=1.0,
+        germinate_cost=0.0,
+        disable_timing_discount=True,  # isolate the PBRS deposit from the timing ramp
+    )
+
+    common = dict(
+        seed_contribution=None,
+        val_acc=0.0,
+        seed_info=None,  # empty slot
+        epoch=10,
+        max_epochs=100,
+        total_params=0,
+        host_params=1,
+        acc_at_germination=0.0,
+        acc_delta=0.0,
+        config=config,
+    )
+
+    germinate_reward = compute_contribution_reward(action=LifecycleOp.GERMINATE, **common)
+    wait_reward = compute_contribution_reward(action=LifecycleOp.WAIT, **common)
+
+    # GERMINATE earns the positive PBRS germination deposit; WAIT does not.
+    assert germinate_reward > wait_reward

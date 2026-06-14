@@ -318,6 +318,17 @@ from esper.leyline.factored_actions import (
     TempoAction,
     get_action_head_sizes,
 )
+from esper.leyline.lifecycle_mutation import (
+    LifecycleMutationCausalContext,
+    LifecycleMutationHealthSnapshot,
+    LifecycleMutationVerdict,
+)
+from esper.leyline.proof_baselines import (
+    REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES,
+    ProofBaselineCohort,
+    ProofBaselineMode,
+    ProofBaselinePlan,
+)
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
 
@@ -720,6 +731,7 @@ from esper.leyline.telemetry import (
     TrendDetectedPayload,
     PPOUpdatePayload,
     MemoryWarningPayload,
+    AllocatorStatsPayload,
     RewardHackingSuspectedPayload,
     TamiyoInitiatedPayload,
     SeedGerminatedPayload,
@@ -734,6 +746,8 @@ from esper.leyline.telemetry import (
     PerformanceDegradationPayload,
     EpisodeOutcomePayload,
     GovernorRollbackPayload,
+    MorphologyCausalLogPhase,
+    MorphologyCausalLogPayload,
     GovernorPanicReason,
 )
 
@@ -776,7 +790,7 @@ from esper.leyline.task_config import TaskConfig
 from esper.leyline.reward_config import LossRewardConfig
 
 # Episode outcome (cross-subsystem Pareto analysis)
-from esper.leyline.episode_outcome import EpisodeOutcome
+from esper.leyline.episode_outcome import EpisodeOutcome, MAX_PARAM_RATIO_REF
 
 # Output protocol (telemetry backend contract)
 from esper.leyline.output_protocol import OutputBackend
@@ -854,6 +868,13 @@ __all__ = [
     "compute_causal_masks",
     "compute_availability_masks",
     "LifecycleOp",
+    "LifecycleMutationVerdict",
+    "LifecycleMutationCausalContext",
+    "LifecycleMutationHealthSnapshot",
+    "ProofBaselineCohort",
+    "ProofBaselineMode",
+    "ProofBaselinePlan",
+    "REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
     "NUM_ALPHA_SPEEDS",
@@ -1029,6 +1050,7 @@ __all__ = [
     "TrendDetectedPayload",
     "PPOUpdatePayload",
     "MemoryWarningPayload",
+    "AllocatorStatsPayload",
     "RewardHackingSuspectedPayload",
     "TamiyoInitiatedPayload",
     "SeedGerminatedPayload",
@@ -1043,6 +1065,8 @@ __all__ = [
     "PerformanceDegradationPayload",
     "EpisodeOutcomePayload",
     "GovernorRollbackPayload",
+    "MorphologyCausalLogPhase",
+    "MorphologyCausalLogPayload",
     "GovernorPanicReason",
 
     # Alpha controller
@@ -1076,6 +1100,7 @@ __all__ = [
 
     # Episode outcome (Pareto analysis)
     "EpisodeOutcome",
+    "MAX_PARAM_RATIO_REF",
 
     # Output protocol (telemetry backends)
     "OutputBackend",

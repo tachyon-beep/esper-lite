@@ -40,6 +40,7 @@ class ActionResult:
         op_logits: Raw masked logits for op head [batch, num_ops].
             Used by telemetry for decision snapshots (action confidence, alternatives).
             Only populated if policy bundle supports it, otherwise None.
+        head_entropies: Dict mapping head names to normalized rollout entropy [batch].
     """
 
     action: dict[str, torch.Tensor]
@@ -47,6 +48,7 @@ class ActionResult:
     value: torch.Tensor
     hidden: tuple[torch.Tensor, torch.Tensor] | None
     op_logits: torch.Tensor | None = None
+    head_entropies: dict[str, torch.Tensor] | None = None
 
 
 @dataclass(frozen=True, slots=True)

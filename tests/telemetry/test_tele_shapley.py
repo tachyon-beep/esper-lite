@@ -31,7 +31,6 @@ class TestTELE533EstimateMean:
     def test_shapley_estimate_has_mean_field(self):
         """TELE-533: ShapleyEstimate has mean field."""
         estimate = ShapleyEstimate()
-        assert hasattr(estimate, "mean")
         assert isinstance(estimate.mean, float)
 
     def test_shapley_estimate_mean_default(self):
@@ -72,7 +71,6 @@ class TestTELE534EstimateStd:
     def test_shapley_estimate_has_std_field(self):
         """TELE-534: ShapleyEstimate has std field."""
         estimate = ShapleyEstimate()
-        assert hasattr(estimate, "std")
         assert isinstance(estimate.std, float)
 
     def test_shapley_estimate_std_default(self):
@@ -105,7 +103,6 @@ class TestTELE530ShapleyValues:
     def test_shapley_snapshot_has_values_field(self):
         """TELE-530: ShapleySnapshot has values field."""
         snapshot = ShapleySnapshot()
-        assert hasattr(snapshot, "values")
         assert isinstance(snapshot.values, dict)
 
     def test_shapley_snapshot_values_default_empty(self):
@@ -153,7 +150,6 @@ class TestTELE531ShapleyEpoch:
     def test_shapley_snapshot_has_epoch_field(self):
         """TELE-531: ShapleySnapshot has epoch field."""
         snapshot = ShapleySnapshot()
-        assert hasattr(snapshot, "epoch")
         assert isinstance(snapshot.epoch, int)
 
     def test_shapley_snapshot_epoch_default(self):
@@ -297,10 +293,6 @@ class TestShapleySignificance:
     If significant, we're 95% confident the true contribution is non-zero.
     """
 
-    def test_get_significance_exists(self):
-        """Significance: ShapleySnapshot has get_significance() method."""
-        snapshot = ShapleySnapshot()
-        assert hasattr(snapshot, "get_significance")
 
     def test_get_significance_returns_false_for_missing_slot(self):
         """Significance: get_significance() returns False for unknown slot."""
@@ -377,10 +369,6 @@ class TestShapleySignificance:
 class TestShapleyGetMean:
     """ShapleySnapshot.get_mean() accessor method."""
 
-    def test_get_mean_exists(self):
-        """get_mean: ShapleySnapshot has get_mean() method."""
-        snapshot = ShapleySnapshot()
-        assert hasattr(snapshot, "get_mean")
 
     def test_get_mean_returns_mean(self):
         """get_mean: Returns mean for existing slot."""

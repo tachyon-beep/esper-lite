@@ -51,6 +51,7 @@ class TestShapedModeBaseline:
             previous_stage=SeedStage.TRAINING.value,
             previous_epochs_in_stage=2,
             seed_age_epochs=5,
+            counterfactual_total_improvement=2.0,
         )
 
         reward = compute_contribution_reward(
@@ -130,6 +131,7 @@ class TestShapedModeBaseline:
             previous_stage=SeedStage.BLENDING.value,
             previous_epochs_in_stage=5,
             seed_age_epochs=10,
+            counterfactual_total_improvement=2.0,
         )
 
         reward = compute_contribution_reward(
@@ -188,6 +190,7 @@ class TestShapedModeBaseline:
             previous_stage=SeedStage.TRAINING.value,
             previous_epochs_in_stage=3,
             seed_age_epochs=5,
+            counterfactual_total_improvement=1.5,
         )
 
         reward, components = compute_contribution_reward(
@@ -204,9 +207,7 @@ class TestShapedModeBaseline:
             return_components=True,
         )
 
-        # Components should exist
         assert components is not None
-        assert hasattr(components, 'total_reward')
 
         # Total should match
         assert abs(components.total_reward - reward) < 0.001, (

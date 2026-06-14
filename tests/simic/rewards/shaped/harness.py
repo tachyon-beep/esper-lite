@@ -35,7 +35,7 @@ def shaped_config(
     germinate_cost: float = 0.0,
     set_alpha_target_cost: float = 0.0,
     disable_timing_discount: bool = True,  # D3: default disabled for isolated tests
-    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "geometric",  # D3
+    attribution_formula: Literal["harmonic", "minimum"] = "harmonic",  # D3
     germination_warmup_epochs: int = 10,  # D3
     germination_discount_floor: float = 0.4,  # D3
 ) -> ContributionRewardConfig:
@@ -76,8 +76,6 @@ def shaped_config(
         fossilize_noncontributing_penalty=0.0,
         early_prune_threshold=0,
         early_prune_penalty=0.0,
-        # D2 capacity economics - disable for isolated SHAPED tests
-        first_germinate_bonus=0.0,
         # D3 timing discount - disable for isolated SHAPED tests
         disable_timing_discount=disable_timing_discount,
         attribution_formula=attribution_formula,
@@ -98,8 +96,15 @@ def seed_info(
     seed_params: int = 0,
     interaction_sum: float = 0.0,
     boost_received: float = 0.0,
+    counterfactual_total_improvement: float | None = None,
 ) -> SeedInfo:
-    """Convenience constructor with safe defaults for shaped tests."""
+    """Convenience constructor with safe defaults for shaped tests.
+
+    In these isolated unit tests there is no host-drift simulation, so the clean
+    counterfactual the anti-gaming/fossilization gates should see is the same
+    value as ``total_improvement``. By default it mirrors ``total_improvement``;
+    a test may override it explicitly.
+    """
     return SeedInfo(
         stage=stage.value,
         improvement_since_stage_start=improvement_since_stage_start,
@@ -111,6 +116,11 @@ def seed_info(
         seed_age_epochs=seed_age_epochs,
         interaction_sum=interaction_sum,
         boost_received=boost_received,
+        counterfactual_total_improvement=(
+            counterfactual_total_improvement
+            if counterfactual_total_improvement is not None
+            else total_improvement
+        ),
     )
 
 

@@ -54,7 +54,59 @@ __all__ = [
     "DenseTrace",
     # Store
     "TelemetryStore",
+    "PROOF_CRITICAL_EVENT_TYPES",
+    "UnsupportedProofImportError",
 ]
+
+
+# =============================================================================
+# Proof-grade accounting
+# =============================================================================
+
+# Event families whose proof fields the store MUST capture to be proof-grade.
+# These carry the multi-objective Pareto outcome, the rollback confounder, and
+# the joinable causal log that a counterfactual proof depends on. The store's
+# reduced analytics schema (context + epoch snapshots + dense traces) does NOT
+# model these, so any store that merely *observed* them is not a proof archive.
+PROOF_CRITICAL_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "EPISODE_OUTCOME",
+        "GOVERNOR_ROLLBACK",
+        "MORPHOLOGY_CAUSAL_LOG",
+    }
+)
+
+
+class UnsupportedProofImportError(RuntimeError):
+    """Raised when a non-proof-grade TelemetryStore is used as a proof archive.
+
+    The TelemetryStore is a lossy analytics summary; it does not retain the
+    proof-critical event families (see ``PROOF_CRITICAL_EVENT_TYPES``). Code
+    that requires a proof archive must call :meth:`TelemetryStore.assert_proof_grade`
+    and will receive this error, which enumerates the dropped proof families and
+    the per-type unsupported event counts so the caller can route to the real
+    proof archive (raw ``events.jsonl`` + DuckDB views) instead.
+    """
+
+    def __init__(
+        self,
+        *,
+        dropped_proof_families: set[str],
+        unsupported_event_counts: dict[str, int],
+    ) -> None:
+        self.dropped_proof_families = set(dropped_proof_families)
+        self.unsupported_event_counts = dict(unsupported_event_counts)
+        families = ", ".join(sorted(dropped_proof_families)) or "(none observed)"
+        counts = ", ".join(
+            f"{name}={count}" for name, count in sorted(unsupported_event_counts.items())
+        ) or "(none)"
+        super().__init__(
+            "TelemetryStore is not proof-grade: it is a lossy analytics summary "
+            "that does not model proof-critical event families. "
+            f"Proof-critical families observed-but-dropped: {families}. "
+            f"Unsupported event counts: {counts}. "
+            "Use the raw events.jsonl proof archive (DuckDB views) for proofs."
+        )
 
 
 def _utc_now() -> datetime:
@@ -160,11 +212,11 @@ class HostSnapshot:
 
     epoch: int = 0
 
-    # Performance (required metrics)
-    val_loss: float = 0.0
+    # Performance (optional metrics - None = not computed, 0.0 = computed as zero)
+    val_loss: float | None = None
     val_accuracy: float = 0.0
 
-    # Performance (optional metrics - None = not computed, 0.0 = computed as zero)
+    # Training performance (optional metrics - None = not computed, 0.0 = computed as zero)
     train_loss: float | None = None
     train_accuracy: float | None = None
 
@@ -387,6 +439,12 @@ class TelemetryStore:
     # Current epoch being built
     current_epoch: EpochSnapshot | None = None
 
+    # Proof-grade accounting (KARN-PROOF-005/006, TT-003)
+    # Every event_type seen but NOT modeled into the store schema, with counts.
+    unsupported_event_counts: dict[str, int] = field(default_factory=dict)
+    # Subset of unsupported families that are proof-critical (observed-but-dropped).
+    dropped_proof_families: set[str] = field(default_factory=set)
+
     def start_episode(self, context: EpisodeContext) -> None:
         """Initialize store for new episode."""
         self.context = context
@@ -394,11 +452,62 @@ class TelemetryStore:
         self.epoch_snapshots.clear()
         self.dense_traces.clear()
         self.current_epoch = None
+        self.unsupported_event_counts.clear()
+        self.dropped_proof_families.clear()
+
+    def record_unsupported_event(self, event_type: str) -> None:
+        """Record an event family the store schema does not model.
+
+        Increments the per-type counter and, if the family is proof-critical,
+        marks it as observed-but-dropped. This is how the store stays HONEST
+        about being a lossy analytics summary rather than a proof archive.
+        """
+        self.unsupported_event_counts[event_type] = (
+            self.unsupported_event_counts.get(event_type, 0) + 1
+        )
+        if event_type in PROOF_CRITICAL_EVENT_TYPES:
+            self.dropped_proof_families.add(event_type)
+
+    @property
+    def proof_grade(self) -> bool:
+        """Whether this store is a proof archive.
+
+        A TelemetryStore is NEVER proof-grade: neither the import path nor the
+        live collector models the proof-critical event families
+        (``EPISODE_OUTCOME`` / ``GOVERNOR_ROLLBACK`` / ``MORPHOLOGY_CAUSAL_LOG``)
+        into the reduced analytics schema. The reduced schema cannot carry the
+        multi-objective Pareto outcome, the rollback confounder, or the joinable
+        causal log a counterfactual proof requires, so the honest answer is
+        always ``False``. Proofs must consume the raw events.jsonl archive.
+        """
+        return False
+
+    def assert_proof_grade(self) -> None:
+        """Reject using this store as a proof archive.
+
+        Raises :class:`UnsupportedProofImportError` (always, since
+        :attr:`proof_grade` is always ``False``) listing the dropped proof
+        families and unsupported event counts. This is the "API rejects proof
+        use" surface for KARN-PROOF-005/006 and TT-003.
+        """
+        if not self.proof_grade:
+            raise UnsupportedProofImportError(
+                dropped_proof_families=self.dropped_proof_families,
+                unsupported_event_counts=self.unsupported_event_counts,
+            )
 
     def start_epoch(self, epoch: int) -> EpochSnapshot:
-        """Start building a new epoch snapshot."""
-        self.current_epoch = EpochSnapshot(epoch=epoch)
-        return self.current_epoch
+        """Start building a new epoch snapshot.
+
+        Seeds the host snapshot's ``host_params`` from the episode context so
+        every epoch (including the first) carries the real host parameter count
+        captured at TRAINING_STARTED, rather than a fabricated zero.
+        """
+        snapshot = EpochSnapshot(epoch=epoch)
+        if self.context is not None:
+            snapshot.host.host_params = self.context.host_params
+        self.current_epoch = snapshot
+        return snapshot
 
     def commit_epoch(self) -> None:
         """Commit current epoch to history."""
@@ -486,6 +595,25 @@ class TelemetryStore:
         count = 0
 
         with open(path, "w") as f:
+            # Write proof-status header so a downstream consumer cannot mistake
+            # this lossy analytics export for a proof archive (KARN-PROOF-005).
+            f.write(
+                json.dumps(
+                    {
+                        "type": "proof_status",
+                        "data": {
+                            "proof_grade": self.proof_grade,
+                            "unsupported_event_counts": dict(self.unsupported_event_counts),
+                            "dropped_proof_families": sorted(self.dropped_proof_families),
+                            "proof_critical_event_types": sorted(PROOF_CRITICAL_EVENT_TYPES),
+                        },
+                    },
+                    default=json_default,
+                )
+                + "\n"
+            )
+            count += 1
+
             # Write context
             if self.context:
                 f.write(json.dumps({"type": "context", "data": serialize(self.context)}, default=json_default) + "\n")
@@ -624,7 +752,7 @@ class TelemetryStore:
             data["train_accuracy"] = coerce_float_or_none(
                 data.get("train_accuracy"), field="HostSnapshot.train_accuracy"
             )
-            data["val_loss"] = coerce_float(data.get("val_loss"), field="HostSnapshot.val_loss", default=0.0)
+            data["val_loss"] = coerce_float_or_none(data.get("val_loss"), field="HostSnapshot.val_loss")
             data["val_accuracy"] = coerce_float(data.get("val_accuracy"), field="HostSnapshot.val_accuracy", default=0.0)
             data["host_params"] = coerce_int(data.get("host_params"), field="HostSnapshot.host_params", default=0, minimum=0)
             data["total_seed_params"] = coerce_int(
@@ -835,7 +963,20 @@ class TelemetryStore:
                 record_type = record.get("type")
                 data = record.get("data", {})
 
-                if record_type == "context":
+                if record_type == "proof_status":
+                    if isinstance(data, dict):
+                        counts = data.get("unsupported_event_counts")
+                        if isinstance(counts, dict):
+                            store.unsupported_event_counts = {
+                                str(k): coerce_int(
+                                    v, field="proof_status.count", default=0, minimum=0
+                                )
+                                for k, v in counts.items()
+                            }
+                        dropped = data.get("dropped_proof_families")
+                        if isinstance(dropped, list):
+                            store.dropped_proof_families = {str(item) for item in dropped}
+                elif record_type == "context":
                     if isinstance(data, dict):
                         store.context = _parse_episode_context(data)
                 elif record_type == "baseline":
@@ -888,7 +1029,11 @@ class TelemetryStore:
                 record_epoch = record.get("epoch")
                 epoch = record_epoch if record_epoch is not None else data.get("epoch", 0)
 
-                # Reconstruct store from events
+                # Reconstruct store from events. The store models only three
+                # families (TRAINING_STARTED / EPOCH_COMPLETED / the
+                # last_action ANALYTICS_SNAPSHOT). EVERY other family is counted
+                # as unsupported so the resulting store stays honest about being
+                # a lossy analytics summary rather than a proof archive.
                 if event_type == "TRAINING_STARTED":
                     # Convert hyperparams dict to tuple of pairs for frozen dataclass
                     hyperparams = data.get("hyperparams", {})
@@ -899,6 +1044,10 @@ class TelemetryStore:
                         task_type=data.get("task", "classification"),
                         reward_mode=data.get("reward_mode", "shaped"),
                         max_epochs=data.get("max_epochs", 75),
+                        # host_params is a required field on TrainingStartedPayload;
+                        # carry it verbatim so the import preserves the real host
+                        # parameter count instead of defaulting it to zero.
+                        host_params=data["host_params"],
                         hyperparameters=hyperparameters,
                     )
                 elif event_type == "EPOCH_COMPLETED":
@@ -908,8 +1057,14 @@ class TelemetryStore:
                         store.start_epoch(epoch)
                         current_epoch_num = epoch
                     if store.current_epoch:
-                        store.current_epoch.host.val_loss = data.get("val_loss", 0.0)
-                        store.current_epoch.host.val_accuracy = data.get("val_accuracy", 0.0)
+                        host = store.current_epoch.host
+                        # Preserve missingness: only set metrics that are actually
+                        # present. Defaulting absent metrics to 0.0 would FABRICATE
+                        # measured-zero loss/accuracy from no data (anti-pattern).
+                        if "val_loss" in data:
+                            host.val_loss = data["val_loss"]
+                        if "val_accuracy" in data:
+                            host.val_accuracy = data["val_accuracy"]
                 elif event_type == "ANALYTICS_SNAPSHOT":
                     # New event type: handle kind="last_action" for policy data
                     kind = data.get("kind")
@@ -918,11 +1073,22 @@ class TelemetryStore:
                             store.current_epoch.policy = PolicySnapshot()
                         policy = store.current_epoch.policy
                         if "total_reward" in data:
-                            policy.reward_total = data.get("total_reward", 0.0)
+                            policy.reward_total = data["total_reward"]
                         if "action_name" in data:
-                            policy.action_op = data.get("action_name", "")
+                            policy.action_op = data["action_name"]
                         if "value_estimate" in data:
-                            policy.value_estimate = data.get("value_estimate", 0.0)
+                            policy.value_estimate = data["value_estimate"]
+                    else:
+                        # ANALYTICS_SNAPSHOT kinds other than last_action are not
+                        # modeled into the store schema.
+                        store.record_unsupported_event(event_type)
+                elif event_type:
+                    # Every other family (EPISODE_OUTCOME, GOVERNOR_ROLLBACK,
+                    # MORPHOLOGY_CAUSAL_LOG, SEED_*, PPO_UPDATE_COMPLETED,
+                    # BATCH_EPOCH_COMPLETED, anomalies, ...) is dropped by the
+                    # reduced schema. Count it so the store knows it is not a
+                    # proof archive.
+                    store.record_unsupported_event(event_type)
 
         # Commit final epoch
         if store.current_epoch:

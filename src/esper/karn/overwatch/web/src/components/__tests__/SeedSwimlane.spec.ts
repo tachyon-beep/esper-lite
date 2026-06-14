@@ -3,29 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import SeedSwimlane from '../SeedSwimlane.vue'
 import type { SeedState, SeedStage } from '../../types/sanctum'
-
-function createSeedState(overrides: Partial<SeedState> = {}): SeedState {
-  return {
-    slot_id: 'slot_0',
-    stage: 'TRAINING',
-    blueprint_id: null,
-    alpha: 0.0,
-    accuracy_delta: 0.01,
-    seed_params: 1000,
-    grad_ratio: 0.5,
-    has_vanishing: false,
-    has_exploding: false,
-    epochs_in_stage: 10,
-    improvement: 0.05,
-    prune_reason: '',
-    auto_pruned: false,
-    epochs_total: 50,
-    counterfactual: 0.0,
-    blend_tempo_epochs: 0,
-    alpha_curve: 'LINEAR',
-    ...overrides
-  }
-}
+import { createSeedState } from './factories'
 
 describe('SeedSwimlane', () => {
   it('renders correct number of slot rows', () => {
@@ -156,12 +134,12 @@ describe('SeedSwimlane', () => {
     expect(legendItems.length).toBeGreaterThan(0)
   })
 
-  it('handles missing seed data for a slot gracefully', () => {
-    // slotIds includes a slot without seed data
+  it('renders a never-observed configured slot as pending, not dormant', () => {
+    // slotIds includes a configured slot that has never been observed.
     const seeds: Record<string, SeedState> = {
       slot_0: createSeedState({ slot_id: 'slot_0', stage: 'TRAINING' })
     }
-    const slotIds = ['slot_0', 'slot_1'] // slot_1 has no seed data
+    const slotIds = ['slot_0', 'slot_1'] // slot_1 was never observed
 
     const wrapper = mount(SeedSwimlane, {
       props: {
@@ -175,9 +153,39 @@ describe('SeedSwimlane', () => {
     const rows = wrapper.findAll('[data-testid="swimlane-row"]')
     expect(rows.length).toBe(2)
 
-    // Second row should show dormant/empty state
+    // Second row is a pending lane, distinct from a dormant seed.
     const secondRow = rows[1]
-    expect(secondRow.find('[data-testid="stage-bar"]').classes()).toContain('stage-dormant')
+    const pendingBar = secondRow.find('[data-testid="pending-bar"]')
+    expect(pendingBar.exists()).toBe(true)
+    expect(pendingBar.classes()).toContain('stage-pending')
+    // It must NOT be a stage bar, and must NOT read as dormant.
+    expect(secondRow.find('[data-testid="stage-bar"]').exists()).toBe(false)
+    expect(pendingBar.classes()).not.toContain('stage-dormant')
+  })
+
+  it('renders an explicitly-observed dormant seed as dormant, not pending', () => {
+    // slot_1 was observed and is in the DORMANT stage (explicit SeedState).
+    const seeds: Record<string, SeedState> = {
+      slot_0: createSeedState({ slot_id: 'slot_0', stage: 'TRAINING' }),
+      slot_1: createSeedState({ slot_id: 'slot_1', stage: 'DORMANT' })
+    }
+    const slotIds = ['slot_0', 'slot_1']
+
+    const wrapper = mount(SeedSwimlane, {
+      props: {
+        seeds,
+        slotIds,
+        currentEpoch: 100
+      }
+    })
+
+    const rows = wrapper.findAll('[data-testid="swimlane-row"]')
+    const secondRow = rows[1]
+    const stageBar = secondRow.find('[data-testid="stage-bar"]')
+    expect(stageBar.exists()).toBe(true)
+    expect(stageBar.classes()).toContain('stage-dormant')
+    // It must NOT render as a pending lane.
+    expect(secondRow.find('[data-testid="pending-bar"]').exists()).toBe(false)
   })
 
   it('displays epochs_in_stage as tooltip on bar', () => {

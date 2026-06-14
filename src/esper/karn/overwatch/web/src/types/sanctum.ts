@@ -1,8 +1,21 @@
 // Auto-generated from Python schema - DO NOT EDIT
-// Run: python scripts/generate_overwatch_types.py
+// Run: npm run generate:types from src/esper/karn/overwatch/web
 // Generated from: esper.karn.sanctum.schema
 
 export type SeedStage = "UNKNOWN" | "DORMANT" | "GERMINATED" | "TRAINING" | "BLENDING" | "HOLDING" | "FOSSILIZED" | "PRUNED" | "EMBARGOED" | "RESETTING";
+
+export interface ShapleyEstimate {
+  mean: number;
+  std: number;
+  n_samples: number;
+}
+
+export interface ShapleySnapshot {
+  slot_ids: string[];
+  values: Record<string, ShapleyEstimate>;
+  epoch: number;
+  timestamp: string | null;
+}
 
 export interface CounterfactualConfig {
   seed_mask: boolean[];
@@ -22,6 +35,131 @@ export interface GPUStats {
   memory_total_gb: number;
   utilization: number;
   temperature: number;
+}
+
+export interface InfrastructureMetrics {
+  cuda_memory_allocated_gb: number;
+  cuda_memory_reserved_gb: number;
+  cuda_memory_peak_gb: number;
+  cuda_memory_fragmentation: number;
+  dataloader_wait_ratio: number;
+  compile_enabled: boolean;
+  compile_backend: string;
+  compile_mode: string;
+}
+
+export interface GradientQualityMetrics {
+  gradient_cv: number;
+  clip_fraction_positive: number;
+  clip_fraction_negative: number;
+}
+
+export interface ValueFunctionMetrics {
+  v_return_correlation: number;
+  td_error_mean: number;
+  td_error_std: number;
+  bellman_error: number;
+  return_p10: number;
+  return_p50: number;
+  return_p90: number;
+  return_skewness: number;
+  return_variance: number;
+  value_predictions: number[];
+  actual_returns: number[];
+  td_errors: number[];
+}
+
+export interface SeedLifecycleEvent {
+  epoch: number;
+  action: string;
+  from_stage: string;
+  to_stage: string;
+  blueprint_id: string;
+  slot_id: string;
+  alpha: number | null;
+  accuracy_delta: number | null;
+  morphology_proposal_id: string | null;
+  morphology_verdict_id: string | null;
+  morphology_mutation_id: string | null;
+  rng_stream: string | null;
+  rng_seed: number | null;
+}
+
+export interface SeedLifecycleStats {
+  germination_count: number;
+  prune_count: number;
+  fossilize_count: number;
+  active_count: number;
+  total_slots: number;
+  germination_rate: number;
+  prune_rate: number;
+  fossilize_rate: number;
+  blend_success_rate: number;
+  avg_lifespan_epochs: number;
+  germination_trend: string;
+  prune_trend: string;
+  fossilize_trend: string;
+}
+
+export interface MorphologyCausalLogEntry {
+  phase: string;
+  env_id: number;
+  slot_id: string;
+  operation: string;
+  action_id: string;
+  proposal_id: string;
+  verdict_id: string;
+  mutation_id: string;
+  observation_hash: string;
+  rng_stream: string;
+  rng_seed: number;
+  topology: string;
+  blueprint_id: string | null;
+  governor_approved: boolean | null;
+  governor_reason: string | null;
+  governor_blocked_factor: string | null;
+  watch_window_evidence: number | null;
+  linked_event_id: string | null;
+}
+
+export interface ObservationStats {
+  slot_features_mean: number;
+  slot_features_std: number;
+  host_features_mean: number;
+  host_features_std: number;
+  context_features_mean: number;
+  context_features_std: number;
+  outlier_pct: number;
+  near_clip_pct: number;
+  clip_pct: number;
+  nan_count: number;
+  inf_count: number;
+  nan_pct: number;
+  inf_pct: number;
+  normalization_drift: number;
+  batch_size: number;
+}
+
+export interface EpisodeStats {
+  length_mean: number;
+  length_std: number;
+  length_min: number;
+  length_max: number;
+  total_episodes: number;
+  episodes_per_second: number;
+  timeout_count: number;
+  success_count: number;
+  early_termination_count: number;
+  timeout_rate: number;
+  success_rate: number;
+  early_termination_rate: number;
+  steps_per_germinate: number;
+  steps_per_prune: number;
+  steps_per_fossilize: number;
+  action_entropy: number;
+  yield_rate: number;
+  slot_utilization: number;
+  completion_trend: string;
 }
 
 export interface SeedState {
@@ -54,6 +192,11 @@ export interface RewardComponents {
   base_acc_delta: number;
   bounded_attribution: number;
   seed_contribution: number;
+  escrow_credit_prev: number;
+  escrow_credit_target: number;
+  escrow_delta: number;
+  escrow_credit_next: number;
+  escrow_forfeit: number;
   compute_rent: number;
   alpha_shock: number;
   ratio_penalty: number;
@@ -66,6 +209,7 @@ export interface RewardComponents {
   avg_scaffold_delay: number;
   env_id: number;
   val_acc: number;
+  stable_val_acc: number | null;
   last_action: string;
 }
 
@@ -79,8 +223,10 @@ export interface DecisionSnapshot {
   expected_value: number;
   actual_reward: number | null;
   alternatives: [string, number][];
+  action_success: boolean | null;
   decision_id: string;
   env_id: number;
+  episode: number;
   epoch: number;
   batch: number;
   value_residual: number;
@@ -141,6 +287,8 @@ export interface BestRunRecord {
   slot_ids: string[];
   growth_ratio: number;
   record_id: string;
+  cumulative_reward: number;
+  peak_cumulative_reward: number;
   reward_components: RewardComponents | null;
   counterfactual_matrix: CounterfactualSnapshot | null;
   shapley_snapshot: ShapleySnapshot | null;
@@ -155,6 +303,10 @@ export interface BestRunRecord {
   blueprint_spawns: Record<string, number>;
   blueprint_fossilized: Record<string, number>;
   blueprint_prunes: Record<string, number>;
+  end_seeds: Record<string, SeedState>;
+  end_reward_components: RewardComponents | null;
+  best_lifecycle_events: SeedLifecycleEvent[];
+  end_lifecycle_events: SeedLifecycleEvent[];
 }
 
 export interface TamiyoState {
@@ -183,6 +335,11 @@ export interface TamiyoState {
   advantage_positive_ratio: number;
   log_prob_min: number;
   log_prob_max: number;
+  decision_density: number;
+  forced_step_ratio: number;
+  advantage_std_floored: boolean;
+  pre_norm_advantage_std: number | null;
+  decision_density_history: number[];
   dead_layers: number;
   exploding_layers: number;
   nan_grad_count: number;
@@ -283,11 +440,13 @@ export interface SystemVitals {
   gpu_memory_total_gb: number;
   gpu_utilization: number;
   gpu_temperature: number;
+  gpu_data_present: boolean;
   cpu_percent: number | null;
   ram_used_gb: number | null;
   ram_total_gb: number | null;
   epochs_per_second: number;
   batches_per_hour: number;
+  throughput_present: boolean;
   host_params: number;
 }
 
@@ -316,14 +475,21 @@ export interface EnvState {
   best_accuracy: number;
   best_accuracy_epoch: number;
   best_accuracy_episode: number;
+  peak_cumulative_reward: number;
   best_seeds: Record<string, SeedState>;
   best_reward_components: RewardComponents | null;
   best_counterfactual_matrix: CounterfactualSnapshot | null;
   best_shapley_snapshot: ShapleySnapshot | null;
   best_action_history: string[];
+  best_blueprint_spawns: Record<string, number>;
+  best_blueprint_fossilized: Record<string, number>;
+  best_blueprint_prunes: Record<string, number>;
+  lifecycle_events: SeedLifecycleEvent[];
+  best_lifecycle_events: SeedLifecycleEvent[];
   action_history: string[];
   action_counts: Record<string, number>;
   total_actions: number;
+  last_action_success: boolean;
   gaming_trigger_count: number;
   total_reward_steps: number;
   status: string;
@@ -350,6 +516,7 @@ export interface SanctumSnapshot {
   max_epochs: number;
   run_id: string;
   task_name: string;
+  reward_mode: string | null;
   run_config: RunConfig;
   start_time: string | null;
   connected: boolean;
@@ -381,6 +548,7 @@ export interface SanctumSnapshot {
   seed_lifecycle: SeedLifecycleStats;
   observation_stats: ObservationStats;
   episode_stats: EpisodeStats;
+  morphology_causal_log: MorphologyCausalLogEntry[];
   focused_env_id: number;
   last_action_env_id: number | null;
   last_action_timestamp: string | null;

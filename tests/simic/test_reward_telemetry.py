@@ -112,6 +112,17 @@ class TestRewardComponentsTelemetry:
         with pytest.raises(KeyError, match="timing_discount"):
             RewardComponentsTelemetry.from_dict(data)
 
+    def test_action_success_defaults_to_unknown_until_execution(self):
+        """Reward components must not claim success before action execution."""
+        original = RewardComponentsTelemetry()
+
+        data = original.to_dict()
+        restored = RewardComponentsTelemetry.from_dict(data)
+
+        assert original.action_success is None
+        assert data["action_success"] is None
+        assert restored.action_success is None
+
     def test_from_dict_parses_false_action_success_string(self):
         """String boolean telemetry from intermediate exports preserves False."""
         data = RewardComponentsTelemetry(action_success=True).to_dict()

@@ -182,6 +182,46 @@ class SeedLifecycleEvent:
     alpha: float | None  # Alpha at transition (for BLENDING/HOLDING)
     accuracy_delta: float | None  # Accuracy improvement (for FOSSILIZE)
 
+    # Causal identity / RNG provenance carried by the seed lifecycle payloads.
+    # These join a lifecycle transition to the morphology proposal/verdict/mutation
+    # that produced it and to the RNG stream/seed used, so the UI can attribute
+    # each transition back to a causal decision. None = not supplied by payload.
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
+
+
+@dataclass
+class MorphologyCausalLogEntry:
+    """A single joinable morphology causal-log row for live Sanctum display.
+
+    Mirrors leyline.MorphologyCausalLogPayload: each entry repeats the stable
+    identity fields so the UI can join proposal -> verdict -> mutation ->
+    watch-window evidence -> terminal outcomes for one lifecycle action without
+    relying on generic event UUIDs.
+    """
+
+    phase: str  # MorphologyCausalLogPhase: proposal/verdict/mutation/dispatch/commit/rollback/fossilization/cooldown/audit
+    env_id: int
+    slot_id: str
+    operation: str
+    action_id: str
+    proposal_id: str
+    verdict_id: str
+    mutation_id: str
+    observation_hash: str
+    rng_stream: str
+    rng_seed: int
+    topology: str
+    blueprint_id: str | None = None
+    governor_approved: bool | None = None
+    governor_reason: str | None = None
+    governor_blocked_factor: str | None = None
+    watch_window_evidence: float | None = None
+    linked_event_id: str | None = None
+
 
 @dataclass
 class SeedLifecycleStats:
@@ -1141,17 +1181,28 @@ class SystemVitals:
     gpu_memory_total_gb: float = 0.0
     gpu_utilization: float = 0.0
     gpu_temperature: float = 0.0
+    # Group-presence flag: True once GPU stats have actually been sampled.
+    # GPU vitals arrive from system-stats polling, independently of PPO updates.
+    # While False the convenience fields above are unmeasured defaults (0.0) and
+    # the UI must render "pending"/unknown rather than a healthy/measured value.
+    gpu_data_present: bool = False
 
     # FIX: CPU was collected but never displayed in old TUI
-    cpu_percent: float | None = 0.0
+    # None = not measured yet (or collection failed); a real reading is a float.
+    cpu_percent: float | None = None
 
     # RAM
-    ram_used_gb: float | None = 0.0
-    ram_total_gb: float | None = 0.0
+    # None = not measured yet (or collection failed); a real reading is a float.
+    ram_used_gb: float | None = None
+    ram_total_gb: float | None = None
 
     # Throughput
     epochs_per_second: float = 0.0
     batches_per_hour: float = 0.0
+    # Group-presence flag: True once throughput has been computed from at least
+    # one completed batch. While False the throughput fields above are unmeasured
+    # defaults (0.0) and the UI must render "pending" rather than "0.0/s".
+    throughput_present: bool = False
 
     # Host network
     host_params: int = 0
@@ -1518,6 +1569,11 @@ class SanctumSnapshot:
 
     # Episode-level metrics (for new EpisodeMetricsPanel)
     episode_stats: EpisodeStats = field(default_factory=EpisodeStats)
+
+    # Morphology causal-log entries (from MORPHOLOGY_CAUSAL_LOG events).
+    # Joinable rows tying proposal -> verdict -> mutation -> watch evidence ->
+    # terminal outcome for each lifecycle action. Most recent last.
+    morphology_causal_log: list[MorphologyCausalLogEntry] = field(default_factory=list)
 
     # Focused env for detail panel
     focused_env_id: int = 0

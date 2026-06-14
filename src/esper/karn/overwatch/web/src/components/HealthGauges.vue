@@ -26,9 +26,16 @@ type HealthStatus = 'good' | 'warning' | 'critical'
 interface GaugeConfig {
   id: string
   label: string
-  percent: number
+  // null percent + pending=true => no data sampled yet, render "—" not "0%".
+  percent: number | null
   health: HealthStatus
+  pending: boolean
 }
+
+// Presence flags distinguish "not measured yet" from "measured zero".
+// GPU vitals arrive from system-stats polling; PPO health arrives on PPO updates.
+const gpuPresent = computed(() => props.vitals.gpu_data_present)
+const ppoPresent = computed(() => props.tamiyo.ppo_data_received)
 
 // Compute GPU utilization percentage and health
 const gpuUtilPercent = computed(() => props.vitals.gpu_utilization)
@@ -86,48 +93,58 @@ const explainedVarianceHealth = computed<HealthStatus>(() => {
   return 'critical'
 })
 
-// All gauge configurations
+// All gauge configurations. When the relevant data group has not been measured
+// yet (gpuPresent / ppoPresent false), the gauge is marked pending: percent is
+// null and health forced 'good' (neutral) so nothing renders as a false alarm.
 const gauges = computed<GaugeConfig[]>(() => [
   {
     id: 'gpu-util',
     label: 'GPU',
-    percent: gpuUtilPercent.value,
-    health: gpuHealth.value
+    percent: gpuPresent.value ? gpuUtilPercent.value : null,
+    health: gpuPresent.value ? gpuHealth.value : 'good',
+    pending: !gpuPresent.value
   },
   {
     id: 'gpu-memory',
     label: 'VRAM',
-    percent: gpuMemoryPercent.value,
-    health: gpuMemoryHealth.value
+    percent: gpuPresent.value ? gpuMemoryPercent.value : null,
+    health: gpuPresent.value ? gpuMemoryHealth.value : 'good',
+    pending: !gpuPresent.value
   },
   {
     id: 'entropy',
     label: 'Entropy',
-    percent: entropyDisplay.value,
-    health: entropyHealth.value
+    percent: ppoPresent.value ? entropyDisplay.value : null,
+    health: ppoPresent.value ? entropyHealth.value : 'good',
+    pending: !ppoPresent.value
   },
   {
     id: 'clip-fraction',
     label: 'Clip',
-    percent: clipFractionPercent.value,
-    health: clipFractionHealth.value
+    percent: ppoPresent.value ? clipFractionPercent.value : null,
+    health: ppoPresent.value ? clipFractionHealth.value : 'good',
+    pending: !ppoPresent.value
   },
   {
     id: 'explained-variance',
     label: 'ExpVar',
-    percent: explainedVariancePercent.value,
-    health: explainedVarianceHealth.value
+    percent: ppoPresent.value ? explainedVariancePercent.value : null,
+    health: ppoPresent.value ? explainedVarianceHealth.value : 'good',
+    pending: !ppoPresent.value
   }
 ])
 
-// Calculate stroke-dasharray for progress arc
-function getStrokeDasharray(percent: number): string {
+// Calculate stroke-dasharray for progress arc. Pending gauges have no arc.
+function getStrokeDasharray(percent: number | null): string {
+  if (percent === null) return `0 ${CIRCUMFERENCE}`
   const progress = (percent / 100) * CIRCUMFERENCE
   return `${progress} ${CIRCUMFERENCE}`
 }
 
-// Temperature warning display
-const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNING_THRESHOLD)
+// Temperature warning display (only meaningful once GPU stats are sampled)
+const showTempWarning = computed(
+  () => gpuPresent.value && props.vitals.gpu_temperature > TEMP_WARNING_THRESHOLD
+)
 </script>
 
 <template>
@@ -137,7 +154,7 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
       :key="gauge.id"
       :data-testid="`gauge-${gauge.id}`"
       class="gauge"
-      :class="`health-${gauge.health}`"
+      :class="[`health-${gauge.health}`, { 'gauge-pending': gauge.pending }]"
     >
       <svg
         :width="SIZE"
@@ -167,7 +184,9 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
         />
       </svg>
       <div class="gauge-content">
-        <span data-testid="gauge-value" class="gauge-value">{{ gauge.percent }}%</span>
+        <span data-testid="gauge-value" class="gauge-value">
+          {{ gauge.pending ? '—' : `${gauge.percent}%` }}
+        </span>
         <span data-testid="gauge-label" class="gauge-label">{{ gauge.label }}</span>
       </div>
     </div>
@@ -185,8 +204,10 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
 
 <style scoped>
 .health-gauges {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
   align-items: center;
+  justify-items: center;
   gap: var(--space-md);
   padding: var(--space-sm);
 }
@@ -196,6 +217,8 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
   display: flex;
   flex-direction: column;
   align-items: center;
+  width: 96px;
+  min-width: 0;
 }
 
 .gauge-svg {
@@ -222,6 +245,15 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
 
 .gauge.health-critical .gauge-progress {
   stroke: var(--status-loss);
+}
+
+/* Pending: no data sampled yet — neutral, no progress arc, dimmed value. */
+.gauge.gauge-pending .gauge-progress {
+  stroke: var(--bg-elevated);
+}
+
+.gauge.gauge-pending .gauge-value {
+  color: var(--text-dim);
 }
 
 .gauge-content {
@@ -251,6 +283,7 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
 .temp-warning {
   display: flex;
   align-items: center;
+  justify-content: center;
   padding: var(--space-xs) var(--space-sm);
   background: var(--status-warn-glow);
   border: 1px solid var(--status-warn);
@@ -258,5 +291,12 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
   font-size: 11px;
   font-weight: 600;
   color: var(--status-warn);
+}
+
+@media (max-width: 640px) {
+  .health-gauges {
+    grid-template-columns: repeat(3, minmax(88px, 1fr));
+    gap: var(--space-sm);
+  }
 }
 </style>

@@ -163,6 +163,7 @@ class TestPruneContributionShaping:
             seed_params=1000,
             previous_stage=STAGE_GERMINATED,
             seed_age_epochs=age,
+            counterfactual_total_improvement=improvement,
         )
 
     def test_prune_toxic_seed_rewarded(self):
@@ -273,6 +274,7 @@ class TestWaitBlendingShaping:
             seed_params=0,
             previous_stage=STAGE_TRAINING,
             seed_age_epochs=epochs,
+            counterfactual_total_improvement=improvement,
         )
 
     def test_wait_at_blending_with_positive_contribution(self):
@@ -366,6 +368,7 @@ class TestContributionRewardComponents:
             seed_params=1000,
             previous_stage=SeedStage.GERMINATED.value,
             seed_age_epochs=5,
+            counterfactual_total_improvement=1.0,
         )
 
         result = compute_contribution_reward(
@@ -400,6 +403,7 @@ class TestContributionRewardComponents:
             seed_params=5000,
             previous_stage=SeedStage.TRAINING.value,
             seed_age_epochs=8,
+            counterfactual_total_improvement=3.0,
         )
 
         reward, components = compute_contribution_reward(
@@ -441,6 +445,7 @@ class TestContributionRewardComponents:
             seed_params=5000,
             previous_stage=STAGE_TRAINING,
             seed_age_epochs=5,
+            counterfactual_total_improvement=1.5,
         )
         config = ContributionRewardConfig(alpha_shock_coef=1.0)
         reward, components = compute_contribution_reward(
@@ -502,6 +507,7 @@ class TestContributionRewardComponents:
             seed_params=1000,
             previous_stage=SeedStage.GERMINATED.value,
             seed_age_epochs=10,
+            counterfactual_total_improvement=-1.0,
         )
 
         reward, components = compute_contribution_reward(
@@ -530,6 +536,7 @@ class TestContributionRewardComponents:
             seed_params=5000,
             previous_stage=SeedStage.TRAINING.value,
             seed_age_epochs=10,
+            counterfactual_total_improvement=2.0,
         )
 
         reward, components = compute_contribution_reward(
@@ -554,13 +561,57 @@ class TestContributionRewardComponents:
 
 
 class TestProxySignalPath:
-    """Tests for the proxy signal path (when seed_contribution is None)."""
+    """Tests for the proxy signal path (when seed_contribution is None).
 
-    def test_positive_acc_delta_gives_reward(self):
-        """Positive acc_delta should give positive bounded_attribution."""
+    The proxy is the low-confidence, pre-counterfactual fallback. It reads the
+    seed's OWN stage-relative improvement (improvement_since_stage_start), NOT
+    host-wide acc_delta, and it only pays once the seed is on the output path
+    (stage >= BLENDING, where alpha is ramping/on). A pre-BLENDING (alpha ~= 0)
+    seed pays nothing -- host progress must not be credited to a seed that is not
+    yet causally contributing. Payment is proxy_contribution_weight (=
+    contribution_weight * proxy_confidence_factor) times the positive improvement.
+    """
+
+    def test_blending_positive_stage_improvement_gives_reward(self):
+        """BLENDING seed with positive stage improvement gets discounted proxy pay."""
         seed_info = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=1.0,
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=1.5,  # Seed-causal, alpha-gated signal
+            total_improvement=1.5,
+            epochs_in_stage=3,
+            seed_params=1000,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=6,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,  # Proxy path (no counterfactual yet)
+            val_acc=65.0,
+            seed_info=seed_info,
+            epoch=8,
+            max_epochs=25,
+            acc_delta=99.0,  # Host drift is IGNORED on the proxy path now
+            return_components=True,
+        )
+
+        # Pays proxy_weight * improvement_since_stage_start, NOT proxy_weight * acc_delta
+        assert components.bounded_attribution > 0, (
+            "Positive stage improvement should give positive attribution"
+        )
+        config = ContributionRewardConfig()
+        expected = config.proxy_contribution_weight * 1.5
+        assert components.bounded_attribution == pytest.approx(expected)
+
+    def test_pre_blending_seed_gets_zero_despite_host_drift(self):
+        """A pre-BLENDING (alpha ~= 0) seed gets zero proxy pay even when host moved.
+
+        This is the anti-confound guard: host-wide accuracy drift must not pay a
+        seed that is not yet causally on the output path.
+        """
+        seed_info = SeedInfo(
+            stage=STAGE_TRAINING,  # Pre-BLENDING: alpha ~= 0
+            improvement_since_stage_start=1.0,  # Even with positive stage signal...
             total_improvement=1.0,
             epochs_in_stage=3,
             seed_params=1000,
@@ -575,27 +626,23 @@ class TestProxySignalPath:
             seed_info=seed_info,
             epoch=5,
             max_epochs=25,
-            acc_delta=1.5,  # Positive delta
+            acc_delta=1.5,  # Host drift -- must NOT pay a pre-BLENDING seed
             return_components=True,
         )
 
-        # Should have positive bounded_attribution from proxy signal
-        assert components.bounded_attribution > 0, "Positive acc_delta should give positive attribution"
-        # Should equal proxy_weight * acc_delta
-        config = ContributionRewardConfig()
-        expected = config.proxy_contribution_weight * 1.5
-        assert components.bounded_attribution == pytest.approx(expected)
+        # Pre-BLENDING => not causally contributing => no proxy attribution
+        assert components.bounded_attribution == 0.0
 
-    def test_negative_acc_delta_gives_zero(self):
-        """Negative acc_delta should give zero bounded_attribution (no penalty)."""
+    def test_negative_stage_improvement_gives_zero(self):
+        """Negative stage improvement gives zero bounded_attribution (no penalty)."""
         seed_info = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=-0.5,
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-0.5,  # Negative stage-relative signal
             total_improvement=-0.5,
             epochs_in_stage=3,
             seed_params=1000,
-            previous_stage=STAGE_GERMINATED,
-            seed_age_epochs=3,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=6,
         )
 
         reward, components = compute_contribution_reward(
@@ -605,23 +652,23 @@ class TestProxySignalPath:
             seed_info=seed_info,
             epoch=5,
             max_epochs=25,
-            acc_delta=-0.5,  # Negative delta
+            acc_delta=2.0,  # Host drift ignored; seed signal is negative
             return_components=True,
         )
 
-        # No penalty for negative delta in proxy path
+        # No penalty for negative stage improvement on the proxy path
         assert components.bounded_attribution == 0.0
 
-    def test_none_acc_delta_gives_zero(self):
-        """None acc_delta should give zero bounded_attribution."""
+    def test_zero_stage_improvement_gives_zero(self):
+        """Zero stage improvement gives zero bounded_attribution."""
         seed_info = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=0.0,
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=0.0,  # No stage-relative gain yet
             total_improvement=0.0,
             epochs_in_stage=3,
             seed_params=1000,
-            previous_stage=STAGE_GERMINATED,
-            seed_age_epochs=3,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=6,
         )
 
         reward, components = compute_contribution_reward(
@@ -631,7 +678,7 @@ class TestProxySignalPath:
             seed_info=seed_info,
             epoch=5,
             max_epochs=25,
-            acc_delta=None,  # No delta provided
+            acc_delta=None,
             return_components=True,
         )
 
@@ -709,6 +756,7 @@ class TestRansomwareSeedDetection:
                 total_improvement=-0.3,  # Negative trajectory
                 epochs_in_stage=epochs_in_stage,
                 seed_age_epochs=10 + epochs_in_stage,
+                counterfactual_total_improvement=-0.3,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -741,6 +789,7 @@ class TestRansomwareSeedDetection:
             total_improvement=2.0,  # Positive trajectory
             epochs_in_stage=5,
             seed_age_epochs=15,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -765,6 +814,7 @@ class TestRansomwareSeedDetection:
                 total_improvement=total_improvement,
                 epochs_in_stage=5,
                 seed_age_epochs=15,
+                counterfactual_total_improvement=total_improvement,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -801,6 +851,7 @@ class TestRansomwareSeedDetection:
                 total_improvement=total_improvement,
                 epochs_in_stage=5,
                 seed_age_epochs=15,
+                counterfactual_total_improvement=total_improvement,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -844,6 +895,7 @@ class TestRansomwareSeedDetection:
             total_improvement=8.0,
             epochs_in_stage=10,
             seed_age_epochs=30,
+            counterfactual_total_improvement=8.0,
         )
 
         _, components = compute_contribution_reward(
@@ -876,6 +928,7 @@ class TestRansomwareSeedDetection:
             total_improvement=-0.02,  # Negative!
             epochs_in_stage=3,
             seed_age_epochs=15,
+            counterfactual_total_improvement=-0.02,
         )
 
         reward, components = compute_contribution_reward(
@@ -908,6 +961,7 @@ class TestHoldingIndecisionPenalty:
             total_improvement=2.0,
             epochs_in_stage=1,  # First epoch - grace period
             seed_age_epochs=10,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -936,6 +990,7 @@ class TestHoldingIndecisionPenalty:
             total_improvement=2.0,
             epochs_in_stage=2,  # Second epoch
             seed_age_epochs=11,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -968,6 +1023,7 @@ class TestHoldingIndecisionPenalty:
                 total_improvement=2.0,
                 epochs_in_stage=epochs_in_stage,
                 seed_age_epochs=10 + epochs_in_stage,
+                counterfactual_total_improvement=2.0,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -1000,6 +1056,7 @@ class TestHoldingIndecisionPenalty:
             total_improvement=2.0,
             epochs_in_stage=5,  # Would have penalty if WAIT
             seed_age_epochs=15,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1045,7 +1102,13 @@ class TestHoldingIndecisionPenalty:
 
 
 class TestSeedlessAttribution:
-    """Test that seedless states get zero attribution."""
+    """Attribution is gated on seed PRESENCE, not host accuracy drift.
+
+    Seedless steps (seed_info is None) get zero attribution no matter how much
+    host accuracy moved -- host-only learning must never be credited to a
+    nonexistent seed. A step where a seed exists but has no measured
+    counterfactual yet falls to the discounted proxy path instead.
+    """
 
     def test_seedless_wait_gets_no_attribution(self):
         """WAIT with no seed should get zero attribution, even with positive acc_delta.
@@ -1088,37 +1151,47 @@ class TestSeedlessAttribution:
             f"Seedless germinate should get no attribution: {components.bounded_attribution}"
         )
 
-    def test_pre_blending_seed_still_gets_proxy_attribution(self):
-        """Pre-blending seed (no counterfactual) should still get proxy attribution.
+    def test_pre_counterfactual_blending_seed_gets_discounted_proxy(self):
+        """A seed ON THE OUTPUT PATH without a counterfactual gets the discounted proxy.
 
-        This is different from seedless - a seed exists but hasn't reached
-        BLENDING yet, so we use acc_delta as a proxy signal.
+        Complement to the seedless cases above: here a seed DOES exist, is causally
+        contributing (stage >= BLENDING, alpha ramping/on), and its clean leave-one-out
+        counterfactual has not been measured yet (seed_contribution is None). The proxy
+        pays a heavily discounted signal driven by the seed's OWN stage-relative
+        improvement (proxy_contribution_weight = contribution_weight *
+        proxy_confidence_factor), NOT host-wide acc_delta. The anti-confound that
+        "host learning must not pay a non-contributing seed" is enforced for the
+        SEEDLESS case (seed_info is None) above, and for the PRE-BLENDING case in
+        TestProxySignalPath.test_pre_blending_seed_gets_zero_despite_host_drift.
         """
 
-        # Seed exists but in TRAINING (no counterfactual yet)
-        training_seed = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=0.5,
-            total_improvement=0.5,
+        # Seed exists and is on the output path (BLENDING), counterfactual not yet measured
+        blending_seed = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=2.0,  # Seed-causal, alpha-gated signal
+            total_improvement=2.0,
             epochs_in_stage=2,
-            seed_age_epochs=3,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=6,
         )
 
         _, components = compute_contribution_reward(
             action=LifecycleOp.WAIT,
-            seed_contribution=None,  # No counterfactual yet
+            seed_contribution=None,  # No counterfactual yet -> proxy path
             val_acc=45.0,
-            seed_info=training_seed,  # SEED EXISTS
-            epoch=3,
+            seed_info=blending_seed,  # SEED EXISTS, on output path
+            epoch=6,
             max_epochs=25,
             acc_at_germination=40.0,
-            acc_delta=2.0,  # Positive delta
+            acc_delta=99.0,  # Host drift ignored on the proxy path
             return_components=True,
         )
 
-        # Should get proxy attribution (proxy_contribution_weight * acc_delta = 0.3 * 2.0 = 0.6)
-        assert components.bounded_attribution == pytest.approx(0.6), (
-            f"Pre-blending seed should get proxy attribution: {components.bounded_attribution}"
+        config = ContributionRewardConfig()
+        expected = config.proxy_contribution_weight * 2.0
+        assert components.bounded_attribution == pytest.approx(expected), (
+            f"Pre-counterfactual BLENDING seed should get discounted proxy attribution "
+            f"({expected}): {components.bounded_attribution}"
         )
 
 
@@ -1138,6 +1211,7 @@ class TestRatioPenalty:
             total_improvement=-0.5,
             epochs_in_stage=3,
             seed_age_epochs=8,
+            counterfactual_total_improvement=-0.5,
         )
 
         _, components = compute_contribution_reward(
@@ -1170,6 +1244,7 @@ class TestRatioPenalty:
             total_improvement=-2.0,
             epochs_in_stage=5,
             seed_age_epochs=10,
+            counterfactual_total_improvement=-2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1203,6 +1278,7 @@ class TestRatioPenalty:
             total_improvement=0.05,  # Very low (below 0.1 threshold)
             epochs_in_stage=4,
             seed_age_epochs=9,
+            counterfactual_total_improvement=0.05,
         )
 
         _, components = compute_contribution_reward(
@@ -1239,6 +1315,7 @@ class TestRatioPenalty:
                 total_improvement=0.05,  # Low positive, not negative
                 epochs_in_stage=3,
                 seed_age_epochs=8,
+                counterfactual_total_improvement=0.05,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -1274,6 +1351,7 @@ class TestRatioPenalty:
             total_improvement=3.0,
             epochs_in_stage=5,
             seed_age_epochs=10,
+            counterfactual_total_improvement=3.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1300,6 +1378,7 @@ class TestRatioPenalty:
             total_improvement=1.0,
             epochs_in_stage=4,
             seed_age_epochs=9,
+            counterfactual_total_improvement=1.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1341,6 +1420,7 @@ class TestPenaltyAntiStacking:
             total_improvement=-2.0,  # Negative = ransomware
             epochs_in_stage=3,  # Would normally trigger PROB penalty
             seed_age_epochs=12,
+            counterfactual_total_improvement=-2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1383,6 +1463,7 @@ class TestPenaltyAntiStacking:
             total_improvement=5.0,  # Positive trajectory
             epochs_in_stage=3,  # Should trigger PROB penalty
             seed_age_epochs=12,
+            counterfactual_total_improvement=5.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1676,6 +1757,7 @@ class TestFossilizeTerminalBonus:
             seed_age_epochs=10,
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=1.0,
         )
 
         config = ContributionRewardConfig()
@@ -1712,6 +1794,7 @@ class TestFossilizeTerminalBonus:
             seed_age_epochs=10,
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=1.0,
         )
 
         _, components_no_leg = compute_contribution_reward(

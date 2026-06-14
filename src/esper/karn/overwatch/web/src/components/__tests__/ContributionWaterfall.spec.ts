@@ -3,9 +3,10 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ContributionWaterfall from '../ContributionWaterfall.vue'
 import type { RewardComponents } from '../../types/sanctum'
+import { createRewardComponents as createBaseRewardComponents } from './factories'
 
 function createRewardComponents(overrides: Partial<RewardComponents> = {}): RewardComponents {
-  return {
+  return createBaseRewardComponents({
     total: 0.25,
     base_acc_delta: 0.15,
     bounded_attribution: 0.02,
@@ -15,13 +16,9 @@ function createRewardComponents(overrides: Partial<RewardComponents> = {}): Rewa
     ratio_penalty: -0.01,
     stage_bonus: 0.05,
     fossilize_terminal_bonus: 0.03,
-    blending_warning: 0.0,
-    holding_warning: 0.0,
-    env_id: 0,
-    val_acc: 0.85,
     last_action: 'WAIT',
     ...overrides
-  }
+  })
 }
 
 describe('ContributionWaterfall', () => {

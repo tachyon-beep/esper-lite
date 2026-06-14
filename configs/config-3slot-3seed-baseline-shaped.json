@@ -1,7 +1,7 @@
 {
   "task": "cifar_baseline",
   "n_episodes": 200,
-  "n_envs": 128,
+  "n_envs": 12,
   "max_epochs": 150,
   "chunk_length": 150,
   "lr": 0.0003,

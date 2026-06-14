@@ -14,6 +14,7 @@ Plan coordination addresses three challenges:
 
 | File | Purpose |
 |------|---------|
+| `ACTIVE_REGISTER.md` | Human-readable register for active ticket sets that should not require opening Filigree |
 | `PLAN_TRACKER.md` | Master tracking document with prioritization, dependencies, and commentary |
 
 > **Note:** The metadata template lives at `docs/plans/PLAN_TEMPLATE.md` alongside the plans themselves.

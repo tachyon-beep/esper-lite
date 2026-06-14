@@ -90,6 +90,46 @@ def test_epoch_completed_payload_accepts_null_observation_stats() -> None:
     assert payload.observation_stats is None
 
 
+def test_morphology_causal_log_payload_requires_joinable_identity() -> None:
+    """Morphology causal logs must join proposal, verdict, mutation, watch, and terminal evidence."""
+    from esper.leyline.telemetry import MorphologyCausalLogPayload
+
+    payload = MorphologyCausalLogPayload.from_dict(
+        {
+            "phase": "watch",
+            "env_id": 2,
+            "slot_id": "r0c0",
+            "operation": "GERMINATE",
+            "action_id": "morph-b3-e4-env2-r0c0-op1",
+            "proposal_id": "morph-b3-e4-env2-r0c0-op1-proposal",
+            "verdict_id": "morph-b3-e4-env2-r0c0-op1-verdict",
+            "mutation_id": "morph-b3-e4-env2-r0c0-op1-mutation",
+            "observation_hash": "obs-abc123",
+            "rng_stream": "simic.lifecycle.env2",
+            "rng_seed": 123456789,
+            "topology": "cnn",
+            "blueprint_id": "conv_light",
+            "governor_approved": True,
+            "governor_reason": "approved",
+            "governor_blocked_factor": None,
+            "watch_window_evidence": 1.25,
+            "linked_event_id": "rollback-1",
+        }
+    )
+
+    assert payload.phase == "watch"
+    assert payload.action_id == "morph-b3-e4-env2-r0c0-op1"
+    assert payload.proposal_id.endswith("-proposal")
+    assert payload.verdict_id.endswith("-verdict")
+    assert payload.mutation_id.endswith("-mutation")
+    assert payload.observation_hash == "obs-abc123"
+    assert payload.rng_stream == "simic.lifecycle.env2"
+    assert payload.rng_seed == 123456789
+    assert payload.governor_approved is True
+    assert payload.watch_window_evidence == 1.25
+    assert payload.linked_event_id == "rollback-1"
+
+
 # =============================================================================
 # PPOUpdatePayload Extensions (per UX specialist enhancements plan)
 # =============================================================================
@@ -400,6 +440,131 @@ def test_telemetry_event_serializes_nested_head_telemetry():
     assert restored_payload.head_telemetry.curve_entropy == 0.35
 
 
+def _full_head_telemetry_dict() -> dict[str, float]:
+    """A complete head_telemetry dict (all 16 fields present)."""
+    return {
+        "op_confidence": 0.85,
+        "slot_confidence": 0.72,
+        "blueprint_confidence": 0.91,
+        "style_confidence": 0.65,
+        "tempo_confidence": 0.88,
+        "alpha_target_confidence": 0.77,
+        "alpha_speed_confidence": 0.69,
+        "curve_confidence": 0.82,
+        "op_entropy": 0.3,
+        "slot_entropy": 0.8,
+        "blueprint_entropy": 0.5,
+        "style_entropy": 0.6,
+        "tempo_entropy": 0.4,
+        "alpha_target_entropy": 0.55,
+        "alpha_speed_entropy": 0.45,
+        "curve_entropy": 0.35,
+    }
+
+
+def test_head_telemetry_from_dict_fails_fast_on_missing_field():
+    """TPD-004: a partial head_telemetry dict must NOT fabricate 0.0; fail loud.
+
+    Every field is produced together by the policy or not at all (None), so a
+    missing key means corrupted/partial telemetry.
+    """
+    import pytest
+
+    from esper.leyline.telemetry import HeadTelemetry
+
+    partial = _full_head_telemetry_dict()
+    del partial["curve_entropy"]
+
+    with pytest.raises(KeyError):
+        HeadTelemetry.from_dict(partial)
+
+
+def test_head_telemetry_from_dict_empty_fails_fast():
+    """TPD-004: an empty head_telemetry dict must raise, not return all-zeros."""
+    import pytest
+
+    from esper.leyline.telemetry import HeadTelemetry
+
+    with pytest.raises(KeyError):
+        HeadTelemetry.from_dict({})
+
+
+def test_head_telemetry_from_dict_preserves_explicit_zero():
+    """TPD-004: an explicit measured 0.0 round-trips as 0.0 (not dropped)."""
+    from esper.leyline.telemetry import HeadTelemetry
+
+    data = _full_head_telemetry_dict()
+    data["op_confidence"] = 0.0
+    data["op_entropy"] = 0.0
+
+    head = HeadTelemetry.from_dict(data)
+    assert head.op_confidence == 0.0
+    assert head.op_entropy == 0.0
+    # Round-trip stability
+    assert HeadTelemetry.from_dict(head.to_dict()) == head
+
+
+# =============================================================================
+# BatchEpochCompletedPayload rolling_accuracy missingness (LN-004)
+# =============================================================================
+
+
+def _full_batch_dict() -> dict:
+    """A complete batch_epoch dict WITHOUT rolling_accuracy."""
+    return {
+        "episodes_completed": 8,
+        "batch_idx": 2,
+        "avg_accuracy": 61.0,
+        "avg_reward": 1.5,
+        "total_episodes": 32,
+        "n_envs": 4,
+    }
+
+
+def test_batch_payload_rolling_accuracy_absent_is_none():
+    """LN-004: absent rolling_accuracy parses as None (not measured), not 0.0."""
+    from esper.leyline.telemetry import BatchEpochCompletedPayload
+
+    payload = BatchEpochCompletedPayload.from_dict(_full_batch_dict())
+    assert payload.rolling_accuracy is None
+
+
+def test_batch_payload_rolling_accuracy_explicit_zero_preserved():
+    """LN-004: an explicit measured 0.0 stays 0.0, distinct from absent (None)."""
+    from esper.leyline.telemetry import BatchEpochCompletedPayload
+
+    data = _full_batch_dict()
+    data["rolling_accuracy"] = 0.0
+    payload = BatchEpochCompletedPayload.from_dict(data)
+    assert payload.rolling_accuracy == 0.0
+    assert payload.rolling_accuracy is not None
+
+
+def test_batch_payload_rolling_accuracy_roundtrip_stable():
+    """LN-004: None stays None and 0.0 stays 0.0 through serialize -> from_dict."""
+    from esper.karn.serialization import _payload_to_dict
+    from esper.leyline.telemetry import BatchEpochCompletedPayload
+
+    # None case
+    none_payload = BatchEpochCompletedPayload.from_dict(_full_batch_dict())
+    none_round = BatchEpochCompletedPayload.from_dict(_payload_to_dict(none_payload))
+    assert none_round.rolling_accuracy is None
+
+    # Explicit zero case
+    zero_payload = BatchEpochCompletedPayload(
+        episodes_completed=8,
+        batch_idx=2,
+        avg_accuracy=61.0,
+        avg_reward=1.5,
+        total_episodes=32,
+        n_envs=4,
+        rolling_accuracy=0.0,
+    )
+    zero_round = BatchEpochCompletedPayload.from_dict(_payload_to_dict(zero_payload))
+    assert zero_round.rolling_accuracy == 0.0
+    assert zero_round.rolling_accuracy is not None
+
+
 # =============================================================================
 # Q-Value Telemetry Tests (Policy V2)
 # =============================================================================
@@ -607,3 +772,103 @@ def test_ppo_update_payload_from_dict_with_q_values():
     assert payload.ppo_updates_count == 2
     assert payload.op_q_values == (0.5, 5.2, 4.0, -1.5, 2.8, 3.1)
     assert payload.q_variance == 2.3
+
+
+# =============================================================================
+# LN-001: EpochCompletedPayload.episode_idx survives serialization
+# =============================================================================
+
+
+def test_epoch_completed_to_dict_includes_episode_idx() -> None:
+    """to_dict() must emit episode_idx; from_dict() requires it (no silent drop)."""
+    from esper.leyline.telemetry import EpochCompletedPayload
+
+    payload = EpochCompletedPayload(
+        env_id=2,
+        val_accuracy=0.81,
+        val_loss=0.33,
+        inner_epoch=7,
+        episode_idx=5,
+    )
+
+    serialized = payload.to_dict()
+    assert "episode_idx" in serialized
+    assert serialized["episode_idx"] == 5
+
+
+def test_epoch_completed_to_dict_preserves_none_episode_idx() -> None:
+    """A genuinely absent episode_idx (None) round-trips as None, not 0."""
+    from esper.leyline.telemetry import EpochCompletedPayload
+
+    payload = EpochCompletedPayload(
+        env_id=0,
+        val_accuracy=0.5,
+        val_loss=1.0,
+        inner_epoch=0,
+        episode_idx=None,
+        observation_stats=None,
+    )
+
+    serialized = payload.to_dict()
+    assert serialized["episode_idx"] is None
+
+    restored = EpochCompletedPayload.from_dict(serialized)
+    assert restored.episode_idx is None
+
+
+def test_epoch_completed_round_trip_preserves_episode_idx() -> None:
+    """to_dict() -> from_dict() must preserve episode_idx exactly."""
+    from esper.leyline.telemetry import EpochCompletedPayload
+
+    original = EpochCompletedPayload(
+        env_id=3,
+        val_accuracy=0.9,
+        val_loss=0.12,
+        inner_epoch=4,
+        episode_idx=11,
+        observation_stats=None,
+    )
+
+    restored = EpochCompletedPayload.from_dict(original.to_dict())
+    assert restored.episode_idx == 11
+    assert restored == original
+
+
+# =============================================================================
+# LN-002: SeedPrunedPayload.blueprint_id optionality
+# =============================================================================
+
+
+def test_seed_pruned_payload_preserves_blueprint_id() -> None:
+    """A normal prune carries its blueprint id through from_dict unchanged."""
+    from esper.leyline.telemetry import SeedPrunedPayload
+
+    payload = SeedPrunedPayload.from_dict(
+        {
+            "slot_id": "r0c0",
+            "env_id": 0,
+            "reason": "no_improvement",
+            "episode_idx": 4,
+            "blueprint_id": "attention",
+        }
+    )
+    assert payload.blueprint_id == "attention"
+
+
+def test_seed_pruned_payload_allows_absent_blueprint_id() -> None:
+    """A slot culled before germination recorded a blueprint has blueprint_id=None.
+
+    None is a legitimate, distinguishable "unknown blueprint" marker, not coerced
+    to a fake id.
+    """
+    from esper.leyline.telemetry import SeedPrunedPayload
+
+    payload = SeedPrunedPayload.from_dict(
+        {
+            "slot_id": "r0c0",
+            "env_id": 0,
+            "reason": "probation",
+            "episode_idx": 1,
+        }
+    )
+    assert payload.blueprint_id is None

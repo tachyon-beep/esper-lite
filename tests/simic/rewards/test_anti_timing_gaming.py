@@ -9,8 +9,6 @@ The anti-gaming formula (harmonic/timing discount) applies when:
 When contribution < progress, attribution is simply capped at contribution.
 """
 
-import math
-
 import pytest
 
 from esper.leyline import LifecycleOp, SeedStage
@@ -19,6 +17,7 @@ from esper.simic.rewards import (
     ContributionRewardConfig,
     SeedInfo,
 )
+from esper.simic.rewards.contribution import FossilizedSeedDripState, compute_basic_reward
 
 
 class TestAntiTimingGamingIntegration:
@@ -42,10 +41,10 @@ class TestAntiTimingGamingIntegration:
             disable_timing_discount=False,
         )
 
-        # Baseline configuration (pre-D3 behavior)
+        # Baseline configuration (harmonic formula, no timing discount)
         config_baseline = ContributionRewardConfig(
             contribution_weight=1.0,
-            attribution_formula="geometric",
+            attribution_formula="harmonic",
             disable_timing_discount=True,
         )
 
@@ -61,6 +60,7 @@ class TestAntiTimingGamingIntegration:
             seed_age_epochs=98,  # epoch 100 - 98 = germinated at epoch 2
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=5.0,
         )
 
         # Gaming scenario: seed claims 30% contribution but host only improved 5%
@@ -90,13 +90,13 @@ class TestAntiTimingGamingIntegration:
         )
 
         # Expected calculations:
-        # Baseline (geometric): sqrt(5 * 30) = sqrt(150) ~ 12.25
+        # Baseline (harmonic, no timing discount): 2 * 5 * 30 / (5 + 30) = 300/35 ~ 8.57
         # D3 Harmonic: 2 * 5 * 30 / (5 + 30) = 300/35 ~ 8.57
         # D3 Timing: epoch 2, warmup 10, floor 0.4
         #   discount = 0.4 + (1.0 - 0.4) * (2/10) = 0.4 + 0.12 = 0.52
         # D3 Combined: 8.57 * 0.52 ~ 4.46
 
-        expected_baseline = math.sqrt(5 * 30)  # ~12.25
+        expected_baseline = 2 * 5 * 30 / (5 + 30)  # ~8.57 (harmonic, no discount)
         expected_harmonic = 2 * 5 * 30 / (5 + 30)  # ~8.57
         expected_discount = 0.4 + (1.0 - 0.4) * (2 / 10)  # 0.52
         expected_d3 = expected_harmonic * expected_discount  # ~4.46
@@ -105,9 +105,72 @@ class TestAntiTimingGamingIntegration:
         assert comp_d3.bounded_attribution == pytest.approx(expected_d3, rel=0.01)
         assert comp_d3.timing_discount == pytest.approx(expected_discount, rel=0.01)
 
-        # D3 reduces attribution significantly for this gaming scenario
+        # The timing discount reduces attribution for this early-germination scenario.
+        # reduction = baseline / d3 = 8.57 / 4.46 ~ 1.92 (= 1 / discount = 1 / 0.52)
         reduction_factor = comp_baseline.bounded_attribution / comp_d3.bounded_attribution
-        assert reduction_factor > 2.5, f"Expected >2.5x reduction, got {reduction_factor:.2f}x"
+        assert reduction_factor > 1.8, f"Expected >1.8x reduction, got {reduction_factor:.2f}x"
+
+    def test_fossilized_seed_regression_is_accounted_after_peak(self) -> None:
+        """Post-fossilization negative contribution must debit drip reward."""
+        config = ContributionRewardConfig(
+            drip_fraction=0.7,
+            max_drip_per_epoch=0.1,
+            negative_drip_ratio=0.5,
+        )
+        drip_state = FossilizedSeedDripState(
+            seed_id="regressed-seed",
+            slot_id="r0c0",
+            fossilize_epoch=20,
+            max_epochs=150,
+            drip_total=1.0,
+            drip_scale=0.05,
+        )
+
+        _, _, _, _, _, _, drip_this_epoch = compute_basic_reward(
+            acc_delta=0.0,
+            effective_seed_params=0,
+            total_params=100_000,
+            host_params=100_000,
+            config=config,
+            epoch=40,
+            max_epochs=150,
+            seed_info=None,
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            fossilized_drip_states=[drip_state],
+            fossilized_contributions={"regressed-seed": -3.0},
+        )
+
+        assert drip_this_epoch < 0.0
+        assert drip_state.drip_paid == pytest.approx(drip_this_epoch)
+
+    def test_fossilized_drip_requires_current_counterfactual_measurement(self) -> None:
+        """Missing fossilized contribution is not equivalent to zero contribution."""
+        config = ContributionRewardConfig(drip_fraction=0.7)
+        drip_state = FossilizedSeedDripState(
+            seed_id="missing-measurement",
+            slot_id="r0c0",
+            fossilize_epoch=20,
+            max_epochs=150,
+            drip_total=1.0,
+            drip_scale=0.05,
+        )
+
+        with pytest.raises(ValueError, match="Missing fossilized contribution"):
+            compute_basic_reward(
+                acc_delta=0.0,
+                effective_seed_params=0,
+                total_params=100_000,
+                host_params=100_000,
+                config=config,
+                epoch=40,
+                max_epochs=150,
+                seed_info=None,
+                action=LifecycleOp.WAIT,
+                seed_contribution=None,
+                fossilized_drip_states=[drip_state],
+                fossilized_contributions={},
+            )
 
     def test_legitimate_late_germination_not_penalized(self) -> None:
         """Seeds germinated after warmup with contribution >= progress get full timing credit."""
@@ -131,6 +194,7 @@ class TestAntiTimingGamingIntegration:
             seed_age_epochs=50,  # germinated at epoch 50 (after warmup)
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=8.0,
         )
 
         # Legitimate scenario: contribution >= progress, both values close
@@ -147,7 +211,7 @@ class TestAntiTimingGamingIntegration:
             return_components=True,
         )
 
-        # When contribution and progress are close, harmonic ~ geometric
+        # When contribution and progress are close, harmonic ~ their average
         # Harmonic: 2 * 8 * 10 / (8 + 10) = 160 / 18 ~ 8.89
         # Timing discount: epoch 50 >= warmup 10 -> discount = 1.0
         # Total: 8.89 * 1.0 = 8.89
@@ -180,6 +244,7 @@ class TestAntiTimingGamingIntegration:
             seed_age_epochs=50,  # After warmup, so timing_discount = 1.0
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=10.0,
         )
 
         # contribution (3) < progress (10), so capped at contribution
@@ -206,7 +271,7 @@ class TestAntiTimingGamingIntegration:
             contribution_weight=1.0,
             germination_warmup_epochs=10,
             germination_discount_floor=0.4,
-            attribution_formula="geometric",
+            attribution_formula="harmonic",
             disable_timing_discount=False,
         )
 
@@ -231,6 +296,7 @@ class TestAntiTimingGamingIntegration:
                 seed_age_epochs=100 - germ_epoch,  # Compute age from current epoch
                 interaction_sum=0.0,
                 boost_received=0.0,
+                counterfactual_total_improvement=5.0,
             )
 
             # Use contribution > progress to ensure formula applies

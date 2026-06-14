@@ -129,6 +129,7 @@ class LSTMPolicyBundle:
             value=result.values,
             hidden=result.hidden,
             op_logits=result.op_logits,
+            head_entropies=result.head_entropies,
         )
 
     def forward(
@@ -474,7 +475,7 @@ class LSTMPolicyBundle:
     def compile(
         self,
         mode: str = "default",
-        dynamic: bool = True,
+        dynamic: bool = False,
     ) -> None:
         """Compile the underlying network with torch.compile.
 

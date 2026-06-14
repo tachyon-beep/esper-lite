@@ -3,28 +3,30 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+
 from esper.karn.overwatch.backend import OverwatchBackend
-from esper.karn.sanctum.schema import SanctumSnapshot
+from esper.karn.sanctum.schema import EventLogEntry, SanctumSnapshot
 
 
 class TestOverwatchBackend:
     """Test OverwatchBackend initialization and event processing."""
 
-    def test_backend_initializes_with_aggregator(self) -> None:
-        """Backend should create a SanctumAggregator instance."""
+    def test_backend_initializes_with_aggregator_registry(self) -> None:
+        """Backend should create an AggregatorRegistry for policy groups."""
         backend = OverwatchBackend(port=8080)
-        assert backend.aggregator is not None
+        assert backend._registry is not None
         assert backend.port == 8080
 
-    def test_emit_processes_event_through_aggregator(self) -> None:
-        """Events should be passed to the aggregator."""
+    def test_emit_routes_event_through_registry(self) -> None:
+        """Events should be routed through the group-aware registry."""
         backend = OverwatchBackend(port=8080)
-        backend.aggregator = MagicMock()
+        backend._registry = MagicMock()
 
         mock_event = MagicMock()
         backend.emit(mock_event)
 
-        backend.aggregator.process_event.assert_called_once_with(mock_event)
+        backend._registry.process_event.assert_called_once_with(mock_event)
 
     def test_emit_triggers_broadcast(self) -> None:
         """emit() should call maybe_broadcast() to notify WebSocket clients.
@@ -33,7 +35,7 @@ class TestOverwatchBackend:
         triggered broadcasts, leaving WebSocket clients stuck on initial state.
         """
         backend = OverwatchBackend(port=8080)
-        backend.aggregator = MagicMock()
+        backend._registry = MagicMock()
         backend.maybe_broadcast = MagicMock()
 
         mock_event = MagicMock()
@@ -114,7 +116,7 @@ class TestOverwatchBackend:
         assert backend._broadcast_queue.empty()
 
         # Emit events - should NOT queue broadcasts since _running is False
-        backend.aggregator = MagicMock()
+        backend._registry = MagicMock()
         for _ in range(10):
             backend.emit(MagicMock())
 
@@ -163,7 +165,7 @@ class TestOverwatchBackend:
         assert backend._broadcast_queue.maxsize == 10
 
     def test_snapshot_to_json_handles_special_types(self) -> None:
-        """JSON serialization should handle enums, datetime, Path."""
+        """JSON serialization should handle enums, datetime, Path, and NumPy."""
         from datetime import datetime, timezone
 
         backend = OverwatchBackend(port=8080)
@@ -172,6 +174,13 @@ class TestOverwatchBackend:
         snapshot = backend.get_snapshot()
         snapshot.start_time = datetime.now(timezone.utc)
         snapshot.connected = True
+        snapshot.event_log.append(EventLogEntry(
+            timestamp="12:00:00",
+            event_type="TEST_EVENT",
+            env_id=None,
+            message="NumPy metric",
+            metadata={"metric": np.float32(1.5), "pending": float("-inf")},
+        ))
 
         json_str = backend.snapshot_to_json(snapshot)
         parsed = json.loads(json_str)
@@ -180,6 +189,43 @@ class TestOverwatchBackend:
         assert "start_time" in parsed
         # connected should be serialized as bool
         assert parsed["connected"] is True
+        assert parsed["event_log"][0]["metadata"]["metric"] == 1.5
+        assert parsed["event_log"][0]["metadata"]["pending"] is None
+
+    def test_get_all_snapshots_returns_grouped_snapshots(self) -> None:
+        """A/B runs should expose one snapshot per policy group."""
+        backend = OverwatchBackend(port=8080)
+        backend._registry = MagicMock()
+        backend._registry.get_all_snapshots.return_value = {
+            "A": SanctumSnapshot(reward_mode="shaped"),
+            "B": SanctumSnapshot(reward_mode="simplified"),
+        }
+
+        snapshots = backend.get_all_snapshots()
+
+        assert sorted(snapshots.keys()) == ["A", "B"]
+        assert snapshots["A"].reward_mode == "shaped"
+        assert snapshots["B"].reward_mode == "simplified"
+
+    def test_broadcast_envelope_includes_group_snapshots(self) -> None:
+        """WebSocket snapshots should carry all cohorts for comparison UI."""
+        backend = OverwatchBackend(port=8080)
+        backend._running = True
+        backend._clients.append(MagicMock())
+        backend.get_all_snapshots = MagicMock(return_value={
+            "A": SanctumSnapshot(reward_mode="shaped", current_episode=3),
+            "B": SanctumSnapshot(reward_mode="simplified", current_episode=4),
+        })
+
+        backend._broadcast()
+        message = backend._broadcast_queue.get_nowait()
+        parsed = json.loads(message)
+
+        assert parsed["type"] == "snapshot"
+        assert parsed["primary_group_id"] == "A"
+        assert parsed["data"]["reward_mode"] == "shaped"
+        assert parsed["snapshots_by_group"]["A"]["current_episode"] == 3
+        assert parsed["snapshots_by_group"]["B"]["reward_mode"] == "simplified"
 
     def test_rate_limiting_deterministic(self) -> None:
         """Rate limiting should use monotonic time for deterministic behavior.

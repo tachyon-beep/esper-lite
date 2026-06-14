@@ -94,7 +94,11 @@ def create_policy(
     # Compile the policy via the protocol method
     # Note: Device placement MUST happen before compile for correct tracing
     # WARNING: Do not call .to(device) after this - it would replace the compiled module
-    policy.compile(mode=compile_mode, dynamic=True)
+    # P3-DYN: dynamic=False. Rollout buffers are statically padded [num_envs, max_steps]
+    # + valid_mask and the LSTM hidden/chunk are fixed, so the policy sees no real shape
+    # variation; static shapes let Inductor specialize + fuse. (The HOST train-step in
+    # helpers.py keeps dynamic=True -- it has genuinely varying CIFAR batch sizes, M22.)
+    policy.compile(mode=compile_mode, dynamic=False)
 
     return policy
 

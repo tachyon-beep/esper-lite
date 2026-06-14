@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
 
 import numpy as np
@@ -16,18 +17,16 @@ from esper.leyline import (
     AlphaMode,
     AlphaSpeedAction,
     BLUEPRINT_IDS,
-    DEFAULT_GAMMA,
-    DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     EPISODE_SUCCESS_THRESHOLD,
     EpisodeOutcome,
     EpisodeOutcomePayload,
-    GovernorRollbackPayload,
     HEAD_NAMES,
-    HINDSIGHT_CREDIT_WEIGHT,
     HeadTelemetry,
+    LifecycleMutationCausalContext,
     LifecycleOp,
-    MAX_HINDSIGHT_CREDIT,
+    MorphologyCausalLogPhase,
     MIN_PRUNE_AGE,
+    MorphologyCausalLogPayload,
     OP_ADVANCE,
     OP_FOSSILIZE,
     OP_GERMINATE,
@@ -42,15 +41,12 @@ from esper.leyline import (
     SlotConfig,
     STYLE_ALPHA_ALGORITHMS,
     STYLE_BLEND_IDS,
-    TEMPO_TO_EPOCHS,
     TelemetryEvent,
     TelemetryEventType,
-    TempoAction,
 )
 from esper.simic.rewards import (
     compute_reward,
     compute_loss_reward,
-    compute_scaffold_hindsight_credit,
     ContributionRewardConfig,
     RewardFamily,
     RewardMode,
@@ -61,6 +57,13 @@ from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 
 from .helpers import compute_rent_and_shock_inputs
+from .handlers import (
+    AlphaTargetParams,
+    GerminateParams,
+    HandlerContext,
+    PruneParams,
+    get_handler,
+)
 from .parallel_env_state import ParallelEnvState
 from esper.simic.vectorized_types import (
     ActionMaskFlags,
@@ -79,6 +82,96 @@ if TYPE_CHECKING:
     from esper.leyline.signals import TrainingSignals
     from esper.runtime.tasks import TaskSpec
     from esper.nissa import BlueprintAnalytics
+
+
+@dataclass(slots=True, frozen=True)
+class FreshContributionTargets:
+    """Counterfactual contribution targets plus proof freshness status."""
+
+    has_fresh_contribution: bool
+    contribution_targets: torch.Tensor | None
+    contribution_mask: torch.Tensor | None
+    stale_slots: tuple[str, ...] = ()
+    missing_tracking_slots: tuple[str, ...] = ()
+
+
+def build_fresh_contribution_targets(
+    *,
+    env_state: ParallelEnvState,
+    baseline_accs: dict[str, float],
+    slot_config: SlotConfig,
+    device: torch.device | str,
+) -> FreshContributionTargets:
+    """Build rollout contribution targets only from current counterfactual evidence."""
+    if not baseline_accs:
+        return FreshContributionTargets(
+            has_fresh_contribution=False,
+            contribution_targets=None,
+            contribution_mask=None,
+        )
+
+    stale_slots: list[str] = []
+    missing_tracking_slots: list[str] = []
+    for slot_id in baseline_accs:
+        if slot_id not in env_state.epochs_since_counterfactual:
+            missing_tracking_slots.append(slot_id)
+            continue
+        if env_state.epochs_since_counterfactual[slot_id] != 0:
+            stale_slots.append(slot_id)
+
+    if stale_slots or missing_tracking_slots:
+        return FreshContributionTargets(
+            has_fresh_contribution=False,
+            contribution_targets=None,
+            contribution_mask=None,
+            stale_slots=tuple(stale_slots),
+            missing_tracking_slots=tuple(missing_tracking_slots),
+        )
+
+    num_slots = slot_config.num_slots
+    contribution_targets = torch.zeros(num_slots, device=device)
+    contribution_mask = torch.zeros(num_slots, dtype=torch.bool, device=device)
+
+    for slot_id, baseline_acc in baseline_accs.items():
+        slot_idx = slot_config.index_for_slot_id(slot_id)
+        contribution = env_state.val_acc - baseline_acc
+        contribution_targets[slot_idx] = contribution
+        contribution_mask[slot_idx] = True
+
+    return FreshContributionTargets(
+        has_fresh_contribution=True,
+        contribution_targets=contribution_targets,
+        contribution_mask=contribution_mask,
+    )
+
+
+def _build_decision_head_telemetry(
+    *,
+    head_confidences_cpu: np.ndarray | None,
+    head_entropies_cpu: np.ndarray | None,
+    env_idx: int,
+) -> HeadTelemetry | None:
+    """Build per-head decision telemetry only when entropy evidence is present."""
+    if head_confidences_cpu is None or head_entropies_cpu is None:
+        return None
+    return HeadTelemetry(
+        op_confidence=float(head_confidences_cpu[0, env_idx]),
+        slot_confidence=float(head_confidences_cpu[1, env_idx]),
+        blueprint_confidence=float(head_confidences_cpu[2, env_idx]),
+        style_confidence=float(head_confidences_cpu[3, env_idx]),
+        tempo_confidence=float(head_confidences_cpu[4, env_idx]),
+        alpha_target_confidence=float(head_confidences_cpu[5, env_idx]),
+        alpha_speed_confidence=float(head_confidences_cpu[6, env_idx]),
+        curve_confidence=float(head_confidences_cpu[7, env_idx]),
+        op_entropy=float(head_entropies_cpu[0, env_idx]),
+        slot_entropy=float(head_entropies_cpu[1, env_idx]),
+        blueprint_entropy=float(head_entropies_cpu[2, env_idx]),
+        style_entropy=float(head_entropies_cpu[3, env_idx]),
+        tempo_entropy=float(head_entropies_cpu[4, env_idx]),
+        alpha_target_entropy=float(head_entropies_cpu[5, env_idx]),
+        alpha_speed_entropy=float(head_entropies_cpu[6, env_idx]),
+        curve_entropy=float(head_entropies_cpu[7, env_idx]),
+    )
 
 
 _HEAD_NAME_TO_IDX: dict[str, int] = {name: idx for idx, name in enumerate(HEAD_NAMES)}
@@ -237,6 +330,128 @@ class ActionExecutionResult:
     post_action_masks: list[dict[str, torch.Tensor]]
 
 
+def _build_lifecycle_mutation_context(
+    *,
+    batch_idx: int,
+    epoch: int,
+    env_idx: int,
+    op_action: int,
+    target_slot: str,
+    observation_hash: str,
+    topology: str,
+) -> LifecycleMutationCausalContext:
+    """Create stable morphology proposal/verdict/mutation identity for one action."""
+    base = _build_lifecycle_action_id(
+        batch_idx=batch_idx,
+        epoch=epoch,
+        env_idx=env_idx,
+        target_slot=target_slot,
+        op_action=op_action,
+    )
+    digest = hashlib.sha256(base.encode("utf-8")).digest()
+    rng_seed = int.from_bytes(digest[:8], byteorder="big", signed=False)
+    return LifecycleMutationCausalContext(
+        action_id=base,
+        proposal_id=f"{base}-proposal",
+        verdict_id=f"{base}-verdict",
+        mutation_id=f"{base}-mutation",
+        observation_hash=observation_hash,
+        rng_stream=f"simic.lifecycle.env{env_idx}",
+        rng_seed=rng_seed,
+        topology=topology,
+        slot_id=target_slot,
+        operation=LifecycleOp(op_action).name,
+    )
+
+
+def _build_lifecycle_action_id(
+    *,
+    batch_idx: int,
+    epoch: int,
+    env_idx: int,
+    target_slot: str,
+    op_action: int,
+) -> str:
+    """Create the stable action identity shared by buffer and causal log rows."""
+    return f"morph-b{batch_idx}-e{epoch}-env{env_idx}-{target_slot}-op{op_action}"
+
+
+def _observation_hash(observation: torch.Tensor) -> str:
+    """Return a stable content hash for the observation used by a lifecycle action."""
+    obs_cpu = observation.detach().to(device="cpu", dtype=torch.float32).contiguous()
+    digest = hashlib.sha256(obs_cpu.numpy().tobytes()).hexdigest()[:16]
+    return f"obs-{digest}"
+
+
+def _build_morphology_causal_log_payload(
+    *,
+    phase: MorphologyCausalLogPhase,
+    context: LifecycleMutationCausalContext,
+    env_idx: int,
+    blueprint_id: str | None,
+    governor_approved: bool | None = None,
+    governor_reason: str | None = None,
+    governor_blocked_factor: str | None = None,
+    watch_window_evidence: float | None = None,
+    linked_event_id: str | None = None,
+) -> MorphologyCausalLogPayload:
+    return MorphologyCausalLogPayload(
+        phase=phase,
+        env_id=env_idx,
+        slot_id=context.slot_id,
+        operation=context.operation,
+        action_id=context.action_id,
+        proposal_id=context.proposal_id,
+        verdict_id=context.verdict_id,
+        mutation_id=context.mutation_id,
+        observation_hash=context.observation_hash,
+        rng_stream=context.rng_stream,
+        rng_seed=context.rng_seed,
+        topology=context.topology,
+        blueprint_id=blueprint_id,
+        governor_approved=governor_approved,
+        governor_reason=governor_reason,
+        governor_blocked_factor=governor_blocked_factor,
+        watch_window_evidence=watch_window_evidence,
+        linked_event_id=linked_event_id,
+    )
+
+
+def _build_rollback_causal_log_payload(
+    *,
+    batch_idx: int,
+    epoch: int,
+    env_idx: int,
+    op_action: int,
+    target_slot: str,
+    topology: str,
+    observation_hash: str,
+    reason: str,
+    loss_at_panic: float | None,
+    blueprint_id: str | None = None,
+) -> MorphologyCausalLogPayload:
+    context = _build_lifecycle_mutation_context(
+        batch_idx=batch_idx,
+        epoch=epoch,
+        env_idx=env_idx,
+        op_action=op_action,
+        target_slot=target_slot,
+        observation_hash=observation_hash,
+        topology=topology,
+    )
+    return _build_morphology_causal_log_payload(
+        phase="rollback",
+        context=context,
+        env_idx=env_idx,
+        blueprint_id=blueprint_id,
+        governor_approved=False,
+        governor_reason=reason,
+        governor_blocked_factor="rollback",
+        watch_window_evidence=loss_at_panic,
+        linked_event_id=context.mutation_id,
+    )
+
+
 def execute_actions(
     *,
     context: ActionExecutionContext,
@@ -260,6 +475,7 @@ def execute_actions(
     op_probs_cpu: np.ndarray | None,
     masked_np: np.ndarray | None,
     baseline_accs: list[dict[str, Any]],
+    all_disabled_accs: dict[int, float],
     governor_panic_envs: list[int],
     env_rollback_occurred: list[bool],
     reward_summary_accum: list[RewardSummaryAccumulator],
@@ -372,23 +588,24 @@ def execute_actions(
         target_slot = action_spec.target_slot
         slot_is_enabled = action_spec.slot_is_enabled
         action_for_reward = action_spec.action_for_reward
-        blend_algorithm_id = action_spec.blend_algorithm_id
-        alpha_algorithm = action_spec.alpha_algorithm
         alpha_target = action_spec.alpha_target
-
-        # Use op name for action counting
-        env_state.action_counts[action_spec.action_for_reward.name] = (
-            env_state.action_counts.get(action_spec.action_for_reward.name, 0) + 1
+        action_id = _build_lifecycle_action_id(
+            batch_idx=batch_idx,
+            epoch=epoch,
+            env_idx=env_idx,
+            target_slot=target_slot,
+            op_action=op_action,
         )
 
         action_success = False
 
         # Governor rollback
         if env_idx in governor_panic_envs:
-            # Capture panic info BEFORE rollback (execute_rollback resets these)
+            # Capture panic info BEFORE rollback (execute_rollback resets these).
+            # Used only for the joinable morphology causal-log rows below; the
+            # authoritative GOVERNOR_ROLLBACK panic record is emitted by the governor.
             panic_reason = env_state.governor._panic_reason
             panic_loss = env_state.governor._panic_loss
-            consecutive_panics = env_state.governor.consecutive_panics
 
             # Stream safety: rollback mutates model tensors; ensure it runs on the
             # per-env CUDA stream to avoid default-stream leakage and races.
@@ -413,25 +630,67 @@ def execute_actions(
             for seed_opt in env_state.seed_optimizers.values():
                 seed_opt.state.clear()
 
-            # Emit rollback telemetry for observability (P2 audit finding)
-            emitters[env_idx].emit(TelemetryEvent(
-                event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
-                data=GovernorRollbackPayload(
-                    env_id=env_idx,
-                    device=str(device),
-                    reason=panic_reason or "unknown",
-                    loss_at_panic=panic_loss,
-                    consecutive_panics=consecutive_panics,
-                ),
-                severity="warning",
-            ))
+            # KTS-003: The GOVERNOR_ROLLBACK telemetry event is emitted by the
+            # SINGLE authoritative source — TolariaGovernor.execute_rollback() — which
+            # carries the complete panic context (loss_at_panic, loss_threshold,
+            # consecutive_panics, panic_reason, and any state_dict key mismatches).
+            # Simic must NOT emit a second, partial GOVERNOR_ROLLBACK here; the governor
+            # is the panic authority. Simic only records the joinable morphology causal
+            # log rows below (which describe the *aborted lifecycle action*, not the
+            # panic itself).
+            rollback_blueprint_id = (
+                BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
+            )
+            rollback_payload = _build_rollback_causal_log_payload(
+                batch_idx=batch_idx,
+                epoch=epoch,
+                env_idx=env_idx,
+                op_action=op_action,
+                target_slot=target_slot,
+                topology=task_spec.topology if task_spec.topology is not None else "unknown",
+                observation_hash=_observation_hash(states_batch_normalized[env_idx]),
+                reason=panic_reason or "unknown",
+                loss_at_panic=panic_loss,
+                blueprint_id=rollback_blueprint_id,
+            )
+            rollback_phases: tuple[tuple[MorphologyCausalLogPhase, str], ...] = (
+                ("rollback", "Morphology rollback causal log"),
+                ("cooldown", "Morphology rollback cooldown"),
+                ("audit", "Morphology rollback audit"),
+            )
+            for rollback_phase, message in rollback_phases:
+                emitters[env_idx].emit(TelemetryEvent(
+                    event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                    data=replace(rollback_payload, phase=rollback_phase),
+                    severity="warning",
+                    message=message,
+                ))
 
-        action_outcome.rollback_occurred = env_rollback_occurred[env_idx]
+            action_outcome.rollback_occurred = True
+            action_outcome.action_success = False
+            action_outcome.reward_raw = 0.0
+            action_outcome.reward_normalized = 0.0
+            action_outcome.truncated = False
+            env_state.last_action_success = False
+            env_state.last_action_op = OP_WAIT
 
-        # Compute reward
+            # Credit assignment: the panic was detected from the CURRENT val_loss
+            # (a consequence of the PRIOR executed transition); this step's sampled
+            # action never executed (rollback ran instead). We must NOT add a buffer
+            # row for that unexecuted action — doing so would make handle_rollbacks'
+            # mark_terminal_with_penalty (which targets the last transition) blame
+            # an innocent action and train PPO to avoid it. Instead we end the
+            # episode here so the PRIOR executed transition becomes the terminal
+            # row that receives the death penalty. If this env had no prior
+            # transition (first-step panic), the penalty is correctly dropped
+            # (mark_terminal_with_penalty returns False — nothing to attribute).
+            agent.buffer.end_episode(env_id=env_idx)
+            continue
+
+        action_outcome.rollback_occurred = False
+
         scoreboard = analytics._get_scoreboard(env_idx)
         host_params = scoreboard.host_params
-
         effective_seed_params, alpha_delta_sq_sum = compute_rent_and_shock_inputs(
             model=model,
             slot_ids=slots,
@@ -442,6 +701,90 @@ def execute_actions(
             prev_slot_params=env_state.prev_slot_params,
         )
 
+        mutation_allowed = True
+        morphology_context: LifecycleMutationCausalContext | None = None
+        morphology_blueprint_id: str | None = None
+        if slot_is_enabled and op_action in (
+            OP_GERMINATE,
+            OP_FOSSILIZE,
+            OP_PRUNE,
+            OP_SET_ALPHA_TARGET,
+            OP_ADVANCE,
+        ):
+            morphology_context = _build_lifecycle_mutation_context(
+                batch_idx=batch_idx,
+                epoch=epoch,
+                env_idx=env_idx,
+                op_action=op_action,
+                target_slot=target_slot,
+                observation_hash=_observation_hash(states_batch_normalized[env_idx]),
+                topology=task_spec.topology if task_spec.topology is not None else "unknown",
+            )
+            preflight_alpha_speed_steps = None
+            preflight_alpha_curve = None
+            if op_action in (OP_PRUNE, OP_SET_ALPHA_TARGET):
+                preflight_alpha_speed_steps = ALPHA_SPEED_TO_STEPS[
+                    AlphaSpeedAction(alpha_speed_action)
+                ]
+                preflight_alpha_curve = AlphaCurveAction(alpha_curve_action).name
+            preflight_blueprint_id = (
+                BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
+            )
+            morphology_blueprint_id = preflight_blueprint_id
+            emitters[env_idx].emit(TelemetryEvent(
+                event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                data=_build_morphology_causal_log_payload(
+                    phase="proposal",
+                    context=morphology_context,
+                    env_idx=env_idx,
+                    blueprint_id=preflight_blueprint_id,
+                ),
+                severity="debug",
+                message="Morphology proposal",
+            ))
+            preflight_verdict = env_state.governor.preflight_lifecycle_mutation(
+                operation=LifecycleOp(op_action),
+                slot_id=target_slot,
+                blueprint_id=preflight_blueprint_id,
+                alpha_target=alpha_target if op_action == OP_SET_ALPHA_TARGET else None,
+                alpha_speed_steps=preflight_alpha_speed_steps,
+                alpha_curve=preflight_alpha_curve,
+                val_loss=env_state.val_loss,
+                val_accuracy=env_state.val_acc,
+                seed_stage=seed_state.stage if seed_state is not None else None,
+                total_params=model.total_params,
+                effective_seed_params=effective_seed_params,
+                max_seeds=effective_max_seeds,
+                active_seed_count=model.total_seeds(),
+                cooldown_epochs_remaining=0,
+                event_id=morphology_context.proposal_id,
+            )
+            emitters[env_idx].emit(TelemetryEvent(
+                event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                data=_build_morphology_causal_log_payload(
+                    phase="verdict",
+                    context=morphology_context,
+                    env_idx=env_idx,
+                    blueprint_id=preflight_blueprint_id,
+                    governor_approved=preflight_verdict.approved,
+                    governor_reason=preflight_verdict.reason,
+                    governor_blocked_factor=preflight_verdict.blocked_factor,
+                ),
+                severity="debug" if preflight_verdict.approved else "warning",
+                message="Morphology governor verdict",
+            ))
+            if not preflight_verdict.approved:
+                action_spec.action_valid_for_reward = False
+                action_spec.action_for_reward = LifecycleOp.WAIT
+                action_for_reward = LifecycleOp.WAIT
+                mutation_allowed = False
+
+        # Use op name for action counting only after rollback has ceded this step.
+        env_state.action_counts[action_spec.action_for_reward.name] = (
+            env_state.action_counts[action_spec.action_for_reward.name] + 1
+        )
+
+        # Compute reward
         seed_contribution = None
         if target_slot in baseline_accs[env_idx]:
             seed_contribution = (
@@ -463,7 +806,21 @@ def execute_actions(
             if slot_is_enabled
             else 0
         )
-        seed_info = SeedInfo.from_seed_state(seed_state, seed_params_for_slot)
+        # Clean counterfactual for the anti-gaming / fossilization gates: the total
+        # seed-attributable improvement = val_acc(all seeds on) - val_acc(all seeds off).
+        # Fall back to the host-only baseline (min over the per-slot leave-one-out accs)
+        # when the all-disabled ablation wasn't measured for this env.
+        env_all_off_acc = all_disabled_accs.get(env_idx)
+        if env_all_off_acc is None and baseline_accs[env_idx]:
+            env_all_off_acc = min(baseline_accs[env_idx].values())
+        counterfactual_total_improvement = (
+            env_state.val_acc - env_all_off_acc if env_all_off_acc is not None else None
+        )
+        seed_info = SeedInfo.from_seed_state(
+            seed_state,
+            seed_params_for_slot,
+            counterfactual_total_improvement=counterfactual_total_improvement,
+        )
 
         # Initialize reward_components to None (only populated for CONTRIBUTION family)
         reward_components: RewardComponentsTelemetry | None = None
@@ -551,7 +908,6 @@ def execute_actions(
             reward_inputs.seed_id = seed_id
             # D2: Capacity Economics (slot saturation prevention)
             reward_inputs.n_active_seeds = n_active_seeds
-            reward_inputs.seeds_germinated_this_episode = env_state.germinate_count
 
             # Drip reward parameters (BASIC_PLUS mode: post-fossilization accountability)
             # Pass existing drip states and build contributions from counterfactual baselines
@@ -708,186 +1064,150 @@ def execute_actions(
             torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
         )
         with lifecycle_ctx:
-            if slot_is_enabled:
+            if slot_is_enabled and mutation_allowed:
                 slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
-                if op_action == OP_GERMINATE and model.seed_slots[target_slot].state is None:
-                    env_state.acc_at_germination[target_slot] = env_state.val_acc
-                    env_state.escrow_credit[target_slot] = 0.0
-                    blueprint_id = BLUEPRINT_IDS[blueprint_action]
-                    assert blueprint_id is not None, (
-                        "NULL blueprint should not reach germination"
-                    )
-                    model.germinate_seed(
-                        blueprint_id,
-                        f"ep{episodes_completed + env_idx}_env{env_idx}_seed_{env_state.seeds_created}",
-                        slot=target_slot,
-                        blend_algorithm_id=blend_algorithm_id,
-                        blend_tempo_epochs=TEMPO_TO_EPOCHS[TempoAction(tempo_action)],
-                        alpha_algorithm=alpha_algorithm,
-                        alpha_target=alpha_target,
-                    )
-                    env_state.init_obs_v3_slot_tracking(target_slot)
-                    env_state.seeds_created += 1
-                    env_state.germinate_count += 1  # TELE-610
-                    env_state.seed_optimizers.pop(target_slot, None)
-                    action_success = True
-                elif op_action == OP_FOSSILIZE:
-                    action_success = context.fossilize_active_seed(model, target_slot)
-                    if action_success:
-                        env_state.seeds_fossilized += 1
-                        env_state.fossilize_count += 1  # TELE-610
-                        if seed_info is not None and (
-                            seed_info.total_improvement
-                            >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
-                        ):
-                            env_state.contributing_fossilized += 1
-                        env_state.acc_at_germination.pop(target_slot, None)
-
-                        # Compute temporally-discounted hindsight credit for scaffolds
-                        beneficiary_improvement = (
-                            seed_info.total_improvement if seed_info else 0.0
+                if morphology_context is not None:
+                    slot_obj.set_pending_morphology_context(morphology_context)
+                    emitters[env_idx].emit(TelemetryEvent(
+                        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                        data=_build_morphology_causal_log_payload(
+                            phase="mutation",
+                            context=morphology_context,
+                            env_idx=env_idx,
+                            blueprint_id=morphology_blueprint_id,
+                            governor_approved=True,
+                            governor_reason="approved",
+                            linked_event_id=morphology_context.mutation_id,
+                        ),
+                        severity="debug",
+                        message="Morphology mutation dispatch",
+                    ))
+                handler_ctx = HandlerContext(
+                    env_idx=env_idx,
+                    slot_id=target_slot,
+                    env_state=env_state,
+                    model=model,
+                    slot=slot_obj,
+                    seed_state=seed_state,
+                    epoch=epoch,
+                    max_epochs=max_epochs,
+                    episodes_completed=episodes_completed,
+                )
+                try:
+                    handler = get_handler(op_action)
+                    if op_action == OP_GERMINATE:
+                        handler_result = handler(
+                            handler_ctx,
+                            GerminateParams(
+                                blueprint_idx=blueprint_action,
+                                style_idx=style_action,
+                                tempo_idx=tempo_action,
+                                alpha_target=alpha_target,
+                            ),
                         )
-                        if beneficiary_improvement > 0:
-                            # Use outer loop epoch variable (not per-env counter)
-                            current_epoch = epoch
-                            total_credit = 0.0
-                            scaffold_count = 0
-                            total_delay = 0
-
-                            # Find all scaffolds that boosted this beneficiary
-                            for (
-                                scaffold_slot,
-                                boosts,
-                            ) in env_state.scaffold_boost_ledger.items():
-                                for (
-                                    boost_given,
-                                    beneficiary_slot,
-                                    epoch_of_boost,
-                                ) in boosts:
-                                    if (
-                                        beneficiary_slot == target_slot
-                                        and boost_given > 0
-                                    ):
-                                        # Temporal discount: credit decays with distance
-                                        delay = current_epoch - epoch_of_boost
-                                        discount = DEFAULT_GAMMA**delay
-
-                                        # Compute discounted hindsight credit
-                                        raw_credit = compute_scaffold_hindsight_credit(
-                                            boost_given=boost_given,
-                                            beneficiary_improvement=beneficiary_improvement,
-                                            credit_weight=HINDSIGHT_CREDIT_WEIGHT,
-                                        )
-                                        total_credit += raw_credit * discount
-                                        scaffold_count += 1
-                                        total_delay += delay
-
-                            # Cap total credit to prevent runaway values
-                            total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
-
-                            env_state.pending_hindsight_credit += total_credit
-
-                            # Track scaffold metrics for telemetry (per-environment)
+                    elif op_action == OP_FOSSILIZE:
+                        handler_result = handler(
+                            handler_ctx,
+                            seed_info,
+                            context.fossilize_active_seed,
+                        )
+                        if handler_result.success:
                             if collect_reward_summary:
                                 summary = reward_summary_accum[env_idx]
-                                summary.scaffold_count += scaffold_count
-                                summary.scaffold_delay_total += total_delay
-
-                            # Clear this beneficiary from all ledgers (it's now fossilized)
-                            for scaffold_slot in list(
-                                env_state.scaffold_boost_ledger.keys()
+                                summary.scaffold_count += int(
+                                    handler_result.telemetry["scaffold_count"]
+                                )
+                                summary.scaffold_delay_total += (
+                                    handler_result.telemetry["avg_scaffold_delay"]
+                                    * handler_result.telemetry["scaffold_count"]
+                                )
+                            # Collect drip state for BASIC_PLUS mode post-fossilization
+                            # accountability. new_drip_state is created in compute_basic_reward
+                            # when action=FOSSILIZE; add it only after fossilization succeeds.
+                            if (
+                                reward_components is not None
+                                and reward_components.new_drip_state is not None
                             ):
-                                env_state.scaffold_boost_ledger[scaffold_slot] = [
-                                    (b, ben, e)
-                                    for (b, ben, e) in env_state.scaffold_boost_ledger[
-                                        scaffold_slot
-                                    ]
-                                    if ben != target_slot
-                                ]
-                                if not env_state.scaffold_boost_ledger[scaffold_slot]:
-                                    del env_state.scaffold_boost_ledger[scaffold_slot]
-
-                        # B8-DRL-02 FIX: Clean up seed optimizer after fossilization
-                        # (was missing - memory leak for fossilized seed optimizers)
-                        env_state.seed_optimizers.pop(target_slot, None)
-
-                        # BUG FIX: Trigger governor snapshot after fossilization
-                        # Without this, a rollback between fossilization and the next
-                        # periodic snapshot (every 5 epochs) produces an incoherent state:
-                        # - Fossilized seed weights not in snapshot (excluded when TRAINING)
-                        # - Fossilized seeds can't be pruned during rollback
-                        # - Result: host reverts but fossilized seed keeps stale weights
-                        # The snapshot must be taken OUTSIDE the CUDA stream context,
-                        # so we set a flag here and take the snapshot later.
-                        env_state.needs_governor_snapshot = True
-
-                        # Collect drip state for BASIC_PLUS mode post-fossilization accountability
-                        # new_drip_state is created in compute_basic_reward when action=FOSSILIZE;
-                        # we only add it to tracking if the fossilization actually succeeded.
-                        if (
-                            reward_components is not None
-                            and reward_components.new_drip_state is not None
-                        ):
-                            env_state.fossilized_drip_states.append(
-                                reward_components.new_drip_state
-                            )
-                elif (
-                    op_action == OP_PRUNE
-                    and model.has_active_seed_in_slot(target_slot)
-                    and seed_state is not None
-                    and seed_state.stage
-                    in (
-                        SeedStage.GERMINATED,
-                        SeedStage.TRAINING,
-                        SeedStage.BLENDING,
-                        SeedStage.HOLDING,
-                    )
-                    # BUG-020 fix: enforce MIN_PRUNE_AGE at execution gate
-                    and seed_info is not None
-                    and seed_info.seed_age_epochs >= MIN_PRUNE_AGE
-                ):
-                    speed_steps = ALPHA_SPEED_TO_STEPS[
-                        AlphaSpeedAction(alpha_speed_action)
-                    ]
-                    curve_action_obj = AlphaCurveAction(alpha_curve_action)
-                    curve = curve_action_obj.to_curve()
-                    steepness = curve_action_obj.to_steepness()
-
-                    # Schedule prune: force alpha to 0 with requested speed/curve.
-                    action_success = slot_obj.schedule_prune(
-                        steps=speed_steps,
-                        curve=curve,
-                        steepness=steepness,
-                        initiator="policy",
-                    )
-                    if action_success:
-                        env_state.prune_count += 1  # TELE-610
-                elif op_action == OP_SET_ALPHA_TARGET and seed_state is not None:
-                    speed_steps = ALPHA_SPEED_TO_STEPS[
-                        AlphaSpeedAction(alpha_speed_action)
-                    ]
-                    curve_action_obj = AlphaCurveAction(alpha_curve_action)
-                    curve = curve_action_obj.to_curve()
-                    steepness = curve_action_obj.to_steepness()
-                    action_success = slot_obj.set_alpha_target(
-                        alpha_target=alpha_target,
-                        steps=speed_steps,
-                        curve=curve,
-                        steepness=steepness,
-                        alpha_algorithm=alpha_algorithm,
-                        initiator="policy",
-                    )
-                elif op_action == OP_ADVANCE and seed_state is not None:
-                    if seed_state.stage in (
-                        SeedStage.GERMINATED,
-                        SeedStage.TRAINING,
-                        SeedStage.BLENDING,
-                    ):
-                        gate_result = slot_obj.advance_stage()
-                        action_success = gate_result.passed
-                elif op_action == OP_WAIT:
-                    # WAIT is always a valid no-op for enabled slots.
-                    action_success = True
+                                env_state.fossilized_drip_states.append(
+                                    reward_components.new_drip_state
+                                )
+                    elif op_action == OP_PRUNE:
+                        handler_result = handler(
+                            handler_ctx,
+                            PruneParams(
+                                alpha_speed_idx=alpha_speed_action,
+                                alpha_curve_idx=alpha_curve_action,
+                            ),
+                            seed_info,
+                        )
+                    elif op_action == OP_SET_ALPHA_TARGET:
+                        handler_result = handler(
+                            handler_ctx,
+                            AlphaTargetParams(
+                                alpha_target_idx=alpha_target_action,
+                                alpha_speed_idx=alpha_speed_action,
+                                alpha_curve_idx=alpha_curve_action,
+                                style_idx=style_action,
+                            ),
+                        )
+                    elif op_action in (OP_ADVANCE, OP_WAIT):
+                        handler_result = handler(handler_ctx)
+                    else:
+                        raise ValueError(f"Unsupported lifecycle operation: {op_action}")
+                finally:
+                    slot_obj.clear_pending_morphology_context()
+                action_success = handler_result.success
+                if morphology_context is not None:
+                    # KTS-002: These rows describe the mutation DISPATCH on this step.
+                    # No genuine delayed post-mutation measurement exists here —
+                    # env_state.val_loss is the PRE-mutation loss for this step, so it
+                    # MUST NOT be attached as watch/audit evidence. We therefore emit a
+                    # "dispatch" phase (the mutation was handed to the handler) and the
+                    # terminal commit/fossilization outcome WITHOUT watch_window_evidence,
+                    # rather than mislabelling pre-mutation loss as post-mutation evidence.
+                    # A real watch window would require deferring evidence to a later
+                    # epoch's validation pass (future work), not a same-step placeholder.
+                    emitters[env_idx].emit(TelemetryEvent(
+                        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                        data=_build_morphology_causal_log_payload(
+                            phase="dispatch",
+                            context=morphology_context,
+                            env_idx=env_idx,
+                            blueprint_id=morphology_blueprint_id,
+                            governor_approved=True,
+                            governor_reason="approved",
+                            linked_event_id=morphology_context.mutation_id,
+                        ),
+                        severity="debug",
+                        message="Morphology mutation dispatched",
+                    ))
+                    # Only emit a terminal commit/fossilization row when the
+                    # handler actually mutated. A declined handler (failed ADVANCE
+                    # gate, FOSSILIZE G5 check) returns success=False after governor
+                    # approval; emitting phase='commit' there would mark a no-op as a
+                    # committed mutation and corrupt the proof/audit trail. The
+                    # 'dispatch' row already records the attempt; no terminal row
+                    # follows a declined handler.
+                    if handler_result.success:
+                        terminal_phase: MorphologyCausalLogPhase = (
+                            "fossilization"
+                            if op_action == OP_FOSSILIZE
+                            else "commit"
+                        )
+                        emitters[env_idx].emit(TelemetryEvent(
+                            event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                            data=_build_morphology_causal_log_payload(
+                                phase=terminal_phase,
+                                context=morphology_context,
+                                env_idx=env_idx,
+                                blueprint_id=morphology_blueprint_id,
+                                governor_approved=True,
+                                governor_reason="approved",
+                                linked_event_id=morphology_context.mutation_id,
+                            ),
+                            severity="debug",
+                            message="Morphology dispatch committed",
+                        ))
             elif op_action == OP_WAIT:
                 action_success = True
 
@@ -896,6 +1216,8 @@ def execute_actions(
                 env_state.successful_action_counts.get(action_for_reward.name, 0) + 1
             )
         action_outcome.action_success = action_success
+        if reward_components is not None:
+            reward_components.action_success = action_success
 
         # Obs V3: Update action feedback state for next timestep's feature extraction
         env_state.last_action_success = action_success
@@ -909,14 +1231,18 @@ def execute_actions(
                 report = slot_reports_for_env[slot_id]
                 if report.telemetry is not None:
                     health_val = report.telemetry.gradient_health
-                    # Fail-fast if gradient_health contains NaN/inf
-                    # This would poison observation features and crash get_action()
-                    if not math.isfinite(health_val):
-                        raise ValueError(
-                            f"NaN/inf gradient_health from telemetry for slot {slot_id}: "
-                            f"{health_val}. Check materialize_grad_stats() or sync_telemetry()."
-                        )
-                    env_state.gradient_health_prev[slot_id] = health_val
+                    # Unmeasured gradient health (None) stays ABSENT from the
+                    # tracking dict so it encodes as UNKNOWN (Obs V3 sentinel),
+                    # never a fabricated measured value (KTS-001/TPD-003). Only a
+                    # measured value is stored; NaN/inf is still a real bug that
+                    # would poison observation features and crash get_action().
+                    if health_val is not None:
+                        if not math.isfinite(health_val):
+                            raise ValueError(
+                                f"NaN/inf gradient_health from telemetry for slot {slot_id}: "
+                                f"{health_val}. Check materialize_grad_stats() or sync_telemetry()."
+                            )
+                        env_state.gradient_health_prev[slot_id] = health_val
 
                 # Obs V3: Increment epochs since last counterfactual measurement
                 # This is reset to 0 when counterfactual_contribution is updated (see line ~2191)
@@ -994,44 +1320,11 @@ def execute_actions(
                         entropy_sum -= p * math.log(p)
                 decision_entropy = entropy_sum
 
-            # Build HeadTelemetry for this env (typed dataclass, not raw dict)
-            head_telem: HeadTelemetry | None = None
-            if head_confidences_cpu is not None:
-                head_telem = HeadTelemetry(
-                    op_confidence=float(head_confidences_cpu[0, env_idx]),
-                    slot_confidence=float(head_confidences_cpu[1, env_idx]),
-                    blueprint_confidence=float(head_confidences_cpu[2, env_idx]),
-                    style_confidence=float(head_confidences_cpu[3, env_idx]),
-                    tempo_confidence=float(head_confidences_cpu[4, env_idx]),
-                    alpha_target_confidence=float(head_confidences_cpu[5, env_idx]),
-                    alpha_speed_confidence=float(head_confidences_cpu[6, env_idx]),
-                    curve_confidence=float(head_confidences_cpu[7, env_idx]),
-                    # Entropy (0.0 if not available)
-                    op_entropy=float(head_entropies_cpu[0, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    slot_entropy=float(head_entropies_cpu[1, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    blueprint_entropy=float(head_entropies_cpu[2, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    style_entropy=float(head_entropies_cpu[3, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    tempo_entropy=float(head_entropies_cpu[4, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    alpha_target_entropy=float(head_entropies_cpu[5, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    alpha_speed_entropy=float(head_entropies_cpu[6, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                    curve_entropy=float(head_entropies_cpu[7, env_idx])
-                    if head_entropies_cpu is not None
-                    else 0.0,
-                )
+            head_telem = _build_decision_head_telemetry(
+                head_confidences_cpu=head_confidences_cpu,
+                head_entropies_cpu=head_entropies_cpu,
+                env_idx=env_idx,
+            )
 
             emitters[env_idx].on_last_action(
                 epoch=epoch,
@@ -1067,22 +1360,15 @@ def execute_actions(
         # contribution = val_acc - baseline_acc (positive = slot helps)
         # DRL Expert: Only set has_fresh_contribution=True when counterfactual measured
         env_baseline_accs = baseline_accs[env_idx]
-        has_fresh_contribution = len(env_baseline_accs) > 0
-        contribution_targets_tensor: torch.Tensor | None = None
-        contribution_mask_tensor: torch.Tensor | None = None
-
-        if has_fresh_contribution:
-            # Build contribution tensor in slot_config order
-            num_slots = slot_config.num_slots
-            contribution_targets_tensor = torch.zeros(num_slots, device=device)
-            contribution_mask_tensor = torch.zeros(num_slots, dtype=torch.bool, device=device)
-
-            for slot_id, baseline_acc in env_baseline_accs.items():
-                slot_idx = slot_config.index_for_slot_id(slot_id)
-                # contribution = how much accuracy drops when this slot is disabled
-                contribution = env_state.val_acc - baseline_acc
-                contribution_targets_tensor[slot_idx] = contribution
-                contribution_mask_tensor[slot_idx] = True
+        fresh_contribution = build_fresh_contribution_targets(
+            env_state=env_state,
+            baseline_accs=env_baseline_accs,
+            slot_config=slot_config,
+            device=device,
+        )
+        has_fresh_contribution = fresh_contribution.has_fresh_contribution
+        contribution_targets_tensor = fresh_contribution.contribution_targets
+        contribution_mask_tensor = fresh_contribution.contribution_mask
 
         step_idx = agent.buffer.step_counts[env_idx]
         agent.buffer.add(
@@ -1122,6 +1408,7 @@ def execute_actions(
             truncated=truncated,
             bootstrap_value=0.0,
             forced_step=forced_step,
+            action_id=action_id,
             # Phase 2.2: Counterfactual contribution supervision targets
             contribution_targets=contribution_targets_tensor,
             contribution_mask=contribution_mask_tensor,
@@ -1232,8 +1519,7 @@ def execute_actions(
                 env_id=env_idx,
                 episode_idx=episodes_completed + env_idx,
                 final_accuracy=env_state.val_acc,
-                param_ratio=(model.total_params - host_params_baseline)
-                / max(1, host_params_baseline),
+                param_ratio=model.total_params / max(1, host_params_baseline),
                 num_fossilized=env_state.seeds_fossilized,
                 num_contributing_fossilized=env_state.contributing_fossilized,
                 episode_reward=env_total_rewards[env_idx],

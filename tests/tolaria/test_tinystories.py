@@ -1,10 +1,8 @@
 """Tests for TinyStories dataset."""
 
-import pytest
 import torch
 
 
-@pytest.mark.slow
 def test_tinystories_dataset_creates():
     """TinyStoriesDataset can be instantiated (mocked)."""
     from esper.utils.data import TinyStoriesDataset
@@ -14,7 +12,6 @@ def test_tinystories_dataset_creates():
     assert len(dataset) > 0
 
 
-@pytest.mark.slow
 def test_tinystories_returns_tensor_pair():
     """TinyStoriesDataset returns (input, target) tensor pair."""
     from esper.utils.data import TinyStoriesDataset
@@ -29,7 +26,6 @@ def test_tinystories_returns_tensor_pair():
     assert y.shape == (64,)
 
 
-@pytest.mark.slow
 def test_tinystories_shifted_target():
     """Target is shifted by 1 from input."""
     from esper.utils.data import TinyStoriesDataset

@@ -23,8 +23,10 @@ from esper.karn.sanctum.schema import (
     EnvState,
     EventLogEntry,
     GPUStats,
+    MorphologyCausalLogEntry,
     RewardComponents,
     RunConfig,
+    SeedLifecycleEvent,
     SeedState,
     SanctumSnapshot,
     SystemVitals,
@@ -71,6 +73,10 @@ def copy_env_state(env: EnvState) -> EnvState:
         accuracy_history=copy_deque(env.accuracy_history),
         action_history=copy_deque(env.action_history),
         action_counts=dict(env.action_counts),
+        lifecycle_events=[copy_lifecycle_event(e) for e in env.lifecycle_events],
+        best_lifecycle_events=[
+            copy_lifecycle_event(e) for e in env.best_lifecycle_events
+        ],
     )
 
 
@@ -123,6 +129,16 @@ def copy_event_log_entry(entry: EventLogEntry) -> EventLogEntry:
     return replace(entry, metadata=dict(entry.metadata))
 
 
+def copy_lifecycle_event(event: SeedLifecycleEvent) -> SeedLifecycleEvent:
+    return replace(event)
+
+
+def copy_morphology_causal_log_entry(
+    entry: MorphologyCausalLogEntry,
+) -> MorphologyCausalLogEntry:
+    return replace(entry)
+
+
 def copy_best_run_record(record: BestRunRecord) -> BestRunRecord:
     return replace(
         record,
@@ -163,4 +179,8 @@ def copy_snapshot(snapshot: SanctumSnapshot) -> SanctumSnapshot:
         cumulative_blueprint_fossilized=dict(snapshot.cumulative_blueprint_fossilized),
         cumulative_blueprint_prunes=dict(snapshot.cumulative_blueprint_prunes),
         slot_stage_counts=dict(snapshot.slot_stage_counts),
+        morphology_causal_log=[
+            copy_morphology_causal_log_entry(e)
+            for e in snapshot.morphology_causal_log
+        ],
     )

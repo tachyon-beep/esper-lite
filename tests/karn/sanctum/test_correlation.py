@@ -150,5 +150,4 @@ class TestTamiyoStateHasCorrelationField:
     def test_field_present_in_snapshot(self):
         """SanctumSnapshot should include tamiyo.entropy_clip_correlation."""
         snapshot = SanctumSnapshot()
-        assert hasattr(snapshot.tamiyo, "entropy_clip_correlation")
         assert snapshot.tamiyo.entropy_clip_correlation == 0.0

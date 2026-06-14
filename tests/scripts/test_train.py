@@ -11,6 +11,17 @@ def test_telemetry_lifecycle_only_flag_wired():
     assert args.telemetry_lifecycle_only is True
 
 
+def test_episode_length_help_uses_leyline_default(capsys):
+    from esper.leyline import DEFAULT_EPISODE_LENGTH
+
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["ppo", "--help"])
+    help_text = capsys.readouterr().out
+
+    assert f"Default: {DEFAULT_EPISODE_LENGTH}" in help_text
+
+
 class TestSlotValidation:
     """Test CLI --slots argument validation."""
 
@@ -409,6 +420,10 @@ class TestTrainMainWiring:
                 str(telemetry_dir),
                 "--max-batches",
                 "0",
+                "--max-seeds",
+                "2",
+                "--reward-mode",
+                "basic",
                 "--slots",
                 "r0c0",
                 "r0c2",
@@ -421,6 +436,8 @@ class TestTrainMainWiring:
         assert train_calls["n_episodes"] == 1
         assert train_calls["max_epochs"] == 75
         assert train_calls["max_batches"] is None
+        assert train_calls["max_seeds"] == 2
+        assert train_calls["reward_mode"] == "basic"
         assert train_calls["slots"] == ["r0c0", "r0c2"]
         assert train_calls["gradient_telemetry_stride"] == 1
 

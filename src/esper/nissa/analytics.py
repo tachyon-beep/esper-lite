@@ -31,6 +31,12 @@ from esper.nissa.output import OutputBackend
 _logger = logging.getLogger(__name__)
 
 
+# Bucket label for prunes whose blueprint_id is None (e.g. a slot culled before
+# germination recorded a blueprint). Kept distinct from any real blueprint id so
+# "unknown" attribution never masquerades as a registered blueprint's stats.
+UNKNOWN_BLUEPRINT: str = "<unknown>"
+
+
 # =============================================================================
 # Compute Cost Multipliers
 # =============================================================================
@@ -81,24 +87,38 @@ class BlueprintStats:
     counterfactuals: list[float] = field(default_factory=list)  # True causal attribution
 
     @property
-    def mean_acc_delta(self) -> float:
-        """Mean accuracy improvement at terminal state."""
-        return sum(self.acc_deltas) / len(self.acc_deltas) if self.acc_deltas else 0.0
+    def mean_acc_delta(self) -> float | None:
+        """Mean accuracy improvement at terminal state.
+
+        None = no measurements recorded (absent), distinct from a measured 0.0.
+        """
+        return sum(self.acc_deltas) / len(self.acc_deltas) if self.acc_deltas else None
 
     @property
-    def mean_churn(self) -> float:
-        """Mean accuracy change on prune (usually negative)."""
-        return sum(self.churns) / len(self.churns) if self.churns else 0.0
+    def mean_churn(self) -> float | None:
+        """Mean accuracy change on prune (usually negative).
+
+        None = no measurements recorded (absent), distinct from a measured 0.0.
+        """
+        return sum(self.churns) / len(self.churns) if self.churns else None
 
     @property
-    def mean_blending_delta(self) -> float:
-        """Mean accuracy change during blending stages."""
-        return sum(self.blending_deltas) / len(self.blending_deltas) if self.blending_deltas else 0.0
+    def mean_blending_delta(self) -> float | None:
+        """Mean accuracy change during blending stages.
+
+        None = no blending delta was ever measured (absent), distinct from a
+        genuinely computed mean of 0.0.
+        """
+        return sum(self.blending_deltas) / len(self.blending_deltas) if self.blending_deltas else None
 
     @property
-    def mean_counterfactual(self) -> float:
-        """Mean counterfactual contribution (true causal attribution)."""
-        return sum(self.counterfactuals) / len(self.counterfactuals) if self.counterfactuals else 0.0
+    def mean_counterfactual(self) -> float | None:
+        """Mean counterfactual contribution (true causal attribution).
+
+        None = no counterfactual was ever measured (absent), distinct from a
+        genuinely computed mean of 0.0.
+        """
+        return sum(self.counterfactuals) / len(self.counterfactuals) if self.counterfactuals else None
 
     @property
     def fossilization_rate(self) -> float:
@@ -213,7 +233,9 @@ class BlueprintAnalytics(OutputBackend):
                     raise ValueError("seed_id required for SEED_FOSSILIZED event")
                 seed_id = event.seed_id
                 improvement = event.data.improvement
-                blending_delta = event.data.blending_delta if event.data.blending_delta is not None else 0.0
+                # Missing attribution stays absent: only record blending_delta /
+                # counterfactual when they were actually measured (None != 0.0).
+                blending_delta = event.data.blending_delta
                 counterfactual = event.data.counterfactual
                 params = event.data.params_added
                 epochs_total = event.data.epochs_total
@@ -223,7 +245,8 @@ class BlueprintAnalytics(OutputBackend):
 
             self.stats[bp_id].fossilized += 1
             self.stats[bp_id].acc_deltas.append(improvement)
-            self.stats[bp_id].blending_deltas.append(blending_delta)
+            if blending_delta is not None:
+                self.stats[bp_id].blending_deltas.append(blending_delta)
             if counterfactual is not None:
                 self.stats[bp_id].counterfactuals.append(counterfactual)
 
@@ -238,20 +261,25 @@ class BlueprintAnalytics(OutputBackend):
             # Show total improvement, blending delta, and causal contribution
             if not self.quiet:
                 causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
+                blending_str = f"{blending_delta:+.2f}%" if blending_delta is not None else "n/a"
                 print(f"    [env{env_id}] Fossilized '{seed_id}' ({bp_id}, "
-                      f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str})")
+                      f"total Δacc {improvement:+.2f}%, blending Δ {blending_str}{causal_str})")
 
         elif event.event_type == TelemetryEventType.SEED_PRUNED:
             if isinstance(event.data, SeedPrunedPayload):
-                if event.data.blueprint_id is None:
-                    raise ValueError("blueprint_id required for SEED_PRUNED event")
-                bp_id = event.data.blueprint_id
+                # A slot culled before germination recorded a blueprint has
+                # blueprint_id=None. Bucket it explicitly under UNKNOWN_BLUEPRINT
+                # rather than crash or coerce it onto a real blueprint's stats.
+                blueprint_id = event.data.blueprint_id
+                bp_id = UNKNOWN_BLUEPRINT if blueprint_id is None else blueprint_id
                 env_id = event.data.env_id
                 if event.seed_id is None:
                     raise ValueError("seed_id required for SEED_PRUNED event")
                 seed_id = event.seed_id
                 improvement = event.data.improvement
-                blending_delta = event.data.blending_delta if event.data.blending_delta is not None else 0.0
+                # Missing attribution stays absent: only record blending_delta /
+                # counterfactual when they were actually measured (None != 0.0).
+                blending_delta = event.data.blending_delta
                 counterfactual = event.data.counterfactual
                 reason = event.data.reason
                 epochs_total = event.data.epochs_total
@@ -261,7 +289,8 @@ class BlueprintAnalytics(OutputBackend):
 
             self.stats[bp_id].pruned += 1
             self.stats[bp_id].churns.append(improvement)
-            self.stats[bp_id].blending_deltas.append(blending_delta)
+            if blending_delta is not None:
+                self.stats[bp_id].blending_deltas.append(blending_delta)
             if counterfactual is not None:
                 self.stats[bp_id].counterfactuals.append(counterfactual)
 
@@ -275,8 +304,9 @@ class BlueprintAnalytics(OutputBackend):
             if not self.quiet:
                 reason_str = f" ({reason})" if reason else ""
                 causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
+                blending_str = f"{blending_delta:+.2f}%" if blending_delta is not None else "n/a"
                 print(f"    [env{env_id}] Pruned '{seed_id}' ({bp_id}, "
-                      f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str}){reason_str}")
+                      f"total Δacc {improvement:+.2f}%, blending Δ {blending_str}{causal_str}){reason_str}")
 
         elif event.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT:
             if isinstance(event.data, AnalyticsSnapshotPayload):
@@ -384,6 +414,17 @@ class BlueprintAnalytics(OutputBackend):
             self.scoreboards[env_id] = SeedScoreboard()
         return self.scoreboards[env_id]
 
+    @staticmethod
+    def _fmt_mean(value: float | None) -> str:
+        """Render an optional mean: a measured value formatted, or 'n/a' if absent.
+
+        Absent (None = no measurements recorded) is rendered distinctly from a
+        measured 0.0, which formats as '  +0.00%'.
+        """
+        if value is None:
+            return f"{'n/a':>7}%"
+        return f"{value:>+7.2f}%"
+
     def summary_table(self) -> str:
         """Pretty-print blueprint performance stats."""
         lines = ["Blueprint Stats:"]
@@ -399,8 +440,8 @@ class BlueprintAnalytics(OutputBackend):
             lines.append(
                 f"  {bp_id:<14} {s.germinated:>5} {s.fossilized:>5} "
                 f"{s.pruned:>5} {s.fossilization_rate:>5.1f}% "
-                f"{s.mean_acc_delta:>+7.2f}% {s.mean_blending_delta:>+7.2f}% "
-                f"{s.mean_counterfactual:>+7.2f}% {s.mean_churn:>+7.2f}%"
+                f"{self._fmt_mean(s.mean_acc_delta)} {self._fmt_mean(s.mean_blending_delta)} "
+                f"{self._fmt_mean(s.mean_counterfactual)} {self._fmt_mean(s.mean_churn)}"
             )
         return "\n".join(lines)
 

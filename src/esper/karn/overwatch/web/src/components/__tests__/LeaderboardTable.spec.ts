@@ -3,35 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import LeaderboardTable from '../LeaderboardTable.vue'
 import type { BestRunRecord } from '../../types/sanctum'
-
-// Factory to create a valid BestRunRecord for testing
-function createBestRunRecord(overrides: Partial<BestRunRecord> = {}): BestRunRecord {
-  const defaults: BestRunRecord = {
-    env_id: 0,
-    episode: 1,
-    peak_accuracy: 0.873,
-    final_accuracy: 0.865,
-    epoch: 100,
-    seeds: {},
-    slot_ids: ['slot_0', 'slot_1'],
-    growth_ratio: 1.05,
-    record_id: 'run-001',
-    reward_components: null,
-    counterfactual_matrix: null,
-    action_history: ['OBSERVE', 'GERMINATE'],
-    reward_history: [0.1, 0.2],
-    accuracy_history: [0.8, 0.85],
-    host_loss: 0.45,
-    host_params: 1000000,
-    fossilized_count: 2,
-    pruned_count: 1,
-    reward_mode: 'standard',
-    blueprint_spawns: {},
-    blueprint_fossilized: {},
-    blueprint_prunes: {}
-  }
-  return { ...defaults, ...overrides }
-}
+import { createBestRunRecord, createSeedState } from './factories'
 
 describe('LeaderboardTable', () => {
   it('renders correct number of rows', () => {
@@ -81,17 +53,35 @@ describe('LeaderboardTable', () => {
     expect(rows[2].attributes('data-testid')).toBe('leaderboard-row-run-001') // env_id 0
   })
 
-  it('displays accuracy as percentage', () => {
+  it('displays Sanctum scoreboard telemetry for reward-efficiency review', () => {
     const runs: BestRunRecord[] = [
-      createBestRunRecord({ record_id: 'run-001', peak_accuracy: 0.8734 })
+      createBestRunRecord({
+        record_id: 'run-001',
+        peak_accuracy: 0.8734,
+        final_accuracy: 0.851,
+        epoch: 47,
+        growth_ratio: 1.052,
+        cumulative_reward: 2.45,
+        seeds: {},
+        end_seeds: {
+          alpha: createSeedState({ slot_id: 'alpha', stage: 'BLENDING' }),
+          beta: createSeedState({ slot_id: 'beta', stage: 'HOLDING' }),
+          gamma: createSeedState({ slot_id: 'gamma', stage: 'FOSSILIZED' })
+        }
+      })
     ]
 
     const wrapper = mount(LeaderboardTable, {
       props: { runs }
     })
 
-    const accuracy = wrapper.find('[data-testid="peak-acc-run-001"]')
-    expect(accuracy.text()).toBe('87.3%')
+    expect(wrapper.find('[data-testid="peak-acc-run-001"]').text()).toBe('87.3%')
+    expect(wrapper.find('[data-testid="epoch-run-001"]').text()).toBe('47')
+    expect(wrapper.find('[data-testid="trajectory-run-001"]').text()).toContain('85.1%')
+    expect(wrapper.find('[data-testid="trajectory-run-001"]').classes()).toContain('trajectory-down')
+    expect(wrapper.find('[data-testid="growth-run-001"]').text()).toBe('1.05x')
+    expect(wrapper.find('[data-testid="reward-run-001"]').text()).toBe('+2.5')
+    expect(wrapper.find('[data-testid="seeds-run-001"]').text()).toBe('1/1/1')
   })
 
   it('respects maxRows prop', () => {
@@ -153,17 +143,42 @@ describe('LeaderboardTable', () => {
     expect(wrapper.emitted('select')![0]).toEqual(['run-002'])
   })
 
-  it('displays fossilized and pruned counts', () => {
+  it('uses the best-run seed composition when end-of-episode seeds are empty', () => {
     const runs: BestRunRecord[] = [
-      createBestRunRecord({ record_id: 'run-001', fossilized_count: 5, pruned_count: 3 })
+      createBestRunRecord({
+        record_id: 'run-001',
+        seeds: {
+          early: createSeedState({ slot_id: 'early', stage: 'BLENDING' }),
+          mid: createSeedState({ slot_id: 'mid', stage: 'FOSSILIZED' }),
+          late: createSeedState({ slot_id: 'late', stage: 'PRUNED' })
+        },
+        end_seeds: {}
+      })
     ]
 
     const wrapper = mount(LeaderboardTable, {
       props: { runs }
     })
 
-    expect(wrapper.find('[data-testid="fossilized-run-001"]').text()).toBe('5')
-    expect(wrapper.find('[data-testid="pruned-run-001"]').text()).toBe('3')
+    expect(wrapper.find('[data-testid="seeds-run-001"]').text()).toBe('1/0/1')
+  })
+
+  it('sorts by reward telemetry when reward header is clicked', async () => {
+    const runs: BestRunRecord[] = [
+      createBestRunRecord({ record_id: 'run-001', peak_accuracy: 0.95, cumulative_reward: -1.5 }),
+      createBestRunRecord({ record_id: 'run-002', peak_accuracy: 0.90, cumulative_reward: 2.0 }),
+      createBestRunRecord({ record_id: 'run-003', peak_accuracy: 0.85, cumulative_reward: 0.3 })
+    ]
+
+    const wrapper = mount(LeaderboardTable, {
+      props: { runs }
+    })
+
+    await wrapper.find('[data-testid="header-reward"]').trigger('click')
+    const rows = wrapper.findAll('[data-testid^="leaderboard-row-"]')
+    expect(rows[0].attributes('data-testid')).toBe('leaderboard-row-run-002')
+    expect(rows[1].attributes('data-testid')).toBe('leaderboard-row-run-003')
+    expect(rows[2].attributes('data-testid')).toBe('leaderboard-row-run-001')
   })
 
   it('highlights selected row via keyboard navigation', () => {

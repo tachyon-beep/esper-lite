@@ -144,7 +144,6 @@ class TestTELE630EnvStatus:
     def test_env_status_field_exists(self) -> None:
         """TELE-630: Verify EnvState.status field exists."""
         env = EnvState(env_id=0)
-        assert hasattr(env, "status")
         assert isinstance(env.status, str)
 
     def test_env_status_default_value(self) -> None:
@@ -232,15 +231,12 @@ class TestTELE630EnvStatus:
     def test_hysteresis_counter_fields_exist(self) -> None:
         """TELE-630: Verify hysteresis counter fields exist."""
         env = EnvState(env_id=0)
-        assert hasattr(env, "stall_counter")
-        assert hasattr(env, "degraded_counter")
         assert env.stall_counter == 0
         assert env.degraded_counter == 0
 
     def test_epochs_since_improvement_field_exists(self) -> None:
         """TELE-630: Verify epochs_since_improvement field exists."""
         env = EnvState(env_id=0)
-        assert hasattr(env, "epochs_since_improvement")
         assert env.epochs_since_improvement == 0
 
     def test_status_flows_through_aggregator(self) -> None:
@@ -282,10 +278,6 @@ class TestTELE631EnvRewardMode:
     - None: No A/B testing active; using default reward configuration
     """
 
-    def test_reward_mode_field_exists(self) -> None:
-        """TELE-631: Verify EnvState.reward_mode field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "reward_mode")
 
     def test_reward_mode_default_value(self) -> None:
         """TELE-631: Default reward_mode is None (no A/B testing)."""
@@ -378,10 +370,6 @@ class TestTELE632EnvRolledBack:
     when training resumes (next EPOCH_COMPLETED event).
     """
 
-    def test_rolled_back_field_exists(self) -> None:
-        """TELE-632: Verify EnvState.rolled_back field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "rolled_back")
 
     def test_rolled_back_type_is_bool(self) -> None:
         """TELE-632: rolled_back is a boolean field."""
@@ -413,7 +401,6 @@ class TestTELE632EnvRolledBack:
     def test_rolled_back_timestamp_recorded(self) -> None:
         """TELE-632: rollback_timestamp is recorded when rollback occurs."""
         env = EnvState(env_id=0)
-        assert hasattr(env, "rollback_timestamp")
         assert env.rollback_timestamp is None  # Default
 
         agg = SanctumAggregator(num_envs=1)
@@ -480,10 +467,6 @@ class TestTELE633EnvRollbackReason:
     - "": No rollback has occurred (normal operation)
     """
 
-    def test_rollback_reason_field_exists(self) -> None:
-        """TELE-633: Verify EnvState.rollback_reason field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "rollback_reason")
 
     def test_rollback_reason_type_is_str(self) -> None:
         """TELE-633: rollback_reason is a string field."""
@@ -582,23 +565,6 @@ class TestTELE633EnvRollbackReason:
 class TestEnvStateSchemaCompleteness:
     """Verify EnvState has all TELE-630 to TELE-633 fields."""
 
-    def test_all_env_status_fields_present(self) -> None:
-        """Verify all status-related fields are present in EnvState."""
-        env = EnvState(env_id=0)
-
-        # TELE-630: Status tracking
-        assert hasattr(env, "status")
-        assert hasattr(env, "epochs_since_improvement")
-        assert hasattr(env, "stall_counter")
-        assert hasattr(env, "degraded_counter")
-
-        # TELE-631: A/B test cohort
-        assert hasattr(env, "reward_mode")
-
-        # TELE-632/633: Rollback state
-        assert hasattr(env, "rolled_back")
-        assert hasattr(env, "rollback_reason")
-        assert hasattr(env, "rollback_timestamp")
 
     def test_all_defaults_are_correct(self) -> None:
         """Verify all default values match TELE record specifications."""
@@ -784,7 +750,6 @@ class TestHistoricalEnvDetailConsumer:
             reward_mode="shaped",
         )
 
-        assert hasattr(record, "reward_mode")
         assert record.reward_mode == "shaped"
 
     def test_best_run_record_reward_mode_default(self) -> None:
@@ -819,10 +784,6 @@ class TestTELE646EnvAccuracyHistory:
     used to generate sparkline visualizations showing accuracy trends.
     """
 
-    def test_accuracy_history_field_exists(self) -> None:
-        """TELE-646: Verify EnvState.accuracy_history field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "accuracy_history")
 
     def test_accuracy_history_default_is_empty_deque(self) -> None:
         """TELE-646: Default accuracy_history is empty deque."""
@@ -878,10 +839,6 @@ class TestTELE647EnvRewardHistory:
     used to generate sparkline visualizations showing reward trends.
     """
 
-    def test_reward_history_field_exists(self) -> None:
-        """TELE-647: Verify EnvState.reward_history field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "reward_history")
 
     def test_reward_history_default_is_empty_deque(self) -> None:
         """TELE-647: Default reward_history is empty deque."""
@@ -937,10 +894,6 @@ class TestTELE648EnvTotalActions:
     percentages. It should equal the sum of all action_counts values.
     """
 
-    def test_total_actions_field_exists(self) -> None:
-        """TELE-648: Verify EnvState.total_actions field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "total_actions")
 
     def test_total_actions_default_value(self) -> None:
         """TELE-648: Default total_actions is 0."""
@@ -997,10 +950,6 @@ class TestTELE649EnvActionCounts:
     has been taken. Factored actions are normalized before counting.
     """
 
-    def test_action_counts_field_exists(self) -> None:
-        """TELE-649: Verify EnvState.action_counts field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "action_counts")
 
     def test_action_counts_default_structure(self) -> None:
         """TELE-649: Default action_counts has all action types at 0."""
@@ -1116,10 +1065,6 @@ class TestTELE670BlueprintSpawns:
     germinated. Provides context for fossilize/prune success rate analysis.
     """
 
-    def test_blueprint_spawns_field_exists(self) -> None:
-        """TELE-670: Verify EnvState.blueprint_spawns field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "blueprint_spawns")
 
     def test_blueprint_spawns_default_empty_dict(self) -> None:
         """TELE-670: Default blueprint_spawns is empty dict."""
@@ -1163,10 +1108,6 @@ class TestTELE671BlueprintFossilized:
     Combined with prune counts, enables success rate calculation.
     """
 
-    def test_blueprint_fossilized_field_exists(self) -> None:
-        """TELE-671: Verify EnvState.blueprint_fossilized field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "blueprint_fossilized")
 
     def test_blueprint_fossilized_default_empty_dict(self) -> None:
         """TELE-671: Default blueprint_fossilized is empty dict."""
@@ -1218,10 +1159,6 @@ class TestTELE672BlueprintPrunes:
     Combined with fossilized counts, enables success rate calculation.
     """
 
-    def test_blueprint_prunes_field_exists(self) -> None:
-        """TELE-672: Verify EnvState.blueprint_prunes field exists."""
-        env = EnvState(env_id=0)
-        assert hasattr(env, "blueprint_prunes")
 
     def test_blueprint_prunes_default_empty_dict(self) -> None:
         """TELE-672: Default blueprint_prunes is empty dict."""
@@ -1283,12 +1220,10 @@ class TestExtendedEnvStateSchemaCompleteness:
         env = EnvState(env_id=0)
 
         # TELE-646: Accuracy history
-        assert hasattr(env, "accuracy_history")
         assert isinstance(env.accuracy_history, deque)
         assert env.accuracy_history.maxlen == 50
 
         # TELE-647: Reward history
-        assert hasattr(env, "reward_history")
         assert isinstance(env.reward_history, deque)
         assert env.reward_history.maxlen == 50
 
@@ -1297,11 +1232,9 @@ class TestExtendedEnvStateSchemaCompleteness:
         env = EnvState(env_id=0)
 
         # TELE-648: Total actions
-        assert hasattr(env, "total_actions")
         assert env.total_actions == 0
 
         # TELE-649: Action counts
-        assert hasattr(env, "action_counts")
         assert len(env.action_counts) == 6  # WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE, ADVANCE
 
     def test_all_graveyard_fields_present(self) -> None:
@@ -1309,15 +1242,12 @@ class TestExtendedEnvStateSchemaCompleteness:
         env = EnvState(env_id=0)
 
         # TELE-670: Blueprint spawns
-        assert hasattr(env, "blueprint_spawns")
         assert env.blueprint_spawns == {}
 
         # TELE-671: Blueprint fossilized
-        assert hasattr(env, "blueprint_fossilized")
         assert env.blueprint_fossilized == {}
 
         # TELE-672: Blueprint prunes
-        assert hasattr(env, "blueprint_prunes")
         assert env.blueprint_prunes == {}
 
     def test_all_extended_defaults_are_correct(self) -> None:

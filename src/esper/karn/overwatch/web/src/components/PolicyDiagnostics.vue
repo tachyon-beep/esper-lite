@@ -13,28 +13,36 @@ const HEAD_ENTROPY_WARNING_THRESHOLD = 0.05
 
 type HealthStatus = 'good' | 'warning' | 'critical'
 
-// --- Formatting Helpers ---
+// PPO policy metrics co-arrive on the first PPO update. Until then the fields
+// hold unmeasured defaults (0.0) that must render as pending, not as a real
+// value or a false-healthy/critical status.
+const ppoPresent = computed(() => props.tamiyo.ppo_data_received)
+const PENDING = '—'
+
+// --- Formatting Helpers (render pending before any PPO data) ---
 function formatLoss(value: number): string {
-  return value.toFixed(3)
+  return ppoPresent.value ? value.toFixed(3) : PENDING
 }
 
 function formatRatio(value: number): string {
-  return value.toFixed(2)
+  return ppoPresent.value ? value.toFixed(2) : PENDING
 }
 
 function formatAdvantage(value: number): string {
-  return value.toFixed(2)
+  return ppoPresent.value ? value.toFixed(2) : PENDING
 }
 
 function formatEntropy(value: number): string {
-  return value.toFixed(2)
+  return ppoPresent.value ? value.toFixed(2) : PENDING
 }
 
 function formatGradNorm(value: number): string {
-  return value.toFixed(2)
+  return ppoPresent.value ? value.toFixed(2) : PENDING
 }
 
 // --- Health Status Computations ---
+// Gradient health counts are integer latches that are valid from the start
+// (0 = genuinely no dead layers, not "unmeasured"), so they are NOT gated.
 const deadLayersHealth = computed<HealthStatus>(() => {
   return props.tamiyo.dead_layers > 0 ? 'warning' : 'good'
 })
@@ -51,12 +59,15 @@ const entropyCollapsedHealth = computed<HealthStatus>(() => {
   return props.tamiyo.entropy_collapsed ? 'critical' : 'good'
 })
 
+// Entropy health is unknown (neutral) until PPO data arrives.
 const globalEntropyHealth = computed<HealthStatus>(() => {
+  if (!ppoPresent.value) return 'good'
   return props.tamiyo.entropy < ENTROPY_WARNING_THRESHOLD ? 'warning' : 'good'
 })
 
-// Head entropy health checks
+// Head entropy health checks (neutral until PPO data arrives)
 function getHeadEntropyHealth(value: number): HealthStatus {
+  if (!ppoPresent.value) return 'good'
   return value < HEAD_ENTROPY_WARNING_THRESHOLD ? 'warning' : 'good'
 }
 
@@ -247,7 +258,7 @@ const hasEarlyStop = computed(() => props.tamiyo.early_stop_epoch !== null)
       <div class="timing-row">
         <div data-testid="update-time" class="timing-item">
           <span class="timing-label">Update Time</span>
-          <span class="timing-value">{{ tamiyo.update_time_ms }} ms</span>
+          <span class="timing-value">{{ ppoPresent ? `${tamiyo.update_time_ms} ms` : '—' }}</span>
         </div>
         <div
           v-if="hasEarlyStop"

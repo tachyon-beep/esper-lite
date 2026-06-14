@@ -54,7 +54,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra tui --group dev
+        run: uv sync --extra tui --extra dashboard --group dev
 
       - name: Type check with mypy
         run: MYPYPATH=src uv run mypy -p esper
@@ -113,16 +113,16 @@ jobs:
         env:
           PYTHONPATH: src
         run: |
-          uv run pytest -m "not integration and not stress and not property" -x --cov=src --cov-report=json
+          uv run pytest -m "not integration and not stress and not property and not slow" -x --cov=src --cov-report=json:.coverage-reports/coverage.json
 
       # Coverage threshold: 75% (not 80%) because this job excludes integration,
-      # stress, and property tests which exercise additional code paths.
+      # stress, property, and slow tests which exercise additional code paths.
       # Full coverage with all test types locally shows ~81%.
       - name: Check coverage threshold
         run: |
           python3 -c "
           import json, sys
-          data = json.load(open('coverage.json'))
+          data = json.load(open('.coverage-reports/coverage.json'))
           coverage = data['totals']['percent_covered']
           print(f'Coverage: {coverage:.1f}%')
           if coverage < 75:
@@ -136,45 +136,38 @@ jobs:
         run: |
           uv run pytest -m integration -v -x
 
-  e2e-smoke-tests:
+  overwatch-web-tests:
     runs-on: ubuntu-latest
     needs: [property-tests, unit-and-integration-tests]
-    timeout-minutes: 10
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src/esper/karn/overwatch/web
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for E2E tests
-        id: check-e2e
-        run: |
-          if [ -d "tests/e2e" ] && [ -n "$(ls -A tests/e2e/*.py 2>/dev/null)" ]; then
-            echo "has_tests=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_tests=false" >> $GITHUB_OUTPUT
-            echo "No E2E tests found, skipping"
-          fi
-
-      - name: Set up Python
-        if: steps.check-e2e.outputs.has_tests == 'true'
-        uses: actions/setup-python@v5
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
-
-      - name: Install uv
-        if: steps.check-e2e.outputs.has_tests == 'true'
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/esper/karn/overwatch/web/package-lock.json
 
       - name: Install dependencies
-        if: steps.check-e2e.outputs.has_tests == 'true'
-        run: uv sync --group dev
+        run: npm ci
 
-      - name: Run E2E smoke tests
-        if: steps.check-e2e.outputs.has_tests == 'true'
-        env:
-          PYTHONPATH: src
+      - name: Build dashboard
+        run: npm run build
+
+      - name: Run component tests
+        run: npm test -- --run
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser smoke tests
         run: |
-          uv run pytest tests/e2e/ -v -x -m "not slow"
+          npm run test:e2e -- --project=chromium
 
   nightly-full-suite:
     if: github.event_name == 'schedule'
@@ -203,22 +196,14 @@ jobs:
         run: |
           uv run pytest -m property -v --hypothesis-show-statistics
 
-      - name: Run all E2E tests
+      - name: Run slow tests
         env:
           PYTHONPATH: src
         run: |
-          if [ -d "tests/e2e" ] && [ -n "$(ls -A tests/e2e/*.py 2>/dev/null)" ]; then
-            uv run pytest tests/e2e/ -v  # All tests, including slow ones
-          else
-            echo "No E2E tests found, skipping"
-          fi
+          uv run pytest -m "slow and not integration and not stress and not property" -v
 
-      - name: Run performance benchmarks
+      - name: Run stress tests
         env:
           PYTHONPATH: src
         run: |
-          if [ -d "tests/benchmarks" ] && [ -n "$(ls -A tests/benchmarks/*.py 2>/dev/null)" ]; then
-            uv run pytest tests/benchmarks/ -v
-          else
-            echo "No benchmark tests found, skipping"
-          fi
+          uv run pytest -m stress -v

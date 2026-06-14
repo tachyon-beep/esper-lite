@@ -92,7 +92,6 @@ R_total = bounded_attribution
         + alpha_shock
         - occupancy_rent
         - fossilized_rent
-        + first_germinate_bonus
         + action_shaping
         + terminal_bonus
 ```
@@ -105,7 +104,7 @@ The core reward signal, computed from counterfactual `seed_contribution`:
 # For positive contribution with progress:
 if seed_contribution >= 0 and progress > 0:
     if seed_contribution >= progress:
-        attributed = formula(progress, seed_contribution)  # geometric/harmonic/minimum
+        attributed = formula(progress, seed_contribution)  # harmonic/minimum
     else:
         attributed = seed_contribution
 
@@ -122,8 +121,7 @@ elif seed_contribution < 0:
 
 | Formula | Equation | Character |
 |---------|----------|-----------|
-| `geometric` | `√(progress × contribution)` | Rewards host drift (legacy) |
-| `harmonic` | `2pc/(p+c)` | Dominated by smaller value (recommended) |
+| `harmonic` | `2pc/(p+c)` | Dominated by smaller value (default) |
 | `minimum` | `min(progress, contribution)` | Very conservative |
 
 **Proxy Fallback**: When `seed_contribution` is unavailable but `acc_delta > 0`:
@@ -179,10 +177,6 @@ occupancy_rent = seed_occupancy_cost * excess_occupied  # 0.01 per excess slot
 
 # Fossilized maintenance rent
 fossilized_rent = fossilized_maintenance_cost * num_fossilized_seeds  # 0.002 per fossil
-
-# First germination bonus (breaks "do nothing" symmetry)
-if action == GERMINATE and seeds_germinated_this_episode == 0:
-    first_germ_bonus = 0.2
 ```
 
 #### Alpha Shock Penalty
@@ -642,7 +636,6 @@ The `RewardComponentsTelemetry` dataclass captures all reward components for deb
 | `action_shaping` | Per-action bonuses/penalties |
 | `terminal_bonus` | Episode completion reward |
 | `fossilize_terminal_bonus` | Fossil count reward (tanh-saturated) |
-| `first_germinate_bonus` | Symmetry-breaking for first germination |
 
 ### Diagnostic Metric
 
@@ -665,7 +658,7 @@ R_attr = w_c × f(progress, contribution) × d_sigmoid × d_timing + r_ratio
 
 where:
 - w_c = contribution_weight (1.0)
-- f() = attribution formula (geometric/harmonic/minimum)
+- f() = attribution formula (harmonic/minimum)
 - d_sigmoid = 1 / (1 + exp(-k × total_improvement)) for negative improvement
 - d_timing = floor + (1 - floor) × (epoch / warmup) for early germination
 - r_ratio = ratio penalty for hacking patterns
@@ -768,7 +761,6 @@ R_escrow = delta
 | `seed_occupancy_cost` | 0.01 | D2: Per-slot excess cost |
 | `free_slots` | 1 | D2: Rent-free slots |
 | `fossilized_maintenance_cost` | 0.002 | D2: Per-fossil maintenance |
-| `first_germinate_bonus` | 0.2 | D2: First germ bonus |
 | `germination_warmup_epochs` | 10 | D3: Warmup period |
 | `germination_discount_floor` | 0.4 | D3: Min discount factor |
 | `disable_timing_discount` | False | D3: Ablation flag |

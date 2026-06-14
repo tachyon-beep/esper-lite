@@ -13,8 +13,10 @@ if TYPE_CHECKING:
     from esper.simic.rewards.contribution import FossilizedSeedDripState
 
 
-def _parse_bool_field(value: float | int | str | bool | None, field_name: str) -> bool:
+def _parse_bool_field(value: float | int | str | bool | None, field_name: str) -> bool | None:
     """Parse serialized boolean telemetry without truthiness coercion."""
+    if value is None:
+        return None
     if type(value) is bool:
         return value
     if type(value) is str:
@@ -72,7 +74,6 @@ class RewardComponentsTelemetry:
     # D2: Capacity Economics (slot saturation prevention)
     occupancy_rent: float = 0.0  # Per-epoch cost for seeds above free_slots threshold
     fossilized_rent: float = 0.0  # Per-epoch maintenance cost for fossilized seeds
-    first_germinate_bonus: float = 0.0  # One-time bonus for first germination (breaks "do nothing" symmetry)
     n_active_seeds: int = 0  # Count of active seeds (for diagnostics)
 
     # D3: Anti-Timing-Gaming (early germination discount)
@@ -87,7 +88,7 @@ class RewardComponentsTelemetry:
 
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
-    action_success: bool = True
+    action_success: bool | None = None
     seed_stage: int | None = None
     epoch: int = 0
     val_acc: float = 0.0
@@ -141,7 +142,6 @@ class RewardComponentsTelemetry:
             # D2: Capacity economics (shaping terms)
             - self.occupancy_rent  # Already negative in reward, store as positive
             - self.fossilized_rent  # Already negative in reward, store as positive
-            + self.first_germinate_bonus
         )
         return abs(shaped) / abs(self.total_reward)
 
@@ -190,7 +190,6 @@ class RewardComponentsTelemetry:
             # D2: Capacity economics
             "occupancy_rent": self.occupancy_rent,
             "fossilized_rent": self.fossilized_rent,
-            "first_germinate_bonus": self.first_germinate_bonus,
             "n_active_seeds": self.n_active_seeds,
             # D3: Anti-timing-gaming
             "timing_discount": self.timing_discount,
@@ -253,7 +252,6 @@ class RewardComponentsTelemetry:
             # D2: Capacity economics
             occupancy_rent=float(data["occupancy_rent"]),  # type: ignore[arg-type]
             fossilized_rent=float(data["fossilized_rent"]),  # type: ignore[arg-type]
-            first_germinate_bonus=float(data["first_germinate_bonus"]),  # type: ignore[arg-type]
             n_active_seeds=int(data["n_active_seeds"]),  # type: ignore[arg-type]
             # D3: Anti-timing-gaming
             timing_discount=float(data["timing_discount"]),  # type: ignore[arg-type]

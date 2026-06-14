@@ -41,6 +41,7 @@ def holding_seed_info(epochs_in_stage: int = 3) -> SeedInfo:
         seed_age_epochs=MIN_PRUNE_AGE + 5,
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=5.0,
     )
 
 

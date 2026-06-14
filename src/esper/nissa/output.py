@@ -360,7 +360,10 @@ class ConsoleOutput(OutputBackend):
                     msg = event.message or event_type
             elif event_type == "SEED_PRUNED":
                 if isinstance(event.data, SeedPrunedPayload):
-                    blueprint_id = event.data.blueprint_id or "?"
+                    # blueprint_id is None when a slot was culled before
+                    # germination recorded one; render that as "n/a", not a
+                    # fake id.
+                    blueprint_id = event.data.blueprint_id if event.data.blueprint_id is not None else "n/a"
                     improvement = event.data.improvement
                     reason = event.data.reason
                     reason_str = f" ({reason})" if reason else ""
@@ -393,10 +396,13 @@ class ConsoleOutput(OutputBackend):
                 avg_reward = event.data.avg_reward
                 env_accs = event.data.env_accuracies or ()
                 env_acc_str = ", ".join(f"{a:.1f}%" for a in env_accs) if env_accs else ""
+                # Absent rolling accuracy (None = not measured) renders "n/a", NOT a
+                # fabricated 0.0%; an explicit measured 0.0 still renders "0.0%" (LN-004).
+                rolling_str = "n/a" if rolling_acc is None else f"{rolling_acc:.1f}%"
                 print(f"[{timestamp}] BATCH {batch_idx} | Episodes {episodes}/{total}")
                 if env_acc_str:
                     print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
-                print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
+                print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_str}), reward: {avg_reward:.1f}")
         elif event_type == "CHECKPOINT_LOADED":
             if not isinstance(event.data, CheckpointLoadedPayload):
                 raise TypeError(f"CHECKPOINT_LOADED event has invalid payload type: {type(event.data)}")
@@ -809,6 +815,21 @@ class NissaHub:
         for worker in self._backend_workers:
             stats[worker._name] = worker.get_stats()
         return stats
+
+    def get_health_snapshot(self) -> dict[str, Any]:
+        """Return queue-pressure health for telemetry consumers."""
+        backend_stats = self.get_backend_stats()
+        backend_dropped_events = sum(
+            int(stats["dropped_events"]) for stats in backend_stats.values()
+        )
+        total_dropped_events = self._dropped_events + backend_dropped_events
+        return {
+            "status": "degraded" if total_dropped_events > 0 else "healthy",
+            "dropped_events": total_dropped_events,
+            "hub_dropped_events": self._dropped_events,
+            "backend_dropped_events": backend_dropped_events,
+            "backend_stats": backend_stats,
+        }
 
     def reset(self) -> None:
         """Reset the hub: close all backends and clear the list.

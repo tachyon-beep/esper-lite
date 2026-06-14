@@ -139,6 +139,25 @@ class TestBufferAdd:
 
         assert buffer.rewards[0, 0].item() == 42.0
 
+    def test_add_stores_op_conditioned_value_tuple(self) -> None:
+        """Sampled op, effective op, and critic value stay aligned in one timestep."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=10,
+            state_dim=64,
+        )
+
+        kwargs = self._make_minimal_add_kwargs(buffer, env_id=1)
+        kwargs["op_action"] = 3
+        kwargs["effective_op_action"] = 0
+        kwargs["value"] = torch.tensor(7.25, requires_grad=True)
+        buffer.add(**kwargs)
+
+        assert buffer.op_actions[1, 0].item() == 3
+        assert buffer.effective_op_actions[1, 0].item() == 0
+        assert buffer.values[1, 0].item() == pytest.approx(7.25)
+        assert buffer.step_counts == [0, 1]
+
     def test_add_raises_on_overflow(self) -> None:
         """Adding beyond max_steps raises RuntimeError."""
         buffer = TamiyoRolloutBuffer(
@@ -258,7 +277,7 @@ class TestMarkTerminalWithPenalty:
     def _add_steps(self, buffer: TamiyoRolloutBuffer, env_id: int, n: int) -> None:
         """Helper to add n minimal steps to buffer."""
         num_slots = buffer.num_slots
-        for _ in range(n):
+        for step_idx in range(n):
             buffer.add(
                 env_id=env_id,
                 state=torch.zeros(buffer.state_dim),
@@ -293,6 +312,7 @@ class TestMarkTerminalWithPenalty:
                 op_mask=torch.ones(buffer.num_ops, dtype=torch.bool),
                 hidden_h=torch.zeros(buffer.lstm_layers, 1, buffer.lstm_hidden_dim),
                 hidden_c=torch.zeros(buffer.lstm_layers, 1, buffer.lstm_hidden_dim),
+                action_id=f"test-env{env_id}-step{step_idx}",
             )
 
     def test_marks_last_step_terminal(self) -> None:
@@ -321,6 +341,34 @@ class TestMarkTerminalWithPenalty:
         buffer.mark_terminal_with_penalty(0, penalty=-10.0)
 
         assert buffer.rewards[0, 4].item() == -10.0
+
+    def test_records_rollback_attribution_metadata(self) -> None:
+        """Rollback penalties must retain causal metadata for PPO diagnostics."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=10,
+            state_dim=64,
+        )
+        self._add_steps(buffer, 0, 5)
+
+        buffer.mark_terminal_with_penalty(
+            0,
+            penalty=-2.5,
+            severity=7.0,
+            triggering_action_id="morph-b2-e3-env0-r0c0-op3",
+            watch_window_evidence=42.0,
+        )
+
+        assert buffer.rollback_transition_types[0, 4].item() == 1
+        assert buffer.rollback_severity[0, 4].item() == 7.0
+        assert buffer.rollback_triggering_action_ids[0][4] == "morph-b2-e3-env0-r0c0-op3"
+        assert buffer.rollback_watch_window_evidence[0, 4].item() == 42.0
+
+        batch = buffer.get_batched_sequences()
+        assert batch["rollback_transition_types"][0, 4].item() == 1
+        assert batch["rollback_severity"][0, 4].item() == 7.0
+        assert batch["rollback_triggering_action_ids"][0][4] == "morph-b2-e3-env0-r0c0-op3"
+        assert batch["rollback_watch_window_evidence"][0, 4].item() == 42.0
 
     def test_returns_false_for_empty_env(self) -> None:
         """Returns False if env has no transitions."""
@@ -490,6 +538,8 @@ class TestGetBatchedSequences:
 
         # All tensors should be on CPU
         for key, tensor in data.items():
+            if not torch.is_tensor(tensor):
+                continue
             assert tensor.device.type == "cpu", f"{key} not on CPU"
 
 
@@ -670,19 +720,3 @@ class TestContributionTargets:
         # Verify data is correctly transferred
         assert data["has_fresh_contribution"][0, 0].item() is True
         assert data["contribution_targets"][0, 0].sum().item() == num_slots
-
-    def test_backward_compatibility_without_contribution_args(self) -> None:
-        """Buffer works correctly when contribution args are not provided (backward compat)."""
-        buffer = TamiyoRolloutBuffer(
-            num_envs=1,
-            max_steps_per_env=5,
-            state_dim=64,
-        )
-
-        # Add step without any contribution kwargs (default behavior)
-        kwargs = self._make_minimal_add_kwargs(buffer, env_id=0)
-        buffer.add(**kwargs)
-
-        # Should not raise, and has_fresh_contribution should be False
-        assert buffer.step_counts[0] == 1
-        assert buffer.has_fresh_contribution[0, 0].item() is False

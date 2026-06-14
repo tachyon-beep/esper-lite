@@ -26,6 +26,9 @@ from esper.leyline import (
     MIN_GOVERNOR_HISTORY_SAMPLES,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
+    LifecycleMutationHealthSnapshot,
+    LifecycleMutationVerdict,
+    LifecycleOp,
     SeedStage,
 )
 from esper.leyline.telemetry import GovernorPanicReason
@@ -70,6 +73,11 @@ class TolariaGovernor:
         self.death_penalty = death_penalty
         self.loss_history: deque[float] = deque(maxlen=history_window)
         self.last_good_state: dict[str, Any] | None = None
+        # P3-SNAP: persistent pinned host buffers reused across snapshots (one per tensor
+        # key) for fast non_blocking DtoH offload. last_good_state aliases these buffers;
+        # restore() consumes them via load_state_dict (copies OUT), and the training loop is
+        # single-threaded, so the next snapshot's copy_ safely refreshes them.
+        self._pinned_snapshot: dict[str, torch.Tensor] = {}
         self.consecutive_panics: int = 0
         self.min_panics_before_rollback = min_panics_before_rollback
         self._pending_panic: bool = False
@@ -82,6 +90,111 @@ class TolariaGovernor:
         self.random_guess_loss = random_guess_loss if random_guess_loss is not None else math.log(10)
         # Capture an initial snapshot so rollback is always possible, even on first panic
         self.snapshot()
+
+    def preflight_lifecycle_mutation(
+        self,
+        *,
+        operation: LifecycleOp,
+        slot_id: str,
+        blueprint_id: str | None,
+        alpha_target: float | None,
+        alpha_speed_steps: int | None,
+        alpha_curve: str | None,
+        val_loss: float,
+        val_accuracy: float,
+        seed_stage: SeedStage | None,
+        total_params: int,
+        effective_seed_params: float,
+        max_seeds: int,
+        active_seed_count: int,
+        cooldown_epochs_remaining: int,
+        event_id: str,
+    ) -> LifecycleMutationVerdict:
+        """Approve or veto a lifecycle mutation before Simic applies side effects."""
+        health_snapshot = LifecycleMutationHealthSnapshot(
+            operation=operation.name,
+            slot_id=slot_id,
+            blueprint_id=blueprint_id,
+            alpha_target=alpha_target,
+            alpha_speed_steps=alpha_speed_steps,
+            alpha_curve=alpha_curve,
+            val_loss=val_loss,
+            val_accuracy=val_accuracy,
+            seed_stage=seed_stage.name if seed_stage is not None else None,
+            total_params=total_params,
+            effective_seed_params=effective_seed_params,
+            max_seeds=max_seeds,
+            active_seed_count=active_seed_count,
+            cooldown_epochs_remaining=cooldown_epochs_remaining,
+            event_id=event_id,
+        )
+        if not math.isfinite(val_loss):
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"nonfinite validation loss before {operation.name}: {val_loss}",
+                blocked_factor="val_loss_finite",
+                health_snapshot=health_snapshot,
+            )
+        if not math.isfinite(val_accuracy):
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"nonfinite validation accuracy before {operation.name}: {val_accuracy}",
+                blocked_factor="val_accuracy_finite",
+                health_snapshot=health_snapshot,
+            )
+        if cooldown_epochs_remaining < 0:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"negative cooldown for {slot_id} on {event_id}",
+                blocked_factor="cooldown_nonnegative",
+                health_snapshot=health_snapshot,
+            )
+        if max_seeds > 0 and active_seed_count > max_seeds:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=(
+                    f"active seed count {active_seed_count} exceeds max_seeds "
+                    f"{max_seeds} on {event_id}"
+                ),
+                blocked_factor="active_seed_capacity",
+                health_snapshot=health_snapshot,
+            )
+        if operation == LifecycleOp.GERMINATE and blueprint_id is None:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"germination proposal missing blueprint on {event_id}",
+                blocked_factor="blueprint_present",
+                health_snapshot=health_snapshot,
+            )
+        if operation == LifecycleOp.GERMINATE and seed_stage is not None:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"germination proposal targets occupied slot {slot_id}",
+                blocked_factor="slot_empty_for_germination",
+                health_snapshot=health_snapshot,
+            )
+        if operation == LifecycleOp.SET_ALPHA_TARGET and alpha_target is None:
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"alpha retarget proposal missing alpha_target on {event_id}",
+                blocked_factor="alpha_target_present",
+                health_snapshot=health_snapshot,
+            )
+        if operation in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE) and (
+            alpha_speed_steps is None or alpha_curve is None
+        ):
+            return LifecycleMutationVerdict(
+                approved=False,
+                reason=f"alpha schedule proposal incomplete on {event_id}",
+                blocked_factor="alpha_schedule_complete",
+                health_snapshot=health_snapshot,
+            )
+
+        return LifecycleMutationVerdict(
+            approved=True,
+            reason="approved",
+            health_snapshot=health_snapshot,
+        )
 
     def snapshot(self) -> None:
         """Save Last Known Good state to CPU memory to reduce GPU memory pressure.
@@ -171,17 +284,32 @@ class TolariaGovernor:
         else:
             filtered_state = full_state
 
-        # Store on CPU to save GPU memory (rollback is rare, memory savings are constant)
-        # Use no_grad() to prevent any autograd overhead during state extraction
-        # PERF: For CUDA tensors, .cpu() already allocates a fresh CPU tensor, so
-        # .clone() is redundant. Only clone() for CPU tensors to ensure independence.
+        # Store on CPU to save GPU memory (rollback is rare, memory savings are constant).
+        # P3-SNAP: offload each CUDA tensor into a persistent PINNED host buffer with a
+        # non_blocking copy (DtoH overlaps default-stream compute), then ONE stream sync
+        # BEFORE exposing last_good_state. The post-copy/pre-assignment sync placement is a
+        # mandatory correctness checkpoint (STOP-SNAP): it guarantees every async copy has
+        # landed before the snapshot is observable, so a rollback can never read a half-copied
+        # buffer. The contract above guarantees current_stream == default_stream.
         with torch.no_grad():
-            self.last_good_state = {
-                k: (v.detach().clone() if v.device.type == "cpu" else v.detach().cpu())
-                   if isinstance(v, torch.Tensor)
-                   else copy.deepcopy(v)
-                for k, v in filtered_state.items()
-            }
+            new_state: dict[str, Any] = {}
+            for k, v in filtered_state.items():
+                if isinstance(v, torch.Tensor):
+                    if v.device.type == "cpu":
+                        new_state[k] = v.detach().clone()
+                        continue
+                    buf = self._pinned_snapshot.get(k)  # authorized owned-cache read
+                    if buf is None or buf.shape != v.shape or buf.dtype != v.dtype:
+                        buf = torch.empty_like(v, device="cpu", pin_memory=True)
+                        self._pinned_snapshot[k] = buf
+                    buf.copy_(v.detach(), non_blocking=True)
+                    new_state[k] = buf
+                else:
+                    new_state[k] = copy.deepcopy(v)
+            if device.type == "cuda":
+                # MUST be post-copy, pre-assignment (STOP-SNAP review checkpoint).
+                torch.cuda.current_stream(device).synchronize()
+            self.last_good_state = new_state
 
     def check_vital_signs(self, current_loss: float) -> bool:
         """Check if the system is irreparably damaged.
@@ -488,4 +616,4 @@ class TolariaGovernor:
         self.snapshot()
 
 
-__all__ = ["TolariaGovernor", "GovernorReport"]
+__all__ = ["TolariaGovernor", "GovernorReport", "LifecycleMutationVerdict"]

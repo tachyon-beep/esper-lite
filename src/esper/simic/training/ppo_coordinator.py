@@ -19,6 +19,13 @@ from typing import TYPE_CHECKING, Any, Callable
 import numpy as np
 import torch
 
+from esper.leyline import (
+    AnomalyDetectedPayload,
+    EpisodeOutcomePayload,
+    TelemetryEvent,
+    TelemetryEventType,
+)
+
 if TYPE_CHECKING:
     from esper.simic.agent import PPOAgent
     from esper.simic.control import RewardNormalizer
@@ -114,14 +121,46 @@ class PPOCoordinator:
         if not rollback_env_indices:
             return rollback_env_indices
 
+        clip = self.reward_normalizer.clip
         for env_idx in rollback_env_indices:
             # B1-DRL-01 fix: Inject death penalty so PPO learns to avoid
             # catastrophic actions. Previously get_punishment_reward() was dead code.
-            # P1-NORM fix: Normalize penalty to match other rewards' scale.
-            # Use normalize_only to avoid polluting running stats with rare outliers.
+            # P1-DEATH fix (esper-lite-1e3d4e8fa6): inject the catastrophe penalty at an
+            # INTENTIONAL, std-INDEPENDENT magnitude by clamping the raw penalty directly
+            # to the reward clip, instead of passing it through normalize_only (which
+            # divided the raw penalty by the running reward std and then clipped). With a
+            # typical reward std < 1 that path saturated at -clip on every rollback
+            # regardless of severity, and it was std-FRAGILE: a larger running std would
+            # silently shrink the penalty toward the ordinary-reward scale. Clamping makes
+            # the penalty land at a fixed, dominating magnitude every time, regardless of
+            # the running reward statistics.
+            # NOTE: this alone does not guarantee dominance over the highest-return
+            # episodes -- a single -clip terminal step cannot outweigh a long run of
+            # positives that sums beyond clip. Sizing/propagation for that tail-dominance
+            # case is tracked separately (it changes training dynamics and needs a
+            # retraining run to tune).
             penalty = env_states[env_idx].governor.get_punishment_reward()
-            normalized_penalty = self.reward_normalizer.normalize_only(penalty)
-            self.agent.buffer.mark_terminal_with_penalty(env_idx, normalized_penalty)
+            normalized_penalty = float(max(-clip, min(clip, penalty)))
+            # Do NOT resolve triggering_action_id eagerly: last_action_id() raises
+            # on an empty buffer (first-step panic with no executed transition).
+            # mark_terminal_with_penalty resolves it internally to the prior
+            # executed transition's id AFTER its own step_count==0 guard, so the
+            # death penalty attaches to the action that actually caused the panic.
+            penalty_applied = self.agent.buffer.mark_terminal_with_penalty(
+                env_idx,
+                normalized_penalty,
+                severity=abs(penalty),
+                watch_window_evidence=abs(penalty),
+            )
+            if not penalty_applied:
+                # No executed transition to attribute the catastrophe to (first-step
+                # panic). The penalty is correctly dropped, but surface it rather
+                # than swallowing it silently so a high rate is observable.
+                self.logger.warning(
+                    "Rollback penalty for env %d not applied: no executed "
+                    "transition to attribute (first-step panic).",
+                    env_idx,
+                )
             # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).
             # Buffer gets normalized_penalty (for PPO training stability).
             # Telemetry gets raw penalty (for cross-run comparability).
@@ -166,9 +205,60 @@ class PPOCoordinator:
                         stability_score=stability,
                     )
                     episode_outcomes[idx] = corrected_outcome
+                    # SIMIC-PROD-001: Emit the corrected EPISODE_OUTCOME exactly once.
+                    # action_execution.py SKIPS EPISODE_OUTCOME emission for rollback
+                    # episodes (env_rollback_occurred is set), so the only emitted
+                    # outcome for this env is the penalty-adjusted one computed here.
+                    # This makes the coordinator the single source of truth for rollback
+                    # episode outcomes (no uncorrected + corrected double-emit).
+                    self._emit_corrected_episode_outcome(env_state, corrected_outcome)
                     break
 
         return rollback_env_indices
+
+    def _emit_corrected_episode_outcome(
+        self,
+        env_state: "ParallelEnvState",
+        outcome: "EpisodeOutcome",
+    ) -> None:
+        """Emit the single penalty-adjusted EPISODE_OUTCOME for a rollback episode.
+
+        Routes through env_state.telemetry_cb (the same per-env callback used by the
+        action path) so env_id/device/episode_idx context is injected consistently.
+        The episode diagnostics fields are real post-episode measurements taken from
+        env_state, not placeholders.
+        """
+        telemetry_cb = env_state.telemetry_cb
+        if telemetry_cb is None:
+            return
+
+        # classify_episode_outcome lives in action_execution; import at call scope to
+        # avoid a module-level import cycle (action_execution imports coordinator types).
+        from esper.simic.training.action_execution import classify_episode_outcome
+
+        outcome_type = classify_episode_outcome(env_state.val_acc)
+        telemetry_cb(
+            TelemetryEvent(
+                event_type=TelemetryEventType.EPISODE_OUTCOME,
+                epoch=outcome.episode_idx,
+                data=EpisodeOutcomePayload(
+                    env_id=outcome.env_id,
+                    episode_idx=outcome.episode_idx,
+                    final_accuracy=outcome.final_accuracy,
+                    param_ratio=outcome.param_ratio,
+                    num_fossilized=outcome.num_fossilized,
+                    num_contributing_fossilized=outcome.num_contributing_fossilized,
+                    episode_reward=outcome.episode_reward,
+                    stability_score=outcome.stability_score,
+                    reward_mode=outcome.reward_mode,
+                    episode_length=self.config.max_epochs,
+                    outcome_type=outcome_type,
+                    germinate_count=env_state.action_counts["GERMINATE"],
+                    prune_count=env_state.action_counts["PRUNE"],
+                    fossilize_count=env_state.action_counts["FOSSILIZE"],
+                ),
+            )
+        )
 
     def run_update(
         self,
@@ -234,22 +324,118 @@ class PPOCoordinator:
 
             # All epochs skipped due to non-finite values
             consecutive_finiteness_failures += 1
+            halted = consecutive_finiteness_failures >= 3
+            status = "halted" if halted else "degraded"
+            metrics["run_governor_signal"] = "ppo_finiteness_failure"
+            metrics["run_governor_finiteness_streak"] = consecutive_finiteness_failures
+            metrics["run_governor_status"] = status
             self.logger.warning(
                 f"PPO update skipped (all {skip_count} epochs hit finiteness gate). "
                 f"Consecutive failures: {consecutive_finiteness_failures}/3"
             )
 
             # Escalate after 3 consecutive failures (DRL best practice)
-            if consecutive_finiteness_failures >= 3:
+            if halted:
+                self._emit_finiteness_failure_anomaly(
+                    metrics=metrics,
+                    consecutive_finiteness_failures=consecutive_finiteness_failures,
+                )
                 raise RuntimeError(
                     f"PPO training failed: {consecutive_finiteness_failures} consecutive updates "
                     "skipped due to non-finite values. Check policy/value network outputs for NaN. "
-                    f"Last failure: {metrics.get('finiteness_gate_failures')}"
+                    f"Last failure: {metrics['finiteness_gate_failures']}"
                 )
-            return consecutive_finiteness_failures, False
+
+            # SIMIC-PROD-004: emit auditable degraded skipped-update telemetry for the
+            # first/second consecutive skips (previously silent). The halting 3rd skip is
+            # handled by _emit_finiteness_failure_anomaly above, so this branch (status
+            # == "degraded") never double-emits with it.
+            self._emit_skipped_update_anomaly(
+                metrics=metrics,
+                skip_count=skip_count,
+                consecutive_finiteness_failures=consecutive_finiteness_failures,
+            )
+            return consecutive_finiteness_failures, True
 
         # Reset counter on successful update
         return 0, True
+
+    def _emit_finiteness_failure_anomaly(
+        self,
+        *,
+        metrics: dict[str, Any],
+        consecutive_finiteness_failures: int,
+    ) -> None:
+        """Emit proof-blocking telemetry for repeated PPO finiteness failures."""
+        if self.hub is None:
+            return
+
+        failures = metrics["finiteness_gate_failures"]
+        sources: list[str] = []
+        for failure in failures:
+            sources.extend(failure["sources"])
+        detail = (
+            "PPO finiteness gate halted run after "
+            f"{consecutive_finiteness_failures} consecutive skipped updates: "
+            + "; ".join(sources)
+        )
+        self.hub.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+                data=AnomalyDetectedPayload(
+                    anomaly_type="ppo_finiteness_failure",
+                    episode=0,
+                    batch=0,
+                    inner_epoch=self.config.max_epochs,
+                    total_episodes=self.config.total_env_episodes,
+                    detail=detail,
+                ),
+                severity="error",
+                group_id=self.group_id,
+            )
+        )
+
+    def _emit_skipped_update_anomaly(
+        self,
+        *,
+        metrics: dict[str, Any],
+        skip_count: int,
+        consecutive_finiteness_failures: int,
+    ) -> None:
+        """Emit auditable, non-halting telemetry for a degraded skipped PPO update.
+
+        SIMIC-PROD-004: A skipped PPO update (all epochs hit the finiteness gate) is an
+        auditable event even before the halting 3rd consecutive failure. This emits a
+        degraded-severity anomaly recording the skip, the skip count, the consecutive
+        streak, and the degraded status, so the first/second skips are no longer silent.
+        """
+        if self.hub is None:
+            return
+
+        failures = metrics["finiteness_gate_failures"]
+        sources: list[str] = []
+        for failure in failures:
+            sources.extend(failure["sources"])
+        detail = (
+            f"PPO update skipped (degraded): all {skip_count} epochs hit the finiteness "
+            f"gate. Consecutive finiteness failures: {consecutive_finiteness_failures}/3 "
+            "(run continues). Sources: " + "; ".join(sources)
+        )
+        self.hub.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+                data=AnomalyDetectedPayload(
+                    anomaly_type="ppo_finiteness_skip",
+                    episode=0,
+                    batch=0,
+                    inner_epoch=self.config.max_epochs,
+                    total_episodes=self.config.total_env_episodes,
+                    detail=detail,
+                ),
+                severity="warning",
+                group_id=self.group_id,
+            )
+        )
 
     def check_gradient_drift(
         self,
@@ -319,9 +505,13 @@ class PPOCoordinator:
                 anomaly_report.anomaly_types.extend(drift_report.anomaly_types)
                 anomaly_report.details.update(drift_report.details)
 
-        # B7-DRL-04: Check LSTM hidden state health after PPO update
-        # LSTM hidden states can become corrupted during BPTT - monitor for
-        # explosion/saturation (RMS > threshold), vanishing (RMS < 1e-6), or NaN/Inf.
+        # B7-DRL-04: Check ROLLOUT LSTM hidden state health after PPO update.
+        # `batched_lstm_hidden` is the hidden state captured during on-policy rollout
+        # collection (behaviour policy). This is DISTINCT from the update-time LSTM
+        # health that PPOUpdateMetricsBuilder.finalize() computes from the re-evaluated
+        # hidden states under the updated params (already in metrics["lstm_*"]).
+        # SIMIC-PROD-003: surface rollout health under rollout_lstm_* keys instead of
+        # clobbering the update-time lstm_* keys.
         lstm_health = compute_lstm_health(batched_lstm_hidden)
         if lstm_health is not None:
             lstm_report = self.anomaly_detector.check_lstm_health(
@@ -336,8 +526,10 @@ class PPOCoordinator:
                 anomaly_report.has_anomaly = True
                 anomaly_report.anomaly_types.extend(lstm_report.anomaly_types)
                 anomaly_report.details.update(lstm_report.details)
-            # Add LSTM health to metrics for telemetry display in Sanctum
-            metrics.update(lstm_health.to_dict())
+            # Add ROLLOUT LSTM health to metrics under distinct rollout_* keys for
+            # telemetry display, preserving the update-time lstm_* health from finalize().
+            for key, value in lstm_health.to_dict().items():
+                metrics[f"rollout_{key}"] = value
 
         # Per-head entropy collapse detection (Task 6)
         # Check individual action heads for collapse even when total entropy appears healthy
@@ -364,6 +556,9 @@ class PPOCoordinator:
                 anomaly_report.details.update(per_head_report.details)
 
         self.handle_telemetry_escalation_fn(anomaly_report, self.telemetry_config)
+        # SIMIC-PROD-002: thread PPO's worst-ratio diagnostic into the emitted ratio
+        # anomaly payload. PPO produces it (metrics["ratio_diagnostic"], present when an
+        # update was performed) and the emitter accepts it, but it was never wired.
         self.emit_anomaly_diagnostics_fn(
             self.hub,
             anomaly_report,
@@ -373,6 +568,7 @@ class PPOCoordinator:
             self.config.max_epochs,
             self.config.total_env_episodes,
             False,
+            ratio_diagnostic=metrics.get("ratio_diagnostic"),
             group_id=self.group_id,
         )
 

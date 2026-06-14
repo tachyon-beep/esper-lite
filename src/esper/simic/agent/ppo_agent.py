@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
-import torch.amp as torch_amp
 import torch.nn as nn
 
 from .rollout_buffer import TamiyoRolloutBuffer
@@ -271,6 +270,31 @@ class PPOAgent:
                     UserWarning,
                     stacklevel=2,
                 )
+        # BPTT INVARIANT (recurrent-PPO correctness):
+        # The PPO update unrolls each buffer row as ONE contiguous LSTM sequence
+        # of length chunk_length, starting from the rollout's timestep-0 hidden
+        # state, and does NOT reset hidden state at done boundaries inside the
+        # sequence (see update() -> evaluate_actions). Rollout collection, by
+        # contrast, zeroes hidden state across episode boundaries. Episodes
+        # terminate only at done == (epoch == max_epochs), and chunk_length is
+        # pinned to max_epochs == episode_length. If a single buffer row could
+        # hold more than one episode (max_steps_per_env > chunk_length), the
+        # recurrent gradient would leak hidden state across the done boundary in
+        # evaluate_actions but not in rollout, producing a SILENT recurrent-
+        # gradient bias. Guard the invariant loudly at construction time.
+        if max_steps_per_env > chunk_length:
+            raise ValueError(
+                "BPTT INVARIANT VIOLATED: max_steps_per_env "
+                f"({max_steps_per_env}) > chunk_length ({chunk_length}). "
+                "chunk_length == episode_length == max_epochs is the LSTM "
+                "sequence length the PPO update unrolls per buffer row. A row "
+                "longer than chunk_length would pack multiple episodes into one "
+                "BPTT sequence; evaluate_actions does not reset hidden state at "
+                "done boundaries, so recurrent gradients would leak across "
+                "episode boundaries (present in evaluate_actions but absent in "
+                "rollout collection) -> silent recurrent-gradient bias. Require "
+                "max_steps_per_env <= chunk_length."
+            )
         self.buffer = TamiyoRolloutBuffer(
             num_envs=num_envs,
             max_steps_per_env=max_steps_per_env,
@@ -532,11 +556,18 @@ class PPOAgent:
         forced_actions = self.buffer.forced_actions
         total_timesteps = sum(self.buffer.step_counts)
         if total_timesteps > 0:
-            forced_count = 0
-            for env_id in range(self.buffer.num_envs):
-                num_steps = self.buffer.step_counts[env_id]
-                if num_steps > 0:
-                    forced_count += int(forced_actions[env_id, :num_steps].sum().item())
+            # P1-VEC: one GPU->CPU sync instead of num_envs. Build the per-env validity
+            # mask (step t valid iff t < step_counts[env]) on device, AND it with the
+            # forced flags, and reduce once. Equivalent to summing forced_actions[env, :n].
+            max_steps = forced_actions.shape[1]
+            step_counts_t = torch.as_tensor(
+                self.buffer.step_counts, device=forced_actions.device, dtype=torch.long
+            )
+            step_valid = (
+                torch.arange(max_steps, device=forced_actions.device)[None, :]
+                < step_counts_t[:, None]
+            )
+            forced_count = int((forced_actions & step_valid).sum().item())  # 1 sync, was num_envs
             forced_step_ratio = forced_count / total_timesteps
             usable_actor_timesteps = total_timesteps - forced_count
         else:
@@ -694,21 +725,77 @@ class PPOAgent:
                 if not op_mask.any():
                     raise ValueError("Op mask has no valid ops - state machine bug.")
 
-                # Forward pass to get LSTM output
-                with torch.no_grad():
+                # TPD-002: Recover the ROLLOUT row's stored LSTM hidden state.
+                # The buffer records, for every transition, the hidden state that was
+                # the recurrent INPUT to the network when that observation was consumed
+                # (pre_step_hiddens during rollout collection). For the recurrent policy,
+                # Q(s, op) telemetry is only meaningful if it conditions on that same
+                # recurrent context. Passing hidden=None would force the network's
+                # initial (zero) hidden state and produce a fake, context-free diagnostic.
+                #
+                # Stored shape: data["hidden_h"]/["hidden_c"] are
+                # [num_envs, max_steps, lstm_layers, hidden_dim]. The network's forward()
+                # expects (h, c) each [lstm_layers, batch, hidden_dim]. We slice the chosen
+                # (env, step) row to [lstm_layers, hidden_dim] and insert a batch dim of 1.
+                #
+                # Every row that exists in the buffer carries a real stored hidden state
+                # (the rollout always supplies pre_step_hiddens; the first step of an
+                # episode stores the network's genuine initial hidden, which is a real
+                # zero-state, NOT a missing value). There is therefore no "no hidden"
+                # case to silently substitute None for — the contract is that a valid row
+                # always has a real recurrent state, and we pass it through unconditionally.
+                sample_hidden_h = (
+                    data["hidden_h"][sample_row, sample_col]  # [lstm_layers, hidden_dim]
+                    .unsqueeze(1)  # [lstm_layers, 1, hidden_dim]
+                    .to(device=self.device, dtype=sample_obs.dtype)
+                    .contiguous()
+                )
+                sample_hidden_c = (
+                    data["hidden_c"][sample_row, sample_col]  # [lstm_layers, hidden_dim]
+                    .unsqueeze(1)  # [lstm_layers, 1, hidden_dim]
+                    .to(device=self.device, dtype=sample_obs.dtype)
+                    .contiguous()
+                )
+
+                # Forward pass to get LSTM output, conditioned on the rollout row's
+                # actual recurrent state (not the initial hidden state).
+                #
+                # AMP-SAFETY (CRITICAL): update() may run under an outer autocast context
+                # (policy_amp_context -> autocast(bf16) for BF16 PPO; the AMP test legs use
+                # autocast(fp16) directly). This no_grad telemetry forward touches EVERY head
+                # Linear (slot/blueprint/.../op/value) BEFORE the gradient-carrying
+                # evaluate_actions forward below. Under autocast, the FIRST forward through a
+                # Linear populates autocast's per-parameter cast-weight CACHE; when that first
+                # touch happens inside no_grad, the cached low-precision weight carries NO
+                # autograd linkage. evaluate_actions then reuses the cached graph-less cast,
+                # so autograd never connects the head logits back to the head nn.Parameters
+                # and the policy/value heads receive None gradients (Sanctum then shows NaN
+                # head grad norms; in production the policy silently stops learning). Running
+                # this pure-FP32, no_grad diagnostic with autocast DISABLED keeps it out of
+                # the training-dtype cast cache, so the real forward establishes the cache
+                # under grad and the head gradients flow. autocast_cache parity is restored.
+                autocast_device_type = torch.device(self.device).type
+                with torch.autocast(device_type=autocast_device_type, enabled=False), torch.no_grad():
                     forward_result = self.policy.network.forward(
                         state=sample_obs,
                         blueprint_indices=sample_blueprints,
-                        hidden=None,  # Use initial hidden state for consistency
+                        hidden=(sample_hidden_h, sample_hidden_c),
                     )
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 
-                # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
-                op_q_values = torch.empty(NUM_OPS, device=self.device)
-                for op_idx in range(NUM_OPS):
-                    op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
-                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)
-                    op_q_values[op_idx] = q_val.squeeze()
+                    # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
+                    # P1-QLOOP: one batched _compute_value call over all ops instead of NUM_OPS
+                    # serial launches. lstm_out is [1, 1, hidden]; broadcast over the op axis.
+                    # Kept inside the autocast(enabled=False) region so the value_head Linear
+                    # is also cached graph-free (the value head is part of the same forward()
+                    # above and trains via the loss below).
+                    op_indices = torch.arange(
+                        NUM_OPS, device=self.device, dtype=torch.long
+                    ).reshape(NUM_OPS, 1)
+                    lstm_out_rep = lstm_out.expand(NUM_OPS, 1, -1).contiguous()  # [NUM_OPS, 1, hidden]
+                    op_q_values = self.policy.network._compute_value(
+                        lstm_out_rep, op_indices
+                    ).reshape(NUM_OPS)
 
                 # Compute Q-variance and Q-spread over valid ops only.
                 valid_q_values = op_q_values[op_mask]
@@ -735,6 +822,8 @@ class PPOAgent:
         # Initialize conditional entropy tracking (P3-2: entropy only when head is causally relevant)
         # This is the true exploration signal for sparse heads like blueprint/tempo
         conditional_head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
+        head_learnable_fraction_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
+        head_gradient_state_history: dict[str, list[str]] = {head: [] for head in HEAD_NAMES + ("value",)}
 
         # LSTM health tracking (TELE-340)
         lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
@@ -754,6 +843,14 @@ class PPOAgent:
             head: torch.tensor(float("-inf"), device=self.device) for head in HEAD_NAMES
         }
         joint_ratio_max_across_epochs = torch.tensor(float("-inf"), device=self.device)
+
+        # Per-head clip-fraction history (factored-PPO trust-region telemetry).
+        # Each entry is the fraction of samples where that head's ratio left
+        # [1-clip, 1+clip] in one epoch; the builder means them across epochs into
+        # head_{name}_clip_fraction metrics. Companion to the joint clip_fraction.
+        head_clip_fraction_history: dict[str, list[torch.Tensor]] = {
+            head: [] for head in HEAD_NAMES
+        }
 
         # Per-head NaN/Inf tracking (for indicator lights)
         # OR across all epochs - once detected, stays detected for this update
@@ -786,34 +883,24 @@ class PPOAgent:
                 "alpha_curve": data["alpha_curve_masks"],
                 "op": data["op_masks"],
             }
-            # B11-PT-01 FIX: Run evaluate_actions outside autocast context.
-            # When PPO update runs under AMP autocast, the network forward pass
-            # produces float16 logits and LSTM states. Even though MaskedCategorical
-            # upcasts logits to float32 for the distribution math, this is not
-            # sufficient - the full forward pass must run in float32 for stable
-            # gradient computation. This is standard practice in RL with AMP:
-            # run the policy evaluation in float32, keep backbone/feature extraction in AMP.
-            # Device can be str ("cpu", "cuda:0") or torch.device - normalize to type string
-            device_type = str(self.device).split(":")[0]
-            with torch_amp.autocast(device_type=device_type, enabled=False):  # type: ignore[attr-defined]
-                # Cast inputs to float32 to ensure entire forward pass is float32
-                # NOTE: initial_hidden_h/c are detached tensors from rollout collection.
-                # This is CORRECT for recurrent PPO:
-                # 1. We use them as starting points for LSTM reconstruction
-                # 2. The LSTM forward pass produces new, gradient-enabled hidden states
-                # 3. BPTT happens within the reconstructed sequence, not through initial_hidden
-                # See rollout_buffer.py lines 377-378 for detach() calls.
-                hidden_h = data["initial_hidden_h"].float()
-                hidden_c = data["initial_hidden_c"].float()
-                result = self.policy.evaluate_actions(
-                    data["states"].float(),
-                    data["blueprint_indices"],
-                    actions,
-                    masks,
-                    hidden=(hidden_h, hidden_c),
-                    probability_floor=self.probability_floor,
-                    aux_stop_gradient=self.aux_stop_gradient,
-                )
+            # P1-BF16: evaluate_actions runs UNDER the BF16 autocast established by
+            # _run_ppo_updates (vectorized.py). The LSTM + heads compute in BF16; the
+            # log_softmax / log_prob / entropy / floor are upcast to FP32 at the masked-
+            # logits seam (P1-EVAL), so ratios/KL stay precision-stable and SYMMETRIC with
+            # the rollout's old_log_probs (which apply the identical FP32 seam). BF16 has
+            # FP32 exponent range, so no GradScaler is required.
+            # NOTE: initial_hidden_h/c are detached rollout tensors used as BPTT starting
+            # points; BPTT happens within the reconstructed sequence, not through them
+            # (see rollout_buffer.py detach() calls).
+            result = self.policy.evaluate_actions(
+                data["states"],
+                data["blueprint_indices"],
+                actions,
+                masks,
+                hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
+                probability_floor=self.probability_floor,
+                aux_stop_gradient=self.aux_stop_gradient,
+            )
             log_probs = result.log_prob
             values = result.value
             entropy = result.entropy
@@ -846,34 +933,50 @@ class PPOAgent:
             nonfinite_found = False
             nonfinite_sources: list[str] = []
 
-            # Check new log_probs - separate NaN from Inf per head
-            # Fast path: only drill down when isfinite fails (preserves 0 syncs in happy path)
-            for key in HEAD_NAMES:
-                lp = log_probs[key]
-                if not torch.isfinite(lp).all():
-                    # Slow path: distinguish NaN from Inf
-                    if torch.isnan(lp).any():
-                        head_nan_detected[key] = True
-                        nonfinite_sources.append(f"log_probs[{key}]: NaN detected")
-                    if torch.isinf(lp).any():
-                        head_inf_detected[key] = True
-                        nonfinite_sources.append(f"log_probs[{key}]: Inf detected")
-                    nonfinite_found = True
+            # P1-SYNC: ONE fused finiteness reduction across all heads' new+old log_probs and
+            # values (was up to 17 separate .all() GPU->CPU syncs on the happy path). new
+            # log_probs are FP32 (the P1-EVAL seam); old log_probs are FP32 because the rollout
+            # buffer is FP32-allocated (rollout_buffer.py) regardless of rollout autocast. We
+            # .float() both stacks defensively so a future dtype change cannot desync the stack.
+            # On failure we drill into the per-head attribution slow path VERBATIM, so
+            # head_nan_detected / head_inf_detected / nonfinite_sources are byte-identical.
+            new_lp_stack = torch.stack([log_probs[k].float() for k in HEAD_NAMES])
+            old_lp_stack = torch.stack(
+                [data[f"{k}_log_probs"][valid_mask].float() for k in HEAD_NAMES]
+            )
+            all_finite = (
+                torch.isfinite(new_lp_stack).all()
+                & torch.isfinite(old_lp_stack).all()
+                & torch.isfinite(values).all()
+            )
+            if not bool(all_finite):  # single sync; per-head drill-down only on failure
+                # Check new log_probs - separate NaN from Inf per head
+                for key in HEAD_NAMES:
+                    lp = log_probs[key]
+                    if not torch.isfinite(lp).all():
+                        # Slow path: distinguish NaN from Inf
+                        if torch.isnan(lp).any():
+                            head_nan_detected[key] = True
+                            nonfinite_sources.append(f"log_probs[{key}]: NaN detected")
+                        if torch.isinf(lp).any():
+                            head_inf_detected[key] = True
+                            nonfinite_sources.append(f"log_probs[{key}]: Inf detected")
+                        nonfinite_found = True
 
-            # Check old log_probs (stored as "{key}_log_probs" in data dict)
-            for key in HEAD_NAMES:
-                old_key = f"{key}_log_probs"
-                old_lp = data[old_key][valid_mask]
-                if not torch.isfinite(old_lp).all():
-                    nonfinite_count = (~torch.isfinite(old_lp)).sum()
-                    nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
-                    nonfinite_found = True
+                # Check old log_probs (stored as "{key}_log_probs" in data dict)
+                for key in HEAD_NAMES:
+                    old_key = f"{key}_log_probs"
+                    old_lp = data[old_key][valid_mask]
+                    if not torch.isfinite(old_lp).all():
+                        nonfinite_count = (~torch.isfinite(old_lp)).sum()
+                        nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
+                        nonfinite_found = True
 
-            # Check values
-            if not torch.isfinite(values).all():
-                nonfinite_count = (~torch.isfinite(values)).sum()
-                nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
-                nonfinite_found = True
+                # Check values
+                if not torch.isfinite(values).all():
+                    nonfinite_count = (~torch.isfinite(values)).sum()
+                    nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
+                    nonfinite_found = True
 
             if nonfinite_found:
                 logger.warning(
@@ -934,12 +1037,19 @@ class PPOAgent:
             # Track conditional entropy (P3-2): entropy only when head is causally relevant
             # This is the true exploration signal for sparse heads like blueprint/tempo.
             # head_masks[key] indicates whether that head affects the gradient for each timestep.
+            unforced_mask = ~forced_mask
+            learnable_denominator = valid_mask.sum().float().clamp(min=1)
             for key in HEAD_NAMES:
                 mask = head_masks[key].float()
                 n_relevant = mask.sum().clamp(min=1)
                 # Conditional mean: sum(entropy * mask) / count(mask)
                 conditional_ent = (entropy[key] * mask).sum() / n_relevant
                 conditional_head_entropy_history[key].append(conditional_ent)
+                action_choice_mask = masks[key][valid_mask].sum(dim=-1) > 1
+                learnable_mask = head_masks[key] & action_choice_mask & unforced_mask
+                head_learnable_fraction_history[key].append(
+                    learnable_mask.sum().float() / learnable_denominator
+                )
 
             # Compute per-head ratios
             old_log_probs = {
@@ -976,6 +1086,8 @@ class PPOAgent:
             metrics["clip_fraction"].append(update_result.ratio_metrics.clip_fraction)
             metrics["clip_fraction_positive"].append(update_result.ratio_metrics.clip_fraction_positive)
             metrics["clip_fraction_negative"].append(update_result.ratio_metrics.clip_fraction_negative)
+            for key, head_clip in update_result.ratio_metrics.per_head_clip_fraction.items():
+                head_clip_fraction_history[key].append(head_clip)
 
             if update_result.ratio_metrics.early_stop:
                 early_stopped = True
@@ -1151,21 +1263,43 @@ class PPOAgent:
 
                 # Collect all head norms as tensors (no .item() yet)
                 head_norm_tensors: list[torch.Tensor] = []
-                for head_module in head_modules:
-                    params_with_grad = [p for p in head_module.parameters() if p.grad is not None]
+                for head_name, head_module in zip(head_names, head_modules):
+                    head_params = list(head_module.parameters())
+                    head_has_trainable_params = any(p.requires_grad for p in head_params)
+                    params_with_grad = [p for p in head_params if p.grad is not None]
                     if params_with_grad:
+                        has_nonfinite_grad = any(
+                            not torch.isfinite(p.grad).all() for p in params_with_grad
+                        )
                         norm_t = torch.linalg.vector_norm(
                             torch.stack([torch.linalg.vector_norm(p.grad) for p in params_with_grad])
                         )
+                        grad_state = "nonfinite" if has_nonfinite_grad else "finite"
                     else:
                         # BUG FIX: Use NaN to signal "no gradient data" instead of 0.0
                         # 0.0 would hide the bug (No Bug-Hiding Patterns rule)
                         # NaN signals missing data and will surface in telemetry
                         norm_t = torch.tensor(float("nan"), device=self.device)
+                        grad_state = "missing" if head_has_trainable_params else "not_learnable"
                     head_norm_tensors.append(norm_t)
+                    head_gradient_state_history[head_name].append(grad_state)
 
                 all_norms = torch.stack(head_norm_tensors)
+                # P1-SYNC: batch the per-head learnable-fraction == 0 compare into ONE sync
+                # (was one .item() per head). Stack each head's latest fraction, materialize
+                # once, then index. Preserves the "not_learnable" relabel bit-for-bit.
+                lf_heads = [hn for hn in head_names if hn in head_learnable_fraction_history]
+                if lf_heads:
+                    lf_is_zero = (
+                        torch.stack([head_learnable_fraction_history[hn][-1] for hn in lf_heads])
+                        == 0.0
+                    ).tolist()  # single sync
+                    lf_zero = dict(zip(lf_heads, lf_is_zero))
+                else:
+                    lf_zero = {}
                 for head_name, grad_norm in zip(head_names, all_norms):
+                    if head_name in lf_zero and lf_zero[head_name]:
+                        head_gradient_state_history[head_name][-1] = "not_learnable"
                     head_grad_norm_history[head_name].append(grad_norm)
 
                 # Gradient CV: coefficient of variation = std/|mean| (per DRL expert)
@@ -1261,6 +1395,8 @@ class PPOAgent:
             head_entropies=head_entropy_history,
             conditional_head_entropies=conditional_head_entropy_history,
             head_grad_norms=head_grad_norm_history,
+            head_learnable_fractions=head_learnable_fraction_history,
+            head_gradient_states=head_gradient_state_history,
             head_nan_detected=head_nan_detected,
             head_inf_detected=head_inf_detected,
             lstm_health_history=lstm_health_history,
@@ -1268,6 +1404,7 @@ class PPOAgent:
             log_prob_max_across_epochs=log_prob_max_across_epochs,
             head_ratio_max_across_epochs=head_ratio_max_across_epochs,
             joint_ratio_max_across_epochs=joint_ratio_max_across_epochs,
+            head_clip_fraction_history=head_clip_fraction_history,
             value_func_metrics=value_func_metrics,
             cuda_memory_metrics=cuda_memory_metrics,
             head_names=HEAD_NAMES,
@@ -1542,7 +1679,8 @@ class PPOAgent:
         # the actual loaded weights, not random initialization.
         # P3 FIX: Use effective_compile_mode (may be overridden by parameter)
         if effective_compile_mode != "off":
-            agent.policy.compile(mode=effective_compile_mode, dynamic=True)
+            # P3-DYN: dynamic=False (static rollout shapes); see factory.py rationale.
+            agent.policy.compile(mode=effective_compile_mode, dynamic=False)
 
         # Update agent's stored compile_mode to reflect what we actually used
         agent.compile_mode = effective_compile_mode

@@ -27,6 +27,28 @@ def test_registry_register_decorator():
         BlueprintRegistry.unregister("cnn", "test_blueprint")
 
 
+def test_registry_rejects_duplicate_registration():
+    """Duplicate topology/name keys must fail instead of overwriting identity."""
+    from esper.kasmina.blueprints import BlueprintRegistry
+
+    @BlueprintRegistry.register("__test_duplicate__", "__test_registry__", param_estimate=100)
+    def create_first(dim: int) -> nn.Module:
+        return nn.Linear(dim, dim)
+
+    try:
+        with pytest.raises(ValueError, match="already registered"):
+
+            @BlueprintRegistry.register("__test_duplicate__", "__test_registry__", param_estimate=200)
+            def create_second(dim: int) -> nn.Module:
+                return nn.Identity()
+
+        spec = BlueprintRegistry.get("__test_registry__", "__test_duplicate__")
+        assert spec.factory is create_first
+        assert spec.param_estimate == 100
+    finally:
+        BlueprintRegistry.unregister("__test_registry__", "__test_duplicate__")
+
+
 def test_registry_list_for_topology():
     """Registry filters blueprints by topology."""
     from esper.kasmina.blueprints import BlueprintRegistry
@@ -50,6 +72,26 @@ def test_registry_sorted_by_params():
     params = [s.param_estimate for s in specs]
 
     assert params == sorted(params)
+
+
+def test_registry_sort_tie_breaks_by_name():
+    """Blueprint listing order must be stable when param estimates tie."""
+    from esper.kasmina.blueprints import BlueprintRegistry
+
+    @BlueprintRegistry.register("__zeta__", "__test_tie__", param_estimate=100)
+    def create_zeta(dim: int) -> nn.Module:
+        return nn.Linear(dim, dim)
+
+    @BlueprintRegistry.register("__alpha__", "__test_tie__", param_estimate=100)
+    def create_alpha(dim: int) -> nn.Module:
+        return nn.Identity()
+
+    try:
+        specs = BlueprintRegistry.list_for_topology("__test_tie__")
+        assert [spec.name for spec in specs] == ["__alpha__", "__zeta__"]
+    finally:
+        BlueprintRegistry.unregister("__test_tie__", "__alpha__")
+        BlueprintRegistry.unregister("__test_tie__", "__zeta__")
 
 
 def test_blueprint_spec_has_factory():

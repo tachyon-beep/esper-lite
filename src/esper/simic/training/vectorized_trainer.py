@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Callable, cast
 
@@ -39,6 +39,7 @@ from esper.utils.data import augment_cifar10_batch
 
 from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
+from .helpers import policy_amp_context
 from .counterfactual_eval import process_fused_val_batch
 from .env_factory import (
     EnvFactoryContext,
@@ -55,6 +56,31 @@ from esper.simic.vectorized_types import (
     EpisodeRecord,
     RewardSummaryAccumulator,
 )
+
+_logger = logging.getLogger(__name__)
+
+
+def log_frag(device: str | torch.device, tag: str) -> None:
+    """Read-only CUDA fragmentation probe (no sync, no empty_cache).
+
+    frag_gap = reserved - allocated = memory the allocator holds but can't hand out.
+    All three reads (memory_stats / memory_allocated / memory_reserved) are host-side
+    allocator accounting; none issues a CUDA synchronize, so this is hot-path-safe.
+    """
+    if not torch.cuda.is_available():
+        return
+    dev = torch.device(device)                 # authorized device-normalization (CLAUDE.md #6)
+    if dev.type != "cuda":
+        return
+    stats = torch.cuda.memory_stats(dev)
+    allocated = torch.cuda.memory_allocated(dev) / 1024**2
+    reserved = torch.cuda.memory_reserved(dev) / 1024**2
+    _logger.info(
+        "frag[%s] dev=%s alloc=%.0fMB reserved=%.0fMB active=%.0fMB frag_gap=%.0fMB nalloc_retries=%d",
+        tag, dev, allocated, reserved,
+        stats["active_bytes.all.current"] / 1024**2,
+        reserved - allocated, stats["num_alloc_retries"],
+    )
 
 
 def _pair_slot_key(
@@ -78,6 +104,49 @@ def _pair_index_accs_for_active_slots(
     }
 
 
+def _pair_interaction_index(
+    pair_acc: float,
+    solo_on_a: float,
+    solo_on_b: float,
+    all_off_acc: float,
+) -> float:
+    """Second-order interaction index I_ij = f({i,j}) - f({i}) - f({j}) + f(empty).
+
+    All four terms MUST share single-coalition-ON semantics:
+      - ``pair_acc``    = f({i,j})  (only slots i, j enabled),
+      - ``solo_on_a/b`` = f({i}) / f({j})  (only that one slot enabled),
+      - ``all_off_acc`` = f(empty)  (all seeds disabled).
+
+    Passing leave-one-out accuracies (f(N\\{i}), "everyone but i") for the solo
+    terms corrupts the index: leave-one-out and solo-ON agree ONLY in the purely
+    additive (no-interaction) regime -- exactly the regime the index exists to
+    detect deviation from -- so the mixed quantity has no clean game-theoretic
+    meaning and its sign/magnitude do not track true synergy when seeds overlap.
+
+    Returns 0.0 for additive (non-interacting) seeds, positive for synergy
+    (the coalition beats the sum of its parts) and negative for antagonism.
+    """
+    return pair_acc - solo_on_a - solo_on_b + all_off_acc
+
+
+def compute_forced_head_flags(
+    masks_batch: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Compute per-head FORCED flags for decision telemetry.
+
+    A head is FORCED only when a single valid candidate remains, i.e. the agent
+    had no real choice (e.g. WAIT-only on the op head). A head that still has two
+    or more valid candidates is NOT forced, even if some candidates were
+    restricted by the mask. This is the contract for AnalyticsSnapshotPayload's
+    per-head ``*_masked`` flags: "forced" means no agency, not "any candidate
+    masked".
+    """
+    return {
+        key: masks_batch[key].sum(dim=-1) <= 1  # [num_envs] bool tensor
+        for key in HEAD_NAMES
+    }
+
+
 def _masked_op_probs_for_telemetry(
     *,
     op_logits: torch.Tensor,
@@ -89,6 +158,90 @@ def _masked_op_probs_for_telemetry(
     if probability_floor is not None and "op" in probability_floor:
         op_min_prob = probability_floor["op"]
     return MaskedCategorical(op_logits, op_mask, min_prob=op_min_prob).probs
+
+
+def _reset_hidden_for_terminal_envs(
+    batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None,
+    *,
+    terminal_envs: list[int],
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Zero recurrent state for envs whose episode terminated mid-batch."""
+    if batched_lstm_hidden is None or not terminal_envs:
+        return batched_lstm_hidden
+
+    h_batch, c_batch = batched_lstm_hidden
+    h_reset = h_batch.clone()
+    c_reset = c_batch.clone()
+    for env_idx in terminal_envs:
+        h_reset[:, env_idx, :].zero_()
+        c_reset[:, env_idx, :].zero_()
+    return h_reset, c_reset
+
+
+def apply_proof_baseline_action_controls(
+    *,
+    masks_batch: dict[str, torch.Tensor],
+    lifecycle_policy: str | None,
+) -> None:
+    """Apply proof-baseline lifecycle controls before action sampling."""
+    if lifecycle_policy is None:
+        return
+    if lifecycle_policy == "paired_lockstep_reward_comparison":
+        return
+
+    # These policies would require real control machinery that does not exist:
+    #   - freeze_replayed_final_topology (static_final) needs topology
+    #     persistence + replay so envs start at a previously-evolved FINAL
+    #     topology and hold it fixed.
+    #   - apply_declared_lifecycle_schedule (fixed_schedule) needs a schedule
+    #     injector that emits non-WAIT ops on a predetermined schedule while
+    #     bypassing the policy.
+    # Masking the op head to WAIT does NEITHER — it would produce a fake
+    # control (a run frozen at its INITIAL topology, applying no ops). Refuse
+    # loudly rather than silently degrade to WAIT-only and invalidate the proof.
+    unsupported_policies = (
+        "freeze_replayed_final_topology",
+        "apply_declared_lifecycle_schedule",
+    )
+    if lifecycle_policy in unsupported_policies:
+        raise RuntimeError(
+            "Proof baseline lifecycle policy "
+            f"{lifecycle_policy!r} is not supported by this runner: it has no "
+            "real control implementation and masking the op head to WAIT would "
+            "produce a fake control that invalidates the morphogenesis proof. "
+            "Mark the cohort current_runner_supported=False or implement the "
+            "real control."
+        )
+
+    wait_only_policies = (
+        "force_wait_only",
+        "freeze_initial_topology",
+    )
+    if lifecycle_policy not in wait_only_policies:
+        raise ValueError(f"Unknown proof baseline lifecycle policy: {lifecycle_policy}")
+
+    wait_idx = LifecycleOp.WAIT.value
+    controlled_op_mask = torch.zeros_like(masks_batch["op"])
+    controlled_op_mask[:, wait_idx] = True
+    masks_batch["op"] = controlled_op_mask
+
+
+def _check_vitals_before_snapshot(
+    env_state: Any,
+    *,
+    epoch: int,
+    val_loss: float,
+) -> bool:
+    """Check governor state before blessing the current weights as rollback-safe."""
+    is_panic = env_state.governor.check_vital_signs(val_loss)
+    if is_panic:
+        return True
+
+    if epoch % 5 == 0 or env_state.needs_governor_snapshot:
+        env_state.governor.snapshot()
+        env_state.needs_governor_snapshot = False
+
+    return False
 
 
 @dataclass
@@ -146,6 +299,7 @@ class VectorizedPPOTrainer:
     gpu_preload_augment: bool
     amp_enabled: bool
     resolved_amp_dtype: torch.dtype | None
+    proof_baseline_lifecycle_policy: str | None
     env_factory: EnvFactoryContext
     compiled_loss_and_correct: Callable[..., tuple[torch.Tensor, torch.Tensor, int]]
     run_ppo_updates: Callable[..., dict[str, Any]]
@@ -163,6 +317,11 @@ class VectorizedPPOTrainer:
     ppo_coordinator: PPOCoordinator = field(init=False)
 
     def __post_init__(self) -> None:
+        # Ada sm_89 TF32: ~2x FP32 matmul/conv on tensor cores at ~1e-3 rel error.
+        # set_float32_matmul_precision("high") is the current API; we do NOT also set the
+        # deprecated torch.backends.cuda.matmul.allow_tf32 (a redundant second path).
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cudnn.allow_tf32 = True
         self.action_execution_context = ActionExecutionContext(
             slots=self.slots,
             ordered_slots=validate_slot_ids(list(self.slots)),
@@ -260,6 +419,14 @@ class VectorizedPPOTrainer:
         torch_profiler_summary = self.torch_profiler_summary
         gpu_preload_augment = self.gpu_preload_augment
         resolved_amp_dtype = self.resolved_amp_dtype
+
+        def rollout_autocast() -> AbstractContextManager[None]:
+            # P1-BF16 (CRITICAL-1): rollout get_action must run under the SAME policy-AMP
+            # context as the PPO update (_run_ppo_updates), so old_log_probs and the update's
+            # log_probs share one precision decision -> unbiased importance ratio. Both legs
+            # call the single shared factory, so the symmetry is structural, not coincidental.
+            return policy_amp_context(self.amp_enabled, resolved_amp_dtype)
+
         env_factory = self.env_factory
         compiled_loss_and_correct = self.compiled_loss_and_correct
         action_execution_context = self.action_execution_context
@@ -289,7 +456,6 @@ class VectorizedPPOTrainer:
             ] = []  # Per-episode tracking for A/B testing
             episode_outcomes: list[Any] = []  # Pareto analysis outcomes
             best_avg_acc = 0.0
-            best_state = None
             recent_accuracies = []
             recent_rewards = []
             consecutive_finiteness_failures = (
@@ -304,6 +470,7 @@ class VectorizedPPOTrainer:
             grad_ema_tracker = GradientEMATracker() if use_telemetry else None
 
             while batch_idx < total_batches:
+                log_frag(self.device, f"batch{batch_idx}.start")
                 # One PPO update per full batch of environments.
                 envs_this_batch = n_envs
                 # Monotonic epoch id for all per-batch snapshot events (commit barrier, PPO, analytics).
@@ -1038,11 +1205,16 @@ class VectorizedPPOTrainer:
                             if all_off_acc is None:
                                 all_off_acc = min(baseline_accs[i].values())
                             for (slot_a, slot_b), pair_acc in pair_accs[i].items():
-                                # Solo accuracies MUST exist - active_slots derived from baseline_accs keys
-                                solo_a = baseline_accs[i][slot_a]
-                                solo_b = baseline_accs[i][slot_b]
-                                # I_ij = f({i,j}) - f({i}) - f({j}) + f(empty)
-                                interaction = pair_acc - solo_a - solo_b + all_off_acc
+                                # I_ij requires single-seed-ON accuracies f({i}):
+                                # solo_on_accs holds "only this slot enabled" (f({i})),
+                                # NOT baseline_accs' leave-one-out (f(N\{i})), which would
+                                # corrupt the index when seeds interact. solo_on accs exist
+                                # for every active slot (kind="solo_on"), so indexing is safe.
+                                solo_on_a = solo_on_accs[i][slot_a]
+                                solo_on_b = solo_on_accs[i][slot_b]
+                                interaction = _pair_interaction_index(
+                                    pair_acc, solo_on_a, solo_on_b, all_off_acc
+                                )
 
                                 # Track positive synergy in scaffold boost ledger for hindsight credit
                                 if interaction > 0:
@@ -1161,15 +1333,12 @@ class VectorizedPPOTrainer:
                             env_state.host_max_acc, env_state.val_acc
                         )
 
-                        # Governor watchdog: snapshot when loss is stable (every 5 epochs)
-                        # Also snapshot immediately after fossilization to prevent incoherent rollback
-                        # (see BUG FIX comment in OP_FOSSILIZE handling above)
-                        if epoch % 5 == 0 or env_state.needs_governor_snapshot:
-                            env_state.governor.snapshot()
-                            env_state.needs_governor_snapshot = False
-
-                        # Governor watchdog: check vital signs after validation
-                        is_panic = env_state.governor.check_vital_signs(val_loss)
+                        # Governor watchdog: check vital signs before blessing a snapshot.
+                        is_panic = _check_vitals_before_snapshot(
+                            env_state,
+                            epoch=epoch,
+                            val_loss=val_loss,
+                        )
                         if is_panic:
                             governor_panic_envs.append(env_idx)
 
@@ -1237,7 +1406,9 @@ class VectorizedPPOTrainer:
 
                         # Fallback: sync telemetry for active seeds that didn't get gradient stats
                         # This ensures accuracy_delta is always populated from metrics.improvement_since_stage_start
-                        # Gradient parameters are omitted - sync_telemetry leaves gradient fields at defaults
+                        # Gradient parameters are omitted - sync_telemetry leaves gradient fields
+                        # UNMEASURED (None). KTS-001: an unmeasured seed must NOT look
+                        # healthy; permissive G2 denies it until real gradient stats arrive.
                         for slot_id in slots:
                             if slot_id in synced_slot_ids:
                                 continue
@@ -1324,6 +1495,10 @@ class VectorizedPPOTrainer:
                     masks_batch["slot_by_op"] = torch.stack(
                         [m["slot_by_op"] for m in all_masks]
                     ).to(device)
+                    apply_proof_baseline_action_controls(
+                        masks_batch=masks_batch,
+                        lifecycle_policy=self.proof_baseline_lifecycle_policy,
+                    )
 
                     # Accumulate raw states for deferred normalizer update
                     raw_states_for_normalizer_update.append(states_batch.detach())
@@ -1365,15 +1540,18 @@ class VectorizedPPOTrainer:
                                 env_c = init_c[:, env_idx : env_idx + 1, :].clone()
                                 pre_step_hiddens.append((env_h, env_c))
 
-                    # get_action returns ActionResult dataclass
-                    action_result = agent.policy.get_action(
-                        states_batch_normalized,
-                        blueprint_indices=blueprint_indices_batch,
-                        masks=masks_batch,
-                        hidden=batched_lstm_hidden,
-                        deterministic=False,
-                        probability_floor=agent.probability_floor,
-                    )
+                    # get_action returns ActionResult dataclass.
+                    # P1-BF16: wrap in the SAME BF16 autocast as the PPO update so the
+                    # stored old_log_probs share the BF16 backbone (unbiased ratio).
+                    with rollout_autocast():
+                        action_result = agent.policy.get_action(
+                            states_batch_normalized,
+                            blueprint_indices=blueprint_indices_batch,
+                            masks=masks_batch,
+                            hidden=batched_lstm_hidden,
+                            deterministic=False,
+                            probability_floor=agent.probability_floor,
+                        )
                     actions_dict = action_result.action
                     head_log_probs = action_result.log_prob
                     values_tensor = action_result.value
@@ -1396,10 +1574,11 @@ class VectorizedPPOTrainer:
                     # Batch compute mask stats for telemetry
                     masked_np: np.ndarray | None = None  # [num_heads, num_envs]
                     if ops_telemetry_enabled:
-                        masked_batch = {
-                            key: ~masks_batch[key].all(dim=-1)  # [num_envs] bool tensor
-                            for key in HEAD_NAMES
-                        }
+                        # FORCED, not "any-masked": a head is forced only when a
+                        # single valid candidate remains (no real choice). Heads
+                        # that still have >=2 valid candidates retain agency even
+                        # though some candidates were restricted.
+                        masked_batch = compute_forced_head_flags(masks_batch)
                         masked_stacked = torch.stack(
                             [masked_batch[name] for name in HEAD_NAMES]
                         )
@@ -1439,9 +1618,6 @@ class VectorizedPPOTrainer:
                         "alpha_curve",
                     )
                     head_confidences_cpu: np.ndarray | None = None  # [8, num_envs]
-
-                    # NOTE: Entropy is not available during action sampling (only during PPO evaluation).
-                    # All entropy fields will be 0.0 until we add entropy computation to get_action().
                     head_entropies_cpu: np.ndarray | None = None
 
                     if ops_telemetry_enabled and head_log_probs:
@@ -1452,6 +1628,16 @@ class VectorizedPPOTrainer:
                         # Single exp + detach + transfer
                         head_confidences_cpu = (
                             torch.exp(stacked_log_probs).detach().cpu().numpy()
+                        )
+                        if action_result.head_entropies is None:
+                            raise RuntimeError(
+                                "Policy action result is missing per-head rollout entropy"
+                            )
+                        stacked_head_entropies = torch.stack(
+                            [action_result.head_entropies[h] for h in _HEAD_NAMES_FOR_TELEM]
+                        )
+                        head_entropies_cpu = (
+                            stacked_head_entropies.detach().cpu().numpy()
                         )
 
                     action_result_bundle = execute_actions(
@@ -1476,6 +1662,7 @@ class VectorizedPPOTrainer:
                         op_probs_cpu=op_probs_cpu,
                         masked_np=masked_np,
                         baseline_accs=baseline_accs,
+                        all_disabled_accs=all_disabled_accs,
                         governor_panic_envs=governor_panic_envs,
                         env_rollback_occurred=env_rollback_occurred,
                         reward_summary_accum=reward_summary_accum,
@@ -1497,6 +1684,15 @@ class VectorizedPPOTrainer:
                         action_result_bundle.post_action_slot_reports
                     )
                     all_post_action_masks = action_result_bundle.post_action_masks
+                    rollback_terminal_envs = [
+                        env_idx
+                        for env_idx, rolled_back in enumerate(env_rollback_occurred)
+                        if rolled_back
+                    ]
+                    batched_lstm_hidden = _reset_hidden_for_terminal_envs(
+                        batched_lstm_hidden,
+                        terminal_envs=rollback_terminal_envs,
+                    )
 
                     # PHASE 2: Compute all bootstrap values in single batched forward pass
                     bootstrap_values: list[float] = []
@@ -1525,7 +1721,9 @@ class VectorizedPPOTrainer:
                             [m["slot_by_op"] for m in all_post_action_masks]
                         ).to(device)
 
-                        with torch.inference_mode():
+                        # P1-BF16: bootstrap value under the same BF16 autocast as the
+                        # update, so Q(s,op) used in GAE is precision-consistent.
+                        with rollout_autocast(), torch.inference_mode():
                             bootstrap_result = agent.policy.get_action(
                                 post_action_features_normalized,
                                 blueprint_indices=post_action_bp_indices,
@@ -1709,6 +1907,39 @@ class VectorizedPPOTrainer:
                         group_id=group_id,
                     )
 
+                    # P2-FRAGMETRIC: per-device CUDA caching-allocator snapshot (host-side,
+                    # no sync) into Karn raw_events. Emitted while env_states is still alive
+                    # (before the P2-DEL teardown); validates P0-ALLOC + the structural
+                    # fragmentation cure (reserved-vs-allocated, retries, OOMs).
+                    for frag_device in sorted({es.env_device for es in env_states}):
+                        if torch.device(frag_device).type != "cuda":
+                            continue
+                        alloc_stats = torch.cuda.memory_stats(frag_device)
+                        frag_allocated = alloc_stats["allocated_bytes.all.current"]
+                        frag_reserved = alloc_stats["reserved_bytes.all.current"]
+                        batch_emitter.on_allocator_stats(
+                            batch_idx=batch_idx,
+                            device=str(frag_device),
+                            allocated_bytes=frag_allocated,
+                            reserved_bytes=frag_reserved,
+                            fragmentation_bytes=frag_reserved - frag_allocated,
+                            num_alloc_retries=alloc_stats["num_alloc_retries"],
+                            num_ooms=alloc_stats["num_ooms"],
+                        )
+
+                # P2-DEL: the batch's telemetry consumers (on_batch_completed, the P2-FRAGMETRIC
+                # emit) have read env_states. Sync each persistent stream so no async kernel still
+                # references the model/optimizer tensors we are about to drop, then release the
+                # refs so the caching allocator can reuse their segments next batch. At LOOP-BODY
+                # indent (NOT inside `if hub:`) so the fence + release run even with telemetry off.
+                # Never empty_cache() here (governor.py NOTE: it fights expandable_segments).
+                for env_state in env_states:
+                    if env_state.stream is not None:
+                        env_state.stream.synchronize()
+                # Drop the list AND the loop variable: a dangling `env_state` would pin the
+                # last env's model/optimizer for another batch, defeating the segment release.
+                del env_states, env_state
+
                 batch_summary = BatchSummary(
                     batch=batch_idx + 1,
                     episodes=batch_epoch_id,
@@ -1722,11 +1953,9 @@ class VectorizedPPOTrainer:
 
                 if rolling_avg_acc > best_avg_acc:
                     best_avg_acc = rolling_avg_acc
-                    best_state = {
-                        k: v.cpu().clone() for k, v in agent.policy.state_dict().items()
-                    }
 
                 episodes_completed = batch_epoch_id
+                log_frag(self.device, f"batch{batch_idx}.end")
                 batch_idx += 1
 
                 # Check for graceful shutdown request (e.g., user quit TUI)
@@ -1756,13 +1985,11 @@ class VectorizedPPOTrainer:
                         "Run longer or reduce --torch-profiler-wait/--torch-profiler-warmup."
                     )
 
-        if best_state:
-            agent.policy.load_state_dict(best_state)
-
         if save_path:
             # B5-PT-02 FIX: Save normalizer state for correct training resume.
             # Resume expects these keys in metadata.
             checkpoint_metadata = {
+                "checkpoint_kind": "last",
                 # Observation normalizer (RunningMeanStd)
                 "obs_normalizer_mean": obs_normalizer.mean.tolist(),
                 "obs_normalizer_var": obs_normalizer.var.tolist(),

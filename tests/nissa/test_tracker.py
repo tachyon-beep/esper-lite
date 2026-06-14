@@ -202,7 +202,7 @@ class TestConfigToggles:
     """Test that config flags are honored by DiagnosticTracker."""
 
     def test_track_norm_false_skips_norm_computation(self) -> None:
-        """When track_norm=False, gradient stats.norm stays at default 0.0.
+        """When track_norm=False, gradient stats.norm stays None (not collected).
 
         Regression test for: config flags existed but were not honored.
         """
@@ -224,15 +224,15 @@ class TestConfigToggles:
         # Check gradient stats
         assert len(tracker._grad_stats) > 0, "Should have captured gradient stats"
         for stats in tracker._grad_stats.values():
-            # norm should be 0.0 (not computed) since track_norm=False
-            assert stats.norm == 0.0, f"norm should be 0.0 when track_norm=False, got {stats.norm}"
-            # std should be non-zero since track_std=True
-            assert stats.std != 0.0, "std should be computed when track_std=True"
+            # norm should be None (not collected) since track_norm=False
+            assert stats.norm is None, f"norm should be None when track_norm=False, got {stats.norm}"
+            # std should be non-None and non-zero since track_std=True
+            assert stats.std is not None and stats.std != 0.0, "std should be computed when track_std=True"
 
         tracker.cleanup()
 
     def test_track_std_false_skips_std_computation(self) -> None:
-        """When track_std=False, gradient stats.std stays at default 0.0."""
+        """When track_std=False, gradient stats.std stays None (not collected)."""
         config = TelemetryConfig.from_profile("standard")
         config.gradients.enabled = True
         config.gradients.layers = "all"  # Track all layers (test model doesn't have 'host.*' prefix)
@@ -251,10 +251,10 @@ class TestConfigToggles:
         # Check gradient stats
         assert len(tracker._grad_stats) > 0, "Should have captured gradient stats"
         for stats in tracker._grad_stats.values():
-            # std should be 0.0 (not computed) since track_std=False
-            assert stats.std == 0.0, f"std should be 0.0 when track_std=False, got {stats.std}"
-            # norm should be non-zero since track_norm=True
-            assert stats.norm != 0.0, "norm should be computed when track_norm=True"
+            # std should be None (not collected) since track_std=False
+            assert stats.std is None, f"std should be None when track_std=False, got {stats.std}"
+            # norm should be non-None and non-zero since track_norm=True
+            assert stats.norm is not None and stats.norm != 0.0, "norm should be computed when track_norm=True"
 
         tracker.cleanup()
 
@@ -321,5 +321,156 @@ class TestConfigToggles:
         assert isinstance(snapshot.sharpness, float), (
             f"sharpness should be float, got {type(snapshot.sharpness)}"
         )
+
+        tracker.cleanup()
+
+
+class TestNotCollectedSerialization:
+    """Disabled diagnostic gradient metrics must serialize as absent, not 0.0.
+
+    Missingness principle: a metric that was *not collected* (diagnostic
+    disabled) must be distinguishable from a metric that was *collected and
+    measured to be exactly 0.0*. The former must serialize as absent/None; the
+    latter must preserve the genuine 0.0.
+    """
+
+    def test_disabled_norm_absent_from_serialization(self) -> None:
+        """track_norm=False -> stats.norm is None and omitted from to_dict()."""
+        config = TelemetryConfig.from_profile("standard")
+        config.gradients.enabled = True
+        config.gradients.layers = "all"
+        config.gradients.track_norm = False
+        config.gradients.track_std = True
+
+        model = _SimpleModel()
+        tracker = DiagnosticTracker(model, config, device="cpu")
+
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+
+        assert tracker._grad_stats, "Should have captured gradient stats"
+        for stats in tracker._grad_stats.values():
+            assert stats.norm is None
+            payload = stats.to_dict()
+            # Not-collected norm must be ABSENT from serialization, not 0.0.
+            assert "norm" not in payload, (
+                f"disabled norm must be absent from serialization, got {payload}"
+            )
+            # std was collected; it must be present.
+            assert "std" in payload
+
+        tracker.cleanup()
+
+    def test_disabled_std_absent_from_serialization(self) -> None:
+        """track_std=False -> stats.std is None and omitted from to_dict()."""
+        config = TelemetryConfig.from_profile("standard")
+        config.gradients.enabled = True
+        config.gradients.layers = "all"
+        config.gradients.track_norm = True
+        config.gradients.track_std = False
+
+        model = _SimpleModel()
+        tracker = DiagnosticTracker(model, config, device="cpu")
+
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+
+        assert tracker._grad_stats, "Should have captured gradient stats"
+        for stats in tracker._grad_stats.values():
+            assert stats.std is None
+            payload = stats.to_dict()
+            assert "std" not in payload, (
+                f"disabled std must be absent from serialization, got {payload}"
+            )
+            assert "norm" in payload
+
+        tracker.cleanup()
+
+    def test_measured_zero_norm_preserved(self) -> None:
+        """A genuinely measured norm of 0.0 is preserved (not treated as absent).
+
+        A layer whose gradient is all-zeros has a real, measured norm of 0.0.
+        That measurement must survive serialization as 0.0, distinct from the
+        not-collected case where the key is absent entirely.
+        """
+        from esper.nissa.tracker import GradientStats
+
+        # Collected-and-measured zero: norm/std are real 0.0 measurements.
+        measured = GradientStats(layer_name="fc.weight", norm=0.0, std=0.0, mean=0.0)
+        payload = measured.to_dict()
+        assert payload["norm"] == 0.0, "measured 0.0 norm must be preserved"
+        assert payload["std"] == 0.0, "measured 0.0 std must be preserved"
+
+        # Not-collected: norm/std are None, omitted from serialization.
+        not_collected = GradientStats(layer_name="fc.weight", mean=0.0)
+        payload = not_collected.to_dict()
+        assert "norm" not in payload
+        assert "std" not in payload
+
+    def test_gradient_health_norm_not_collected_when_norm_disabled(self) -> None:
+        """GradientHealth aggregates omit overall_norm when no norms collected.
+
+        With track_norm disabled, no per-layer norm is measured, so the
+        aggregate overall_norm/norm_variance are not-collected (None / absent)
+        rather than a fabricated 0.0.
+        """
+        config = TelemetryConfig.from_profile("standard")
+        config.gradients.enabled = True
+        config.gradients.layers = "all"
+        config.gradients.track_norm = False
+        config.gradients.track_std = True
+
+        model = _SimpleModel()
+        tracker = DiagnosticTracker(model, config, device="cpu")
+
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+
+        snapshot = tracker.end_epoch(
+            epoch=1, train_loss=0.5, val_loss=0.4, val_accuracy=60.0
+        )
+
+        assert snapshot.gradient_health is not None
+        gh = snapshot.gradient_health
+        assert gh.overall_norm is None, "overall_norm must be None when norms not collected"
+        assert gh.norm_variance is None
+        payload = gh.to_dict()
+        assert "overall_norm" not in payload, (
+            f"not-collected overall_norm must be absent from serialization, got {payload}"
+        )
+        assert "norm_variance" not in payload
+        # health_score is always present (computed from vanishing/exploding).
+        assert "health_score" in payload
+
+        tracker.cleanup()
+
+    def test_gradient_health_norm_collected_when_norm_enabled(self) -> None:
+        """GradientHealth includes overall_norm when norms are collected."""
+        config = TelemetryConfig.from_profile("standard")
+        config.gradients.enabled = True
+        config.gradients.layers = "all"
+        config.gradients.track_norm = True
+        config.gradients.track_std = True
+
+        model = _SimpleModel()
+        tracker = DiagnosticTracker(model, config, device="cpu")
+
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+
+        snapshot = tracker.end_epoch(
+            epoch=1, train_loss=0.5, val_loss=0.4, val_accuracy=60.0
+        )
+
+        assert snapshot.gradient_health is not None
+        gh = snapshot.gradient_health
+        assert gh.overall_norm is not None
+        payload = gh.to_dict()
+        assert "overall_norm" in payload
+        assert "norm_variance" in payload
 
         tracker.cleanup()

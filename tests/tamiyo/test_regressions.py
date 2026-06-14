@@ -290,7 +290,7 @@ class TestCounterfactualPreferredForFossilize:
 
     BEHAVIOR:
     - If counterfactual_contribution is not None: Use it (true causal impact)
-    - If counterfactual_contribution is None: Fall back to total_improvement
+    - If counterfactual_contribution is None: wait for proof, never fossilize
 
     This test verifies the preference logic works correctly.
     """
@@ -321,10 +321,10 @@ class TestCounterfactualPreferredForFossilize:
         # Reason should mention counterfactual value
         assert "2.0" in decision.reason or "2.00" in decision.reason
 
-    def test_total_improvement_fallback_when_no_counterfactual(
+    def test_total_improvement_does_not_fossilize_without_counterfactual(
         self, mock_signals_factory, mock_seed_factory
     ):
-        """Should fall back to total_improvement when counterfactual is None."""
+        """Should wait for counterfactual proof when counterfactual is None."""
         from esper.leyline import SeedStage
 
         policy = HeuristicTamiyo(topology="cnn")
@@ -341,9 +341,8 @@ class TestCounterfactualPreferredForFossilize:
         signals = mock_signals_factory(epoch=10)
         decision = policy.decide(signals, [seed])
 
-        # Should fossilize using total_improvement fallback
-        assert decision.action.name == "FOSSILIZE"
-        assert "3.5" in decision.reason or "3.50" in decision.reason
+        assert decision.action.name == "WAIT"
+        assert "counterfactual" in decision.reason
 
     def test_negative_counterfactual_triggers_cull(
         self, mock_signals_factory, mock_seed_factory
@@ -371,10 +370,10 @@ class TestCounterfactualPreferredForFossilize:
         # Reason should show the negative contribution
         assert "-1.5" in decision.reason or "-1.50" in decision.reason
 
-    def test_counterfactual_none_with_positive_total_fossilizes(
+    def test_counterfactual_none_with_positive_total_waits_for_proof(
         self, mock_signals_factory, mock_seed_factory
     ):
-        """When counterfactual is None, positive total should fossilize."""
+        """When counterfactual is None, positive total should not fossilize."""
         from esper.leyline import SeedStage
 
         config = HeuristicPolicyConfig(
@@ -393,8 +392,8 @@ class TestCounterfactualPreferredForFossilize:
         signals = mock_signals_factory(epoch=10)
         decision = policy.decide(signals, [seed])
 
-        # Should fossilize (total=2.5 >= threshold=1.0)
-        assert decision.action.name == "FOSSILIZE"
+        assert decision.action.name == "WAIT"
+        assert "counterfactual" in decision.reason
 
     def test_both_below_threshold_culls(
         self, mock_signals_factory, mock_seed_factory

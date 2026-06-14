@@ -202,6 +202,72 @@ class TestTolariaGovernor:
 
         assert len(gov.loss_history) == 9
 
+    def test_preflight_verdict_carries_structured_health_snapshot(self):
+        """Lifecycle preflight verdicts expose loss, accuracy, capacity, and topology inputs."""
+        from esper.leyline import LifecycleOp
+        from esper.tolaria import TolariaGovernor
+
+        gov = TolariaGovernor(DummyModel())
+
+        verdict = gov.preflight_lifecycle_mutation(
+            operation=LifecycleOp.GERMINATE,
+            slot_id="r0c0",
+            blueprint_id="conv_l",
+            alpha_target=None,
+            alpha_speed_steps=None,
+            alpha_curve=None,
+            val_loss=1.2,
+            val_accuracy=65.0,
+            seed_stage=None,
+            total_params=100_000,
+            effective_seed_params=2_500.0,
+            max_seeds=4,
+            active_seed_count=1,
+            cooldown_epochs_remaining=0,
+            event_id="proposal-1",
+        )
+
+        assert verdict.approved is True
+        assert verdict.blocked_factor is None
+        assert verdict.health_snapshot is not None
+        assert verdict.health_snapshot.operation == "GERMINATE"
+        assert verdict.health_snapshot.val_loss == 1.2
+        assert verdict.health_snapshot.val_accuracy == 65.0
+        assert verdict.health_snapshot.total_params == 100_000
+        assert verdict.health_snapshot.effective_seed_params == 2_500.0
+        assert verdict.health_snapshot.active_seed_count == 1
+        assert verdict.health_snapshot.blueprint_id == "conv_l"
+
+    def test_preflight_accuracy_veto_names_blocked_factor(self):
+        """Tolaria preflight should identify accuracy health separately from loss."""
+        from esper.leyline import LifecycleOp
+        from esper.tolaria import TolariaGovernor
+
+        gov = TolariaGovernor(DummyModel())
+
+        verdict = gov.preflight_lifecycle_mutation(
+            operation=LifecycleOp.GERMINATE,
+            slot_id="r0c0",
+            blueprint_id="conv_l",
+            alpha_target=None,
+            alpha_speed_steps=None,
+            alpha_curve=None,
+            val_loss=1.2,
+            val_accuracy=float("nan"),
+            seed_stage=None,
+            total_params=100_000,
+            effective_seed_params=2_500.0,
+            max_seeds=4,
+            active_seed_count=1,
+            cooldown_epochs_remaining=0,
+            event_id="proposal-2",
+        )
+
+        assert verdict.approved is False
+        assert verdict.blocked_factor == "val_accuracy_finite"
+        assert verdict.health_snapshot is not None
+        assert math.isnan(verdict.health_snapshot.val_accuracy)
+
     def test_check_vital_signs_no_panic_on_normal_loss(self):
         """Test that normal loss values don't trigger panic."""
         from esper.tolaria import TolariaGovernor
@@ -361,6 +427,49 @@ class TestTolariaGovernor:
             # Payload is now a typed GovernorRollbackPayload dataclass
             assert event.data.env_id == 7
             assert event.data.device == "cpu"
+
+    def test_panic_rollback_emits_exactly_one_complete_governor_rollback(self):
+        """KTS-003: the governor is the SINGLE authoritative GOVERNOR_ROLLBACK source.
+
+        A single panic rollback must emit EXACTLY ONE GOVERNOR_ROLLBACK event per env,
+        and that record must carry the COMPLETE panic context (loss_at_panic, threshold,
+        consecutive_panics, panic_reason). No second, partial rollback record is allowed.
+        """
+        from unittest.mock import Mock, patch
+
+        from esper.leyline import TelemetryEventType
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Drive a genuine NaN panic so the panic context is populated by the governor.
+        assert gov.check_vital_signs(float("nan")) is True
+        assert gov._panic_reason == "governor_nan"
+
+        with patch("esper.nissa.get_hub") as get_hub:
+            hub = Mock()
+            get_hub.return_value = hub
+
+            gov.execute_rollback(env_id=3)
+
+        rollback_events = [
+            call.args[0]
+            for call in hub.emit.call_args_list
+            if call.args[0].event_type == TelemetryEventType.GOVERNOR_ROLLBACK
+        ]
+        # EXACTLY ONE complete record from the single authoritative source.
+        assert len(rollback_events) == 1
+
+        payload = rollback_events[0].data
+        assert payload.env_id == 3
+        assert payload.device == "cpu"
+        assert payload.reason  # non-empty
+        # COMPLETE panic context (the partial Simic duplicate would omit these).
+        assert payload.panic_reason == "governor_nan"
+        assert payload.loss_at_panic is not None
+        assert payload.loss_threshold is not None
+        assert payload.consecutive_panics is not None
 
     def test_execute_rollback_resets_consecutive_panics_each_time(self):
         """Test that each rollback resets panic counter (not increments)."""

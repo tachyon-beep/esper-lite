@@ -30,44 +30,64 @@ from esper.nissa.config import TelemetryConfig
 
 @dataclass
 class GradientStats:
-    """Statistics for a single layer's gradients."""
+    """Statistics for a single layer's gradients.
+
+    Diagnostic metrics that can be individually disabled via config flags
+    (``norm``, ``std``) are ``None`` when not collected, so a disabled
+    diagnostic is distinguishable from a genuinely measured ``0.0``. They are
+    omitted from ``to_dict()`` serialization when not collected.
+    """
     layer_name: str
-    norm: float = 0.0
-    std: float = 0.0
+    norm: float | None = None
+    std: float | None = None
     mean: float = 0.0
     vanishing_pct: float = 0.0  # % of near-zero gradients
     exploding_pct: float = 0.0  # % of very large gradients
     percentiles: dict[int, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "layer": self.layer_name,
-            "norm": self.norm,
-            "std": self.std,
             "mean": self.mean,
             "vanishing_pct": self.vanishing_pct,
             "exploding_pct": self.exploding_pct,
             "percentiles": self.percentiles,
         }
+        # Diagnostic metrics gated by config: omit when not collected so a
+        # disabled diagnostic does not masquerade as a measured 0.0.
+        if self.norm is not None:
+            result["norm"] = self.norm
+        if self.std is not None:
+            result["std"] = self.std
+        return result
 
 
 @dataclass
 class GradientHealth:
-    """Aggregate gradient health indicators."""
-    overall_norm: float = 0.0
-    norm_variance: float = 0.0
+    """Aggregate gradient health indicators.
+
+    ``overall_norm`` and ``norm_variance`` are ``None`` when per-layer norms
+    were not collected (``track_norm`` disabled), so a not-collected aggregate
+    is distinguishable from a genuinely measured ``0.0``. They are omitted from
+    ``to_dict()`` serialization when not collected.
+    """
+    overall_norm: float | None = None
+    norm_variance: float | None = None
     vanishing_layers: int = 0
     exploding_layers: int = 0
     health_score: float = 1.0  # 0-1, higher is healthier
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "overall_norm": self.overall_norm,
-            "norm_variance": self.norm_variance,
+        result: dict[str, Any] = {
             "vanishing_layers": self.vanishing_layers,
             "exploding_layers": self.exploding_layers,
             "health_score": self.health_score,
         }
+        if self.overall_norm is not None:
+            result["overall_norm"] = self.overall_norm
+        if self.norm_variance is not None:
+            result["norm_variance"] = self.norm_variance
+        return result
 
 
 @dataclass
@@ -209,8 +229,9 @@ class DiagnosticTracker:
         - Single GPU sync via batched tolist()
 
         Respects config flags:
-        - track_norm: If False, skip norm computation (stats.norm stays 0.0)
-        - track_std: If False, skip std computation (stats.std stays 0.0)
+        - track_norm: If False, skip norm computation (stats.norm stays None
+          => not collected, distinguishable from a measured 0.0)
+        - track_std: If False, skip std computation (stats.std stays None)
         """
         if grad is None:
             return
@@ -316,13 +337,22 @@ class DiagnosticTracker:
         if not self._grad_stats:
             return GradientHealth()
 
-        norms = [s.norm for s in self._grad_stats.values()]
+        # norm is None when track_norm is disabled (not collected); only
+        # aggregate the layers that were actually measured.
+        norms = [s.norm for s in self._grad_stats.values() if s.norm is not None]
         vanishing_pcts = [s.vanishing_pct for s in self._grad_stats.values()]
         exploding_pcts = [s.exploding_pct for s in self._grad_stats.values()]
 
         health = GradientHealth()
-        health.overall_norm = float(np.mean(norms))
-        health.norm_variance = float(np.var(norms))
+        norm_collected = bool(norms)
+        if norm_collected:
+            health.overall_norm = float(np.mean(norms))
+            health.norm_variance = float(np.var(norms))
+        else:
+            # Norms were not collected; leave overall_norm/norm_variance as
+            # not-collected (None) rather than reporting a fabricated 0.0.
+            health.overall_norm = None
+            health.norm_variance = None
         health.vanishing_layers = sum(1 for v in vanishing_pcts if v > 0.5)
         health.exploding_layers = sum(1 for e in exploding_pcts if e > 0.01)
 
@@ -332,12 +362,13 @@ class DiagnosticTracker:
             score -= 0.2 * health.vanishing_layers
         if health.exploding_layers > 0:
             score -= 0.3 * health.exploding_layers
-        if health.norm_variance > 10:
-            score -= 0.1
-        if health.overall_norm < 1e-5:
-            score -= 0.3
-        if health.overall_norm > 100:
-            score -= 0.2
+        if health.norm_variance is not None and health.overall_norm is not None:
+            if health.norm_variance > 10:
+                score -= 0.1
+            if health.overall_norm < 1e-5:
+                score -= 0.3
+            if health.overall_norm > 100:
+                score -= 0.2
         health.health_score = max(0.0, min(1.0, score))
 
         return health

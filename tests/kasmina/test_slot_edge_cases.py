@@ -195,12 +195,15 @@ class TestCullBehavior:
 class TestStepEpochBehavior:
     """Tests for step_epoch behavior."""
 
-    def test_step_epoch_no_seed_no_crash(self):
-        """step_epoch() with no active seed should not crash."""
+    def test_step_epoch_no_seed_preserves_empty_slot(self):
+        """step_epoch() with no active seed preserves the empty slot contract."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
 
-        # Should be a no-op, not raise
         slot.step_epoch()
+        assert slot.state is None
+        assert slot.seed is None
+        assert slot.is_active is False
+        assert slot.alpha == 0.0
 
     def test_step_epoch_germinated_does_not_advance(self):
         """step_epoch() in GERMINATED stage does not advance."""
@@ -392,13 +395,20 @@ class TestForceAlphaContext:
         # After context, alpha restored
         assert slot.state.alpha == 0.8
 
-    def test_force_alpha_no_seed_no_crash(self):
-        """force_alpha() with no active seed should not crash."""
+    def test_force_alpha_no_seed_preserves_empty_slot(self):
+        """force_alpha() with no active seed preserves the empty slot contract."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
 
-        # Should be a no-op, not raise
         with slot.force_alpha(0.0):
-            pass
+            assert slot.state is None
+            assert slot.seed is None
+            assert slot.is_active is False
+            assert slot.alpha == 0.0
+
+        assert slot.state is None
+        assert slot.seed is None
+        assert slot.is_active is False
+        assert slot.alpha == 0.0
 
     def test_force_alpha_disables_schedule(self):
         """force_alpha() should disable alpha_schedule temporarily."""

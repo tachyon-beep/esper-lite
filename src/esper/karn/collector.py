@@ -268,6 +268,12 @@ class KarnCollector:
             self._handle_anomaly_event(event, event_type)
         elif event_type == "ANALYTICS_SNAPSHOT":
             self._handle_analytics_snapshot(event)
+        else:
+            # Families the reduced store schema does not model — notably the
+            # proof-critical EPISODE_OUTCOME / GOVERNOR_ROLLBACK /
+            # MORPHOLOGY_CAUSAL_LOG. Record them so the live store reports
+            # non-proof-grade (KARN-PROOF-005) instead of silently dropping them.
+            self.store.record_unsupported_event(event_type)
 
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event - auto-initialize episode AND first epoch."""
@@ -284,6 +290,7 @@ class KarnCollector:
                 task_type=event.data.task,
                 reward_mode=event.data.reward_mode or "shaped",
                 max_epochs=event.data.max_epochs,
+                host_params=event.data.host_params,
             )
         else:
             _logger.warning(f"Unknown data type in TRAINING_STARTED: {type(event.data)}")
@@ -459,7 +466,7 @@ class KarnCollector:
             current_epoch.epoch = epoch_num
             current_epoch.host.epoch = epoch_num
             current_epoch.host.val_accuracy = payload.avg_accuracy
-            # BATCH doesn't have val_loss - leave at default 0.0
+            current_epoch.host.val_loss = None
 
             # Increment epochs_in_stage for all occupied slots (only DORMANT excluded)
             for slot in current_epoch.slots.values():
@@ -655,11 +662,17 @@ class KarnCollector:
         task_type: str = "classification",
         reward_mode: str = "shaped",
         max_epochs: int = 75,
+        host_params: int = 0,
         **kwargs: Any,
     ) -> EpisodeContext:
         """Start a new training episode.
 
         Creates EpisodeContext and initializes the store.
+
+        ``host_params`` is the post-materialization host parameter count emitted
+        on ``TrainingStartedPayload``; it is threaded into the context so the
+        export (and every host snapshot derived from it) carries the real value
+        instead of a fabricated zero.
         """
         context = EpisodeContext(
             episode_id=episode_id or str(uuid4()),
@@ -669,6 +682,7 @@ class KarnCollector:
             task_type=task_type,
             reward_mode=reward_mode,
             max_epochs=max_epochs,
+            host_params=host_params,
             hyperparameters=tuple(kwargs.items()),
         )
 

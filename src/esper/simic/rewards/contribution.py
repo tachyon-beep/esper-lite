@@ -98,7 +98,8 @@ class RewardMode(Enum):
     BASIC_PLUS: BASIC + post-fossilization drip reward (accountability for fossilized seeds)
     SPARSE: Terminal-only ground truth (accuracy - param_cost)
     MINIMAL: Sparse + early-prune penalty only
-    SIMPLIFIED: DRL Expert recommended - PBRS + intervention cost + terminal only
+    SIMPLIFIED: Diagnostic-only PBRS + intervention cost + terminal reward.
+        It omits structural rent and is not blueprint-economy evidence.
     """
 
     SHAPED = "shaped"
@@ -284,11 +285,9 @@ class ContributionRewardConfig:
     # - seed_occupancy_cost: Per-epoch cost per seed above free_slots threshold
     # - free_slots: First N slots incur no occupancy rent (encourages some activity)
     # - fossilized_maintenance_cost: Per-epoch cost per fossilized seed (they still consume capacity)
-    # - first_germinate_bonus: One-time bonus for first germination (breaks "do nothing" symmetry)
     seed_occupancy_cost: float = 0.01
     free_slots: int = 1
     fossilized_maintenance_cost: float = 0.002
-    first_germinate_bonus: float = 0.2
 
     # === D3: Anti-Timing-Gaming (early germination discount) ===
     # Seeds germinated before warmup period receive discounted attribution.
@@ -300,10 +299,9 @@ class ContributionRewardConfig:
 
     # === D3: Attribution formula variant ===
     # Controls how progress and seed_contribution combine into attributed value.
-    # - "geometric": sqrt(progress * contribution) - rewards host drift, legacy default
     # - "harmonic": 2*p*c/(p+c) - dominated by smaller value, anti-gaming (recommended)
     # - "minimum": min(progress, contribution) - very conservative
-    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "harmonic"
+    attribution_formula: Literal["harmonic", "minimum"] = "harmonic"
 
     # === Drip Reward Configuration (BASIC_PLUS mode) ===
     # Post-fossilization accountability: drip reward paid over remaining epochs
@@ -344,6 +342,11 @@ class ContributionRewardConfig:
     def default() -> "ContributionRewardConfig":
         """Return default configuration."""
         return ContributionRewardConfig()
+
+    @property
+    def supports_blueprint_economy_evidence(self) -> bool:
+        """Whether this reward mode can support "complexity pays rent" claims."""
+        return self.reward_mode != RewardMode.SIMPLIFIED
 
 
 # Default config singleton (avoid repeated allocations)
@@ -393,7 +396,6 @@ def compute_contribution_reward(
     escrow_credit_prev: float = 0.0,
     # D2: Capacity economics parameters
     n_active_seeds: int = 0,
-    seeds_germinated_this_episode: int = 0,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant)."""
     if config is None:
@@ -436,6 +438,22 @@ def compute_contribution_reward(
     if seed_contribution is not None and seed_info is not None:
         total_imp = seed_info.total_improvement
 
+        # Anti-gaming + ransomware gates must key on the CLEAN counterfactual
+        # (val_acc - all_disabled_acc = total seed-attributable improvement), NOT the
+        # host-drift-confounded total_improvement. In a still-learning host
+        # total_improvement is inflated by host drift (diluting the ratio check, letting
+        # gaming through); in a plateaued/declining host it goes <= 0 and a genuinely
+        # valuable seed is penalised for behaviour it did not cause. Providing
+        # seed_contribution without its counterfactual is a contract violation
+        # (production always supplies it via SeedInfo.from_seed_state from the trainer's
+        # all-disabled ablation); fail loudly rather than silently gate on host drift.
+        if seed_info.counterfactual_total_improvement is None:
+            raise ValueError(
+                "seed_contribution provided without counterfactual_total_improvement; "
+                "the anti-gaming/fossilization gates require the clean counterfactual signal"
+            )
+        counterfactual_imp = seed_info.counterfactual_total_improvement
+
         if not escrow_mode:
             if total_imp < 0:
                 exp_arg = min(-config.attribution_sigmoid_steepness * total_imp, 700.0)
@@ -443,23 +461,23 @@ def compute_contribution_reward(
 
         if seed_contribution > 1.0 and attribution_discount >= 0.5 and not config.disable_anti_gaming:
             safe_threshold = max(config.improvement_safe_threshold, 1e-8)
-            if total_imp > safe_threshold:
-                ratio = seed_contribution / total_imp
+            if counterfactual_imp > safe_threshold:
+                ratio = seed_contribution / counterfactual_imp
                 if ratio > config.hacking_ratio_threshold:
                     ratio_penalty = -min(
                         -config.prune_good_seed_penalty,
                         0.1 * (ratio - config.hacking_ratio_threshold) / config.hacking_ratio_threshold,
                     )
-            elif total_imp <= config.improvement_safe_threshold:
+            elif counterfactual_imp <= config.improvement_safe_threshold:
                 ratio_penalty = config.prune_good_seed_penalty * min(1.0, seed_contribution / 10.0)
 
         if slot_id is not None and seed_id is not None:
             hub = get_hub()
-            if total_imp > 0 and ratio_penalty != 0:
+            if counterfactual_imp > 0 and ratio_penalty != 0:
                 _check_reward_hacking(
                     hub,
                     seed_contribution=seed_contribution,
-                    total_improvement=total_imp,
+                    total_improvement=counterfactual_imp,
                     hacking_ratio_threshold=config.hacking_ratio_threshold,
                     slot_id=slot_id,
                     seed_id=seed_id,
@@ -467,7 +485,7 @@ def compute_contribution_reward(
             _check_ransomware_signature(
                 hub,
                 seed_contribution=seed_contribution,
-                total_improvement=total_imp,
+                total_improvement=counterfactual_imp,
                 slot_id=slot_id,
                 seed_id=seed_id,
             )
@@ -550,8 +568,43 @@ def compute_contribution_reward(
                     )
                     bounded_attribution *= timing_discount
         elif seed_info is not None and not seed_is_fossilized:
-            if acc_delta is not None and acc_delta > 0:
-                bounded_attribution = config.proxy_contribution_weight * acc_delta
+            # Proxy path: a seed exists but its clean leave-one-out counterfactual has
+            # not been measured yet (seed_contribution is None, e.g. before the
+            # all-disabled ablation runs early in a seed's life). We fall back to a
+            # HEAVILY DISCOUNTED, SEED-CAUSAL proxy -- proxy_contribution_weight is
+            # contribution_weight * proxy_confidence_factor (0.3), i.e. the proxy is
+            # treated as only 30% as reliable as a true counterfactual.
+            #
+            # The proxy reads the seed's OWN stage-relative improvement
+            # (improvement_since_stage_start = current_val_acc - acc_at_stage_start),
+            # NOT host-wide acc_delta. Host-wide validation drift is the host
+            # optimiser's progress, not the seed's, and using it would pay a seed for
+            # learning it did not cause -- the exact host-drift confound the
+            # counterfactual design exists to eliminate. The stage-relative signal is
+            # alpha-gated by construction: it only becomes a meaningful causal signal
+            # once the seed is on the output path. We therefore gate the proxy on
+            # stage >= BLENDING (alpha ramping/on); a pre-BLENDING (alpha ~= 0) seed is
+            # not yet causally contributing, so it pays nothing no matter how much the
+            # host moved. Only positive improvement pays; non-positive pays nothing (no
+            # penalty on the proxy path -- without the counterfactual we cannot
+            # causally attribute a regression to the seed either).
+            #
+            # This does NOT touch the counterfactual-PRESENT path (seed_contribution is
+            # not None, above), which keys anti-gaming, the ratio penalty, and
+            # fossilization gates entirely on the clean counterfactual. A real
+            # counterfactual dominates this proxy the moment one is available, and a
+            # truly seedless step (seed_info is None) never reaches this branch, so
+            # host-only learning is still never credited to a nonexistent seed.
+            # improvement_since_stage_start is None before the seed's first
+            # stage-relative measurement (no data yet => no signal to pay); the
+            # holding-indecision gate below uses the same `is not None` distinction.
+            stage_improvement = seed_info.improvement_since_stage_start
+            if (
+                seed_info.stage >= STAGE_BLENDING
+                and stage_improvement is not None
+                and stage_improvement > 0
+            ):
+                bounded_attribution = config.proxy_contribution_weight * stage_improvement
 
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         if seed_info.total_improvement < 0:
@@ -684,7 +737,6 @@ def compute_contribution_reward(
     # must count against the free_slots threshold until D3 (audit) creates proper incentives.
     occupancy_rent = 0.0
     fossilized_rent = 0.0
-    first_germ_bonus = 0.0
 
     # Occupancy rent for occupied slots above free_slots threshold
     # n_occupied includes both active AND fossilized seeds (they all consume slots)
@@ -699,16 +751,9 @@ def compute_contribution_reward(
         fossilized_rent = config.fossilized_maintenance_cost * num_fossilized_seeds
         reward -= fossilized_rent
 
-    # First-germination bonus (breaks "do nothing" symmetry)
-    # One-time bonus when agent takes first germination action
-    if action == LifecycleOp.GERMINATE and seeds_germinated_this_episode == 0:
-        first_germ_bonus = config.first_germinate_bonus
-        reward += first_germ_bonus
-
     if components:
         components.occupancy_rent = occupancy_rent
         components.fossilized_rent = fossilized_rent
-        components.first_germinate_bonus = first_germ_bonus
         components.n_active_seeds = n_active_seeds
 
     action_shaping = 0.0
@@ -748,13 +793,18 @@ def compute_contribution_reward(
         #
         # Guards (must match _contribution_fossilize_shaping for consistency):
         # 1. seed_info exists and is in HOLDING stage (valid fossilize)
-        # 2. seed hasn't made accuracy worse (total_improvement >= 0)
+        # 2. the seed's CLEAN COUNTERFACTUAL contribution hasn't made accuracy worse
+        #    (counterfactual_total_improvement >= 0), NOT host-drift total_improvement:
+        #    a plateaued/declining host must not block a genuinely valuable seed from
+        #    fossilizing for behaviour it did not cause. None (no counterfactual measured)
+        #    => not legitimate (no causal proof of non-harm).
         # 3. seed meets contribution threshold
         # 4. terminal rewards are enabled
         is_valid_fossilize = (
             seed_info is not None
             and seed_info.stage == STAGE_HOLDING
-            and seed_info.total_improvement >= 0
+            and seed_info.counterfactual_total_improvement is not None
+            and seed_info.counterfactual_total_improvement >= 0
         )
         if (
             is_valid_fossilize
@@ -1004,7 +1054,11 @@ def compute_basic_reward(
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         is_valid = seed_info.stage == STAGE_HOLDING
         if is_valid:
-            improvement = seed_info.total_improvement
+            # Gate on the clean counterfactual, not host-drift total_improvement.
+            # None (no counterfactual measured) => no causal proof of benefit => 0.0,
+            # which routes to the non-contributing penalty branch below.
+            counterfactual_imp = seed_info.counterfactual_total_improvement
+            improvement = counterfactual_imp if counterfactual_imp is not None else 0.0
             meets_threshold = (
                 seed_contribution is not None
                 and seed_contribution >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
@@ -1075,9 +1129,15 @@ def compute_basic_reward(
     # means the seed is still helping; negative means it's hurting.
     # Asymmetric clipping prevents death spirals while rewarding sustained value.
     drip_this_epoch = 0.0
-    if fossilized_drip_states and fossilized_contributions:
+    if fossilized_drip_states:
+        if fossilized_contributions is None:
+            raise ValueError("Missing fossilized contribution measurements for drip reward")
         for drip_state in fossilized_drip_states:
-            contribution = fossilized_contributions.get(drip_state.seed_id, 0.0)
+            if drip_state.seed_id not in fossilized_contributions:
+                raise ValueError(
+                    f"Missing fossilized contribution for seed {drip_state.seed_id}"
+                )
+            contribution = fossilized_contributions[drip_state.seed_id]
             epoch_drip = drip_state.compute_epoch_drip(
                 current_contribution=contribution,
                 max_drip=config.max_drip_per_epoch,
@@ -1287,30 +1347,30 @@ def _compute_timing_discount(
 def _compute_attributed_value(
     progress: float,
     seed_contribution: float,
-    formula: Literal["geometric", "harmonic", "minimum"],
+    formula: Literal["harmonic", "minimum"],
 ) -> float:
     """Compute attributed value using the specified formula.
 
     Args:
         progress: Accuracy improvement since germination (val_acc - acc_at_germination)
         seed_contribution: Counterfactual contribution of the seed
-        formula: One of "geometric", "harmonic", "minimum"
+        formula: One of "harmonic", "minimum"
 
     Returns:
         Attributed value combining progress and contribution
 
     Formulas:
-        - geometric: sqrt(progress * contribution) - rewards host drift
         - harmonic: 2*p*c/(p+c) - dominated by smaller value, anti-gaming
         - minimum: min(progress, contribution) - very conservative
+
+    The "geometric" mean sqrt(progress * contribution) was removed: it inflates
+    reward with host drift (the larger `progress` term pulls the mean up), which
+    is exactly the confound the counterfactual design exists to eliminate.
     """
     if progress <= 0 or seed_contribution <= 0:
         return 0.0
 
-    if formula == "geometric":
-        return math.sqrt(progress * seed_contribution)
-
-    elif formula == "harmonic":
+    if formula == "harmonic":
         # Harmonic mean: 2ab/(a+b), dominated by smaller value
         # Guard against division by near-zero when both values are tiny
         return 2 * progress * seed_contribution / max(progress + seed_contribution, 1e-8)

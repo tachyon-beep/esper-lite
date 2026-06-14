@@ -61,8 +61,13 @@ def seed_info(
     seed_age_epochs: int = MIN_PRUNE_AGE,
     interaction_sum: float = 0.0,
     boost_received: float = 0.0,
+    counterfactual_total_improvement: float | None = None,
 ) -> SeedInfo:
-    """Convenience constructor with safe defaults for escrow tests."""
+    """Convenience constructor with safe defaults for escrow tests.
+
+    With no host-drift simulation in these isolated tests, the clean
+    counterfactual mirrors ``total_improvement`` by default; a test may override.
+    """
     return SeedInfo(
         stage=stage.value,
         improvement_since_stage_start=improvement_since_stage_start,
@@ -74,6 +79,11 @@ def seed_info(
         seed_age_epochs=seed_age_epochs,
         interaction_sum=interaction_sum,
         boost_received=boost_received,
+        counterfactual_total_improvement=(
+            counterfactual_total_improvement
+            if counterfactual_total_improvement is not None
+            else total_improvement
+        ),
     )
 
 

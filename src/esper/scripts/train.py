@@ -1,6 +1,32 @@
 #!/usr/bin/env python3
 """Training CLI for Simic RL algorithms."""
 
+import os
+
+# Allocator policy MUST precede the first CUDA allocation (and the spawn re-import at
+# the bottom of this module, since workers inherit os.environ). expandable_segments
+# cures per-stream segment stranding from the per-batch env rebuild; gc_threshold caps
+# reserved-pool bloat on the 16 GB cards. torch 2.9 renamed the key from the now-deprecated
+# PYTORCH_CUDA_ALLOC_CONF to PYTORCH_ALLOC_CONF; we set the current name. setdefault lets an
+# operator's exported override win (the documented PyTorch channel, not a back-compat shim).
+os.environ.setdefault(
+    "PYTORCH_ALLOC_CONF",
+    "expandable_segments:True,garbage_collection_threshold:0.8",
+)
+
+# Fail loud (not silent) if a transitive import already created the CUDA context: the
+# allocator policy is read at first context creation, so a late set silently does nothing.
+import torch as _t
+
+if _t.cuda.is_initialized():  # type: ignore[no-untyped-call]
+    import warnings
+
+    warnings.warn(
+        "PYTORCH_ALLOC_CONF set after CUDA init; allocator policy will NOT apply.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
 import argparse
 import logging
 import sys
@@ -10,7 +36,7 @@ import torch
 
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.runtime.tasks import VALID_TASKS
-from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
+from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_LSTM_HIDDEN_DIM
 from esper.simic.training import TrainingConfig
 
 _logger = logging.getLogger(__name__)
@@ -258,6 +284,20 @@ def build_parser() -> argparse.ArgumentParser:
     heur_parser.add_argument("--max-seeds", type=int, default=None,
         help="Maximum total seeds across all slots (default: unlimited)")
     heur_parser.add_argument(
+        "--reward-mode",
+        choices=[
+            "shaped",
+            "escrow",
+            "basic",
+            "basic_plus",
+            "sparse",
+            "minimal",
+            "simplified",
+        ],
+        default="shaped",
+        help="Contribution reward variant for heuristic reward telemetry (default: shaped)",
+    )
+    heur_parser.add_argument(
         "--min-fossilize-improvement",
         type=float,
         default=None,
@@ -385,7 +425,7 @@ def build_parser() -> argparse.ArgumentParser:
             "escrow-vs-basic",
         ],
         default=None,
-        help="True A/B test: train separate policies on separate GPUs",
+        help="Sequential reward-mode A/B: train separate policies on separate GPUs",
     )
 
     # === Tamiyo Training Scale ===
@@ -413,7 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="L",
         help="Epochs per environment per round (full train-loader passes). "
              "Also sets the LSTM sequence length (chunk_length), so longer episodes "
-             "demand longer temporal memory. (Maps to max_epochs. Default: 25)",
+             f"demand longer temporal memory. (Maps to max_epochs. Default: {DEFAULT_EPISODE_LENGTH})",
     )
     ppo_parser.add_argument(
         "--ppo-epochs",
@@ -714,6 +754,8 @@ def main() -> None:
                     telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                     min_fossilize_improvement=args.min_fossilize_improvement,
                     gradient_telemetry_stride=args.gradient_telemetry_stride if args.gradient_telemetry_stride is not None else (1 if args.telemetry_level == "debug" else 10),
+                    max_seeds=args.max_seeds,
+                    reward_mode=args.reward_mode,
                 )
 
             elif args.algorithm == "ppo":

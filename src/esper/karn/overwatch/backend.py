@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import threading
 import time
 from collections import deque
@@ -22,7 +23,9 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any
 
-from esper.karn.sanctum.aggregator import SanctumAggregator
+import numpy as np
+
+from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.schema import SanctumSnapshot
 
 if TYPE_CHECKING:
@@ -49,9 +52,30 @@ def _json_serializer(obj: Any) -> Any:
         return str(obj)
     if isinstance(obj, deque):
         return list(obj)
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
     if is_dataclass(obj) and not isinstance(obj, type):
         return asdict(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _json_safe(obj: Any) -> Any:
+    """Convert snapshot objects into strict JSON-compatible values."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return _json_safe(asdict(obj))
+    if isinstance(obj, dict):
+        return {str(key): _json_safe(value) for key, value in obj.items()}
+    if isinstance(obj, deque):
+        return [_json_safe(value) for value in obj]
+    if isinstance(obj, list | tuple):
+        return [_json_safe(value) for value in obj]
+    if isinstance(obj, Enum | datetime | Path | np.generic | np.ndarray):
+        return _json_safe(_json_serializer(obj))
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
 
 
 class OverwatchBackend:
@@ -90,8 +114,8 @@ class OverwatchBackend:
         self.snapshot_rate_hz = snapshot_rate_hz
         self._min_broadcast_interval = 1.0 / snapshot_rate_hz
 
-        # Aggregator for event processing (same as Sanctum TUI)
-        self.aggregator = SanctumAggregator(num_envs=num_envs)
+        # Group-aware aggregators for event processing (same as Sanctum TUI)
+        self._registry = AggregatorRegistry(num_envs=num_envs)
 
         # Rate limiting state
         self._last_broadcast_time: float = 0.0
@@ -122,7 +146,7 @@ class OverwatchBackend:
         Args:
             event: The telemetry event to process.
         """
-        self.aggregator.process_event(event)
+        self._registry.process_event(event)
         self.maybe_broadcast()
 
     def get_snapshot(self) -> SanctumSnapshot:
@@ -131,7 +155,19 @@ class OverwatchBackend:
         Returns:
             Current aggregated snapshot state.
         """
-        return self.aggregator.get_snapshot()
+        snapshots = self.get_all_snapshots()
+        group_id = self._select_primary_group_id(snapshots)
+        if group_id is None:
+            return SanctumSnapshot()
+        return snapshots[group_id]
+
+    def get_all_snapshots(self) -> dict[str, SanctumSnapshot]:
+        """Get snapshots for all policy groups.
+
+        Returns:
+            Mapping from policy group ID to current snapshot state.
+        """
+        return self._registry.get_all_snapshots()
 
     def snapshot_to_json(self, snapshot: SanctumSnapshot) -> str:
         """Serialize a SanctumSnapshot to JSON.
@@ -142,7 +178,7 @@ class OverwatchBackend:
         Returns:
             JSON string representation.
         """
-        return json.dumps(asdict(snapshot), default=_json_serializer)
+        return json.dumps(_json_safe(snapshot), allow_nan=False)
 
     def maybe_broadcast(self) -> None:
         """Trigger a rate-limited broadcast.
@@ -169,11 +205,22 @@ class OverwatchBackend:
             if not self._clients:
                 return
 
-        snapshot = self.get_snapshot()
+        snapshots_by_group = self.get_all_snapshots()
+        primary_group_id = self._select_primary_group_id(snapshots_by_group)
+        if primary_group_id is None:
+            snapshot = SanctumSnapshot()
+        else:
+            snapshot = snapshots_by_group[primary_group_id]
+
         # Serialize once: wrap snapshot in message envelope and serialize together
         message = json.dumps(
-            {"type": "snapshot", "data": asdict(snapshot)},
-            default=_json_serializer,
+            {
+                "type": "snapshot",
+                "primary_group_id": primary_group_id,
+                "data": _json_safe(snapshot),
+                "snapshots_by_group": _json_safe(snapshots_by_group),
+            },
+            allow_nan=False,
         )
 
         # Queue for async broadcast (bounded to prevent backlog on slow clients)
@@ -200,6 +247,7 @@ class OverwatchBackend:
             from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
             from fastapi.responses import FileResponse
             from fastapi.staticfiles import StaticFiles
+            from starlette.routing import WebSocketRoute
 
             # Mark as running only after successful import
             self._running = True
@@ -242,11 +290,10 @@ class OverwatchBackend:
                             ]
 
             # Start broadcaster task on app startup
-            @app.on_event("startup")  # type: ignore[untyped-decorator]
+            @app.on_event("startup")
             async def start_broadcaster() -> None:
                 asyncio.create_task(broadcaster_loop())
 
-            @app.websocket("/ws")  # type: ignore[untyped-decorator]
             async def websocket_endpoint(websocket: WebSocket) -> None:
                 await websocket.accept()
 
@@ -284,8 +331,10 @@ class OverwatchBackend:
                         if websocket in self._clients:
                             self._clients.remove(websocket)
 
+            app.router.routes.append(WebSocketRoute("/ws", websocket_endpoint))
+
             # Serve index.html at root
-            @app.get("/")  # type: ignore[untyped-decorator]
+            @app.get("/")
             async def serve_index() -> FileResponse | Response:
                 index_path = self._static_path / "index.html"
                 if not index_path.exists():
@@ -356,6 +405,16 @@ class OverwatchBackend:
             self._clients.clear()
 
         _logger.info("Overwatch backend stopped")
+
+    def _select_primary_group_id(
+        self,
+        snapshots_by_group: dict[str, SanctumSnapshot],
+    ) -> str | None:
+        if not snapshots_by_group:
+            return None
+        if "default" in snapshots_by_group:
+            return "default"
+        return sorted(snapshots_by_group.keys())[0]
 
     def close(self) -> None:
         """Close the backend (called by Nissa hub on shutdown).

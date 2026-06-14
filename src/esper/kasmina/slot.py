@@ -44,7 +44,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Callable, ClassVar, Generator, TYPE_CHECKING
+from typing import Any, Callable, ClassVar, Generator, TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
@@ -53,6 +53,7 @@ from esper.kasmina.blend_ops import blend_gate, blend_multiply
 from esper.kasmina.isolation import GradientHealthMonitor, blend_with_isolation, ste_forward
 from esper.kasmina.alpha_controller import AlphaController
 from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve, AlphaMode
+from esper.leyline.lifecycle_mutation import LifecycleMutationCausalContext
 
 from esper.leyline import (
     # Lifecycle
@@ -441,9 +442,11 @@ class SeedState:
         SeedMetrics remains the source of truth for accuracy/epoch data.
 
         Gradient parameters are optional - when None, gradient-related telemetry
-        fields are left at their default values (no gradient data available).
-        This separates the concern of accuracy telemetry (always available)
-        from gradient telemetry (only when gradient stats are collected).
+        fields are left UNMEASURED (None), NOT reset to a healthy value. This
+        separates the concern of accuracy telemetry (always available) from
+        gradient telemetry (only when gradient stats are collected). A seed that
+        has never had gradients measured stays unmeasured, and gates depending on
+        gradient health (permissive G2) deny it until real stats arrive (KTS-001).
 
         IMPORTANT: accuracy_delta is stage-aware:
         - TRAINING/GERMINATED (alpha=0): Always 0.0 because seed cannot affect output
@@ -542,12 +545,16 @@ class SeedState:
             alpha_velocity = 0.0
         else:
             alpha_velocity = (controller.alpha_target - controller.alpha_start) / alpha_steps_total
+        if self.blueprint_id not in BLUEPRINT_ID_TO_INDEX:
+            raise ValueError(
+                f"Unknown blueprint_id {self.blueprint_id!r}; cannot encode observation index"
+            )
 
         return SeedStateReport(
             seed_id=self.seed_id,
             slot_id=self.slot_id,
             blueprint_id=self.blueprint_id,
-            blueprint_index=BLUEPRINT_ID_TO_INDEX.get(self.blueprint_id, -1),
+            blueprint_index=BLUEPRINT_ID_TO_INDEX[self.blueprint_id],
             stage=self.stage,
             previous_stage=self.previous_stage,
             previous_epochs_in_stage=self.previous_epochs_in_stage,
@@ -810,21 +817,32 @@ class QualityGates:
             # Check 2: No exploding gradients (HARD REQUIREMENT)
             # Exploding gradients indicate unbounded dynamics that will compound
             # catastrophically when the seed's alpha is ramped up during blending.
+            #
+            # KTS-001: Gradient health must have been ACTUALLY MEASURED. A fresh
+            # seed, or one synced via the fallback path with no gradient stats,
+            # has unmeasured (None) gradient telemetry and is NOT healthy by
+            # default. Unmeasured gradients fail the safety gate outright.
             telemetry = state.telemetry
-            if telemetry is not None and telemetry.has_exploding:
+            if telemetry is None or not telemetry.gradient_measured:
+                checks_failed.append("gradient_health_not_measured")
+                exploding_ok = False
+                gradient_health_ok = False
+            elif telemetry.has_exploding:
                 checks_failed.append("exploding_gradients")
                 exploding_ok = False
+                # Health is moot when gradients are exploding: deny.
+                gradient_health_ok = False
             else:
                 checks_passed.append("no_exploding_gradients")
                 exploding_ok = True
 
-            # Check 3: Gradient health above safety threshold
-            # Low gradient health indicates the seed may destabilize the host.
-            gradient_health_ok = True  # Default to OK if no telemetry
-            if telemetry is not None:
+                # Check 3: Gradient health above safety threshold.
+                # Low gradient health indicates the seed may destabilize the host.
                 health = telemetry.gradient_health
+                assert health is not None  # gradient_measured (checked above) guarantees a value
                 if health >= self.min_gradient_health_for_blending:
                     checks_passed.append(f"gradient_health_{health:.2f}")
+                    gradient_health_ok = True
                 else:
                     checks_failed.append(
                         f"gradient_health_low_{health:.2f}_need_{self.min_gradient_health_for_blending:.2f}"
@@ -1080,6 +1098,7 @@ class SeedSlot(nn.Module):
         self.telemetry_lifecycle_only: bool = False
         self.telemetry_inner_epoch: int | None = None
         self.telemetry_global_epoch: int | None = None
+        self._pending_morphology_context: LifecycleMutationCausalContext | None = None
         # Auto-forward gates: stage transitions can be advanced automatically by step_epoch()
         # when the corresponding gate passes (configured by Simic TrainingConfig).
         self.auto_forward_gates: frozenset[GateLevel] = frozenset()
@@ -1380,7 +1399,12 @@ class SeedSlot(nn.Module):
             self.seed.eval()
             with torch.no_grad():
                 seed_out = self.seed(shape_probe)
-            if isinstance(seed_out, torch.Tensor) and seed_out.shape != expected_shape:
+            if not torch.is_tensor(seed_out):
+                raise AssertionError(
+                    f"Seed '{blueprint_id}' must return torch.Tensor during shape probe; "
+                    f"got {type(seed_out).__name__}"
+                )
+            if seed_out.shape != expected_shape:
                 raise AssertionError(
                     f"Seed '{blueprint_id}' changed shape: "
                     f"{seed_out.shape} vs {expected_shape}"
@@ -1533,12 +1557,12 @@ class SeedSlot(nn.Module):
                         # Optional gradient health fields
                         grad_ratio=self._telemetry_grad_ratio(),
                         has_vanishing=(
-                            self.state.telemetry.has_vanishing
+                            bool(self.state.telemetry.has_vanishing)
                             if self.state.telemetry and self.state.telemetry.epoch > 0
                             else False
                         ),
                         has_exploding=(
-                            self.state.telemetry.has_exploding
+                            bool(self.state.telemetry.has_exploding)
                             if self.state.telemetry and self.state.telemetry.epoch > 0
                             else False
                         ),
@@ -1621,12 +1645,12 @@ class SeedSlot(nn.Module):
         alpha_curve_name = self.state.alpha_controller.alpha_curve.name
         grad_ratio = self._telemetry_grad_ratio()
         has_vanishing = (
-            self.state.telemetry.has_vanishing
+            bool(self.state.telemetry.has_vanishing)
             if self.state.telemetry and self.state.telemetry.epoch > 0
             else False
         )
         has_exploding = (
-            self.state.telemetry.has_exploding
+            bool(self.state.telemetry.has_exploding)
             if self.state.telemetry and self.state.telemetry.epoch > 0
             else False
         )
@@ -1750,12 +1774,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -1832,12 +1856,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -2474,12 +2498,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -2519,12 +2543,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -2560,12 +2584,12 @@ class SeedSlot(nn.Module):
                     # Optional gradient health fields
                     grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
-                        self.state.telemetry.has_vanishing
+                        bool(self.state.telemetry.has_vanishing)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
                     has_exploding=(
-                        self.state.telemetry.has_exploding
+                        bool(self.state.telemetry.has_exploding)
                         if self.state.telemetry and self.state.telemetry.epoch > 0
                         else False
                     ),
@@ -2606,6 +2630,17 @@ class SeedSlot(nn.Module):
             return 0.0
         return float(ratio)
 
+    def set_pending_morphology_context(
+        self,
+        context: LifecycleMutationCausalContext,
+    ) -> None:
+        """Attach causal mutation identity to the next lifecycle telemetry event."""
+        self._pending_morphology_context = context
+
+    def clear_pending_morphology_context(self) -> None:
+        """Clear pending causal mutation identity after lifecycle handler dispatch."""
+        self._pending_morphology_context = None
+
     def _emit_telemetry(
         self,
         event_type: TelemetryEventType,
@@ -2627,6 +2662,25 @@ class SeedSlot(nn.Module):
             return
         if self.fast_mode and not self.telemetry_lifecycle_only:
             return
+        if (
+            self._pending_morphology_context is not None
+            and event_type
+            in (
+                TelemetryEventType.SEED_GERMINATED,
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                TelemetryEventType.SEED_FOSSILIZED,
+                TelemetryEventType.SEED_PRUNED,
+            )
+        ):
+            context = self._pending_morphology_context
+            data = replace(
+                cast(Any, data),
+                morphology_proposal_id=context.proposal_id,
+                morphology_verdict_id=context.verdict_id,
+                morphology_mutation_id=context.mutation_id,
+                rng_stream=context.rng_stream,
+                rng_seed=context.rng_seed,
+            )
 
         event = TelemetryEvent(
             event_type=event_type,

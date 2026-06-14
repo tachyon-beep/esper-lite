@@ -153,6 +153,91 @@ def test_fossilize_creates_lifecycle_event():
     assert le.accuracy_delta == 2.3
 
 
+def test_fossilize_records_original_from_stage():
+    """SEED_FOSSILIZED must record the real prior stage, not a self-transition.
+
+    Regression for KTS-004: the fossilize handler mutated seed.stage to
+    FOSSILIZED before the lifecycle event read from_stage, producing a
+    FOSSILIZED -> FOSSILIZED self-transition that erased the real origin.
+    """
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    # Advance the seed into BLENDING so it has a non-terminal prior stage.
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+        slot_id="r0c0",
+        epoch=20,
+        data=SeedStageChangedPayload(
+            env_id=0, slot_id="r0c0", from_stage="TRAINING", to_stage="BLENDING",
+            alpha=0.5,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_FOSSILIZED,
+        slot_id="r0c0",
+        epoch=50,
+        data=SeedFossilizedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy",
+            improvement=2.3, params_added=500,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[-1]
+    assert le.action == "FOSSILIZE"
+    assert le.from_stage == "BLENDING"
+    assert le.to_stage == "FOSSILIZED"
+    assert le.accuracy_delta == 2.3
+
+
+def test_prune_records_original_from_stage_and_delta():
+    """SEED_PRUNED records the real prior stage AND carries the payload delta.
+
+    Regression for KTS-004: the prune handler hard-coded accuracy_delta=None
+    even though the pruned payload's improvement carried the real delta.
+    """
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+        slot_id="r0c0",
+        epoch=20,
+        data=SeedStageChangedPayload(
+            env_id=0, slot_id="r0c0", from_stage="TRAINING", to_stage="BLENDING",
+            alpha=0.5,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_PRUNED,
+        slot_id="r0c0",
+        epoch=30,
+        data=SeedPrunedPayload(
+            env_id=0, slot_id="r0c0", reason="gate_failure", improvement=-1.7,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[-1]
+    assert le.action == "PRUNE"
+    assert le.from_stage == "BLENDING"
+    assert le.to_stage == "PRUNED"
+    assert le.accuracy_delta == -1.7
+
+
 def test_blending_to_holding_auto_transition():
     """BLENDING -> HOLDING should be marked as [auto] transition."""
     agg = SanctumAggregator(num_envs=4)
@@ -224,6 +309,213 @@ def test_prune_creates_lifecycle_event():
     assert le.action == "PRUNE"
     assert le.from_stage == "GERMINATED"
     assert le.to_stage == "PRUNED"
+
+
+def test_never_observed_slot_absent_while_dormant_seed_present():
+    """A never-observed configured slot is absent from env.seeds; an observed
+    dormant seed has an explicit entry.
+
+    Regression for UI-005: the snapshot must let consumers distinguish
+    "missing / never measured" from "observed dormant". The aggregator never
+    fabricates a dormant SeedState for a slot that has never produced an event.
+    """
+    agg = SanctumAggregator(num_envs=1)
+
+    # slot r0c0 is observed (germinated). slot r0c1 is configured (it appears in
+    # slot_ids once any sibling event registers it) but never produces an event.
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    # Observe a second slot and immediately prune it, then nothing for a third.
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c1",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c1", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+
+    snapshot = agg.get_snapshot()
+    env = snapshot.envs[0]
+
+    # Both observed slots have explicit SeedState entries.
+    assert "r0c0" in env.seeds
+    assert "r0c1" in env.seeds
+    # A configured-but-never-observed slot is simply absent from env.seeds:
+    # the frontend renders such slots (present in slot_ids, absent from seeds)
+    # as a distinct pending lane rather than a fabricated dormant seed.
+    assert "r0c9" not in env.seeds
+
+
+def test_germinate_preserves_causal_ids():
+    """SEED_GERMINATED causal IDs / RNG identity survive into the lifecycle event."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            blueprint_id="conv_heavy",
+            params=1000,
+            morphology_proposal_id="prop-1",
+            morphology_verdict_id="ver-1",
+            morphology_mutation_id="mut-1",
+            rng_stream="kasmina:germinate",
+            rng_seed=7,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[0]
+    assert le.morphology_proposal_id == "prop-1"
+    assert le.morphology_verdict_id == "ver-1"
+    assert le.morphology_mutation_id == "mut-1"
+    assert le.rng_stream == "kasmina:germinate"
+    assert le.rng_seed == 7
+
+
+def test_stage_change_preserves_causal_ids():
+    """SEED_STAGE_CHANGED causal IDs survive into the lifecycle event."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+        slot_id="r0c0",
+        epoch=20,
+        data=SeedStageChangedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            from_stage="TRAINING",
+            to_stage="BLENDING",
+            alpha=0.2,
+            morphology_proposal_id="prop-2",
+            morphology_verdict_id="ver-2",
+            morphology_mutation_id="mut-2",
+            rng_stream="tamiyo:advance",
+            rng_seed=11,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[1]
+    assert le.action == "ADVANCE"
+    assert le.morphology_proposal_id == "prop-2"
+    assert le.morphology_verdict_id == "ver-2"
+    assert le.morphology_mutation_id == "mut-2"
+    assert le.rng_stream == "tamiyo:advance"
+    assert le.rng_seed == 11
+
+
+def test_fossilize_preserves_causal_ids():
+    """SEED_FOSSILIZED causal IDs survive into the lifecycle event."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_FOSSILIZED,
+        slot_id="r0c0",
+        epoch=50,
+        data=SeedFossilizedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            blueprint_id="conv_heavy",
+            improvement=2.3,
+            params_added=500,
+            morphology_proposal_id="prop-3",
+            morphology_verdict_id="ver-3",
+            morphology_mutation_id="mut-3",
+            rng_stream="kasmina:fossilize",
+            rng_seed=13,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[1]
+    assert le.action == "FOSSILIZE"
+    assert le.morphology_proposal_id == "prop-3"
+    assert le.morphology_verdict_id == "ver-3"
+    assert le.morphology_mutation_id == "mut-3"
+    assert le.rng_stream == "kasmina:fossilize"
+    assert le.rng_seed == 13
+
+
+def test_prune_preserves_causal_ids():
+    """SEED_PRUNED causal IDs survive into the lifecycle event."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_PRUNED,
+        slot_id="r0c0",
+        epoch=30,
+        data=SeedPrunedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            reason="gate_failure",
+            morphology_proposal_id="prop-4",
+            morphology_verdict_id="ver-4",
+            morphology_mutation_id="mut-4",
+            rng_stream="governor:prune",
+            rng_seed=17,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[1]
+    assert le.action == "PRUNE"
+    assert le.morphology_proposal_id == "prop-4"
+    assert le.morphology_verdict_id == "ver-4"
+    assert le.morphology_mutation_id == "mut-4"
+    assert le.rng_stream == "governor:prune"
+    assert le.rng_seed == 17
+
+
+def test_lifecycle_causal_ids_default_none_when_absent():
+    """Payloads without causal IDs yield None (not a crash, not a fake value)."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[0]
+    assert le.morphology_proposal_id is None
+    assert le.morphology_verdict_id is None
+    assert le.morphology_mutation_id is None
+    assert le.rng_stream is None
+    assert le.rng_seed is None
 
 
 def test_best_run_record_has_dual_state():

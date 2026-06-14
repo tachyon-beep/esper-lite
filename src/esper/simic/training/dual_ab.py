@@ -1,18 +1,18 @@
-"""Dual-policy A/B testing: train separate policies on separate GPUs.
+"""Sequential dual-policy A/B testing: train separate policies on separate GPUs.
 
-This module implements true A/B comparison of reward modes by training
-independent policies in parallel, each on its own GPU with its own reward mode.
+This module implements reward-mode comparison by training
+independent policies sequentially, each on its assigned device with its own reward mode.
 
 Architecture:
     - One PolicyGroup per GPU/device
     - Each group has: independent agent, dedicated envs, own reward config
-    - Groups train in lockstep for fair comparison
+    - Groups share configuration but currently train sequentially
     - Final results show which reward mode produces the better policy
 
 Limitations:
     - Phase 1 Implementation: Groups currently train sequentially, not in parallel lockstep
     - This means later groups benefit from GPU warm-up and cached compilation
-    - True parallel comparison would require modifying train_ppo_vectorized to support
+    - True lockstep comparison would require modifying train_ppo_vectorized to support
       multiple agents running simultaneously, or using separate processes per group
     - The current approach is acceptable for initial A/B comparisons where we care about
       final policy quality rather than exact wall-clock parity during training
@@ -80,6 +80,9 @@ def train_dual_policy_ab(
     seed: int = 42,
     use_telemetry: bool = True,
     slots: list[str] | None = None,
+    proof_baseline_modes: dict[str, str] | None = None,
+    proof_baseline_lifecycle_policies: dict[str, str] | None = None,
+    proof_baseline_pair_id: str | None = None,
     **kwargs: Any,
 ) -> dict[str, tuple[PPOAgent, list[dict[str, Any]]]]:
     """Train multiple policies sequentially (Phase 1), one per GPU/device, for A/B testing.
@@ -114,6 +117,11 @@ def train_dual_policy_ab(
         use_telemetry: Enable telemetry events
         slots: List of slot IDs to use (e.g., ["r0c0", "r0c1", "r0c2"]).
             Defaults to ["r0c0", "r0c1", "r0c2"] (3 slots).
+        proof_baseline_modes: Optional group_id -> proof baseline mode labels
+            persisted into TRAINING_STARTED telemetry.
+        proof_baseline_lifecycle_policies: Optional group_id -> lifecycle
+            control policy labels enforced by vectorized PPO before sampling.
+        proof_baseline_pair_id: Optional proof cohort pair identifier.
         **kwargs: Additional arguments passed to train_ppo_vectorized
 
     Returns:
@@ -194,6 +202,15 @@ def train_dual_policy_ab(
         # Deterministic seed offset per group (for reproducibility across sessions)
         group_hash = int(hashlib.md5(group_id.encode()).hexdigest()[:8], 16)
         group_seed = seed + (group_hash % 10000)
+        proof_baseline_mode = None
+        if proof_baseline_modes is not None and group_id in proof_baseline_modes:
+            proof_baseline_mode = proof_baseline_modes[group_id]
+        proof_baseline_lifecycle_policy = None
+        if (
+            proof_baseline_lifecycle_policies is not None
+            and group_id in proof_baseline_lifecycle_policies
+        ):
+            proof_baseline_lifecycle_policy = proof_baseline_lifecycle_policies[group_id]
 
         # Train this group using vectorized PPO
         agent, history = train_ppo_vectorized(
@@ -215,6 +232,9 @@ def train_dual_policy_ab(
             reward_mode=reward_mode.value,
             slots=slots,  # Pass slot configuration
             group_id=group_id,  # Tag telemetry events with group
+            proof_baseline_mode=proof_baseline_mode,
+            proof_baseline_pair_id=proof_baseline_pair_id,
+            proof_baseline_lifecycle_policy=proof_baseline_lifecycle_policy,
             **kwargs,
         )
 

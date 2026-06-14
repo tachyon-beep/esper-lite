@@ -34,7 +34,6 @@ import threading
 from typing import Any, cast
 
 import torch
-import torch.amp as torch_amp
 import torch.nn as nn
 
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
@@ -70,6 +69,7 @@ from esper.simic.telemetry import (
     collect_per_layer_gradients,
 )
 from esper.simic.control import RunningMeanStd, RewardNormalizer
+from esper.tamiyo.policy.action_masks import MaskedCategorical
 from esper.tamiyo.policy.features import get_feature_size
 from esper.simic.agent import PPOAgent
 from esper.simic.agent.types import PPOUpdateMetrics
@@ -82,6 +82,7 @@ from esper.simic.rewards import (
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.simic.telemetry.emitters import VectorizedEmitter
 from .env_factory import EnvFactoryContext
+from .helpers import policy_amp_context
 from .parallel_env_state import ParallelEnvState
 from .vectorized_trainer import VectorizedPPOTrainer
 
@@ -176,60 +177,219 @@ def _calculate_value_warmup_steps(
     return value_warmup_batches * max(1, ppo_updates_per_batch)
 
 
+_PPO_MEAN_REDUCED_METRICS = frozenset({
+    "policy_loss",
+    "value_loss",
+    "entropy_floor_penalty",
+    "approx_kl",
+    "clip_fraction",
+    "clip_fraction_positive",
+    "clip_fraction_negative",
+    "explained_variance",
+    "entropy",
+    "ratio_mean",
+    "ratio_std",
+    "gradient_cv",
+    "forced_step_ratio",
+    "value_mean",
+    "return_mean",
+    "return_std",
+    "value_target_scale",
+    "pre_norm_advantage_mean",
+    "pre_norm_advantage_std",
+    "d5_pre_norm_advantage_std",
+    "advantage_mean",
+    "advantage_std",
+    "advantage_skewness",
+    "advantage_kurtosis",
+    "advantage_positive_ratio",
+    "v_return_correlation",
+    "td_error_mean",
+    "td_error_std",
+    "bellman_error",
+    "return_p10",
+    "return_p50",
+    "return_p90",
+    "return_variance",
+    "return_skewness",
+    "cuda_memory_allocated_gb",
+    "cuda_memory_reserved_gb",
+    "cuda_memory_peak_gb",
+    "cuda_memory_fragmentation",
+    "throughput_step_time_ms_sum",
+    "throughput_dataloader_wait_ms_sum",
+    "log_prob_min",
+    "log_prob_max",
+    "q_variance",
+    "q_spread",
+    "lstm_h_l2_total",
+    "lstm_c_l2_total",
+    "lstm_h_rms",
+    "lstm_c_rms",
+    "lstm_h_env_rms_mean",
+    "lstm_c_env_rms_mean",
+    "lstm_h_max",
+    "lstm_c_max",
+    "aux_contribution_loss",
+    "effective_aux_coef",
+    "aux_pred_variance",
+    "aux_explained_variance",
+    "aux_pred_target_correlation",
+})
+
+_PPO_MAX_REDUCED_METRICS = frozenset({
+    "ratio_max",
+    "value_max",
+    "value_std",
+    "pre_clip_grad_norm",
+    "lstm_h_env_rms_max",
+    "lstm_c_env_rms_max",
+})
+
+_PPO_MIN_REDUCED_METRICS = frozenset({
+    "ratio_min",
+    "value_min",
+    "early_stop_epoch",
+})
+
+_PPO_SUM_REDUCED_METRICS = frozenset({
+    "finiteness_gate_skip_count",
+    "usable_actor_timesteps",
+    "nan_grad_count",
+    "inf_grad_count",
+    "dead_layers",
+    "exploding_layers",
+})
+
+_PPO_ANY_REDUCED_METRICS = frozenset({
+    "ppo_update_performed",
+    "advantage_std_floored",
+    "lstm_has_nan",
+    "lstm_has_inf",
+})
+
+_PPO_FIRST_REDUCED_METRICS = frozenset({
+    "op_q_values",
+    "op_valid_mask",
+    "ratio_diagnostic",
+    "layer_gradient_health",
+    "conditional_head_entropies",
+})
+
+_PPO_APPEND_REDUCED_METRICS = frozenset({
+    "finiteness_gate_failures",
+})
+
+_PPO_HEAD_SERIES_MAX_REDUCED_METRICS = frozenset({
+    "head_entropies",
+    "head_grad_norms",
+})
+
+_PPO_HEAD_SERIES_APPEND_REDUCED_METRICS = frozenset({
+    "head_learnable_fractions",
+})
+
+_PPO_HEAD_STATE_APPEND_REDUCED_METRICS = frozenset({
+    "head_gradient_states",
+})
+
+_PPO_HEAD_BOOL_OR_REDUCED_METRICS = frozenset({
+    "head_nan_detected",
+    "head_inf_detected",
+})
+
+
+def _aggregate_head_series_max(values: list[Any]) -> dict[str, list[float]]:
+    merged: dict[str, float] = {}
+    for update_dict in values:
+        for head, head_values in update_dict.items():
+            max_val = max(head_values)
+            if head not in merged or max_val > merged[head]:
+                merged[head] = max_val
+    return {head: [value] for head, value in merged.items()}
+
+
+def _aggregate_head_series_append(values: list[Any]) -> dict[str, list[Any]]:
+    merged: dict[str, list[Any]] = {}
+    for update_dict in values:
+        for head, head_values in update_dict.items():
+            if head not in merged:
+                merged[head] = []
+            merged[head].extend(head_values)
+    return merged
+
+
+def _aggregate_head_states(values: list[Any]) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for update_dict in values:
+        for head, states in update_dict.items():
+            if head not in merged:
+                merged[head] = []
+            merged[head].extend(states)
+    return merged
+
+
+def _aggregate_head_bool_or(values: list[Any]) -> dict[str, bool]:
+    merged: dict[str, bool] = {}
+    for update_dict in values:
+        for head, flag in update_dict.items():
+            merged[head] = bool(flag) or (head in merged and merged[head])
+    return merged
+
+
+def _aggregate_list_append(values: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    for update_list in values:
+        merged.extend(update_list)
+    return merged
+
+
 def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, Any]:
-    """Aggregate metrics across multiple PPO updates for a single batch."""
+    """Aggregate metrics across multiple PPO updates using declared reducers."""
     if not update_metrics:
         return {}
 
     aggregated: dict[str, Any] = {}
-    keys = {k for metrics in update_metrics for k in metrics.keys()}
+    keys = {key for metrics in update_metrics for key in metrics}
     for key in keys:
-        values: list[Any] = [
-            metrics.get(key)
-            for metrics in update_metrics
-            if key in metrics and metrics.get(key) is not None
-        ]
+        values: list[Any] = []
+        for metrics in update_metrics:
+            if key in metrics:
+                value = metrics[key]  # type: ignore[literal-required]
+                if value is not None:
+                    values.append(value)
         if not values:
             continue
-        if key == "ratio_max" or key.endswith("_ratio_max"):
-            # All ratio max fields (ratio_max, head_*_ratio_max, joint_ratio_max)
-            # should take the maximum across PPO updates, not average
-            aggregated[key] = max(values)
-        elif key == "ratio_min":
-            aggregated[key] = min(values)
-        elif key == "value_min":
-            aggregated[key] = min(values)
-        elif key == "value_max":
-            aggregated[key] = max(values)
-        elif key == "value_mean":
-            # Average of means across environments
+
+        if key in _PPO_MEAN_REDUCED_METRICS or key.endswith("_clip_fraction"):
+            # head_{name}_clip_fraction keys are per-head fractions: mean across
+            # PPO updates, matching how the joint clip_fraction (in the frozenset)
+            # is reduced. The suffix only matches the per-head keys -- the joint
+            # 'clip_fraction'/'clip_fraction_positive'/'clip_fraction_negative'
+            # keys do not end in '_clip_fraction' and are handled by the frozenset.
             aggregated[key] = sum(values) / len(values)
-        elif key == "value_std":
-            # Cannot simply average std - take max as conservative approximation
-            # (proper solution requires pooled variance with means, but max ensures
-            # we don't underestimate variance which could mask instability)
+        elif key in _PPO_MAX_REDUCED_METRICS or key.endswith("_ratio_max"):
             aggregated[key] = max(values)
-        elif key == "early_stop_epoch":
+        elif key in _PPO_MIN_REDUCED_METRICS:
             aggregated[key] = min(values)
-        elif key in ("head_entropies", "head_grad_norms"):
-            # Dict[head_name, List[float]] - merge lists from multiple PPO updates
-            # Take max per-head value across all updates (conservative for monitoring)
-            merged: dict[str, float] = {}
-            for update_dict in values:
-                if isinstance(update_dict, dict):
-                    for head, head_values in update_dict.items():
-                        if isinstance(head_values, list) and head_values:
-                            max_val = max(head_values)
-                            if head not in merged or max_val > merged[head]:
-                                merged[head] = max_val
-            # Return in format emitter expects: dict[head, list[float]]
-            aggregated[key] = {h: [v] for h, v in merged.items()}
-        elif isinstance(values[0], dict):
+        elif key in _PPO_SUM_REDUCED_METRICS:
+            aggregated[key] = sum(values)
+        elif key in _PPO_ANY_REDUCED_METRICS:
+            aggregated[key] = any(values)
+        elif key in _PPO_FIRST_REDUCED_METRICS:
             aggregated[key] = values[0]
-        elif isinstance(values[0], (int, float)):
-            aggregated[key] = sum(values) / len(values)
+        elif key in _PPO_APPEND_REDUCED_METRICS:
+            aggregated[key] = _aggregate_list_append(values)
+        elif key in _PPO_HEAD_SERIES_MAX_REDUCED_METRICS:
+            aggregated[key] = _aggregate_head_series_max(values)
+        elif key in _PPO_HEAD_SERIES_APPEND_REDUCED_METRICS:
+            aggregated[key] = _aggregate_head_series_append(values)
+        elif key in _PPO_HEAD_STATE_APPEND_REDUCED_METRICS:
+            aggregated[key] = _aggregate_head_states(values)
+        elif key in _PPO_HEAD_BOOL_OR_REDUCED_METRICS:
+            aggregated[key] = _aggregate_head_bool_or(values)
         else:
-            aggregated[key] = values[0]
+            raise KeyError(f"No PPO metric reducer declared for '{key}'")
     return aggregated
 
 
@@ -277,10 +437,10 @@ def _run_ppo_updates(
 
     for update_idx in range(updates_to_run):
         clear_buffer = update_idx == updates_to_run - 1
-        if use_amp and torch.cuda.is_available() and amp_dtype is not None:
-            with torch_amp.autocast(device_type="cuda", dtype=amp_dtype):  # type: ignore[attr-defined]
-                metrics = agent.update(clear_buffer=clear_buffer)
-        else:
+        # P1-BF16: the PPO policy update runs under the SAME shared policy-AMP context as
+        # the rollout legs (CRITICAL-1 symmetry, enforced structurally). BF16-or-FP32 only
+        # -- never unscaled FP16, since the policy optimizer wires no GradScaler.
+        with policy_amp_context(use_amp, amp_dtype):
             metrics = agent.update(clear_buffer=clear_buffer)
         if metrics:
             update_metrics.append(metrics)
@@ -344,6 +504,12 @@ def _emit_anomaly_diagnostics(
         "ratio_collapse": TelemetryEventType.RATIO_COLLAPSE_DETECTED,
         "value_collapse": TelemetryEventType.VALUE_COLLAPSE_DETECTED,
         "numerical_instability": TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+        # Gradient-pathology anomalies from AnomalyDetector.check_gradient_drift.
+        # These signal slow divergence of gradient norm/health from the EMA and
+        # have a dedicated event type so consumers can distinguish them from the
+        # generic GRADIENT_ANOMALY catch-all.
+        "gradient_norm_drift": TelemetryEventType.GRADIENT_PATHOLOGY_DETECTED,
+        "gradient_health_drift": TelemetryEventType.GRADIENT_PATHOLOGY_DETECTED,
     }
 
     gradient_stats = None
@@ -514,6 +680,9 @@ def train_ppo_vectorized(
     torch_profiler_profile_memory: bool = False,
     torch_profiler_with_stack: bool = False,
     torch_profiler_summary: bool = False,
+    proof_baseline_mode: str | None = None,
+    proof_baseline_pair_id: str | None = None,
+    proof_baseline_lifecycle_policy: str | None = None,
 ) -> tuple[PPOAgent, list[dict[str, Any]]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -812,6 +981,13 @@ def train_ppo_vectorized(
     else:
         effective_compile_mode = compile_mode if not quiet_analytics else "off"
 
+    # P1-VALID: disable MaskedCategorical's per-head .any()/.isnan() validation in the
+    # TRAINING process. Those force CPU syncs + @torch.compiler.disable graph breaks on the
+    # hot path (rollout get_action and evaluate_actions). NaN/Inf logits are caught by the PPO
+    # finiteness gate; empty masks by the folded sync-free guard in evaluate_actions. This is
+    # the documented `validate` toggle, not a shim -- dev/eval/CI processes keep validate=True.
+    MaskedCategorical.validate = False
+
     # Create or resume PPO agent
     if resume_path:
         checkpoint = torch.load(resume_path, map_location="cpu", weights_only=True)
@@ -865,6 +1041,10 @@ def train_ppo_vectorized(
             )
         )
     else:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
         # Create policy via Tamiyo factory
         # IMPORTANT: Pass actual slot_config to ensure action heads/masks align
         # with environment slot ordering (critical for non-default slot layouts)
@@ -952,6 +1132,8 @@ def train_ppo_vectorized(
                 compile_mode=agent.compile_mode
                 if agent.compile_mode != "off"
                 else None,
+                proof_baseline_mode=proof_baseline_mode,
+                proof_baseline_pair_id=proof_baseline_pair_id,
             ),
         )
     )
@@ -1049,6 +1231,7 @@ def train_ppo_vectorized(
             env_devices=env_device_map,
             num_workers=effective_workers,
             shuffle=False,
+            drop_last=False,
         )
 
     num_train_batches = len(shared_train_iter)
@@ -1126,14 +1309,28 @@ def train_ppo_vectorized(
             else:
                 resolved_amp_dtype = torch.float16
                 use_grad_scaler = True
-                _logger.info("AMP using FP16 with GradScaler (pre-Ampere GPU)")
+                _logger.info(
+                    "AMP using FP16 with GradScaler for host-model training (pre-Ampere GPU). "
+                    "The PPO policy path runs in FP32 (policy_amp_context): the policy optimizer "
+                    "has no GradScaler, so FP16 there would underflow."
+                )
         else:
             raise ValueError(f"Invalid amp_dtype: {amp_dtype}")
 
     amp_enabled = resolved_amp_dtype is not None
 
+    # P2-STREAMPOOL: build one persistent CUDA stream per env up front (None on CPU). Indexed
+    # by env_idx to match env_device_map; the list is never mutated after construction.
+    env_streams: list["torch.cuda.Stream | None"] = [
+        torch.cuda.Stream(device=torch.device(dev))  # type: ignore[no-untyped-call]
+        if torch.device(dev).type == "cuda"
+        else None
+        for dev in env_device_map
+    ]
+
     env_factory = EnvFactoryContext(
         env_device_map=env_device_map,
+        env_streams=env_streams,
         create_model=create_model,
         task_spec=task_spec,
         slots=slots,
@@ -1207,6 +1404,7 @@ def train_ppo_vectorized(
         gpu_preload_augment=gpu_preload_augment,
         amp_enabled=amp_enabled,
         resolved_amp_dtype=resolved_amp_dtype,
+        proof_baseline_lifecycle_policy=proof_baseline_lifecycle_policy,
         env_factory=env_factory,
         compiled_loss_and_correct=_compiled_loss_and_correct,
         run_ppo_updates=_run_ppo_updates,

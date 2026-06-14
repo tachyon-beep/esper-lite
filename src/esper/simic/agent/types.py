@@ -65,6 +65,18 @@ class PPOUpdateMetrics(TypedDict, total=False):
     clip_fraction: float
     clip_fraction_positive: float
     clip_fraction_negative: float
+    # Per-head clip-fraction (factored-PPO trust-region telemetry): fraction of
+    # samples where each head's ratio left [1-clip, 1+clip]. Companion to the
+    # joint clip_fraction above; the loss clips per head, so these expose the
+    # per-head clipping the joint figure aggregates over.
+    head_slot_clip_fraction: float
+    head_blueprint_clip_fraction: float
+    head_style_clip_fraction: float
+    head_tempo_clip_fraction: float
+    head_alpha_target_clip_fraction: float
+    head_alpha_speed_clip_fraction: float
+    head_alpha_curve_clip_fraction: float
+    head_op_clip_fraction: float
     explained_variance: float
     entropy: float
     ratio_mean: float
@@ -122,6 +134,8 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_entropies: dict[str, list[float]]  # Per-head, per-epoch
     conditional_head_entropies: dict[str, list[float]]  # Entropy when head is causally relevant
     head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
+    head_learnable_fractions: dict[str, list[float]]  # Per-head, per-epoch learnable fraction
+    head_gradient_states: dict[str, list[str]]  # finite, missing, nonfinite, or not_learnable
     ratio_diagnostic: dict[str, Any]
     # Q-values (Policy V2 op-conditioned critic)
     op_q_values: tuple[float, ...]
@@ -132,6 +146,8 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_nan_detected: dict[str, bool]
     head_inf_detected: dict[str, bool]
     # LSTM hidden state health (TELE-340)
+    # UPDATE-time health: computed during PPO update epochs from re-evaluated hidden
+    # states under the updated params (PPOUpdateMetricsBuilder.finalize()).
     lstm_h_rms: float | None
     lstm_c_rms: float | None
     lstm_h_env_rms_mean: float | None
@@ -142,6 +158,21 @@ class PPOUpdateMetrics(TypedDict, total=False):
     lstm_c_max: float | None
     lstm_has_nan: bool | None
     lstm_has_inf: bool | None
+    # ROLLOUT-time LSTM health (SIMIC-PROD-003): computed from the hidden state captured
+    # during on-policy rollout collection (behaviour policy). DISTINCT signal from the
+    # update-time lstm_* health above; injected by the coordinator's anomaly pass.
+    rollout_lstm_h_l2_total: float | None
+    rollout_lstm_c_l2_total: float | None
+    rollout_lstm_h_rms: float | None
+    rollout_lstm_c_rms: float | None
+    rollout_lstm_h_env_rms_mean: float | None
+    rollout_lstm_h_env_rms_max: float | None
+    rollout_lstm_c_env_rms_mean: float | None
+    rollout_lstm_c_env_rms_max: float | None
+    rollout_lstm_h_max: float | None
+    rollout_lstm_c_max: float | None
+    rollout_lstm_has_nan: bool | None
+    rollout_lstm_has_inf: bool | None
     # D5: Slot Saturation Diagnostics
     # Track forced WAIT steps to understand PPO stability under slot saturation
     forced_step_ratio: float  # Fraction of timesteps with forced decisions (no agency)

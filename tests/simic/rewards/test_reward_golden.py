@@ -28,6 +28,7 @@ def test_contribution_reward_golden_simplified_pbrs() -> None:
         previous_stage=SeedStage.GERMINATED.value,
         previous_epochs_in_stage=1,
         seed_age_epochs=5,
+        counterfactual_total_improvement=0.0,
     )
 
     reward = compute_reward(
@@ -135,6 +136,7 @@ def test_basic_mode_prune_forfeits_pbrs() -> None:
         previous_stage=SeedStage.GERMINATED.value,
         previous_epochs_in_stage=1,
         seed_age_epochs=6,
+        counterfactual_total_improvement=2.0,
     )
 
     reward = compute_reward(
@@ -188,6 +190,7 @@ def test_basic_mode_fossilize_good_seed() -> None:
         previous_stage=SeedStage.BLENDING.value,
         previous_epochs_in_stage=3,
         seed_age_epochs=20,
+        counterfactual_total_improvement=5.0,
     )
 
     reward = compute_reward(
@@ -218,6 +221,63 @@ def test_basic_mode_fossilize_good_seed() -> None:
     assert reward == pytest.approx(2.918, abs=0.05)
 
 
+def test_basic_mode_fossilize_gates_on_counterfactual_not_host_drift() -> None:
+    """FOSSILIZE legitimacy must follow the CLEAN counterfactual, not host drift.
+
+    Regression for esper-lite-ea19d665a3: in a declining/plateaued host,
+    total_improvement (full-model accuracy change since germination) goes negative
+    purely from host drift the seed did NOT cause. The OLD code gated fossilize on
+    total_improvement >= 0, so a genuinely valuable seed (positive counterfactual) was
+    wrongly routed to the non-contributing/ransomware penalty. With the gate keyed on
+    counterfactual_total_improvement, the good seed fossilizes normally even though the
+    host declined. This is the exact confound ea19 fixes — the two values DIFFER here.
+    """
+    config = ContributionRewardConfig(
+        reward_mode=RewardMode.BASIC,
+        param_budget=500_000,
+        param_penalty_weight=0.1,
+        basic_fossilize_base_bonus=0.3,
+        basic_contribution_scale=0.5,
+        attribution_formula="harmonic",
+    )
+    seed_info = SeedInfo(
+        stage=SeedStage.HOLDING.value,
+        improvement_since_stage_start=0.5,
+        total_improvement=-5.0,  # HOST DRIFT: full model declined since germination
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.BLENDING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=20,
+        counterfactual_total_improvement=5.0,  # but the seed itself is genuinely valuable
+    )
+
+    reward = compute_reward(
+        ContributionRewardInputs(
+            action=LifecycleOp.FOSSILIZE,
+            seed_contribution=5.0,
+            val_acc=75.0,
+            seed_info=seed_info,
+            epoch=20,
+            max_epochs=150,
+            total_params=110_000,
+            host_params=100_000,
+            acc_at_germination=70.0,
+            acc_delta=5.0,
+            committed_val_acc=75.0,
+            fossilized_seed_params=0,
+            effective_seed_params=10_000,
+            config=config,
+        )
+    )
+
+    # Gate uses the counterfactual (+5.0): harmonic(5.0, 5.0) = 5.0, same substantial
+    # bonus as the good-seed golden. Under the old total_improvement (-5.0) gate this
+    # would have been the non-contributing penalty (improvement <= 0).
+    assert reward > 2.0, "Good seed in a declining host must still fossilize on its counterfactual"
+    assert reward == pytest.approx(2.918, abs=0.05)
+
+
 def test_basic_mode_fossilize_ransomware_penalty() -> None:
     """FOSSILIZE in BASIC mode penalizes ransomware seeds.
 
@@ -241,6 +301,7 @@ def test_basic_mode_fossilize_ransomware_penalty() -> None:
         previous_stage=SeedStage.BLENDING.value,
         previous_epochs_in_stage=3,
         seed_age_epochs=20,
+        counterfactual_total_improvement=-3.0,
     )
 
     reward = compute_reward(
@@ -296,6 +357,7 @@ def test_basic_mode_fossilize_drip_split() -> None:
         previous_stage=SeedStage.BLENDING.value,
         previous_epochs_in_stage=3,
         seed_age_epochs=20,
+        counterfactual_total_improvement=5.0,
     )
 
     result = compute_basic_reward(
@@ -353,6 +415,7 @@ def test_basic_mode_drip_disabled_when_fraction_zero() -> None:
         previous_stage=SeedStage.BLENDING.value,
         previous_epochs_in_stage=3,
         seed_age_epochs=20,
+        counterfactual_total_improvement=5.0,
     )
 
     result = compute_basic_reward(

@@ -374,8 +374,8 @@ class TestCounterfactualGuard:
 
     @given(seed=probationary_seed_states(with_counterfactual=False))
     @settings(max_examples=50)
-    def test_no_counterfactual_uses_total_improvement(self, seed):
-        """Property: Without counterfactual, falls back to total_improvement."""
+    def test_no_counterfactual_never_fossilizes_from_total_improvement(self, seed):
+        """Property: Without counterfactual, total improvement is not proof."""
         policy = HeuristicTamiyo(topology="cnn")
 
         # Force no counterfactual
@@ -393,9 +393,9 @@ class TestCounterfactualGuard:
 
         decision = policy.decide(MockSignals(), active_seeds=[seed])
 
-        # With positive total_improvement, should fossilize
-        assert decision.action.name == "FOSSILIZE", \
-            "Should fossilize with positive total_improvement when no counterfactual"
+        assert decision.action.name != "FOSSILIZE", (
+            "Should not fossilize with positive total_improvement when no counterfactual"
+        )
 
 
 # =============================================================================

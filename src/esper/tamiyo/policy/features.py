@@ -43,6 +43,80 @@ from esper.leyline.stage_schema import (
 
 # HOT PATH: ONLY leyline imports allowed!
 
+# Obs V3 "no evidence yet" sentinel for pre-measurement diagnostics.
+#
+# A freshly germinated seed has not yet been observed: no gradient-health
+# reading and no counterfactual measurement exist. Encoding such a slot as
+# healthy/fresh would teach the policy positive evidence the system has never
+# observed (TPD-003). Instead, absence of tracking is encoded as this sentinel,
+# which lies OUTSIDE the measured range of both diagnostics so the encoder
+# genuinely distinguishes "unknown" from any real reading:
+#   - gradient_health_prev: measured health is clamped to [0, 1];
+#   - counterfactual_fresh: DEFAULT_GAMMA ** n is in (0, 1] for finite n >= 0,
+#     and the stale limit is 0.0.
+# -1.0 collides with neither range and preserves the float32 tensor contract.
+OBS_V3_UNKNOWN_SENTINEL: float = -1.0
+
+
+def _counterfactual_freshness(
+    epochs_since_counterfactual: dict[str, int],
+    slot_id: str,
+) -> float:
+    """Return counterfactual freshness, or the UNKNOWN sentinel when no
+    measurement has ever been recorded for the slot.
+
+    Missing tracking means "no counterfactual evidence yet" (e.g. a just
+    germinated seed), which is distinct from a measured stale value (0.0) and
+    from a measured fresh value (1.0). It is encoded as OBS_V3_UNKNOWN_SENTINEL.
+    """
+    if slot_id not in epochs_since_counterfactual:
+        return OBS_V3_UNKNOWN_SENTINEL
+    epochs_since_cf = epochs_since_counterfactual[slot_id]
+    return DEFAULT_GAMMA ** epochs_since_cf
+
+
+def _previous_gradient_health(
+    gradient_health_prev: dict[str, float],
+    slot_id: str,
+) -> float:
+    """Return previous-epoch gradient health, or the UNKNOWN sentinel when no
+    gradient-health reading has ever been recorded for the slot.
+
+    Missing tracking means "no gradient-health evidence yet" (e.g. a just
+    germinated seed). Measured health lies in [0, 1], so it must NOT be encoded
+    as 0.0 (which is a measured "fully unhealthy" reading); it is encoded as
+    OBS_V3_UNKNOWN_SENTINEL instead.
+    """
+    if slot_id not in gradient_health_prev:
+        return OBS_V3_UNKNOWN_SENTINEL
+    return gradient_health_prev[slot_id]
+
+
+def _validated_gradient_health(value: float | None, slot_id: str) -> float:
+    """Encode current gradient health for the observation.
+
+    Unmeasured gradient health (``None``) encodes as ``0.0`` — absence is NOT
+    healthy evidence, matching the missing-telemetry branch (KTS-001). A seed
+    whose gradient stats have not been measured yet (e.g. just germinated) is a
+    legitimate, not a malformed, state. A materialized tensor or a NaN/inf value
+    is still a real telemetry bug and fails fast.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, torch.Tensor):
+        raise ValueError(
+            f"gradient_health for slot {slot_id} must be a materialized scalar, "
+            f"got tensor shape {tuple(value.shape)}."
+        )
+    else:
+        raw_health = float(value)
+    if not math.isfinite(raw_health):
+        raise ValueError(
+            f"NaN/inf in gradient_health for slot {slot_id}. "
+            f"Value: {value}. This indicates malformed seed telemetry."
+        )
+    return safe(raw_health, 1.0, max_val=1.0)
+
 
 # =============================================================================
 # Symlog Transform for LSTM Saturation Prevention
@@ -109,19 +183,31 @@ __all__ = [
 # Observation V3 Feature Extraction (Phase 2)
 # =============================================================================
 
-def _pad_history(history: list[float], length: int = 5) -> list[float]:
-    """Left-pad history to fixed length with zeros.
+def _pad_history(history: list[float], length: int = 5) -> list[float | None]:
+    """Left-pad history to fixed length, marking absent steps with ``None``.
+
+    Early in an episode the history is shorter than ``length``: those leading
+    steps have simply not been observed yet. Padding them with ``0.0`` would
+    fabricate an observed value of zero where there was no observation at all,
+    making "absent" indistinguishable from a genuinely measured zero loss or
+    zero accuracy in the resulting observation tensor (TPD-005).
+
+    Instead, absent steps are returned as ``None``. Callers normalize the real
+    values and encode the ``None`` positions as ``OBS_V3_UNKNOWN_SENTINEL``,
+    which lies OUTSIDE the [0, 1] range of every history feature so the policy
+    can distinguish "not yet observed" from "observed zero".
 
     Args:
         history: Raw history values (may be shorter than length at episode start)
         length: Target length (default 5)
 
     Returns:
-        List of exactly `length` values, left-padded with 0.0 if needed
+        List of exactly ``length`` entries: the most recent values, left-padded
+        with ``None`` for steps that have not been observed yet.
     """
     if len(history) >= length:
-        return history[-length:]
-    return [0.0] * (length - len(history)) + history
+        return list(history[-length:])
+    return [None] * (length - len(history)) + list(history)
 
 
 def _extract_base_features_v3(
@@ -163,7 +249,7 @@ def _extract_base_features_v3(
     # Current metrics (3 dims)
     # Normalize epoch to [0, 1] range using runtime max_epochs
     max_epochs_den = float(max_epochs)
-    epoch_norm = float(signal.metrics.epoch) / max_epochs_den
+    epoch_norm = min(float(signal.metrics.epoch), max_epochs_den) / max_epochs_den
     # Loss normalization: symlog to prevent LSTM saturation
     # Old: log(1+loss)/log(16) allowed loss=100 → 1.67 (exceeded 1.0)
     # New: symlog(loss)/7 keeps all values in ~[0, 1] range
@@ -171,13 +257,21 @@ def _extract_base_features_v3(
     val_loss_norm = symlog(signal.metrics.val_loss) / _SYMLOG_NORM
     val_accuracy_norm = signal.metrics.val_accuracy / 100.0
 
-    # Extract and normalize loss history (5 dims) - symlog normalization
+    # Extract and normalize loss history (5 dims) - symlog normalization.
+    # Absent steps (None) encode as the UNKNOWN sentinel, NOT as observed-0.0.
     loss_history_padded = _pad_history(signal.loss_history, 5)
-    loss_history_norm = [symlog(x) / _SYMLOG_NORM for x in loss_history_padded]
+    loss_history_norm = [
+        OBS_V3_UNKNOWN_SENTINEL if x is None else symlog(x) / _SYMLOG_NORM
+        for x in loss_history_padded
+    ]
 
-    # Extract and normalize accuracy history (5 dims)
+    # Extract and normalize accuracy history (5 dims).
+    # Absent steps (None) encode as the UNKNOWN sentinel, NOT as observed-0.0.
     acc_history_padded = _pad_history(signal.accuracy_history, 5)
-    acc_history_norm = [x / 100.0 for x in acc_history_padded]
+    acc_history_norm = [
+        OBS_V3_UNKNOWN_SENTINEL if x is None else x / 100.0
+        for x in acc_history_padded
+    ]
 
     # Stage distribution (3 dims) - normalize by actual slot count
     # CRITICAL: Must use slot_config.num_slots for correctness with arbitrary grid sizes
@@ -256,10 +350,10 @@ def _extract_slot_features_v3(
     # Current alpha (1 dim)
     current_alpha = slot_report.metrics.current_alpha
 
-    # Improvement - use counterfactual contribution if available, else improvement_since_stage_start (1 dim)
+    # Improvement - causal counterfactual contribution only (1 dim)
     contribution = slot_report.metrics.counterfactual_contribution
     if contribution is None:
-        contribution = slot_report.metrics.improvement_since_stage_start
+        contribution = 0.0
     contribution_norm = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
 
     # Contribution velocity (1 dim) - raw velocity, not fossilize lookahead
@@ -300,19 +394,24 @@ def _extract_slot_features_v3(
             gradient_norm = symlog(grad_norm_raw) / _SYMLOG_NORM
         else:
             gradient_norm = 0.0
-        gradient_health = safe(slot_report.telemetry.gradient_health, 1.0, max_val=1.0)
+        gradient_health = _validated_gradient_health(
+            slot_report.telemetry.gradient_health,
+            slot_id,
+        )
         has_vanishing = 1.0 if slot_report.telemetry.has_vanishing else 0.0
         has_exploding = 1.0 if slot_report.telemetry.has_exploding else 0.0
     else:
-        # Default values when telemetry not available (shouldn't happen in Obs V3)
+        # Missing telemetry is not healthy evidence for an active slot.
         gradient_norm = 0.0
-        gradient_health = 1.0  # Assume healthy
+        gradient_health = 0.0
         has_vanishing = 0.0
         has_exploding = 0.0
 
     # gradient_health_prev (1 dim) - from env_state tracking
-    # Default to 1.0 (healthy) if not yet tracked for this slot
-    gradient_health_prev = env_state.gradient_health_prev.get(slot_id, 1.0)
+    gradient_health_prev = _previous_gradient_health(
+        env_state.gradient_health_prev,
+        slot_id,
+    )
     # Fail-fast if NaN was stored in gradient_health_prev (indicates upstream bug)
     if not math.isfinite(gradient_health_prev):
         raise ValueError(
@@ -330,8 +429,10 @@ def _extract_slot_features_v3(
     # counterfactual_fresh (1 dim) - gamma-matched decay
     # DEFAULT_GAMMA ** epochs_since_counterfactual
     # With DEFAULT_GAMMA=0.995, signal stays >0.5 for ~138 epochs
-    epochs_since_cf = env_state.epochs_since_counterfactual.get(slot_id, 0)
-    counterfactual_fresh = DEFAULT_GAMMA ** epochs_since_cf
+    counterfactual_fresh = _counterfactual_freshness(
+        env_state.epochs_since_counterfactual,
+        slot_id,
+    )
 
     # seed_age_norm (1 dim) - normalize to [0, 1] using runtime max_epochs.
     # This exposes prune-age gating and distinguishes "new vs old" seeds even
@@ -638,7 +739,7 @@ def batch_obs_to_features(
         # Fill directly into pre-allocated tensor
 
         # Current metrics (3 dims: epoch, val_loss, val_accuracy)
-        epoch_norm = float(signal.metrics.epoch) / max_epochs_den
+        epoch_norm = min(float(signal.metrics.epoch), max_epochs_den) / max_epochs_den
         # Loss normalization: symlog to prevent LSTM saturation
         val_loss_norm = symlog(signal.metrics.val_loss) / _SYMLOG_NORM
         val_accuracy_norm = signal.metrics.val_accuracy / 100.0
@@ -647,15 +748,21 @@ def batch_obs_to_features(
         obs[env_idx, 1] = val_loss_norm
         obs[env_idx, 2] = val_accuracy_norm
 
-        # Loss history (5 dims) - symlog normalized
+        # Loss history (5 dims) - symlog normalized.
+        # Absent steps (None) encode as the UNKNOWN sentinel, NOT as observed-0.0.
         loss_history_padded = _pad_history(signal.loss_history, 5)
         for i, loss_val in enumerate(loss_history_padded):
-            obs[env_idx, 3 + i] = symlog(loss_val) / _SYMLOG_NORM
+            obs[env_idx, 3 + i] = (
+                OBS_V3_UNKNOWN_SENTINEL if loss_val is None else symlog(loss_val) / _SYMLOG_NORM
+            )
 
-        # Accuracy history (5 dims) - normalized to [0, 1]
+        # Accuracy history (5 dims) - normalized to [0, 1].
+        # Absent steps (None) encode as the UNKNOWN sentinel, NOT as observed-0.0.
         acc_history_padded = _pad_history(signal.accuracy_history, 5)
         for i, acc_val in enumerate(acc_history_padded):
-            obs[env_idx, 8 + i] = acc_val / 100.0
+            obs[env_idx, 8 + i] = (
+                OBS_V3_UNKNOWN_SENTINEL if acc_val is None else acc_val / 100.0
+            )
 
         # Stage distribution (3 dims)
         obs[env_idx, 13] = num_training / max_slots
@@ -693,10 +800,10 @@ def batch_obs_to_features(
             # Current alpha (1 dim)
             obs[env_idx, slot_offset + 11] = report.metrics.current_alpha
 
-            # Improvement (1 dim)
+            # Improvement (1 dim) - causal counterfactual contribution only
             contribution = report.metrics.counterfactual_contribution
             if contribution is None:
-                contribution = report.metrics.improvement_since_stage_start
+                contribution = 0.0
             contribution_norm = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
             obs[env_idx, slot_offset + 12] = contribution_norm
 
@@ -731,18 +838,24 @@ def batch_obs_to_features(
                     obs[env_idx, slot_offset + 23] = symlog(grad_norm_raw) / _SYMLOG_NORM
                 else:
                     obs[env_idx, slot_offset + 23] = 0.0
-                obs[env_idx, slot_offset + 24] = safe(report.telemetry.gradient_health, 1.0, max_val=1.0)
+                obs[env_idx, slot_offset + 24] = _validated_gradient_health(
+                    report.telemetry.gradient_health,
+                    slot_id,
+                )
                 obs[env_idx, slot_offset + 25] = 1.0 if report.telemetry.has_vanishing else 0.0
                 obs[env_idx, slot_offset + 26] = 1.0 if report.telemetry.has_exploding else 0.0
             else:
-                # Default values when telemetry not available
+                # Missing telemetry is not healthy evidence for an active slot.
                 obs[env_idx, slot_offset + 23] = 0.0
-                obs[env_idx, slot_offset + 24] = 1.0  # Assume healthy
+                obs[env_idx, slot_offset + 24] = 0.0
                 obs[env_idx, slot_offset + 25] = 0.0
                 obs[env_idx, slot_offset + 26] = 0.0
 
             # gradient_health_prev (1 dim)
-            gradient_health_prev = env_state.gradient_health_prev.get(slot_id, 1.0)
+            gradient_health_prev = _previous_gradient_health(
+                env_state.gradient_health_prev,
+                slot_id,
+            )
             if not math.isfinite(gradient_health_prev):
                 raise ValueError(
                     f"NaN/inf in gradient_health_prev for slot {slot_id}. "
@@ -756,8 +869,10 @@ def batch_obs_to_features(
             obs[env_idx, slot_offset + 28] = min(float(epochs_in_stage), max_epochs_den) / max_epochs_den
 
             # counterfactual_fresh (1 dim)
-            epochs_since_cf = env_state.epochs_since_counterfactual.get(slot_id, 0)
-            obs[env_idx, slot_offset + 29] = DEFAULT_GAMMA ** epochs_since_cf
+            obs[env_idx, slot_offset + 29] = _counterfactual_freshness(
+                env_state.epochs_since_counterfactual,
+                slot_id,
+            )
 
             # seed_age_norm (1 dim)
             seed_age = report.metrics.epochs_total

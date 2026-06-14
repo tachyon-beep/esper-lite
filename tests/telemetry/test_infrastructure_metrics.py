@@ -501,11 +501,15 @@ class TestTELE720CpuPercent:
     These tests verify schema contract.
     """
 
-    def test_cpu_percent_default_zero(self) -> None:
-        """TELE-720: cpu_percent defaults to 0.0."""
+    def test_cpu_percent_default_none(self) -> None:
+        """TELE-720: cpu_percent defaults to None (not measured yet).
+
+        UI-004: absence must be distinguishable from a measured 0.0. A fresh
+        snapshot has not sampled CPU, so the default is None, not 0.0.
+        """
         vitals = SystemVitals()
 
-        assert vitals.cpu_percent == 0.0
+        assert vitals.cpu_percent is None
 
     def test_cpu_percent_nullable(self) -> None:
         """TELE-720: cpu_percent can be None (collection failure)."""
@@ -526,12 +530,16 @@ class TestTELE721RamUsage:
     These tests verify schema contract.
     """
 
-    def test_ram_fields_default_zero(self) -> None:
-        """TELE-721: RAM fields default to 0.0."""
+    def test_ram_fields_default_none(self) -> None:
+        """TELE-721: RAM fields default to None (not measured yet).
+
+        UI-004: absence must be distinguishable from a measured 0.0. A fresh
+        snapshot has not sampled RAM, so the defaults are None, not 0.0.
+        """
         vitals = SystemVitals()
 
-        assert vitals.ram_used_gb == 0.0
-        assert vitals.ram_total_gb == 0.0
+        assert vitals.ram_used_gb is None
+        assert vitals.ram_total_gb is None
 
     def test_ram_fields_nullable(self) -> None:
         """TELE-721: RAM fields can be None (collection failure)."""

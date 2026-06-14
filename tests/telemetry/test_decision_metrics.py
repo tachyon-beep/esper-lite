@@ -297,6 +297,14 @@ class TestTELE800HeadTelemetry:
             alpha_target_confidence=0.90,
             alpha_speed_confidence=0.65,
             curve_confidence=0.80,
+            op_entropy=0.0,
+            slot_entropy=0.0,
+            blueprint_entropy=0.0,
+            style_entropy=0.0,
+            tempo_entropy=0.0,
+            alpha_target_entropy=0.0,
+            alpha_speed_entropy=0.0,
+            curve_entropy=0.0,
         )
 
         emitter.on_last_action(
@@ -345,6 +353,14 @@ class TestTELE800HeadTelemetry:
         }
 
         head_telemetry = HeadTelemetry(
+            op_confidence=0.0,
+            slot_confidence=0.0,
+            blueprint_confidence=0.0,
+            style_confidence=0.0,
+            tempo_confidence=0.0,
+            alpha_target_confidence=0.0,
+            alpha_speed_confidence=0.0,
+            curve_confidence=0.0,
             op_entropy=1.2,
             slot_entropy=0.8,
             blueprint_entropy=1.5,
@@ -1039,3 +1055,74 @@ class TestTELE800FullSnapshot:
         # Mask flags
         assert payload.op_masked is False
         assert payload.blueprint_masked is True
+
+
+class TestForcedHeadFlagsProducer:
+    """TPD-001: the per-head FORCED flag must mean "no real choice".
+
+    The producer in vectorized_trainer derives the per-head ``*_masked`` flag
+    from the action masks. The contract is that the flag is set only when a head
+    has a single valid candidate (the agent was forced). A head with multiple
+    valid candidates retains agency even if some candidates were restricted, and
+    must NOT be flagged as forced.
+    """
+
+    @staticmethod
+    def _masks_with_op(op_valid: list[bool]) -> dict[str, "object"]:
+        import torch
+
+        from esper.leyline import HEAD_NAMES
+
+        masks: dict[str, object] = {}
+        for name in HEAD_NAMES:
+            if name == "op":
+                masks[name] = torch.tensor([op_valid], dtype=torch.bool)
+            else:
+                # All other heads: two valid candidates (not forced).
+                masks[name] = torch.tensor([[True, True]], dtype=torch.bool)
+        return masks
+
+    def test_multiple_valid_actions_not_forced(self) -> None:
+        """A mask with multiple valid ops (some restricted) does NOT set forced."""
+        import torch
+
+        from esper.simic.training.vectorized_trainer import compute_forced_head_flags
+
+        # 5-op space: WAIT + two more valid, two restricted -> 3 valid, has choice.
+        masks = self._masks_with_op([True, True, True, False, False])
+        flags = compute_forced_head_flags(masks)
+        assert bool(torch.as_tensor(flags["op"])[0]) is False
+
+    def test_wait_only_single_valid_is_forced(self) -> None:
+        """A WAIT-only (single valid) op mask DOES set forced."""
+        import torch
+
+        from esper.simic.training.vectorized_trainer import compute_forced_head_flags
+
+        masks = self._masks_with_op([True, False, False, False, False])
+        flags = compute_forced_head_flags(masks)
+        assert bool(torch.as_tensor(flags["op"])[0]) is True
+
+    def test_other_head_with_multiple_valid_not_forced(self) -> None:
+        """A non-op head with two valid candidates is not forced."""
+        import torch
+
+        from esper.simic.training.vectorized_trainer import compute_forced_head_flags
+
+        masks = self._masks_with_op([True, True, False, False, False])
+        flags = compute_forced_head_flags(masks)
+        assert bool(torch.as_tensor(flags["slot"])[0]) is False
+
+    def test_single_valid_non_op_head_is_forced(self) -> None:
+        """A non-op head reduced to a single valid candidate is forced."""
+        import torch
+
+        from esper.leyline import HEAD_NAMES
+        from esper.simic.training.vectorized_trainer import compute_forced_head_flags
+
+        masks = self._masks_with_op([True, True, False, False, False])
+        # Collapse the slot head to a single valid candidate.
+        masks["slot"] = torch.tensor([[True, False]], dtype=torch.bool)
+        flags = compute_forced_head_flags(masks)
+        assert bool(torch.as_tensor(flags["slot"])[0]) is True
+        assert set(flags.keys()) == set(HEAD_NAMES)

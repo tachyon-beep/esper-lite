@@ -394,11 +394,10 @@ def _ensure_cifar10_cached(
     # precompute entries for this device. This prevents unbounded cache growth when
     # training with different seeds (each seed would otherwise create a ~750MB entry).
     if augment_mode == "precompute" and cache_key not in _GPU_DATASET_CACHE:
-        evicted = clear_gpu_dataset_cache(device=device, augment_mode="precompute")
-        if evicted > 0:
-            # Release memory back to CUDA driver after eviction
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+        # No empty_cache() here: a synchronous flush fights expandable_segments and
+        # forces a reserved-pool collapse-then-regrow. The ~750MB/seed entry stays in
+        # the caching pool; garbage_collection_threshold:0.8 reclaims it under pressure.
+        clear_gpu_dataset_cache(device=device, augment_mode="precompute")
 
     if refresh or cache_key not in _GPU_DATASET_CACHE:
         # Load raw data (no augmentation for GPU-resident - applied at batch time)

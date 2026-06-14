@@ -3,71 +3,17 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import PolicyDiagnostics from '../PolicyDiagnostics.vue'
 import type { TamiyoState } from '../../types/sanctum'
+import { createTamiyoState } from './factories'
 
 function createTamiyo(overrides: Partial<TamiyoState> = {}): TamiyoState {
-  return {
-    entropy: 0.5,
-    clip_fraction: 0.1,
-    kl_divergence: 0.01,
+  return createTamiyoState({
     explained_variance: 0.85,
     policy_loss: 0.15,
     value_loss: 0.25,
     entropy_loss: 0.05,
     grad_norm: 1.0,
-    learning_rate: 0.0003,
-    entropy_coef: 0.01,
-    ratio_mean: 1.0,
-    ratio_min: 0.9,
-    ratio_max: 1.1,
-    ratio_std: 0.05,
-    advantage_mean: 0.0,
-    advantage_std: 1.0,
-    advantage_min: -2.0,
-    advantage_max: 2.0,
-    advantage_raw_mean: 0.0,
-    advantage_raw_std: 1.0,
-    dead_layers: 0,
-    exploding_layers: 0,
-    nan_grad_count: 0,
-    layer_gradient_health: null,
-    entropy_collapsed: false,
-    update_time_ms: 150,
-    early_stop_epoch: null,
-    head_slot_entropy: 0.5,
-    head_blueprint_entropy: 0.5,
-    head_style_entropy: 0.5,
-    head_tempo_entropy: 0.5,
-    head_alpha_target_entropy: 0.5,
-    head_alpha_speed_entropy: 0.5,
-    head_alpha_curve_entropy: 0.5,
-    head_op_entropy: 0.5,
-    head_slot_grad_norm: 1.0,
-    head_blueprint_grad_norm: 1.0,
-    head_style_grad_norm: 1.0,
-    head_tempo_grad_norm: 1.0,
-    head_alpha_target_grad_norm: 1.0,
-    head_alpha_speed_grad_norm: 1.0,
-    head_alpha_curve_grad_norm: 1.0,
-    head_op_grad_norm: 1.0,
-    episode_return_history: [],
-    current_episode_return: 0,
-    current_episode: 0,
-    policy_loss_history: [],
-    value_loss_history: [],
-    grad_norm_history: [],
-    entropy_history: [],
-    explained_variance_history: [],
-    kl_divergence_history: [],
-    clip_fraction_history: [],
-    inner_epoch: 0,
-    ppo_batch: 0,
-    action_counts: {},
-    total_actions: 0,
-    ppo_data_received: true,
-    recent_decisions: [],
-    group_id: null,
     ...overrides
-  }
+  })
 }
 
 describe('PolicyDiagnostics', () => {
@@ -470,6 +416,48 @@ describe('PolicyDiagnostics', () => {
       })
 
       expect(wrapper.find('.policy-diagnostics').exists()).toBe(true)
+    })
+  })
+
+  describe('Pending (no PPO data yet)', () => {
+    it('renders losses, ratios and advantage as pending (—) before first PPO update', () => {
+      const wrapper = mount(PolicyDiagnostics, {
+        props: {
+          // ppo_data_received false: all PPO fields are unmeasured 0.0 defaults.
+          tamiyo: createTamiyo({
+            ppo_data_received: false,
+            policy_loss: 0,
+            value_loss: 0,
+            entropy_loss: 0,
+            ratio_mean: 0,
+            advantage_mean: 0,
+            entropy: 0,
+            update_time_ms: 0
+          })
+        }
+      })
+
+      expect(wrapper.find('[data-testid="policy-loss"]').text()).toContain('—')
+      expect(wrapper.find('[data-testid="value-loss"]').text()).toContain('—')
+      expect(wrapper.find('[data-testid="ratio-mean"]').text()).toContain('—')
+      expect(wrapper.find('[data-testid="advantage-mean"]').text()).toContain('—')
+      expect(wrapper.find('[data-testid="update-time"]').text()).toContain('—')
+      // Entropy with no data must not flag a false warning.
+      expect(wrapper.find('[data-testid="global-entropy"]').classes()).toContain('health-good')
+      // Head entropy of 0 must not flag a false warning while pending.
+      expect(wrapper.find('[data-testid="head-entropy-slot"]').classes()).toContain('health-good')
+    })
+
+    it('renders a measured loss of 0.000 (not pending) when PPO data present', () => {
+      const wrapper = mount(PolicyDiagnostics, {
+        props: {
+          tamiyo: createTamiyo({ ppo_data_received: true, policy_loss: 0 })
+        }
+      })
+
+      // A genuinely measured 0 must render "0.000", never pending.
+      expect(wrapper.find('[data-testid="policy-loss"]').text()).toContain('0.000')
+      expect(wrapper.find('[data-testid="policy-loss"]').text()).not.toContain('—')
     })
   })
 

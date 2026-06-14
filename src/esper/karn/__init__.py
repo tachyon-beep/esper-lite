@@ -39,6 +39,8 @@ from esper.karn.store import (
     DenseTraceTrigger,
     BatchMetrics,
     GateEvaluationTrace,
+    PROOF_CRITICAL_EVENT_TYPES,
+    UnsupportedProofImportError,
 )
 from esper.leyline import SeedStage  # Re-export authoritative definition
 
@@ -104,6 +106,8 @@ __all__ = [
     "DenseTraceTrigger",
     "BatchMetrics",
     "GateEvaluationTrace",
+    "PROOF_CRITICAL_EVENT_TYPES",
+    "UnsupportedProofImportError",
     "SeedStage",
     # Collector
     "KarnCollector",

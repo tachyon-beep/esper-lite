@@ -118,6 +118,42 @@ class TestTrainOneEpoch:
         assert total == 32
         assert grad_stats is None
 
+    def test_heuristic_seed_optimizer_excludes_fossilized_slots(self):
+        """Heuristic seed optimizer should not keep training fossilized seeds."""
+        from types import SimpleNamespace
+
+        from esper.leyline import SeedStage
+        from esper.simic.training.helpers import _build_heuristic_seed_optimizer
+
+        active_param = nn.Parameter(torch.ones(()))
+        fossilized_param = nn.Parameter(torch.ones(()))
+        model = SimpleNamespace(
+            seed_slots={
+                "r0c0": SimpleNamespace(
+                    state=SimpleNamespace(stage=SeedStage.TRAINING),
+                    get_parameters=lambda: iter([active_param]),
+                ),
+                "r0c1": SimpleNamespace(
+                    state=SimpleNamespace(stage=SeedStage.FOSSILIZED),
+                    get_parameters=lambda: iter([fossilized_param]),
+                ),
+            }
+        )
+
+        optimizer = _build_heuristic_seed_optimizer(
+            model,
+            slot_ids=["r0c0", "r0c1"],
+            seed_lr=0.01,
+        )
+
+        assert optimizer is not None
+        optimizer_param_ids = {
+            id(param)
+            for group in optimizer.param_groups
+            for param in group["params"]
+        }
+        assert optimizer_param_ids == {id(active_param)}
+
     def test_lm_task_type(self):
         """Should handle language modeling task type."""
         from esper.simic.training.helpers import _train_one_epoch

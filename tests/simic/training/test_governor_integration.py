@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 
 from esper.simic.training.parallel_env_state import ParallelEnvState
+from esper.simic.training.vectorized_trainer import _check_vitals_before_snapshot
 from esper.tolaria.governor import TolariaGovernor
 
 
@@ -325,6 +326,36 @@ class TestGovernorSnapshotFlag:
         for key, value in snapshot.items():
             if isinstance(value, torch.Tensor):
                 assert torch.all(value == 42.0), f"Snapshot didn't capture modified {key}"
+
+    def test_panic_epoch_does_not_overwrite_last_good_snapshot(self) -> None:
+        """Panic detection must run before periodic or post-fossilization snapshots."""
+        env_state, model = create_env_state()
+
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.data.fill_(7.0)
+        env_state.governor.snapshot()
+        safe_snapshot = {
+            key: value.detach().clone()
+            for key, value in env_state.governor.last_good_state.items()
+            if isinstance(value, torch.Tensor)
+        }
+
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.data.fill_(float("nan"))
+        env_state.needs_governor_snapshot = True
+
+        is_panic = _check_vitals_before_snapshot(
+            env_state,
+            epoch=5,
+            val_loss=float("nan"),
+        )
+
+        assert is_panic is True
+        assert env_state.needs_governor_snapshot is True
+        for key, expected in safe_snapshot.items():
+            assert torch.equal(env_state.governor.last_good_state[key], expected)
 
 
 class TestStreamContextDuringRollback:

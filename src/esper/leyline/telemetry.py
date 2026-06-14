@@ -99,6 +99,7 @@ class TelemetryEventType(Enum):
 
     # === Governor Events (Tolaria) ===
     GOVERNOR_ROLLBACK = auto()        # Emergency rollback executed
+    MORPHOLOGY_CAUSAL_LOG = auto()    # Proposal/verdict/mutation/watch causal log row
 
     # === Training Progress Events ===
     TRAINING_STARTED = auto()         # Training run initialized
@@ -112,6 +113,9 @@ class TelemetryEventType(Enum):
 
     # === Episode Events ===
     EPISODE_OUTCOME = auto()  # Multi-objective outcome for Pareto analysis
+
+    # === Memory / Allocator Events ===
+    ALLOCATOR_STATS = auto()  # Per-device CUDA caching-allocator stats (frag, retries, OOMs)
 
 
 @dataclass
@@ -189,11 +193,16 @@ class SeedTelemetry:
     blueprint_id: str = ""
     layer_id: str = ""
 
-    # Health signals (lightweight, always collected)
-    gradient_norm: float = 0.0
-    gradient_health: float = 1.0  # 0-1, higher is healthier
-    has_vanishing: bool = False
-    has_exploding: bool = False
+    # Health signals.
+    # These are NOT-MEASURED by default (None). A fresh seed, or one synced via
+    # the fallback path that has no gradient stats, leaves these None. None means
+    # "gradient health was never measured" and MUST NOT be treated as healthy by
+    # any gate or feature encoder. Only an actual gradient collection populates
+    # them. See: KTS-001.
+    gradient_norm: float | None = None
+    gradient_health: float | None = None  # 0-1, higher is healthier; None = not measured
+    has_vanishing: bool | None = None  # None = not measured
+    has_exploding: bool | None = None  # None = not measured
 
     # Progress signals
     accuracy: float = 0.0  # percentage (0-100)
@@ -228,6 +237,15 @@ class SeedTelemetry:
     # Always present because policy always samples a curve; causal relevance
     # is handled by advantage masking in simic/agent/advantages.py.
     alpha_curve: str = "LINEAR"
+
+    @property
+    def gradient_measured(self) -> bool:
+        """True iff gradient health was actually measured (not the unmeasured default).
+
+        Gates and quality checks must require this before trusting gradient_health
+        or has_exploding: an unmeasured seed is NOT healthy by default (KTS-001).
+        """
+        return self.gradient_health is not None
 
     def to_features(self) -> list[float]:
         """Convert to 26-dim feature vector for RL policies.
@@ -264,11 +282,19 @@ class SeedTelemetry:
             from esper.leyline.stage_schema import NUM_STAGES
             stage_one_hot = [0.0] * NUM_STAGES
 
+        # Unmeasured gradient health (None) encodes as 0.0 here: absence is NOT
+        # healthy evidence. This mirrors tamiyo/policy/features.py, which treats
+        # missing telemetry as gradient_health=0.0 for an active slot.
+        gradient_norm = 0.0 if self.gradient_norm is None else self.gradient_norm
+        gradient_health = 0.0 if self.gradient_health is None else self.gradient_health
+        has_vanishing = bool(self.has_vanishing)  # None -> False
+        has_exploding = bool(self.has_exploding)  # None -> False
+
         return stage_one_hot + [
-            min(self.gradient_norm, _GRADIENT_NORM_MAX) / _GRADIENT_NORM_MAX,
-            self.gradient_health,
-            float(self.has_vanishing),
-            float(self.has_exploding),
+            min(gradient_norm, _GRADIENT_NORM_MAX) / _GRADIENT_NORM_MAX,
+            gradient_health,
+            float(has_vanishing),
+            float(has_exploding),
             min(self.epochs_in_stage, _EPOCHS_IN_STAGE_MAX) / _EPOCHS_IN_STAGE_MAX,
             self.accuracy / 100.0,
             max(-1.0, min(1.0, self.accuracy_delta / _ACCURACY_DELTA_SCALE)),
@@ -464,6 +490,10 @@ class TrainingStartedPayload:
     compile_backend: str | None = None
     compile_mode: str | None = None
 
+    # Proof-control identity for blueprint-health baseline cohorts.
+    proof_baseline_mode: str | None = None
+    proof_baseline_pair_id: str | None = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainingStartedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -501,6 +531,12 @@ class TrainingStartedPayload:
             compile_enabled=data.get("compile_enabled", False),
             compile_backend=data.get("compile_backend"),
             compile_mode=data.get("compile_mode"),
+            proof_baseline_mode=data["proof_baseline_mode"]
+            if "proof_baseline_mode" in data
+            else None,
+            proof_baseline_pair_id=data["proof_baseline_pair_id"]
+            if "proof_baseline_pair_id" in data
+            else None,
         )
 
 
@@ -582,6 +618,7 @@ class EpochCompletedPayload:
             "val_accuracy": self.val_accuracy,
             "val_loss": self.val_loss,
             "inner_epoch": self.inner_epoch,
+            "episode_idx": self.episode_idx,
             "train_loss": self.train_loss,
             "train_accuracy": self.train_accuracy,
             "host_grad_norm": self.host_grad_norm,
@@ -605,7 +642,11 @@ class BatchEpochCompletedPayload:
     # OPTIONAL - resume-aware metadata
     start_episode: int = 0  # Resume offset (episode where this run started)
     requested_episodes: int = 0  # Total episodes requested by user
-    rolling_accuracy: float = 0.0
+    # Rolling-average accuracy. None = NOT MEASURED (e.g. partial/old telemetry
+    # with no rolling window yet); 0.0 = MEASURED zero. These must NOT collapse:
+    # an absent rolling accuracy renders as "n/a", a measured 0.0 as "0.0%"
+    # (LN-004).
+    rolling_accuracy: float | None = None
     env_accuracies: tuple[float, ...] | None = None
 
     @classmethod
@@ -626,7 +667,9 @@ class BatchEpochCompletedPayload:
             # OPTIONAL: Resume-aware fields default to 0 for fresh runs.
             start_episode=data.get("start_episode", 0),
             requested_episodes=data.get("requested_episodes", 0),
-            rolling_accuracy=data.get("rolling_accuracy", 0.0),
+            # OPTIONAL: None preserves "not measured" (absent key) distinct from a
+            # measured 0.0; the serializer always emits the key when present.
+            rolling_accuracy=data.get("rolling_accuracy"),
             env_accuracies=env_accuracies,
         )
 
@@ -758,12 +801,35 @@ class PPOUpdatePayload:
     head_alpha_speed_grad_norm: float | None = None
     head_alpha_curve_grad_norm: float | None = None
     head_op_grad_norm: float | None = None
+    head_value_grad_norm: float | None = None
     head_style_entropy: float | None = None
     head_tempo_entropy: float | None = None
     head_alpha_target_entropy: float | None = None
     head_alpha_speed_entropy: float | None = None
     head_alpha_curve_entropy: float | None = None
     head_op_entropy: float | None = None
+
+    # Per-head learnability diagnostics.
+    # learnable_fraction = fraction of valid timesteps where the head was causally
+    # relevant and had more than one valid action. gradient_state is one of:
+    # finite, missing, nonfinite, not_learnable.
+    head_slot_learnable_fraction: float | None = None
+    head_blueprint_learnable_fraction: float | None = None
+    head_style_learnable_fraction: float | None = None
+    head_tempo_learnable_fraction: float | None = None
+    head_alpha_target_learnable_fraction: float | None = None
+    head_alpha_speed_learnable_fraction: float | None = None
+    head_alpha_curve_learnable_fraction: float | None = None
+    head_op_learnable_fraction: float | None = None
+    head_slot_gradient_state: str | None = None
+    head_blueprint_gradient_state: str | None = None
+    head_style_gradient_state: str | None = None
+    head_tempo_gradient_state: str | None = None
+    head_alpha_target_gradient_state: str | None = None
+    head_alpha_speed_gradient_state: str | None = None
+    head_alpha_curve_gradient_state: str | None = None
+    head_op_gradient_state: str | None = None
+    head_value_gradient_state: str | None = None
 
     # Per-head PPO ratio max (Policy V2 - multi-head ratio explosion detection)
     # Individual head ratios can look healthy while joint ratio exceeds clip range
@@ -776,6 +842,20 @@ class PPOUpdatePayload:
     head_alpha_curve_ratio_max: float = 1.0
     head_op_ratio_max: float = 1.0
     joint_ratio_max: float = 1.0  # Product of per-head ratios (computed in log-space)
+
+    # Per-head PPO clip-fraction (factored-PPO trust-region telemetry).
+    # Fraction of samples where each head's ratio left [1-clip, 1+clip] -- i.e.
+    # where the per-head surrogate actually clipped. Companion to the JOINT
+    # clip_fraction: the loss clips per head, so a single head can be heavily
+    # clipped while the joint clip_fraction reads low.
+    head_slot_clip_fraction: float = 0.0
+    head_blueprint_clip_fraction: float = 0.0
+    head_style_clip_fraction: float = 0.0
+    head_tempo_clip_fraction: float = 0.0
+    head_alpha_target_clip_fraction: float = 0.0
+    head_alpha_speed_clip_fraction: float = 0.0
+    head_alpha_curve_clip_fraction: float = 0.0
+    head_op_clip_fraction: float = 0.0
 
     # PPO inner loop context
     inner_epoch: int = 0  # Host training epoch (1-150), NOT PPO update iteration
@@ -841,6 +921,24 @@ class PPOUpdatePayload:
     lstm_c_max: float | None = None   # Max absolute value in c
     lstm_has_nan: bool = False  # NaN detected in hidden state
     lstm_has_inf: bool = False  # Inf detected in hidden state
+
+    # === Rollout-time LSTM Hidden State Health (SIMIC-PROD-003) ===
+    # The lstm_* fields above are UPDATE-time health (hidden states re-evaluated under
+    # the updated params during the PPO epochs). These rollout_lstm_* fields are the
+    # health of the hidden state captured during on-policy rollout collection (behaviour
+    # policy). Distinct, separable signal — kept so neither clobbers the other.
+    rollout_lstm_h_l2_total: float | None = None
+    rollout_lstm_c_l2_total: float | None = None
+    rollout_lstm_h_rms: float | None = None
+    rollout_lstm_c_rms: float | None = None
+    rollout_lstm_h_env_rms_mean: float | None = None
+    rollout_lstm_h_env_rms_max: float | None = None
+    rollout_lstm_c_env_rms_mean: float | None = None
+    rollout_lstm_c_env_rms_max: float | None = None
+    rollout_lstm_h_max: float | None = None
+    rollout_lstm_c_max: float | None = None
+    rollout_lstm_has_nan: bool = False
+    rollout_lstm_has_inf: bool = False
 
     # === D5: Slot Saturation Diagnostics ===
     # Track forced WAIT steps to understand PPO stability under slot saturation.
@@ -925,12 +1023,31 @@ class PPOUpdatePayload:
             head_alpha_speed_grad_norm=data.get("head_alpha_speed_grad_norm"),
             head_alpha_curve_grad_norm=data.get("head_alpha_curve_grad_norm"),
             head_op_grad_norm=data.get("head_op_grad_norm"),
+            head_value_grad_norm=data.get("head_value_grad_norm"),
             head_style_entropy=data.get("head_style_entropy"),
             head_tempo_entropy=data.get("head_tempo_entropy"),
             head_alpha_target_entropy=data.get("head_alpha_target_entropy"),
             head_alpha_speed_entropy=data.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=data.get("head_alpha_curve_entropy"),
             head_op_entropy=data.get("head_op_entropy"),
+            # OPTIONAL: Per-head learnability diagnostics.
+            head_slot_learnable_fraction=data.get("head_slot_learnable_fraction"),
+            head_blueprint_learnable_fraction=data.get("head_blueprint_learnable_fraction"),
+            head_style_learnable_fraction=data.get("head_style_learnable_fraction"),
+            head_tempo_learnable_fraction=data.get("head_tempo_learnable_fraction"),
+            head_alpha_target_learnable_fraction=data.get("head_alpha_target_learnable_fraction"),
+            head_alpha_speed_learnable_fraction=data.get("head_alpha_speed_learnable_fraction"),
+            head_alpha_curve_learnable_fraction=data.get("head_alpha_curve_learnable_fraction"),
+            head_op_learnable_fraction=data.get("head_op_learnable_fraction"),
+            head_slot_gradient_state=data.get("head_slot_gradient_state"),
+            head_blueprint_gradient_state=data.get("head_blueprint_gradient_state"),
+            head_style_gradient_state=data.get("head_style_gradient_state"),
+            head_tempo_gradient_state=data.get("head_tempo_gradient_state"),
+            head_alpha_target_gradient_state=data.get("head_alpha_target_gradient_state"),
+            head_alpha_speed_gradient_state=data.get("head_alpha_speed_gradient_state"),
+            head_alpha_curve_gradient_state=data.get("head_alpha_curve_gradient_state"),
+            head_op_gradient_state=data.get("head_op_gradient_state"),
+            head_value_gradient_state=data.get("head_value_gradient_state"),
             # OPTIONAL: Per-head ratio max (only for factored policies, defaults to 1.0).
             head_slot_ratio_max=data.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=data.get("head_blueprint_ratio_max", 1.0),
@@ -941,6 +1058,15 @@ class PPOUpdatePayload:
             head_alpha_curve_ratio_max=data.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=data.get("head_op_ratio_max", 1.0),
             joint_ratio_max=data.get("joint_ratio_max", 1.0),
+            # OPTIONAL: Per-head clip-fraction (only for factored policies, default 0.0).
+            head_slot_clip_fraction=data.get("head_slot_clip_fraction", 0.0),
+            head_blueprint_clip_fraction=data.get("head_blueprint_clip_fraction", 0.0),
+            head_style_clip_fraction=data.get("head_style_clip_fraction", 0.0),
+            head_tempo_clip_fraction=data.get("head_tempo_clip_fraction", 0.0),
+            head_alpha_target_clip_fraction=data.get("head_alpha_target_clip_fraction", 0.0),
+            head_alpha_speed_clip_fraction=data.get("head_alpha_speed_clip_fraction", 0.0),
+            head_alpha_curve_clip_fraction=data.get("head_alpha_curve_clip_fraction", 0.0),
+            head_op_clip_fraction=data.get("head_op_clip_fraction", 0.0),
             # REQUIRED: PPO inner loop context.
             inner_epoch=data["inner_epoch"],
             batch=data["batch"],
@@ -981,12 +1107,38 @@ class PPOUpdatePayload:
             lstm_c_max=data.get("lstm_c_max"),
             lstm_has_nan=data.get("lstm_has_nan", False),
             lstm_has_inf=data.get("lstm_has_inf", False),
+            rollout_lstm_h_l2_total=data.get("rollout_lstm_h_l2_total"),
+            rollout_lstm_c_l2_total=data.get("rollout_lstm_c_l2_total"),
+            rollout_lstm_h_rms=data.get("rollout_lstm_h_rms"),
+            rollout_lstm_c_rms=data.get("rollout_lstm_c_rms"),
+            rollout_lstm_h_env_rms_mean=data.get("rollout_lstm_h_env_rms_mean"),
+            rollout_lstm_h_env_rms_max=data.get("rollout_lstm_h_env_rms_max"),
+            rollout_lstm_c_env_rms_mean=data.get("rollout_lstm_c_env_rms_mean"),
+            rollout_lstm_c_env_rms_max=data.get("rollout_lstm_c_env_rms_max"),
+            rollout_lstm_h_max=data.get("rollout_lstm_h_max"),
+            rollout_lstm_c_max=data.get("rollout_lstm_c_max"),
+            rollout_lstm_has_nan=data.get("rollout_lstm_has_nan", False),
+            rollout_lstm_has_inf=data.get("rollout_lstm_has_inf", False),
             # REQUIRED: Pre-normalization advantage stats.
             pre_norm_advantage_mean=data["pre_norm_advantage_mean"],
             pre_norm_advantage_std=data["pre_norm_advantage_std"],
             # REQUIRED: Return statistics.
             return_mean=data["return_mean"],
             return_std=data["return_std"],
+            # OPTIONAL: Value function quality metrics (TELE-220..228). Default
+            # to 0.0 (matching field declarations) when an older/partial event
+            # predates them; emitted via the generic asdict serializer.
+            v_return_correlation=data.get("v_return_correlation", 0.0),
+            td_error_mean=data.get("td_error_mean", 0.0),
+            td_error_std=data.get("td_error_std", 0.0),
+            bellman_error=data.get("bellman_error", 0.0),
+            return_p10=data.get("return_p10", 0.0),
+            return_p50=data.get("return_p50", 0.0),
+            return_p90=data.get("return_p90", 0.0),
+            return_variance=data.get("return_variance", 0.0),
+            return_skewness=data.get("return_skewness", 0.0),
+            # OPTIONAL: Value target scale (default 1.0, matching declaration).
+            value_target_scale=data.get("value_target_scale", 1.0),
             # OPTIONAL: D5 slot saturation diagnostics (defaults for non-D5 batches).
             forced_step_ratio=data.get("forced_step_ratio", 0.0),
             usable_actor_timesteps=data.get("usable_actor_timesteps", 0),
@@ -1072,6 +1224,11 @@ class SeedGerminatedPayload:
     epochs_in_stage: int = 0
     blend_tempo_epochs: int = 5
     alpha_curve: str = "LINEAR"
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedGerminatedPayload":
@@ -1091,6 +1248,17 @@ class SeedGerminatedPayload:
             has_exploding=data.get("has_exploding", False),
             epochs_in_stage=data.get("epochs_in_stage", 0),
             blend_tempo_epochs=data.get("blend_tempo_epochs", 5),
+            morphology_proposal_id=data["morphology_proposal_id"]
+            if "morphology_proposal_id" in data
+            else None,
+            morphology_verdict_id=data["morphology_verdict_id"]
+            if "morphology_verdict_id" in data
+            else None,
+            morphology_mutation_id=data["morphology_mutation_id"]
+            if "morphology_mutation_id" in data
+            else None,
+            rng_stream=data["rng_stream"] if "rng_stream" in data else None,
+            rng_seed=data["rng_seed"] if "rng_seed" in data else None,
         )
 
 
@@ -1122,6 +1290,11 @@ class SeedStageChangedPayload:
     # Alpha curve - always present (policy always samples), but only causally
     # relevant during BLENDING. See simic/agent/advantages.py for causal masking.
     alpha_curve: str = "LINEAR"
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedStageChangedPayload":
@@ -1142,6 +1315,17 @@ class SeedStageChangedPayload:
             grad_ratio=data.get("grad_ratio", 0.0),
             has_vanishing=data.get("has_vanishing", False),
             has_exploding=data.get("has_exploding", False),
+            morphology_proposal_id=data["morphology_proposal_id"]
+            if "morphology_proposal_id" in data
+            else None,
+            morphology_verdict_id=data["morphology_verdict_id"]
+            if "morphology_verdict_id" in data
+            else None,
+            morphology_mutation_id=data["morphology_mutation_id"]
+            if "morphology_mutation_id" in data
+            else None,
+            rng_stream=data["rng_stream"] if "rng_stream" in data else None,
+            rng_seed=data["rng_seed"] if "rng_seed" in data else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1163,6 +1347,11 @@ class SeedStageChangedPayload:
             "has_vanishing": self.has_vanishing,
             "has_exploding": self.has_exploding,
             "alpha_curve": self.alpha_curve,
+            "morphology_proposal_id": self.morphology_proposal_id,
+            "morphology_verdict_id": self.morphology_verdict_id,
+            "morphology_mutation_id": self.morphology_mutation_id,
+            "rng_stream": self.rng_stream,
+            "rng_seed": self.rng_seed,
         }
 
 
@@ -1190,6 +1379,11 @@ class SeedFossilizedPayload:
     epochs_total: int = 0
     counterfactual: float | None = None
     blending_delta: float | None = None  # Accuracy change during blending stage
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedFossilizedPayload":
@@ -1208,6 +1402,17 @@ class SeedFossilizedPayload:
             # OPTIONAL: Counterfactual/blending analysis (None = not computed).
             counterfactual=data.get("counterfactual"),
             blending_delta=data.get("blending_delta"),
+            morphology_proposal_id=data["morphology_proposal_id"]
+            if "morphology_proposal_id" in data
+            else None,
+            morphology_verdict_id=data["morphology_verdict_id"]
+            if "morphology_verdict_id" in data
+            else None,
+            morphology_mutation_id=data["morphology_mutation_id"]
+            if "morphology_mutation_id" in data
+            else None,
+            rng_stream=data["rng_stream"] if "rng_stream" in data else None,
+            rng_seed=data["rng_seed"] if "rng_seed" in data else None,
         )
 
 
@@ -1228,7 +1433,9 @@ class SeedPrunedPayload:
     # CONTEXT (injected by emit_with_env_context)
     episode_idx: int | None = None
 
-    # OPTIONAL (None = not computed, 0.0 = computed as zero)
+    # OPTIONAL (None = not yet known, e.g. a slot culled before germination
+    # recorded a blueprint). Consumers MUST bucket None as "unknown blueprint"
+    # explicitly rather than crash or coerce to a fake id.
     blueprint_id: str | None = None
     improvement: float = 0.0
     auto_pruned: bool = False
@@ -1236,6 +1443,11 @@ class SeedPrunedPayload:
     counterfactual: float | None = None
     blending_delta: float | None = None  # Accuracy change during blending stage
     initiator: str = "policy"  # Who initiated the prune: "policy", "governor", "auto"
+    morphology_proposal_id: str | None = None
+    morphology_verdict_id: str | None = None
+    morphology_mutation_id: str | None = None
+    rng_stream: str | None = None
+    rng_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedPrunedPayload":
@@ -1246,7 +1458,8 @@ class SeedPrunedPayload:
             env_id=data["env_id"],
             reason=data["reason"],
             episode_idx=data["episode_idx"],
-            # OPTIONAL: Blueprint may be unknown if pruning very early.
+            # OPTIONAL: Blueprint may be unknown if a slot was culled before
+            # germination recorded one (None = unknown, bucketed by consumers).
             blueprint_id=data.get("blueprint_id"),
             improvement=data.get("improvement", 0.0),
             auto_pruned=data.get("auto_pruned", False),
@@ -1256,6 +1469,17 @@ class SeedPrunedPayload:
             blending_delta=data.get("blending_delta"),
             # OPTIONAL: Initiator context (defaults to policy).
             initiator=data.get("initiator", "policy"),
+            morphology_proposal_id=data["morphology_proposal_id"]
+            if "morphology_proposal_id" in data
+            else None,
+            morphology_verdict_id=data["morphology_verdict_id"]
+            if "morphology_verdict_id" in data
+            else None,
+            morphology_mutation_id=data["morphology_mutation_id"]
+            if "morphology_mutation_id" in data
+            else None,
+            rng_stream=data["rng_stream"] if "rng_stream" in data else None,
+            rng_seed=data["rng_seed"] if "rng_seed" in data else None,
         )
 
 
@@ -1342,51 +1566,58 @@ class HeadTelemetry:
     Entropy measures how spread out the distribution is (higher = more uncertain).
     """
 
-    # Per-head confidence (probability of chosen action)
-    op_confidence: float = 0.0
-    slot_confidence: float = 0.0
-    blueprint_confidence: float = 0.0
-    style_confidence: float = 0.0
-    tempo_confidence: float = 0.0
-    alpha_target_confidence: float = 0.0
-    alpha_speed_confidence: float = 0.0
-    curve_confidence: float = 0.0
+    # Per-head confidence (probability of chosen action).
+    # All 16 fields are REQUIRED: the producer (_build_decision_head_telemetry)
+    # populates every head together from the policy's confidence/entropy tensors,
+    # or returns None when no head telemetry was measured at all. There is no
+    # partial-population path, so an absent field in a serialized head_telemetry
+    # dict means corrupted/partial telemetry and MUST fail loud rather than be
+    # fabricated as a measured 0.0 (TPD-004).
+    op_confidence: float
+    slot_confidence: float
+    blueprint_confidence: float
+    style_confidence: float
+    tempo_confidence: float
+    alpha_target_confidence: float
+    alpha_speed_confidence: float
+    curve_confidence: float
 
     # Per-head entropy (distribution spread - higher means more uncertain)
-    op_entropy: float = 0.0
-    slot_entropy: float = 0.0
-    blueprint_entropy: float = 0.0
-    style_entropy: float = 0.0
-    tempo_entropy: float = 0.0
-    alpha_target_entropy: float = 0.0
-    alpha_speed_entropy: float = 0.0
-    curve_entropy: float = 0.0
+    op_entropy: float
+    slot_entropy: float
+    blueprint_entropy: float
+    style_entropy: float
+    tempo_entropy: float
+    alpha_target_entropy: float
+    alpha_speed_entropy: float
+    curve_entropy: float
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "HeadTelemetry":
-        """Parse from dict.
+        """Parse from dict. Raises KeyError on any missing field.
 
-        ALL fields are optional with defaults of 0.0 because different heads
-        may be inactive depending on policy configuration and action masking.
+        Every field is required: to_dict() always emits all 16, so a valid
+        serialized HeadTelemetry always carries all of them. A missing key is
+        partial/corrupted telemetry, not a measured zero (TPD-004); we fail
+        fast instead of fabricating 0.0.
         """
         return cls(
-            # OPTIONAL: All confidence/entropy fields default to 0.0 for inactive heads.
-            op_confidence=data.get("op_confidence", 0.0),
-            slot_confidence=data.get("slot_confidence", 0.0),
-            blueprint_confidence=data.get("blueprint_confidence", 0.0),
-            style_confidence=data.get("style_confidence", 0.0),
-            tempo_confidence=data.get("tempo_confidence", 0.0),
-            alpha_target_confidence=data.get("alpha_target_confidence", 0.0),
-            alpha_speed_confidence=data.get("alpha_speed_confidence", 0.0),
-            curve_confidence=data.get("curve_confidence", 0.0),
-            op_entropy=data.get("op_entropy", 0.0),
-            slot_entropy=data.get("slot_entropy", 0.0),
-            blueprint_entropy=data.get("blueprint_entropy", 0.0),
-            style_entropy=data.get("style_entropy", 0.0),
-            tempo_entropy=data.get("tempo_entropy", 0.0),
-            alpha_target_entropy=data.get("alpha_target_entropy", 0.0),
-            alpha_speed_entropy=data.get("alpha_speed_entropy", 0.0),
-            curve_entropy=data.get("curve_entropy", 0.0),
+            op_confidence=data["op_confidence"],
+            slot_confidence=data["slot_confidence"],
+            blueprint_confidence=data["blueprint_confidence"],
+            style_confidence=data["style_confidence"],
+            tempo_confidence=data["tempo_confidence"],
+            alpha_target_confidence=data["alpha_target_confidence"],
+            alpha_speed_confidence=data["alpha_speed_confidence"],
+            curve_confidence=data["curve_confidence"],
+            op_entropy=data["op_entropy"],
+            slot_entropy=data["slot_entropy"],
+            blueprint_entropy=data["blueprint_entropy"],
+            style_entropy=data["style_entropy"],
+            tempo_entropy=data["tempo_entropy"],
+            alpha_target_entropy=data["alpha_target_entropy"],
+            alpha_speed_entropy=data["alpha_speed_entropy"],
+            curve_entropy=data["curve_entropy"],
         )
 
     def to_dict(self) -> dict[str, float]:
@@ -1455,7 +1686,10 @@ class AnalyticsSnapshotPayload:
     alpha_algorithm: str | None = None
     alpha_algorithm_selected: str | None = None
     action_success: bool | None = None
-    # Per-head mask flags (True = action was forced by mask)
+    # Per-head FORCED flags. True = the head had effectively NO choice: a single
+    # valid candidate remained (e.g. WAIT-only on the op head). Ordinary
+    # restrictions that still leave two or more valid candidates do NOT set this;
+    # the head retained real agency. See vectorized_trainer._forced_head_flags.
     op_masked: bool | None = None
     slot_masked: bool | None = None
     blueprint_masked: bool | None = None
@@ -1526,6 +1760,8 @@ class AnalyticsSnapshotPayload:
     max_epochs: int | None = None
     max_batches: int | None = None
     min_fossilize_improvement: float | None = None
+    max_seeds: int | None = None
+    reward_mode: str | None = None
     telemetry_lifecycle_only: bool | None = None
     telemetry_level: str | None = None
 
@@ -1574,6 +1810,24 @@ class AnalyticsSnapshotPayload:
             alpha_algorithm=data.get("alpha_algorithm"),
             alpha_algorithm_selected=data.get("alpha_algorithm_selected"),
             action_success=data.get("action_success"),
+            # kind="last_action": reward component breakdown (RewardHealthPanel).
+            # Optional floats; None = not populated for this kind.
+            base_acc_delta=data.get("base_acc_delta"),
+            bounded_attribution=data.get("bounded_attribution"),
+            compute_rent=data.get("compute_rent"),
+            stage_bonus=data.get("stage_bonus"),
+            ratio_penalty=data.get("ratio_penalty"),
+            alpha_shock=data.get("alpha_shock"),
+            # kind="last_action": TamiyoBrain decision-card context.
+            slot_states=data.get("slot_states"),
+            # JSON has no tuple type: re-tuple the inner (action, prob) pairs to
+            # honour the declared list[tuple[str, float]] contract.
+            alternatives=(
+                [tuple(pair) for pair in data["alternatives"]]
+                if data.get("alternatives") is not None
+                else None
+            ),
+            decision_entropy=data.get("decision_entropy"),
             # kind="last_action": Per-head mask flags
             op_masked=data.get("op_masked"),
             slot_masked=data.get("slot_masked"),
@@ -1620,6 +1874,8 @@ class AnalyticsSnapshotPayload:
             max_epochs=data.get("max_epochs"),
             max_batches=data.get("max_batches"),
             min_fossilize_improvement=data.get("min_fossilize_improvement"),
+            max_seeds=data.get("max_seeds"),
+            reward_mode=data.get("reward_mode"),
             telemetry_lifecycle_only=data.get("telemetry_lifecycle_only"),
             telemetry_level=data.get("telemetry_level"),
             # kind="heuristic_episode": episode completion
@@ -1808,6 +2064,50 @@ class MemoryWarningPayload:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class AllocatorStatsPayload:
+    """Payload for ALLOCATOR_STATS event.
+
+    Per-device snapshot of the CUDA caching allocator (host-side accounting, no sync).
+    fragmentation_bytes = reserved - allocated = memory the allocator holds but cannot
+    hand out; a high ratio reserved/allocated with climbing num_alloc_retries is the
+    per-stream segment-stranding signature this telemetry exists to measure (P2-FRAGMETRIC).
+    """
+
+    # REQUIRED
+    batch_idx: int
+    device: str
+    allocated_bytes: int
+    reserved_bytes: int
+    fragmentation_bytes: int
+    num_alloc_retries: int
+    num_ooms: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "batch_idx": self.batch_idx,
+            "device": self.device,
+            "allocated_bytes": self.allocated_bytes,
+            "reserved_bytes": self.reserved_bytes,
+            "fragmentation_bytes": self.fragmentation_bytes,
+            "num_alloc_retries": self.num_alloc_retries,
+            "num_ooms": self.num_ooms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AllocatorStatsPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            batch_idx=data["batch_idx"],
+            device=data["device"],
+            allocated_bytes=data["allocated_bytes"],
+            reserved_bytes=data["reserved_bytes"],
+            fragmentation_bytes=data["fragmentation_bytes"],
+            num_alloc_retries=data["num_alloc_retries"],
+            num_ooms=data["num_ooms"],
+        )
+
+
 RewardHackingPattern = Literal[
     "attribution_ratio",
     "ransomware_signature",
@@ -1868,7 +2168,8 @@ class EpisodeOutcomePayload:
 
     Captures multi-objective outcomes for Pareto analysis:
     - final_accuracy: Task performance (higher = better)
-    - param_ratio: Parameter efficiency (lower = better)
+    - param_ratio: Parameter growth ratio total_params / host_params
+      (lower = better; 1.0 = no growth, 1.2 = 20% growth)
     - stability_score: Training stability (higher = better)
 
     Note: env_id may be -1 when emitted from slots (Kasmina), which don't
@@ -1880,7 +2181,7 @@ class EpisodeOutcomePayload:
     env_id: int  # -1 = sentinel (replaced by emit_with_env_context)
     episode_idx: int
     final_accuracy: float
-    param_ratio: float  # total_params / host_params
+    param_ratio: float  # total_params / host_params; 1.0 = no growth, 1.2 = 20% growth
     num_fossilized: int
     num_contributing_fossilized: int  # Seeds that contributed to learning
     episode_reward: float  # Total reward for the episode
@@ -1924,6 +2225,82 @@ GovernorPanicReason = Literal[
     "governor_divergence", # Loss exceeding statistical threshold
     "governor_rollback",   # Default fallback reason
 ]
+
+
+MorphologyCausalLogPhase = Literal[
+    "proposal",
+    "verdict",
+    "mutation",
+    "dispatch",
+    "commit",
+    "rollback",
+    "fossilization",
+    "cooldown",
+    "audit",
+]
+
+
+@dataclass(slots=True, frozen=True)
+class MorphologyCausalLogPayload:
+    """Joinable causal log row for one lifecycle action.
+
+    Each row repeats the stable identity fields so telemetry consumers can join
+    proposal, governor verdict, mutation dispatch, watch evidence, and terminal
+    outcomes without relying on generic event UUIDs.
+    """
+
+    phase: MorphologyCausalLogPhase
+    env_id: int
+    slot_id: str
+    operation: str
+    action_id: str
+    proposal_id: str
+    verdict_id: str
+    mutation_id: str
+    observation_hash: str
+    rng_stream: str
+    rng_seed: int
+    topology: str
+    blueprint_id: str | None
+    governor_approved: bool | None = None
+    governor_reason: str | None = None
+    governor_blocked_factor: str | None = None
+    watch_window_evidence: float | None = None
+    linked_event_id: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MorphologyCausalLogPayload":
+        """Parse from dict. Raises KeyError on missing required identity fields."""
+        return cls(
+            phase=data["phase"],
+            env_id=data["env_id"],
+            slot_id=data["slot_id"],
+            operation=data["operation"],
+            action_id=data["action_id"],
+            proposal_id=data["proposal_id"],
+            verdict_id=data["verdict_id"],
+            mutation_id=data["mutation_id"],
+            observation_hash=data["observation_hash"],
+            rng_stream=data["rng_stream"],
+            rng_seed=data["rng_seed"],
+            topology=data["topology"],
+            blueprint_id=data["blueprint_id"],
+            governor_approved=data["governor_approved"]
+            if "governor_approved" in data
+            else None,
+            governor_reason=data["governor_reason"]
+            if "governor_reason" in data
+            else None,
+            governor_blocked_factor=data["governor_blocked_factor"]
+            if "governor_blocked_factor" in data
+            else None,
+            watch_window_evidence=data["watch_window_evidence"]
+            if "watch_window_evidence" in data
+            else None,
+            linked_event_id=data["linked_event_id"]
+            if "linked_event_id" in data
+            else None,
+        )
 
 
 @dataclass(slots=True, frozen=True)
@@ -1995,6 +2372,7 @@ TelemetryPayload = (
     | TrendDetectedPayload
     | PPOUpdatePayload
     | MemoryWarningPayload
+    | AllocatorStatsPayload
     | RewardHackingSuspectedPayload
     | TamiyoInitiatedPayload
     | SeedGerminatedPayload
@@ -2008,6 +2386,7 @@ TelemetryPayload = (
     | PerformanceDegradationPayload
     | EpisodeOutcomePayload
     | GovernorRollbackPayload
+    | MorphologyCausalLogPayload
 )
 
 

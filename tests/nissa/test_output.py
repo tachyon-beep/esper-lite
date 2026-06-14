@@ -13,7 +13,40 @@ from esper.leyline.telemetry import (
     EpochCompletedPayload,
     SeedGerminatedPayload,
 )
-from esper.nissa.output import DirectoryOutput, NissaHub, OutputBackend, _join_with_timeout
+from esper.nissa.output import (
+    DirectoryOutput,
+    FileOutput,
+    NissaHub,
+    OutputBackend,
+    _join_with_timeout,
+)
+
+
+class TestFileOutputEpisodeIdx:
+    """LN-001: FileOutput JSONL rows must carry episode_idx."""
+
+    def test_jsonl_row_includes_episode_idx(self, tmp_path: Path):
+        backend = FileOutput(tmp_path / "events.jsonl", buffer_size=1)
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            seed_id="seed_0",
+            epoch=3,
+            data=EpochCompletedPayload(
+                env_id=1,
+                inner_epoch=3,
+                val_loss=0.4,
+                val_accuracy=80.0,
+                episode_idx=7,
+                seeds=None,
+            ),
+        )
+        backend.emit(event)
+        backend.close()
+
+        with open(tmp_path / "events.jsonl") as f:
+            data = json.loads(f.readline())
+        assert data["data"]["episode_idx"] == 7
 
 
 class TestDirectoryOutput:
@@ -64,6 +97,32 @@ class TestDirectoryOutput:
             assert data["seed_id"] == "seed_0"
             assert data["data"]["val_accuracy"] == 85.5
 
+    def test_jsonl_row_includes_episode_idx(self, tmp_path: Path):
+        """LN-001: DirectoryOutput JSONL rows must carry episode_idx (no silent drop)."""
+        backend = DirectoryOutput(tmp_path)
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            seed_id="seed_0",
+            epoch=5,
+            data=EpochCompletedPayload(
+                env_id=0,
+                inner_epoch=5,
+                val_loss=0.5,
+                val_accuracy=85.5,
+                episode_idx=9,
+                seeds=None,
+            ),
+        )
+        backend.emit(event)
+        backend.close()
+
+        events_file = list(tmp_path.iterdir())[0] / "events.jsonl"
+        with open(events_file) as f:
+            data = json.loads(f.readline())
+        assert "episode_idx" in data["data"]
+        assert data["data"]["episode_idx"] == 9
+
     def test_output_dir_property_returns_timestamped_path(self, tmp_path: Path):
         """DirectoryOutput.output_dir returns the full path to timestamped directory."""
         backend = DirectoryOutput(tmp_path)
@@ -88,6 +147,36 @@ class TestDirectoryOutput:
         datetime.strptime(ts_part, "%Y-%m-%d_%H%M%S")
 
         backend.close()
+
+
+class TestNissaHubHealth:
+    """Tests for queue-pressure health reporting."""
+
+    def test_health_snapshot_surfaces_hub_and_backend_drops(self):
+        class NoopBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        backend = NoopBackend()
+        hub.add_backend(backend)
+        hub._dropped_events = 2
+        hub._backend_workers[0]._dropped_events = 3
+
+        health = hub.get_health_snapshot()
+
+        assert health["status"] == "degraded"
+        assert health["dropped_events"] == 5
+        assert health["hub_dropped_events"] == 2
+        assert health["backend_dropped_events"] == 3
+
+        hub.close()
 
 
 class TestNissaHubWithDirectoryOutput:
@@ -629,12 +718,16 @@ class TestNissaHubTimeoutBehavior:
 
     def test_flush_logs_warning_on_timeout(self, caplog: pytest.LogCaptureFixture):
         """flush() should log warning when timeout expires."""
+        import threading
+
+        release_emit = threading.Event()
+
         class SlowBackend(OutputBackend):
             def start(self) -> None:
                 pass
 
             def emit(self, event: TelemetryEvent) -> None:
-                time.sleep(10)  # Very slow
+                release_emit.wait()
 
             def close(self) -> None:
                 pass
@@ -664,6 +757,7 @@ class TestNissaHubTimeoutBehavior:
         ]
         assert len(timeout_warnings) >= 1
 
+        release_emit.set()
         hub.close(timeout=0.1)
 
 
@@ -800,6 +894,8 @@ class TestNissaHubConcurrentAddRemove:
 
         events_received: list[tuple[str, int | None]] = []
         events_lock = threading.Lock()
+        removal_started = threading.Event()
+        release_removed_backend = threading.Event()
 
         class SlowBackend(OutputBackend):
             def __init__(self, name: str):
@@ -809,7 +905,9 @@ class TestNissaHubConcurrentAddRemove:
                 pass
 
             def emit(self, event: TelemetryEvent) -> None:
-                time.sleep(0.01)  # Slow enough to allow race
+                if self.name == "backend1":
+                    removal_started.set()
+                    release_removed_backend.wait()
                 with events_lock:
                     events_received.append((self.name, event.epoch))
 
@@ -833,8 +931,14 @@ class TestNissaHubConcurrentAddRemove:
             )
             hub.emit(event)
 
+        assert removal_started.wait(timeout=1.0)
         # Remove backend1 while events are still being processed
-        hub.remove_backend(backend1)
+        remove_thread = threading.Thread(target=hub.remove_backend, args=(backend1,))
+        remove_thread.start()
+        assert remove_thread.is_alive()
+        release_removed_backend.set()
+        remove_thread.join(timeout=1.0)
+        assert not remove_thread.is_alive()
 
         # Emit more events (should only go to backend2)
         for i in range(10, 15):
@@ -860,3 +964,229 @@ class TestNissaHubConcurrentAddRemove:
             f"Backend2 should have received events after backend1 removal. "
             f"Got {len(backend2_events)} events."
         )
+
+
+class TestTGV001JsonlPayloadFields:
+    """TGV-001: Nissa JSONL output must preserve non-default payload fields.
+
+    The FileOutput/DirectoryOutput JSONL path serializes a payload via
+    ``_payload_to_dict`` (``payload.to_dict()`` if present, else
+    ``dataclasses.asdict``). These tests assert the key proof/diagnostic
+    payloads survive that path with their distinctive non-default fields
+    intact, AND that the emitted JSONL re-parses back through ``from_dict``
+    without losing those fields. This is the Nissa-path complement to
+    ``tests/leyline/test_payload_round_trip.py``.
+    """
+
+    @staticmethod
+    def _emit_and_read(tmp_path: Path, event: TelemetryEvent) -> dict:
+        backend = FileOutput(tmp_path / "events.jsonl", buffer_size=1)
+        backend.emit(event)
+        backend.close()
+        with open(tmp_path / "events.jsonl") as f:
+            return json.loads(f.readline())
+
+    def test_seed_germinated_proof_fields_survive_jsonl(self, tmp_path: Path):
+        """Morphology proof / RNG provenance fields survive the JSONL path."""
+        from esper.leyline.telemetry import SeedGerminatedPayload
+
+        payload = SeedGerminatedPayload(
+            slot_id="slot_3",
+            env_id=2,
+            blueprint_id="bp_xyz",
+            params=4096,
+            episode_idx=11,
+            alpha=0.33,
+            grad_ratio=1.7,
+            has_vanishing=True,
+            has_exploding=True,
+            epochs_in_stage=9,
+            blend_tempo_epochs=8,
+            alpha_curve="COSINE",
+            morphology_proposal_id="prop-1",
+            morphology_verdict_id="ver-2",
+            morphology_mutation_id="mut-3",
+            rng_stream="germinate",
+            rng_seed=123456,
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_GERMINATED,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        # Distinctive non-default fields must be present in JSONL.
+        assert data["episode_idx"] == 11
+        assert data["morphology_proposal_id"] == "prop-1"
+        assert data["morphology_verdict_id"] == "ver-2"
+        assert data["morphology_mutation_id"] == "mut-3"
+        assert data["rng_stream"] == "germinate"
+        assert data["rng_seed"] == 123456
+        assert data["alpha_curve"] == "COSINE"
+        # And the JSONL re-parses back to an equal payload.
+        assert SeedGerminatedPayload.from_dict(data) == payload
+
+    def test_seed_stage_changed_proof_fields_survive_jsonl(self, tmp_path: Path):
+        from esper.leyline.telemetry import SeedStageChangedPayload
+
+        payload = SeedStageChangedPayload(
+            slot_id="slot_1",
+            env_id=4,
+            from_stage="TRAINING",
+            to_stage="BLENDING",
+            episode_idx=22,
+            alpha=0.6,
+            accuracy_delta=2.5,
+            epochs_in_stage=7,
+            grad_ratio=1.25,
+            has_vanishing=True,
+            has_exploding=True,
+            alpha_curve="EXPONENTIAL",
+            morphology_proposal_id="prop-9",
+            morphology_verdict_id="ver-8",
+            morphology_mutation_id="mut-7",
+            rng_stream="stage",
+            rng_seed=99,
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["episode_idx"] == 22
+        assert data["morphology_proposal_id"] == "prop-9"
+        assert data["rng_seed"] == 99
+        assert data["alpha_curve"] == "EXPONENTIAL"
+        assert SeedStageChangedPayload.from_dict(data) == payload
+
+    def test_episode_outcome_diagnostics_survive_jsonl(self, tmp_path: Path):
+        from esper.leyline.telemetry import EpisodeOutcomePayload
+
+        payload = EpisodeOutcomePayload(
+            env_id=3,
+            episode_idx=14,
+            final_accuracy=91.2,
+            param_ratio=1.18,
+            num_fossilized=2,
+            num_contributing_fossilized=1,
+            episode_reward=12.5,
+            stability_score=0.87,
+            reward_mode="shaped",
+            episode_length=25,
+            outcome_type="success",
+            germinate_count=3,
+            prune_count=1,
+            fossilize_count=2,
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPISODE_OUTCOME,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["episode_length"] == 25
+        assert data["outcome_type"] == "success"
+        assert data["germinate_count"] == 3
+        assert data["prune_count"] == 1
+        assert data["fossilize_count"] == 2
+        assert EpisodeOutcomePayload.from_dict(data) == payload
+
+    def test_governor_rollback_panic_fields_survive_jsonl(self, tmp_path: Path):
+        from esper.leyline.telemetry import GovernorRollbackPayload
+
+        payload = GovernorRollbackPayload(
+            env_id=0,
+            device="cuda:0",
+            reason="loss diverged",
+            episode_idx=5,
+            loss_at_panic=42.0,
+            loss_threshold=10.0,
+            consecutive_panics=3,
+            panic_reason="governor_divergence",
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["loss_at_panic"] == 42.0
+        assert data["consecutive_panics"] == 3
+        assert data["panic_reason"] == "governor_divergence"
+        assert data["episode_idx"] == 5
+        assert GovernorRollbackPayload.from_dict(data) == payload
+
+    def test_morphology_causal_log_identity_fields_survive_jsonl(self, tmp_path: Path):
+        from esper.leyline.telemetry import MorphologyCausalLogPayload
+
+        payload = MorphologyCausalLogPayload(
+            phase="verdict",
+            env_id=1,
+            slot_id="slot_0",
+            operation="GERMINATE",
+            action_id="act-1",
+            proposal_id="prop-1",
+            verdict_id="ver-1",
+            mutation_id="mut-1",
+            observation_hash="abc123",
+            rng_stream="morph",
+            rng_seed=7,
+            topology="resnet",
+            blueprint_id="bp_1",
+            governor_approved=True,
+            governor_reason="ok",
+            governor_blocked_factor="none",
+            watch_window_evidence=0.42,
+            linked_event_id="evt-1",
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["proposal_id"] == "prop-1"
+        assert data["verdict_id"] == "ver-1"
+        assert data["mutation_id"] == "mut-1"
+        assert data["observation_hash"] == "abc123"
+        assert data["watch_window_evidence"] == 0.42
+        assert MorphologyCausalLogPayload.from_dict(data) == payload
+
+    def test_epoch_completed_observation_stats_survive_jsonl(self, tmp_path: Path):
+        """EpochCompletedPayload carries nested ObservationStatsTelemetry through JSONL."""
+        from esper.leyline.telemetry import EpochCompletedPayload
+        from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+
+        obs = ObservationStatsTelemetry(
+            slot_features_mean=1.0,
+            slot_features_std=2.0,
+            outlier_pct=0.3,
+            nan_count=1,
+            inf_count=2,
+            batch_size=16,
+        )
+        payload = EpochCompletedPayload(
+            env_id=1,
+            val_accuracy=88.0,
+            val_loss=0.31,
+            inner_epoch=4,
+            episode_idx=8,
+            train_loss=0.41,
+            train_accuracy=86.0,
+            host_grad_norm=1.9,
+            seeds=None,
+            observation_stats=obs,
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["episode_idx"] == 8
+        assert data["train_loss"] == 0.41
+        assert data["host_grad_norm"] == 1.9
+        assert data["observation_stats"]["batch_size"] == 16
+        assert data["observation_stats"]["nan_count"] == 1
+        assert EpochCompletedPayload.from_dict(data) == payload

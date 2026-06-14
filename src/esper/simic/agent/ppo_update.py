@@ -21,6 +21,13 @@ class RatioMetrics:
     early_stop: torch.Tensor
     per_head_ratio_max: dict[str, torch.Tensor]
     joint_ratio_max: torch.Tensor
+    # Per-head clip fraction: fraction of samples where the PER-HEAD ratio falls
+    # outside [1-clip, 1+clip]. This is the head-level companion to the JOINT
+    # clip_fraction above. The trust region is enforced PER HEAD by compute_losses
+    # (the surrogate clips each head's ratio independently), so the joint
+    # clip_fraction can read low while one head is heavily clipped -- this dict
+    # surfaces that per-head signal for tuning. Keys are head_names.
+    per_head_clip_fraction: dict[str, torch.Tensor]
 
 
 @dataclass(slots=True)
@@ -83,9 +90,35 @@ def compute_ratio_metrics(
             total_weight = total_weight + causal_weight
         approx_kl = weighted_kl_sum / total_weight.clamp(min=1e-8)
 
+        # JOINT clip-fraction / directional clip diagnostics.
+        #
+        # DESIGN RULING (factored-PPO trust region): The surrogate loss in
+        # compute_losses enforces the trust region PER HEAD -- it clips each head's
+        # ratio independently to [1-clip, 1+clip] and sums the per-head clipped
+        # objectives (see compute_losses docstring). These clip_fraction* values,
+        # however, are computed on the JOINT ratio = exp(sum_k log_ratio_k) =
+        # prod_k (per-head ratio). The joint ratio is the importance weight of the
+        # full factored policy and is the right scalar for the *aggregate* KL /
+        # early-stop signal, but it does NOT describe where the per-head loss
+        # actually clipped. A single head near its clip bound can move the joint
+        # ratio across the threshold while the others sit at ~1, and conversely
+        # several mildly-clipped heads can multiply into a large joint ratio with
+        # no single head clipped. Read joint clip_fraction as a trust-region
+        # *pressure* gauge, and per_head_clip_fraction (below) for the per-head
+        # clipping that the loss is actually applying.
         clip_fraction_t = ((joint_ratio - 1.0).abs() > clip_ratio).float().mean()
         clip_pos = (joint_ratio > 1.0 + clip_ratio).float().mean()
         clip_neg = (joint_ratio < 1.0 - clip_ratio).float().mean()
+
+        # PER-HEAD clip-fraction: fraction of samples where this head's ratio is
+        # outside [1-clip, 1+clip] -- i.e. where compute_losses actually clipped
+        # this head's surrogate. Mean is unmasked to match the joint clip_fraction
+        # above (which is also taken over all samples), keeping the two directly
+        # comparable in telemetry.
+        per_head_clip_fraction = {
+            key: ((per_head_ratios[key] - 1.0).abs() > clip_ratio).float().mean()
+            for key in head_names
+        }
 
         if target_kl is None:
             early_stop = torch.tensor(False, device=approx_kl.device)
@@ -110,6 +143,7 @@ def compute_ratio_metrics(
         early_stop=early_stop,
         per_head_ratio_max=per_head_ratio_max,
         joint_ratio_max=joint_ratio_max,
+        per_head_clip_fraction=per_head_clip_fraction,
     )
 
 
@@ -238,6 +272,35 @@ def compute_losses(
     This prevents the policy from receiving noisy gradients from forced WAIT
     corridors where its output didn't matter, while still training the value
     function to predict returns in those states.
+
+    FACTORED-PPO TRUST REGION (design ruling)
+    -----------------------------------------
+    The action space is FACTORED into independent categorical heads, so the joint
+    policy is the product of the per-head categoricals:
+        pi(a|s) = prod_k pi_k(a_k|s)
+    and the joint importance ratio factorises as
+        r(s,a) = pi(a|s)/pi_old(a|s) = prod_k r_k(s,a_k),   log r = sum_k log r_k.
+
+    This loop enforces the PPO trust region PER HEAD: for each head k it clips
+    r_k independently to [1-clip, 1+clip], takes the pessimistic min against the
+    unclipped surrogate, and SUMS the per-head clipped objectives. This is the
+    correct factored-PPO formulation: each head is its own categorical with its
+    own gradient, and per-head clipping bounds each factor's policy update
+    directly. Clipping the JOINT ratio instead would couple the heads' update
+    magnitudes through the product r = prod_k r_k -- one head's large ratio would
+    suppress every other head's gradient even where those heads barely moved, and
+    a head that is causally masked on a step (mask=0) would still distort the
+    shared joint clip decision. Per-head clipping avoids both, and is consistent
+    with how the per-head causal masks already gate each head's loss below.
+
+    TELEMETRY NOTE: compute_ratio_metrics reports KL and clip_fraction on the
+    JOINT ratio (the aggregate trust-region pressure / early-stop signal), while
+    RatioMetrics.per_head_clip_fraction reports, per head, the fraction of
+    samples this loop actually clipped. The two are intentionally different views:
+    the loss is per-head; the joint clip_fraction is an aggregate. Read both
+    together when tuning -- a low joint clip_fraction with a high per-head
+    clip_fraction on one head means that head is hitting its trust region even
+    though the joint ratio looks calm.
 
     PYTORCH OPTIMIZATION: entropy_floor_penalty_coef MUST be a dict (not a scalar).
     Caller (PPOAgent) normalizes scalar inputs to dict at __init__ time. This avoids

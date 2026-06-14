@@ -66,26 +66,6 @@ def test_timing_discount_always_reduces_early_germination_reward(inputs):
 
 
 @given(
-    progress=st.floats(min_value=10.0, max_value=50.0),
-    contribution=st.floats(min_value=0.1, max_value=2.0),
-)
-@settings(max_examples=200)
-def test_harmonic_always_less_than_geometric_when_progress_dominates(
-    progress: float, contribution: float
-):
-    """D3-Attribution: Harmonic <= Geometric when progress > contribution."""
-    assume(progress > contribution * 2)  # Progress dominates
-
-    geometric = _compute_attributed_value(progress, contribution, "geometric")
-    harmonic = _compute_attributed_value(progress, contribution, "harmonic")
-
-    assert harmonic <= geometric, (
-        f"Harmonic {harmonic} > Geometric {geometric} "
-        f"for progress={progress}, contribution={contribution}"
-    )
-
-
-@given(
     progress=st.floats(min_value=0.1, max_value=50.0),
     contribution=st.floats(min_value=0.1, max_value=50.0),
 )
@@ -117,18 +97,16 @@ def test_combined_fixes_reduce_gaming_incentive(inputs):
         disable_terminal_reward=True,
         disable_anti_gaming=True,
         rent_weight=0.0,
-        first_germinate_bonus=0.0,
     )
 
     config_baseline = ContributionRewardConfig(
         contribution_weight=1.0,
-        attribution_formula="geometric",
+        attribution_formula="harmonic",
         disable_timing_discount=True,
         disable_pbrs=True,
         disable_terminal_reward=True,
         disable_anti_gaming=True,
         rent_weight=0.0,
-        first_germinate_bonus=0.0,
     )
 
     seed = SeedInfo(
@@ -142,6 +120,7 @@ def test_combined_fixes_reduce_gaming_incentive(inputs):
         seed_age_epochs=inputs["seed_age"],
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=5.0,
     )
 
     # Progress >> contribution scenario (gaming)
@@ -212,16 +191,13 @@ def test_timing_discount_monotonicity(e1: int, e2: int, warmup: int, floor: floa
 def test_formula_symmetry_when_equal(value: float):
     """D3-Attribution: All formulas yield identical values when progress == contribution.
 
-    This is a mathematical identity for geometric/harmonic/minimum means:
-    - geometric: sqrt(a*a) = a
+    This is a mathematical identity for harmonic/minimum means:
     - harmonic: 2*a*a/(a+a) = a
     - minimum: min(a, a) = a
     """
-    geometric = _compute_attributed_value(value, value, "geometric")
     harmonic = _compute_attributed_value(value, value, "harmonic")
     minimum = _compute_attributed_value(value, value, "minimum")
 
-    assert abs(geometric - value) < 1e-6, f"Geometric({value}, {value}) = {geometric} != {value}"
     assert abs(harmonic - value) < 1e-6, f"Harmonic({value}, {value}) = {harmonic} != {value}"
     assert abs(minimum - value) < 1e-6, f"Minimum({value}, {value}) = {minimum} != {value}"
 
@@ -232,15 +208,13 @@ def test_formula_symmetry_when_equal(value: float):
 )
 @settings(max_examples=300)
 def test_attribution_ordering_invariant(progress: float, contribution: float):
-    """D3-Attribution: minimum <= harmonic <= geometric always holds.
+    """D3-Attribution: minimum <= harmonic always holds.
 
     This ordering is a mathematical property of these means for positive values:
     - Minimum is the most conservative (smallest)
     - Harmonic is dominated by the smaller value
-    - Geometric is the middle ground
     The equality holds when progress == contribution.
     """
-    geometric = _compute_attributed_value(progress, contribution, "geometric")
     harmonic = _compute_attributed_value(progress, contribution, "harmonic")
     minimum = _compute_attributed_value(progress, contribution, "minimum")
 
@@ -249,9 +223,5 @@ def test_attribution_ordering_invariant(progress: float, contribution: float):
 
     assert minimum <= harmonic + eps, (
         f"Ordering violated: minimum {minimum} > harmonic {harmonic} "
-        f"for progress={progress}, contribution={contribution}"
-    )
-    assert harmonic <= geometric + eps, (
-        f"Ordering violated: harmonic {harmonic} > geometric {geometric} "
         f"for progress={progress}, contribution={contribution}"
     )

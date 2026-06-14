@@ -272,6 +272,24 @@ class TestFossilizeDecisions:
         # Should fossilize because counterfactual is positive
         assert decision.action.name == "FOSSILIZE"
 
+    def test_holding_seed_without_counterfactual_waits_for_proof(self):
+        """Should not fossilize from total improvement without counterfactual proof."""
+        policy = HeuristicTamiyo(topology="cnn")
+
+        seed = MockSeedState(
+            stage=SeedStage.HOLDING,
+            epochs_in_stage=3,
+            improvement=2.0,
+            total_improvement=5.0,
+            counterfactual=None,
+        )
+        signals = MockTrainingSignals(MockTrainingMetrics(epoch=30))
+
+        decision = policy.decide(signals, active_seeds=[seed])
+
+        assert decision.action.name == "WAIT"
+        assert "counterfactual" in decision.reason
+
 
 class TestWaitDecisions:
     """Tests for wait/patience decision logic."""

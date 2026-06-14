@@ -7,6 +7,7 @@ from esper.tamiyo.policy import get_policy, list_policies
 from esper.tamiyo.policy.lstm_bundle import LSTMPolicyBundle
 from esper.leyline import ActionResult, EvalResult, ForwardResult
 from esper.leyline import (
+    HEAD_NAMES,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -81,6 +82,7 @@ def test_lstm_bundle_get_action(lstm_bundle, slot_config):
     assert isinstance(result, ActionResult)
     assert "op" in result.action
     assert "op" in result.log_prob
+    assert tuple(result.head_entropies) == HEAD_NAMES
     assert result.hidden is not None
 
 

@@ -21,7 +21,13 @@ from esper.leyline.signals import TrainingMetrics, TrainingSignals
 from esper.leyline.stages import SeedStage
 from esper.leyline.telemetry import SeedTelemetry
 from esper.leyline.slot_config import SlotConfig
-from esper.tamiyo.policy.features import _pad_history, batch_obs_to_features, symlog, symlog_tensor
+from esper.tamiyo.policy.features import (
+    OBS_V3_UNKNOWN_SENTINEL,
+    _pad_history,
+    batch_obs_to_features,
+    symlog,
+    symlog_tensor,
+)
 
 pytestmark = pytest.mark.property
 
@@ -72,7 +78,9 @@ def test_pad_history_returns_fixed_length(history: list[float], length: int) -> 
     if len(history) >= length:
         assert padded == history[-length:]
     else:
-        assert padded[: length - len(history)] == [0.0] * (length - len(history))
+        # Absent (not-yet-observed) steps are marked None, NOT a fabricated 0.0,
+        # so the encoder can distinguish them from an observed zero (TPD-005).
+        assert padded[: length - len(history)] == [None] * (length - len(history))
         assert padded[length - len(history) :] == history
 
 
@@ -347,19 +355,92 @@ def test_batch_obs_to_features_shape_and_core_invariants(batch) -> None:
             assert -1.0 <= improvement_norm <= 1.0
             assert -1.0 <= velocity_norm <= 1.0
 
+            # TPD-003: a missing entry encodes UNKNOWN (no evidence yet),
+            # distinct from any measured reading.
             expected_prev = (
                 env_state.gradient_health_prev[slot_id]
                 if slot_id in env_state.gradient_health_prev
-                else 1.0
+                else OBS_V3_UNKNOWN_SENTINEL
             )
             assert obs[env_idx, slot_offset + 27].item() == pytest.approx(expected_prev)
 
-            expected_epochs_since_cf = (
-                env_state.epochs_since_counterfactual[slot_id]
-                if slot_id in env_state.epochs_since_counterfactual
-                else 0
-            )
-            assert obs[env_idx, slot_offset + 29].item() == pytest.approx(
-                DEFAULT_GAMMA ** expected_epochs_since_cf
-            )
+            if slot_id in env_state.epochs_since_counterfactual:
+                expected_freshness = DEFAULT_GAMMA ** env_state.epochs_since_counterfactual[
+                    slot_id
+                ]
+            else:
+                expected_freshness = OBS_V3_UNKNOWN_SENTINEL
+            assert obs[env_idx, slot_offset + 29].item() == pytest.approx(expected_freshness)
 
+
+def _signals_with_history(
+    loss_history: list[float], accuracy_history: list[float]
+) -> TrainingSignals:
+    metrics = TrainingMetrics(
+        epoch=10,
+        global_step=10,
+        train_loss=0.0,
+        val_loss=0.0,
+        loss_delta=0.0,
+        train_accuracy=0.0,
+        val_accuracy=0.0,
+        accuracy_delta=0.0,
+        plateau_epochs=0,
+        host_stabilized=0,
+        best_val_accuracy=0.0,
+        best_val_loss=0.0,
+    )
+    return TrainingSignals(
+        metrics=metrics,
+        loss_history=loss_history,
+        accuracy_history=accuracy_history,
+        available_slots=1,
+    )
+
+
+def test_absent_history_distinct_from_observed_zero_history() -> None:
+    """TPD-005: an absent (not-yet-observed) history step must encode
+    differently from a genuinely observed value of 0.0.
+
+    Loss-history slots live at base indices 3..7 and accuracy-history slots at
+    8..12. A fresh seed with a single observation left-pads four absent steps;
+    those must be the UNKNOWN sentinel, NOT the same value an observed loss/acc
+    of exactly 0.0 would produce.
+    """
+    slot_config = SlotConfig.for_grid(1, 1)
+    device = torch.device("cpu")
+    env_state = EnvStateStub(last_action_success=False, last_action_op=0)
+
+    # Short history: only the most recent step observed (value 0.0), four absent.
+    short = _signals_with_history(loss_history=[0.0], accuracy_history=[0.0])
+    # Full history of genuinely observed zeros.
+    full = _signals_with_history(
+        loss_history=[0.0, 0.0, 0.0, 0.0, 0.0],
+        accuracy_history=[0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+
+    obs, _ = batch_obs_to_features(
+        [short, full],
+        [{}, {}],
+        [env_state, env_state],
+        slot_config,
+        device,
+        max_epochs=200,
+    )
+
+    # Absent steps (the four leading slots) must be the UNKNOWN sentinel.
+    for i in range(4):
+        assert obs[0, 3 + i].item() == pytest.approx(OBS_V3_UNKNOWN_SENTINEL)  # loss
+        assert obs[0, 8 + i].item() == pytest.approx(OBS_V3_UNKNOWN_SENTINEL)  # accuracy
+    # The single observed 0.0 (loss and accuracy) must encode as 0.0, NOT sentinel.
+    assert obs[0, 7].item() == pytest.approx(0.0)
+    assert obs[0, 12].item() == pytest.approx(0.0)
+
+    # Fully-observed zero history must be all 0.0 — distinct from the absent rows.
+    for i in range(5):
+        assert obs[1, 3 + i].item() == pytest.approx(0.0)
+        assert obs[1, 8 + i].item() == pytest.approx(0.0)
+
+    # Absent and observed-zero encodings differ on the padded positions.
+    assert obs[0, 3].item() != pytest.approx(obs[1, 3].item())
+    assert obs[0, 8].item() != pytest.approx(obs[1, 8].item())

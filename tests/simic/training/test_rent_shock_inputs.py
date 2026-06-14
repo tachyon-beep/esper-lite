@@ -11,6 +11,7 @@ from __future__ import annotations
 import torch
 
 from esper.kasmina.host import CNNHost, MorphogeneticModel
+from esper.leyline.alpha import AlphaAlgorithm
 from esper.leyline.alpha import AlphaMode
 from esper.leyline.stages import SeedStage
 from esper.simic.training.helpers import compute_rent_and_shock_inputs
@@ -92,3 +93,65 @@ def test_prune_ramp_shock_invariant_to_blend_out_freeze_and_rent_stops_after_pru
     assert shock2 > 0.0
     assert effective2 == 0.0
 
+
+def test_training_stage_active_seed_pays_no_base_rent() -> None:
+    """BaseSlotRent starts at BLENDING, not during seed incubation."""
+    host = CNNHost()
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+    model.germinate_seed("conv_light", "seed0", slot="r0c0")
+
+    slot = model.seed_slots["r0c0"]
+    assert slot.state is not None
+    slot.state.transition(SeedStage.TRAINING)
+    slot.set_alpha(1.0)
+
+    effective, shock = compute_rent_and_shock_inputs(
+        model=model,
+        slot_ids=["r0c0"],
+        host_params=_host_param_count(host),
+        base_slot_rent_ratio=0.0039,
+        prev_slot_alphas={"r0c0": 0.0},
+        prev_slot_params={"r0c0": 0},
+    )
+
+    assert effective == 0.0
+    assert shock == 0.0
+
+
+def test_gated_blending_counts_gate_network_as_reward_rent_overhead() -> None:
+    """GATE alpha schedules are trainable overhead and must reach reward inputs."""
+    host = CNNHost()
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+    model.germinate_seed(
+        "conv_light",
+        "seed0",
+        slot="r0c0",
+        blend_algorithm_id="gated",
+        alpha_algorithm=AlphaAlgorithm.GATE,
+    )
+
+    slot = model.seed_slots["r0c0"]
+    assert slot.state is not None
+    slot.state.transition(SeedStage.TRAINING)
+    slot.state.transition(SeedStage.BLENDING)
+    slot.start_blending(total_steps=4)
+    slot.set_alpha(0.5)
+
+    assert slot.alpha_schedule is not None
+    gate_params = sum(p.numel() for p in slot.alpha_schedule.parameters())
+    seed_params = int(slot.state.metrics.seed_param_count)
+    host_params = _host_param_count(host)
+    base_ratio = 0.0039
+
+    effective, shock = compute_rent_and_shock_inputs(
+        model=model,
+        slot_ids=["r0c0"],
+        host_params=host_params,
+        base_slot_rent_ratio=base_ratio,
+        prev_slot_alphas={"r0c0": 0.0},
+        prev_slot_params={"r0c0": 0},
+    )
+
+    expected = (base_ratio * host_params) + 0.5 * (seed_params + gate_params)
+    assert effective == expected
+    assert shock == 0.0

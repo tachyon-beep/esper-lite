@@ -5,8 +5,11 @@ Breaking changes to TelemetryEvent.data fields may require view updates.
 """
 from __future__ import annotations
 
-import duckdb
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
+
+import duckdb
 
 VIEW_DEFINITIONS: dict[str, str] = {
     "raw_events": """
@@ -59,12 +62,15 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.n_envs')::INTEGER as n_envs,
             json_extract(data, '$.n_episodes')::INTEGER as n_episodes,
             json_extract(data, '$.max_epochs')::INTEGER as max_epochs,
+            json_extract(data, '$.max_batches')::INTEGER as max_batches,
             json_extract(data, '$.lr')::DOUBLE as lr,
             json_extract(data, '$.entropy_coef')::DOUBLE as entropy_coef,
             json_extract(data, '$.clip_ratio')::DOUBLE as clip_ratio,
             json_extract(data, '$.param_budget')::INTEGER as param_budget,
             json_extract_string(data, '$.policy_device') as policy_device,
-            json_extract(data, '$.host_params')::INTEGER as host_params
+            json_extract(data, '$.host_params')::INTEGER as host_params,
+            json_extract_string(data, '$.proof_baseline_mode') as proof_baseline_mode,
+            json_extract_string(data, '$.proof_baseline_pair_id') as proof_baseline_pair_id
         FROM raw_events
         WHERE event_type = 'TRAINING_STARTED'
     """,
@@ -154,7 +160,26 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.head_alpha_target_grad_norm')::DOUBLE as head_alpha_target_grad_norm,
             json_extract(data, '$.head_alpha_speed_grad_norm')::DOUBLE as head_alpha_speed_grad_norm,
             json_extract(data, '$.head_alpha_curve_grad_norm')::DOUBLE as head_alpha_curve_grad_norm,
-            json_extract(data, '$.head_op_grad_norm')::DOUBLE as head_op_grad_norm
+            json_extract(data, '$.head_op_grad_norm')::DOUBLE as head_op_grad_norm,
+            json_extract(data, '$.head_value_grad_norm')::DOUBLE as head_value_grad_norm,
+            -- Per-head learnability diagnostics
+            json_extract(data, '$.head_slot_learnable_fraction')::DOUBLE as head_slot_learnable_fraction,
+            json_extract(data, '$.head_blueprint_learnable_fraction')::DOUBLE as head_blueprint_learnable_fraction,
+            json_extract(data, '$.head_style_learnable_fraction')::DOUBLE as head_style_learnable_fraction,
+            json_extract(data, '$.head_tempo_learnable_fraction')::DOUBLE as head_tempo_learnable_fraction,
+            json_extract(data, '$.head_alpha_target_learnable_fraction')::DOUBLE as head_alpha_target_learnable_fraction,
+            json_extract(data, '$.head_alpha_speed_learnable_fraction')::DOUBLE as head_alpha_speed_learnable_fraction,
+            json_extract(data, '$.head_alpha_curve_learnable_fraction')::DOUBLE as head_alpha_curve_learnable_fraction,
+            json_extract(data, '$.head_op_learnable_fraction')::DOUBLE as head_op_learnable_fraction,
+            json_extract_string(data, '$.head_slot_gradient_state') as head_slot_gradient_state,
+            json_extract_string(data, '$.head_blueprint_gradient_state') as head_blueprint_gradient_state,
+            json_extract_string(data, '$.head_style_gradient_state') as head_style_gradient_state,
+            json_extract_string(data, '$.head_tempo_gradient_state') as head_tempo_gradient_state,
+            json_extract_string(data, '$.head_alpha_target_gradient_state') as head_alpha_target_gradient_state,
+            json_extract_string(data, '$.head_alpha_speed_gradient_state') as head_alpha_speed_gradient_state,
+            json_extract_string(data, '$.head_alpha_curve_gradient_state') as head_alpha_curve_gradient_state,
+            json_extract_string(data, '$.head_op_gradient_state') as head_op_gradient_state,
+            json_extract_string(data, '$.head_value_gradient_state') as head_value_gradient_state
         FROM raw_events
         WHERE event_type = 'PPO_UPDATE_COMPLETED'
     """,
@@ -229,7 +254,12 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.epochs_total')::INTEGER as epochs_total,
             json_extract_string(data, '$.reason') as reason,
             json_extract_string(data, '$.initiator') as initiator,
-            json_extract(data, '$.auto_pruned')::BOOLEAN as auto_pruned
+            json_extract(data, '$.auto_pruned')::BOOLEAN as auto_pruned,
+            json_extract_string(data, '$.morphology_proposal_id') as morphology_proposal_id,
+            json_extract_string(data, '$.morphology_verdict_id') as morphology_verdict_id,
+            json_extract_string(data, '$.morphology_mutation_id') as morphology_mutation_id,
+            json_extract_string(data, '$.rng_stream') as rng_stream,
+            json_extract(data, '$.rng_seed')::BIGINT as rng_seed
         FROM raw_events
         WHERE event_type IN (
             'SEED_GERMINATED',
@@ -237,6 +267,37 @@ VIEW_DEFINITIONS: dict[str, str] = {
             'SEED_FOSSILIZED',
             'SEED_PRUNED'
         )
+    """,
+    "morphology_causal_log": """
+        CREATE OR REPLACE VIEW morphology_causal_log AS
+        SELECT
+            event_id,
+            timestamp,
+            run_dir,
+            group_id,
+            epoch,
+            severity,
+            message,
+            json_extract_string(data, '$.phase') as phase,
+            json_extract(data, '$.env_id')::INTEGER as env_id,
+            json_extract_string(data, '$.slot_id') as slot_id,
+            json_extract_string(data, '$.operation') as operation,
+            json_extract_string(data, '$.action_id') as action_id,
+            json_extract_string(data, '$.proposal_id') as proposal_id,
+            json_extract_string(data, '$.verdict_id') as verdict_id,
+            json_extract_string(data, '$.mutation_id') as mutation_id,
+            json_extract_string(data, '$.observation_hash') as observation_hash,
+            json_extract_string(data, '$.rng_stream') as rng_stream,
+            json_extract(data, '$.rng_seed')::BIGINT as rng_seed,
+            json_extract_string(data, '$.topology') as topology,
+            json_extract_string(data, '$.blueprint_id') as blueprint_id,
+            json_extract(data, '$.governor_approved')::BOOLEAN as governor_approved,
+            json_extract_string(data, '$.governor_reason') as governor_reason,
+            json_extract_string(data, '$.governor_blocked_factor') as governor_blocked_factor,
+            json_extract(data, '$.watch_window_evidence')::DOUBLE as watch_window_evidence,
+            json_extract_string(data, '$.linked_event_id') as linked_event_id
+        FROM raw_events
+        WHERE event_type = 'MORPHOLOGY_CAUSAL_LOG'
     """,
     "decisions": """
         CREATE OR REPLACE VIEW decisions AS
@@ -457,6 +518,63 @@ VIEW_DEFINITIONS: dict[str, str] = {
             'PLATEAU_DETECTED'
         )
     """,
+    "run_confounders": """
+        CREATE OR REPLACE VIEW run_confounders AS
+        SELECT
+            event_id,
+            timestamp,
+            run_dir,
+            group_id,
+            json_extract(data, '$.env_id')::INTEGER as env_id,
+            event_type,
+            json_extract_string(data, '$.anomaly_type') as anomaly_type,
+            -- episode: numerical/gradient anomalies carry $.episode; rollback and
+            -- degradation carry $.episode_idx; coalesce so every confounder
+            -- surfaces an episode index when one exists.
+            COALESCE(
+                json_extract(data, '$.episode')::INTEGER,
+                json_extract(data, '$.episode_idx')::INTEGER
+            ) as episode,
+            json_extract(data, '$.batch')::INTEGER as batch,
+            json_extract(data, '$.inner_epoch')::INTEGER as inner_epoch,
+            json_extract(data, '$.total_episodes')::INTEGER as total_episodes,
+            -- detail: anomaly events ship $.detail; the proof-integrity confounders
+            -- ship their own descriptive fields. Build a human-readable detail per
+            -- event class so the proof ledger never prints a bare NULL.
+            CASE event_type
+                WHEN 'GOVERNOR_ROLLBACK' THEN
+                    'governor rollback: ' ||
+                    COALESCE(json_extract_string(data, '$.reason'), 'unknown reason')
+                WHEN 'REWARD_HACKING_SUSPECTED' THEN
+                    'reward hacking suspected (' ||
+                    COALESCE(json_extract_string(data, '$.pattern'), 'unknown pattern') ||
+                    ') slot=' || COALESCE(json_extract_string(data, '$.slot_id'), '?') ||
+                    ' seed=' || COALESCE(json_extract_string(data, '$.seed_id'), '?')
+                WHEN 'PERFORMANCE_DEGRADATION' THEN
+                    'performance degradation: drop ' ||
+                    COALESCE(json_extract_string(data, '$.drop_percent'), '?') ||
+                    '% (threshold ' ||
+                    COALESCE(json_extract_string(data, '$.threshold_percent'), '?') || '%)'
+                ELSE json_extract_string(data, '$.detail')
+            END as detail,
+            -- Every event surfaced by this view is a proof confounder and blocks
+            -- the proof verdict. Numerical/gradient pathologies, governor
+            -- rollbacks, reward-hacking suspicion, and performance degradation all
+            -- invalidate a clean reward-efficiency comparison.
+            true as proof_blocking
+        FROM raw_events
+        WHERE event_type IN (
+            'VALUE_COLLAPSE_DETECTED',
+            'RATIO_EXPLOSION_DETECTED',
+            'RATIO_COLLAPSE_DETECTED',
+            'GRADIENT_ANOMALY',
+            'GRADIENT_PATHOLOGY_DETECTED',
+            'NUMERICAL_INSTABILITY_DETECTED',
+            'GOVERNOR_ROLLBACK',
+            'REWARD_HACKING_SUSPECTED',
+            'PERFORMANCE_DEGRADATION'
+        )
+    """,
     "episode_outcomes": """
         CREATE OR REPLACE VIEW episode_outcomes AS
         SELECT
@@ -563,6 +681,75 @@ def telemetry_has_event_files(telemetry_dir: str) -> bool:
     """Return True if the telemetry directory contains any events.jsonl files."""
     telemetry_path = Path(telemetry_dir)
     return any(telemetry_path.glob("*/events.jsonl"))
+
+
+@dataclass(frozen=True)
+class MalformedLine:
+    """A single malformed (non-JSON) line discovered in telemetry ingestion."""
+
+    run_dir: str
+    file: str
+    line_number: int  # 1-based line number within the file
+    snippet: str  # truncated raw content for human triage
+
+
+@dataclass(frozen=True)
+class IngestionIntegrity:
+    """Result of scanning telemetry JSONL files for malformed lines.
+
+    The raw_events DuckDB view ingests with ignore_errors=true, which silently
+    drops malformed rows. For a proof packet that must FAIL CLOSED, silent drops
+    are unacceptable: a single corrupt line could be the very EPISODE_OUTCOME or
+    confounder that would have changed the verdict. This scan re-reads the files
+    independently of DuckDB and surfaces every line that is not valid JSON so the
+    proof packet can BLOCK on ingestion corruption.
+    """
+
+    malformed_lines: list[MalformedLine] = field(default_factory=list)
+
+    @property
+    def malformed_count(self) -> int:
+        return len(self.malformed_lines)
+
+    @property
+    def is_clean(self) -> bool:
+        return not self.malformed_lines
+
+
+def _snippet(raw: str, *, limit: int = 120) -> str:
+    stripped = raw.rstrip("\n")
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[:limit] + "…"
+
+
+def scan_ingestion_integrity(telemetry_dir: str) -> IngestionIntegrity:
+    """Scan every events.jsonl line for JSON validity.
+
+    Blank lines (whitespace only) are ignored — they are not data and DuckDB's
+    newline-delimited reader skips them too. Every other line that fails to parse
+    as JSON is recorded with its file and 1-based line number.
+    """
+    telemetry_path = Path(telemetry_dir)
+    malformed: list[MalformedLine] = []
+    for events_file in sorted(telemetry_path.glob("*/events.jsonl")):
+        run_dir = events_file.parent.name
+        with events_file.open("r", encoding="utf-8") as handle:
+            for line_number, raw in enumerate(handle, start=1):
+                if not raw.strip():
+                    continue
+                try:
+                    json.loads(raw)
+                except json.JSONDecodeError:
+                    malformed.append(
+                        MalformedLine(
+                            run_dir=run_dir,
+                            file=str(events_file),
+                            line_number=line_number,
+                            snippet=_snippet(raw),
+                        )
+                    )
+    return IngestionIntegrity(malformed_lines=malformed)
 
 
 def _create_empty_raw_events_view(conn: duckdb.DuckDBPyConnection) -> None:

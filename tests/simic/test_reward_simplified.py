@@ -14,7 +14,6 @@ from esper.simic.rewards import (
 )
 def test_simplified_mode_exists():
     """RewardMode.SIMPLIFIED should be a valid enum member."""
-    assert hasattr(RewardMode, "SIMPLIFIED")
     assert RewardMode.SIMPLIFIED.value == "simplified"
 
 
@@ -22,6 +21,15 @@ def test_simplified_mode_string_conversion():
     """SIMPLIFIED mode should round-trip through string."""
     mode = RewardMode("simplified")
     assert mode == RewardMode.SIMPLIFIED
+
+
+def test_simplified_mode_is_not_blueprint_economy_evidence():
+    """SIMPLIFIED is diagnostic-only and cannot prove complexity pays rent."""
+    simplified = ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED)
+    shaped = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
+
+    assert simplified.supports_blueprint_economy_evidence is False
+    assert shaped.supports_blueprint_economy_evidence is True
 
 
 class TestComputeSimplifiedReward:

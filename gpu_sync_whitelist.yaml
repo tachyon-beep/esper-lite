@@ -108,9 +108,18 @@ allow_hits:
 - key: src/esper/simic/agent/ppo_agent.py:PPOAgent.update:item
   owner: John
   reason: D5 metrics - count forced actions per episode for slot saturation diagnostics; once per update
+- key: src/esper/simic/agent/ppo_agent.py:PPOAgent.update:tolist
+  owner: John
+  reason: P1-SYNC telemetry - single batched sync for per-head learnable-fraction==0 relabel (replaced one .item() per head); once per update, not per step
 - key: src/esper/simic/training/action_execution.py:execute_actions:tolist
   owner: John
   reason: Forced action tracking - single GPU-to-CPU sync for forced step flags; batched per-batch not per-step
+- key: src/esper/simic/training/action_execution.py:_observation_hash:to_cpu
+  owner: John
+  reason: Morphology causal-log proof evidence - hashes lifecycle observations only when mutation/rollback audit rows are emitted
+- key: src/esper/simic/training/action_execution.py:_observation_hash:numpy
+  owner: John
+  reason: Morphology causal-log proof evidence - serializes the copied lifecycle observation for stable content hashing
 - key: src/esper/simic/control/normalization.py:ValueNormalizer.get_scale:item
   owner: John
   reason: Telemetry - extract normalizer scale once per PPO update; not in hot path, defaults to CPU device
@@ -258,6 +267,12 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:4
   owner: John
   reason: vectorized trainer sync point
+- key: src/esper/karn/overwatch/backend.py:_json_serializer:item
+  owner: John
+  reason: Dashboard JSON serialization boundary for NumPy scalar payloads; not a training hot path
+- key: src/esper/karn/overwatch/backend.py:_json_serializer:tolist
+  owner: John
+  reason: Dashboard JSON serialization boundary for NumPy array payloads; not a training hot path
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy:3
   owner: John
   reason: vectorized trainer sync point
@@ -312,9 +327,9 @@ allow_hits:
 - key: src/esper/tolaria/governor.py:TolariaGovernor.execute_rollback:cuda_synchronize
   owner: John
   reason: Safety-critical - ensure all CUDA streams complete before load_state_dict; prevents race conditions
-- key: src/esper/tolaria/governor.py:TolariaGovernor.snapshot:cpu
+- key: src/esper/tolaria/governor.py:TolariaGovernor.snapshot:synchronize
   owner: John
-  reason: Memory optimization - move snapshot tensors to CPU to save GPU memory; rare operation, not hot path
+  reason: P3-SNAP correctness checkpoint (STOP-SNAP) - one stream sync after non_blocking pinned-host copies, before last_good_state is observable, so rollback can never read a half-copied buffer; rare operation, not hot path
 - key: src/esper/utils/data.py:SharedGPUBatchIterator.__init__:cuda_synchronize
   owner: John
   reason: Initialization barrier - ensure GPU memory transfers complete before DataLoader creation

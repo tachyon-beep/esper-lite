@@ -117,7 +117,7 @@ class AnomalyDetector:
         reasons = []
 
         # Check loss spike
-        if snapshot.host.val_loss > 0:
+        if snapshot.host.val_loss is not None and snapshot.host.val_loss > 0:
             loss_ratio = self.stats.update_loss(snapshot.host.val_loss)
             if loss_ratio > self.config.loss_spike_threshold:
                 reasons.append(f"loss_spike:{loss_ratio:.1f}x")

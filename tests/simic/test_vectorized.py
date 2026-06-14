@@ -11,7 +11,7 @@ import pytest
 import torch
 from unittest.mock import Mock, MagicMock, patch
 
-from esper.leyline import NUM_OPS, SeedStage, TelemetryEvent, TelemetryEventType
+from esper.leyline import HEAD_NAMES, NUM_OPS, SeedStage, TelemetryEvent, TelemetryEventType
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.telemetry import SeedGerminatedPayload
 from esper.simic.telemetry import AnomalyReport
@@ -224,7 +224,12 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "q_spread": 0.0,
         # Per-head stats (optional but expected by emitter loop)
         "head_entropies": {},
-        "head_grad_norms": {},
+        "head_grad_norms": {"value": [0.4]},
+        "head_learnable_fractions": {head: [1.0] for head in HEAD_NAMES},
+        "head_gradient_states": {
+            **{head: ["finite"] for head in HEAD_NAMES},
+            "value": ["finite"],
+        },
     }
     base.update(overrides)
     return base
@@ -892,6 +897,104 @@ def test_aggregate_ppo_metrics_special_reductions_and_head_merging():
     }
 
 
+def test_aggregate_ppo_metrics_mean_reduces_per_head_clip_fraction():
+    """head_{name}_clip_fraction keys must mean-reduce across updates, not KeyError.
+
+    Regression for esper-lite-deb6b11575: _aggregate_ppo_metrics raises KeyError for
+    any metric with no declared reducer. The per-head clip-fraction telemetry relies
+    on the '_clip_fraction' suffix matching the mean-reduce branch (disjoint from the
+    joint 'clip_fraction'/'clip_fraction_positive'/'clip_fraction_negative' keys).
+    """
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {"head_slot_clip_fraction": 0.2, "clip_fraction": 0.1},
+        {"head_slot_clip_fraction": 0.4, "clip_fraction": 0.3},
+    ])
+
+    # Per-head key is mean-reduced via the suffix branch.
+    assert metrics["head_slot_clip_fraction"] == pytest.approx(0.3)
+    # The joint clip_fraction (in the MEAN frozenset) is also mean-reduced and is
+    # NOT double-handled by the suffix branch.
+    assert metrics["clip_fraction"] == pytest.approx(0.2)
+
+
+def test_aggregate_ppo_metrics_reduces_proof_fields_explicitly():
+    """Proof-critical PPO fields must not fall through generic first-value merging."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {
+            "ppo_update_performed": True,
+            "finiteness_gate_skip_count": 1,
+            "finiteness_gate_failures": [{"epoch": 0, "sources": ["value"]}],
+            "head_gradient_states": {
+                "op": ["finite"],
+                "value": ["missing"],
+            },
+            "head_learnable_fractions": {
+                "op": [1.0],
+                "value": [0.0],
+            },
+            "head_nan_detected": {"op": False, "value": True},
+            "head_inf_detected": {"op": False, "value": False},
+            "usable_actor_timesteps": 8,
+            "forced_step_ratio": 0.25,
+            "d5_pre_norm_advantage_std": 0.2,
+            "advantage_std_floored": False,
+            "op_q_values": (1.0, 2.0),
+            "op_valid_mask": (True, False),
+            "ratio_diagnostic": {"representative": "first"},
+        },
+        {
+            "ppo_update_performed": False,
+            "finiteness_gate_skip_count": 2,
+            "finiteness_gate_failures": [{"epoch": 1, "sources": ["log_prob"]}],
+            "head_gradient_states": {
+                "op": ["nonfinite"],
+                "value": ["not_learnable"],
+            },
+            "head_learnable_fractions": {
+                "op": [0.5],
+                "value": [0.0],
+            },
+            "head_nan_detected": {"op": True, "value": False},
+            "head_inf_detected": {"op": False, "value": True},
+            "usable_actor_timesteps": 5,
+            "forced_step_ratio": 0.75,
+            "d5_pre_norm_advantage_std": 0.4,
+            "advantage_std_floored": True,
+            "op_q_values": (3.0, 4.0),
+            "op_valid_mask": (False, True),
+            "ratio_diagnostic": {"representative": "second"},
+        },
+    ])
+
+    assert metrics["ppo_update_performed"] is True
+    assert metrics["finiteness_gate_skip_count"] == 3
+    assert metrics["finiteness_gate_failures"] == [
+        {"epoch": 0, "sources": ["value"]},
+        {"epoch": 1, "sources": ["log_prob"]},
+    ]
+    assert metrics["head_gradient_states"] == {
+        "op": ["finite", "nonfinite"],
+        "value": ["missing", "not_learnable"],
+    }
+    assert metrics["head_learnable_fractions"] == {
+        "op": [1.0, 0.5],
+        "value": [0.0, 0.0],
+    }
+    assert metrics["head_nan_detected"] == {"op": True, "value": True}
+    assert metrics["head_inf_detected"] == {"op": False, "value": True}
+    assert metrics["usable_actor_timesteps"] == 13
+    assert metrics["forced_step_ratio"] == pytest.approx(0.5)
+    assert metrics["d5_pre_norm_advantage_std"] == pytest.approx(0.3)
+    assert metrics["advantage_std_floored"] is True
+    assert metrics["op_q_values"] == (1.0, 2.0)
+    assert metrics["op_valid_mask"] == (True, False)
+    assert metrics["ratio_diagnostic"] == {"representative": "first"}
+
+
 def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
     """Updates should stop when KL exceeds threshold and still clear the buffer."""
 
@@ -980,17 +1083,21 @@ def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
         )
 
 
-def test_run_ppo_updates_uses_amp_context_when_enabled(monkeypatch):
-    """AMP path should call agent.update under autocast when enabled."""
+def test_run_ppo_updates_uses_policy_amp_context_when_enabled(monkeypatch):
+    """The PPO update must run agent.update under the SHARED policy_amp_context (the same
+    factory the rollout legs use), called with the run's (use_amp, amp_dtype)."""
     from contextlib import contextmanager
+    from esper.simic.training import vectorized as vmod
     from esper.simic.training.vectorized import _run_ppo_updates
 
+    entered: list[tuple] = []
+
     @contextmanager
-    def _fake_autocast(*_args, **_kwargs):
+    def _fake_ctx(amp_enabled, dtype):
+        entered.append((amp_enabled, dtype))
         yield
 
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr("esper.simic.training.vectorized.torch_amp.autocast", _fake_autocast)
+    monkeypatch.setattr(vmod, "policy_amp_context", _fake_ctx)
 
     class _StubBuffer:
         def reset(self) -> None:
@@ -1018,9 +1125,10 @@ def test_run_ppo_updates_uses_amp_context_when_enabled(monkeypatch):
         raw_states_for_normalizer_update=[],
         obs_normalizer=_StubNormalizer(),
         use_amp=True,
-        amp_dtype=torch.float16,
+        amp_dtype=torch.bfloat16,
     )
     assert agent.calls == [True]
+    assert entered == [(True, torch.bfloat16)]
 
 # =============================================================================
 # Telemetry Escalation Tests
@@ -1225,6 +1333,75 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
     assert data.gradient_stats is not None
     assert data.stability is not None
     assert data.ratio_diagnostic == {"foo": "bar"}
+
+
+class _CollectStubHub:
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event):
+        self.events.append(event)
+
+
+class _CollectStubAgent:
+    class _Policy:
+        class _Net:
+            pass
+
+        def __init__(self):
+            self._network = _CollectStubAgent._Policy._Net()
+
+        @property
+        def network(self):
+            return self._network
+
+    def __init__(self):
+        self.policy = self._Policy()
+
+
+@pytest.mark.parametrize(
+    "anomaly_type",
+    ["gradient_norm_drift", "gradient_health_drift"],
+)
+def test_emit_anomaly_diagnostics_maps_gradient_pathology(anomaly_type):
+    """TT-002: gradient-pathology anomalies emit GRADIENT_PATHOLOGY_DETECTED."""
+    hub = _CollectStubHub()
+    report = AnomalyReport(has_anomaly=True, anomaly_types=[anomaly_type])
+
+    _emit_anomaly_diagnostics(
+        hub=hub,
+        anomaly_report=report,
+        agent=_CollectStubAgent(),
+        batch_epoch_id=3,
+        batch_idx=0,
+        max_epochs=5,
+        total_episodes=10,
+        collect_debug=False,
+    )
+
+    assert len(hub.events) == 1
+    assert hub.events[0].event_type == TelemetryEventType.GRADIENT_PATHOLOGY_DETECTED
+
+
+def test_emit_anomaly_diagnostics_unmapped_falls_back_to_gradient_anomaly():
+    """TT-002: genuinely-unmapped anomaly types still fall back to GRADIENT_ANOMALY."""
+    hub = _CollectStubHub()
+    # lstm_h_explosion has no dedicated event type -> generic fallback.
+    report = AnomalyReport(has_anomaly=True, anomaly_types=["lstm_h_explosion"])
+
+    _emit_anomaly_diagnostics(
+        hub=hub,
+        anomaly_report=report,
+        agent=_CollectStubAgent(),
+        batch_epoch_id=3,
+        batch_idx=0,
+        max_epochs=5,
+        total_episodes=10,
+        collect_debug=False,
+    )
+
+    assert len(hub.events) == 1
+    assert hub.events[0].event_type == TelemetryEventType.GRADIENT_ANOMALY
 
 
 # =============================================================================

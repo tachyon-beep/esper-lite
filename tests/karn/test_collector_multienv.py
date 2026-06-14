@@ -862,6 +862,7 @@ class TestMinimalTelemetryFallback:
         assert snapshot.host.val_accuracy == 0.75, (
             f"val_accuracy should come from BATCH avg_accuracy, got {snapshot.host.val_accuracy}"
         )
+        assert snapshot.host.val_loss is None
         # batch_idx is 1 (1-indexed), so epoch should be 1
         assert snapshot.epoch == 1, f"Epoch should be 1 (batch_idx), got {snapshot.epoch}"
 

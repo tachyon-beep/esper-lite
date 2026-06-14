@@ -298,6 +298,7 @@ This prohibition does not extend to genuine uses of type checking or error handl
 For absence of doubt, when using these ask yourself "is this defensive programming to hide a bug that should not be possible in a well designed system, or is this legitimate type handling?' If the former, remove it and fix the underlying issue.
 
 <!-- filigree:instructions:v3.0.0rc12:65e6fb25 -->
+<!-- filigree:last-writer:filigree install -->
 ## Filigree Issue Tracker
 
 `filigree` tracks tasks for this project. Data lives in `.filigree/`. Prefer

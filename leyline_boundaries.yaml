@@ -151,6 +151,10 @@ allow_hits:
     owner: "john"
     reason: "Protocol for slot resolution callback, simic-internal"
 
+  - key: "src/esper/simic/training/action_execution.py:dataclass:FreshContributionTargets"
+    owner: "john"
+    reason: "Counterfactual freshness helper result, simic-internal"
+
   - key: "src/esper/simic/training/action_execution.py:dataclass:ActionExecutionContext"
     owner: "john"
     reason: "Context for action execution, simic-internal"

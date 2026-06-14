@@ -6,7 +6,11 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from esper.karn.mcp.views import create_views, VIEW_DEFINITIONS
+from esper.karn.mcp.views import (
+    create_views,
+    scan_ingestion_integrity,
+    VIEW_DEFINITIONS,
+)
 
 
 def test_view_definitions_exist():
@@ -25,8 +29,10 @@ def test_view_definitions_exist():
         "reward_calibration",
         "batch_stats",
         "anomalies",
+        "run_confounders",
         "episode_outcomes",
         "shapley_computed",
+        "morphology_causal_log",
     }
     assert set(VIEW_DEFINITIONS.keys()) == expected
 
@@ -70,6 +76,99 @@ def test_raw_events_includes_filename_and_run_dir(tmp_path):
     assert extracted_run_dir == "telemetry_2025-01-01_000000"
     assert filename.endswith("/telemetry_2025-01-01_000000/events.jsonl") or filename.endswith(
         "\\telemetry_2025-01-01_000000\\events.jsonl"
+    )
+
+
+def test_morphology_causal_log_view_extracts_joinable_fields(tmp_path):
+    """morphology_causal_log exposes stable action identity and proof evidence."""
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "causal-1",
+        "event_type": "MORPHOLOGY_CAUSAL_LOG",
+        "timestamp": "2026-06-13T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 7,
+        "group_id": "default",
+        "message": "Morphology audit evidence",
+        "data": {
+            "phase": "audit",
+            "env_id": 0,
+            "slot_id": "r0c0",
+            "operation": "GERMINATE",
+            "action_id": "morph-b1-e7-env0-r0c0-op1",
+            "proposal_id": "morph-b1-e7-env0-r0c0-op1-proposal",
+            "verdict_id": "morph-b1-e7-env0-r0c0-op1-verdict",
+            "mutation_id": "morph-b1-e7-env0-r0c0-op1-mutation",
+            "observation_hash": "obs-abc123",
+            "rng_stream": "simic.lifecycle.env0",
+            "rng_seed": 12345,
+            "topology": "cnn",
+            "blueprint_id": "conv_l",
+            "governor_approved": True,
+            "governor_reason": "approved",
+            "governor_blocked_factor": None,
+            "watch_window_evidence": 1.25,
+            "linked_event_id": "morph-b1-e7-env0-r0c0-op1-mutation",
+        },
+        "severity": "debug",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            run_dir,
+            epoch,
+            phase,
+            env_id,
+            slot_id,
+            operation,
+            action_id,
+            proposal_id,
+            verdict_id,
+            mutation_id,
+            observation_hash,
+            rng_stream,
+            rng_seed,
+            topology,
+            blueprint_id,
+            governor_approved,
+            governor_reason,
+            governor_blocked_factor,
+            watch_window_evidence,
+            linked_event_id
+        FROM morphology_causal_log
+        """
+    ).fetchone()
+
+    assert row == (
+        "test_run",
+        7,
+        "audit",
+        0,
+        "r0c0",
+        "GERMINATE",
+        "morph-b1-e7-env0-r0c0-op1",
+        "morph-b1-e7-env0-r0c0-op1-proposal",
+        "morph-b1-e7-env0-r0c0-op1-verdict",
+        "morph-b1-e7-env0-r0c0-op1-mutation",
+        "obs-abc123",
+        "simic.lifecycle.env0",
+        12345,
+        "cnn",
+        "conv_l",
+        True,
+        "approved",
+        None,
+        1.25,
+        "morph-b1-e7-env0-r0c0-op1-mutation",
     )
 
 
@@ -305,6 +404,24 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "head_alpha_speed_grad_norm": 1.6,
             "head_alpha_curve_grad_norm": 1.7,
             "head_op_grad_norm": 1.8,
+            "head_value_grad_norm": 1.9,
+            "head_slot_learnable_fraction": 0.25,
+            "head_blueprint_learnable_fraction": 0.0,
+            "head_style_learnable_fraction": 0.5,
+            "head_tempo_learnable_fraction": 0.0,
+            "head_alpha_target_learnable_fraction": 0.5,
+            "head_alpha_speed_learnable_fraction": 0.25,
+            "head_alpha_curve_learnable_fraction": 0.25,
+            "head_op_learnable_fraction": 1.0,
+            "head_slot_gradient_state": "finite",
+            "head_blueprint_gradient_state": "not_learnable",
+            "head_style_gradient_state": "finite",
+            "head_tempo_gradient_state": "not_learnable",
+            "head_alpha_target_gradient_state": "finite",
+            "head_alpha_speed_gradient_state": "finite",
+            "head_alpha_curve_gradient_state": "finite",
+            "head_op_gradient_state": "finite",
+            "head_value_gradient_state": "finite",
         },
         "severity": "info",
     }
@@ -322,12 +439,173 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             batch,
             policy_loss,
             head_slot_entropy,
-            head_op_grad_norm
+            head_op_grad_norm,
+            head_value_grad_norm,
+            head_blueprint_learnable_fraction,
+            head_blueprint_gradient_state,
+            head_value_gradient_state
         FROM ppo_updates
         """
     ).fetchone()
 
-    assert row == (42, "A", 7, 3, 0.1, 0.9, 1.8)
+    assert row == (42, "A", 7, 3, 0.1, 0.9, 1.8, 1.9, 0.0, "not_learnable", "finite")
+
+
+def test_run_confounders_view_surfaces_numerical_instability(tmp_path):
+    """run_confounders should expose proof-blocking anomaly payload facts."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "anomaly-1",
+        "event_type": "NUMERICAL_INSTABILITY_DETECTED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 12,
+        "group_id": "treatment",
+        "message": "ignored by ledger",
+        "data": {
+            "anomaly_type": "numerical_instability",
+            "env_id": 2,
+            "episode": 12,
+            "batch": 3,
+            "inner_epoch": 7,
+            "total_episodes": 100,
+            "detail": "nonfinite policy loss",
+        },
+        "severity": "error",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            run_dir,
+            group_id,
+            env_id,
+            event_type,
+            anomaly_type,
+            episode,
+            batch,
+            inner_epoch,
+            total_episodes,
+            detail,
+            proof_blocking
+        FROM run_confounders
+        """
+    ).fetchone()
+
+    assert row == (
+        "test_run",
+        "treatment",
+        2,
+        "NUMERICAL_INSTABILITY_DETECTED",
+        "numerical_instability",
+        12,
+        3,
+        7,
+        100,
+        "nonfinite policy loss",
+        True,
+    )
+
+
+def test_run_confounders_view_surfaces_integrity_confounders(tmp_path):
+    """run_confounders must surface rollback, reward-hacking, and degradation
+    as proof-blocking confounders (KARN-PROOF-002)."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    events = [
+        {
+            "event_id": "rollback-1",
+            "event_type": "GOVERNOR_ROLLBACK",
+            "timestamp": datetime.now().isoformat(),
+            "epoch": 5,
+            "group_id": "treatment",
+            "data": {
+                "env_id": 1,
+                "device": "cpu",
+                "reason": "governor_nan",
+                "episode_idx": 5,
+            },
+            "severity": "error",
+        },
+        {
+            "event_id": "hack-1",
+            "event_type": "REWARD_HACKING_SUSPECTED",
+            "timestamp": datetime.now().isoformat(),
+            "epoch": 6,
+            "group_id": "treatment",
+            "data": {
+                "pattern": "attribution_ratio",
+                "slot_id": "r0c0",
+                "seed_id": "seed-1",
+                "seed_contribution": 0.9,
+                "total_improvement": 0.1,
+                "ratio": 9.0,
+                "threshold": 2.0,
+            },
+            "severity": "warning",
+        },
+        {
+            "event_id": "degrade-1",
+            "event_type": "PERFORMANCE_DEGRADATION",
+            "timestamp": datetime.now().isoformat(),
+            "epoch": 7,
+            "group_id": "treatment",
+            "data": {
+                "env_id": 2,
+                "current_acc": 40.0,
+                "rolling_avg_acc": 80.0,
+                "drop_percent": 50.0,
+                "threshold_percent": 20.0,
+                "episode_idx": 7,
+            },
+            "severity": "warning",
+        },
+    ]
+    events_file.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    rows = conn.execute(
+        """
+        SELECT event_type, proof_blocking, detail, episode
+        FROM run_confounders
+        ORDER BY event_type
+        """
+    ).fetchall()
+
+    by_type = {row[0]: row for row in rows}
+    assert set(by_type) == {
+        "GOVERNOR_ROLLBACK",
+        "REWARD_HACKING_SUSPECTED",
+        "PERFORMANCE_DEGRADATION",
+    }
+    # All three must be proof-blocking.
+    for row in rows:
+        assert row[1] is True, f"{row[0]} should be proof_blocking"
+
+    # Each surfaces a human-readable detail (never a bare NULL).
+    assert "governor_nan" in by_type["GOVERNOR_ROLLBACK"][2]
+    assert "attribution_ratio" in by_type["REWARD_HACKING_SUSPECTED"][2]
+    assert "performance degradation" in by_type["PERFORMANCE_DEGRADATION"][2]
+
+    # episode is coalesced from $.episode_idx for rollback/degradation.
+    assert by_type["GOVERNOR_ROLLBACK"][3] == 5
+    assert by_type["PERFORMANCE_DEGRADATION"][3] == 7
 
 
 def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
@@ -361,6 +639,11 @@ def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
                 "epochs_in_stage": 0,
                 "blend_tempo_epochs": 5,
                 "alpha_curve": "LINEAR",
+                "morphology_proposal_id": "morph-b1-e2-env0-r0c0-op1-proposal",
+                "morphology_verdict_id": "morph-b1-e2-env0-r0c0-op1-verdict",
+                "morphology_mutation_id": "morph-b1-e2-env0-r0c0-op1-mutation",
+                "rng_stream": "simic.lifecycle.env0",
+                "rng_seed": 42000,
             },
             "severity": "info",
         },
@@ -385,6 +668,11 @@ def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
                 "has_vanishing": False,
                 "has_exploding": False,
                 "alpha_curve": "LINEAR",
+                "morphology_proposal_id": "morph-b1-e3-env0-r0c0-op5-proposal",
+                "morphology_verdict_id": "morph-b1-e3-env0-r0c0-op5-verdict",
+                "morphology_mutation_id": "morph-b1-e3-env0-r0c0-op5-mutation",
+                "rng_stream": "simic.lifecycle.env0",
+                "rng_seed": 42001,
             },
             "severity": "info",
         },
@@ -408,6 +696,11 @@ def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
                 "counterfactual": None,
                 "blending_delta": None,
                 "initiator": "policy",
+                "morphology_proposal_id": "morph-b1-e4-env0-r0c0-op3-proposal",
+                "morphology_verdict_id": "morph-b1-e4-env0-r0c0-op3-verdict",
+                "morphology_mutation_id": "morph-b1-e4-env0-r0c0-op3-mutation",
+                "rng_stream": "simic.lifecycle.env0",
+                "rng_seed": 42002,
             },
             "severity": "info",
         },
@@ -419,16 +712,31 @@ def test_seed_lifecycle_view_parses_seed_payload_fields(tmp_path):
 
     rows = conn.execute(
         """
-        SELECT event_type, env_id, blueprint_id, params, grad_ratio, from_stage, to_stage, reason, initiator
+        SELECT
+            event_type, env_id, blueprint_id, params, grad_ratio, from_stage, to_stage,
+            reason, initiator, morphology_proposal_id, morphology_verdict_id,
+            morphology_mutation_id, rng_stream, rng_seed
         FROM seed_lifecycle
         ORDER BY event_type
         """
     ).fetchall()
 
     assert rows == [
-        ("SEED_GERMINATED", 0, "conv_l", 1024, 0.75, None, None, None, None),
-        ("SEED_PRUNED", 0, "conv_l", None, None, None, None, "policy_prune", "policy"),
-        ("SEED_STAGE_CHANGED", 0, None, None, 0.7, "TRAINING", "BLENDING", None, None),
+        (
+            "SEED_GERMINATED", 0, "conv_l", 1024, 0.75, None, None, None, None,
+            "morph-b1-e2-env0-r0c0-op1-proposal", "morph-b1-e2-env0-r0c0-op1-verdict",
+            "morph-b1-e2-env0-r0c0-op1-mutation", "simic.lifecycle.env0", 42000,
+        ),
+        (
+            "SEED_PRUNED", 0, "conv_l", None, None, None, None, "policy_prune", "policy",
+            "morph-b1-e4-env0-r0c0-op3-proposal", "morph-b1-e4-env0-r0c0-op3-verdict",
+            "morph-b1-e4-env0-r0c0-op3-mutation", "simic.lifecycle.env0", 42002,
+        ),
+        (
+            "SEED_STAGE_CHANGED", 0, None, None, 0.7, "TRAINING", "BLENDING", None, None,
+            "morph-b1-e3-env0-r0c0-op5-proposal", "morph-b1-e3-env0-r0c0-op5-verdict",
+            "morph-b1-e3-env0-r0c0-op5-mutation", "simic.lifecycle.env0", 42001,
+        ),
     ]
 
 
@@ -615,3 +923,130 @@ def test_create_views_escapes_telemetry_dir_sql_literal(tmp_path):
     assert conn.execute("SELECT event_id FROM raw_events").fetchone() == ("evt-1",)
     with pytest.raises(duckdb.CatalogException):
         conn.execute(f"SELECT * FROM {injected_table}")
+
+
+# ---------------------------------------------------------------------------
+# KARN-PROOF-003: scan_ingestion_integrity re-reads events.jsonl independently
+# of DuckDB's ignore_errors and surfaces malformed lines so the proof FAILS
+# CLOSED on corruption. These pin the scanner the proof packet depends on.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_ingestion_integrity_clean_on_empty_dir(tmp_path):
+    """No events.jsonl files at all is structurally clean (no corruption)."""
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is True
+    assert result.malformed_count == 0
+    assert result.malformed_lines == []
+
+
+def test_scan_ingestion_integrity_clean_on_valid_jsonl(tmp_path):
+    """Every line valid JSON -> clean, never a false positive."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    events = [
+        {"event_id": "a", "event_type": "TRAINING_STARTED"},
+        {"event_id": "b", "event_type": "EPISODE_OUTCOME"},
+    ]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n"
+    )
+
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is True
+    assert result.malformed_count == 0
+
+
+def test_scan_ingestion_integrity_ignores_blank_lines(tmp_path):
+    """Whitespace-only lines are not data and must not be flagged as corrupt."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        json.dumps({"event_id": "a", "event_type": "X"}) + "\n\n   \n"
+    )
+
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is True
+
+
+def test_scan_ingestion_integrity_blocks_on_malformed_jsonl(tmp_path):
+    """A corrupt JSONL line that DuckDB would silently drop is surfaced.
+
+    This is the independent re-read that makes the proof packet FAIL CLOSED:
+    the malformed line must be recorded with its run_dir, file, 1-based line
+    number, and a triage snippet -- it must NOT vanish the way DuckDB's
+    ignore_errors ingestion would let it.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    good = json.dumps({"event_id": "a", "event_type": "EPISODE_OUTCOME"})
+    # Truncated JSON: DuckDB's ignore_errors reader would silently skip this.
+    corrupt = '{"event_id": "bad", "event_type": "EPISODE_OUTCOME", "data": {'
+    (run_dir / "events.jsonl").write_text(good + "\n" + corrupt + "\n")
+
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is False
+    assert result.malformed_count == 1
+    bad_line = result.malformed_lines[0]
+    assert bad_line.run_dir == "run"
+    assert bad_line.line_number == 2
+    assert bad_line.file.endswith("events.jsonl")
+    assert "bad" in bad_line.snippet
+
+
+def test_scan_ingestion_integrity_reports_every_malformed_line(tmp_path):
+    """Multiple corrupt lines across files are each recorded, none coalesced."""
+    run_a = tmp_path / "run_a"
+    run_a.mkdir()
+    run_b = tmp_path / "run_b"
+    run_b.mkdir()
+    (run_a / "events.jsonl").write_text(
+        json.dumps({"event_id": "ok"}) + "\n" + "{not json\n"
+    )
+    (run_b / "events.jsonl").write_text("also bad}\n")
+
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is False
+    assert result.malformed_count == 2
+    run_dirs = {line.run_dir for line in result.malformed_lines}
+    assert run_dirs == {"run_a", "run_b"}
+
+
+def test_run_confounders_view_empty_on_clean_run(tmp_path):
+    """A run with only benign events surfaces NO confounders (no false block)."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "clean_run"
+    run_dir.mkdir()
+    events = [
+        {
+            "event_id": "start-1",
+            "event_type": "TRAINING_STARTED",
+            "timestamp": datetime.now().isoformat(),
+            "group_id": "A",
+            "data": {"episode_id": "proof"},
+            "severity": "info",
+        },
+        {
+            "event_id": "eo-1",
+            "event_type": "EPISODE_OUTCOME",
+            "timestamp": datetime.now().isoformat(),
+            "group_id": "A",
+            "data": {"env_id": 0, "final_accuracy": 80.0},
+            "severity": "info",
+        },
+    ]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n"
+    )
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    rows = conn.execute("SELECT * FROM run_confounders").fetchall()
+    assert rows == []

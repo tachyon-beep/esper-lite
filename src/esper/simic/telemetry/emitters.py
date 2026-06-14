@@ -19,6 +19,7 @@ from esper.leyline import (
     ALPHA_CURVE_NAMES,
     ALPHA_SPEED_NAMES,
     ALPHA_TARGET_VALUES,
+    AllocatorStatsPayload,
     AnalyticsSnapshotPayload,
     BatchEpochCompletedPayload,
     BLUEPRINT_IDS,
@@ -147,9 +148,18 @@ class VectorizedEmitter:
                     "accuracy_delta": report.telemetry.accuracy_delta,
                     "epochs_in_stage": report.telemetry.epochs_in_stage,
                     "alpha": report.telemetry.alpha,
-                    "grad_ratio": report.telemetry.gradient_health,
-                    "has_vanishing": report.telemetry.has_vanishing,
-                    "has_exploding": report.telemetry.has_exploding,
+                    # Karn SeedState types these float/bool; unmeasured gradient
+                    # health (None) encodes as 0.0 / False (no anomaly), matching
+                    # the leyline to_features convention (KTS-001). Distinguishing
+                    # unmeasured from measured-zero in the Karn UI is tracked
+                    # separately (UI-004).
+                    "grad_ratio": (
+                        report.telemetry.gradient_health
+                        if report.telemetry.gradient_health is not None
+                        else 0.0
+                    ),
+                    "has_vanishing": bool(report.telemetry.has_vanishing),
+                    "has_exploding": bool(report.telemetry.has_exploding),
                     # Inter-slot interaction metrics (from SeedMetrics - always present via default_factory)
                     # Note: These are zero for n>3 seeds due to factorial complexity limits
                     "contribution_velocity": report.metrics.contribution_velocity,
@@ -554,6 +564,41 @@ class VectorizedEmitter:
                 ),
             ))
 
+    def on_allocator_stats(
+        self,
+        *,
+        batch_idx: int,
+        device: str,
+        allocated_bytes: int,
+        reserved_bytes: int,
+        fragmentation_bytes: int,
+        num_alloc_retries: int,
+        num_ooms: int,
+    ) -> None:
+        """Emit a per-device CUDA caching-allocator snapshot (P2-FRAGMETRIC).
+
+        Batch/device-level event: emitted directly (not via _emit) so the payload's
+        ``device`` is the MEASURED device, not the emitter's env device. The stats are
+        host-side allocator accounting (no CUDA sync). Consumed via the Karn raw_events
+        view (auto-ingested by event_type='ALLOCATOR_STATS'); no dedicated view wiring.
+        """
+        if not self.hub:
+            return
+        self.hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.ALLOCATOR_STATS,
+            epoch=batch_idx,
+            group_id=self.group_id,
+            data=AllocatorStatsPayload(
+                batch_idx=batch_idx,
+                device=device,
+                allocated_bytes=allocated_bytes,
+                reserved_bytes=reserved_bytes,
+                fragmentation_bytes=fragmentation_bytes,
+                num_alloc_retries=num_alloc_retries,
+                num_ooms=num_ooms,
+            ),
+        ))
+
 
 def emit_with_env_context(
     hub: Any,
@@ -779,6 +824,19 @@ def compute_grad_norm_surrogate(module: nn.Module) -> float:
     return float(total_norm.item())
 
 
+def _aggregate_head_gradient_state(states: list[str]) -> str:
+    """Aggregate per-epoch gradient state into one proof-facing state."""
+    if "nonfinite" in states:
+        return "nonfinite"
+    if "missing" in states:
+        return "missing"
+    if "finite" in states:
+        return "finite"
+    if states and all(state == "not_learnable" for state in states):
+        return "not_learnable"
+    raise ValueError(f"Unknown or empty head gradient state list: {states}")
+
+
 def aggregate_layer_gradient_health(
     layer_stats: list[LayerGradientStats],
 ) -> dict[str, int | float | dict[str, float]]:
@@ -873,6 +931,16 @@ def emit_ppo_update_event(
             avg_grad_norm = sum(values) / len(values)  # Fail on empty list
             head_grad_norms_avg[f"head_{head}_grad_norm"] = avg_grad_norm
 
+    # Proof-critical learnability fields are mandatory for PPO updates.
+    head_learnable_fractions_avg = {}
+    for head, values in metrics["head_learnable_fractions"].items():
+        avg_learnable_fraction = sum(values) / len(values)  # Fail on empty list
+        head_learnable_fractions_avg[f"head_{head}_learnable_fraction"] = avg_learnable_fraction
+
+    head_gradient_states = {}
+    for head, states in metrics["head_gradient_states"].items():
+        head_gradient_states[f"head_{head}_gradient_state"] = _aggregate_head_gradient_state(states)
+
     step_time_ms_sum = metrics["throughput_step_time_ms_sum"]
     dataloader_wait_ms_sum = metrics["throughput_dataloader_wait_ms_sum"]
     # When updates are skipped (empty buffer / finiteness gate), step time can be 0.
@@ -950,12 +1018,30 @@ def emit_ppo_update_event(
             head_alpha_speed_grad_norm=head_grad_norms_avg.get("head_alpha_speed_grad_norm"),
             head_alpha_curve_grad_norm=head_grad_norms_avg.get("head_alpha_curve_grad_norm"),
             head_op_grad_norm=head_grad_norms_avg.get("head_op_grad_norm"),
+            head_value_grad_norm=head_grad_norms_avg["head_value_grad_norm"],
             head_style_entropy=head_entropies_avg.get("head_style_entropy"),
             head_tempo_entropy=head_entropies_avg.get("head_tempo_entropy"),
             head_alpha_target_entropy=head_entropies_avg.get("head_alpha_target_entropy"),
             head_alpha_speed_entropy=head_entropies_avg.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=head_entropies_avg.get("head_alpha_curve_entropy"),
             head_op_entropy=head_entropies_avg.get("head_op_entropy"),
+            head_slot_learnable_fraction=head_learnable_fractions_avg["head_slot_learnable_fraction"],
+            head_blueprint_learnable_fraction=head_learnable_fractions_avg["head_blueprint_learnable_fraction"],
+            head_style_learnable_fraction=head_learnable_fractions_avg["head_style_learnable_fraction"],
+            head_tempo_learnable_fraction=head_learnable_fractions_avg["head_tempo_learnable_fraction"],
+            head_alpha_target_learnable_fraction=head_learnable_fractions_avg["head_alpha_target_learnable_fraction"],
+            head_alpha_speed_learnable_fraction=head_learnable_fractions_avg["head_alpha_speed_learnable_fraction"],
+            head_alpha_curve_learnable_fraction=head_learnable_fractions_avg["head_alpha_curve_learnable_fraction"],
+            head_op_learnable_fraction=head_learnable_fractions_avg["head_op_learnable_fraction"],
+            head_slot_gradient_state=head_gradient_states["head_slot_gradient_state"],
+            head_blueprint_gradient_state=head_gradient_states["head_blueprint_gradient_state"],
+            head_style_gradient_state=head_gradient_states["head_style_gradient_state"],
+            head_tempo_gradient_state=head_gradient_states["head_tempo_gradient_state"],
+            head_alpha_target_gradient_state=head_gradient_states["head_alpha_target_gradient_state"],
+            head_alpha_speed_gradient_state=head_gradient_states["head_alpha_speed_gradient_state"],
+            head_alpha_curve_gradient_state=head_gradient_states["head_alpha_curve_gradient_state"],
+            head_op_gradient_state=head_gradient_states["head_op_gradient_state"],
+            head_value_gradient_state=head_gradient_states["head_value_gradient_state"],
             # Per-head ratio max (Policy V2 - multi-head ratio explosion detection)
             head_slot_ratio_max=metrics.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=metrics.get("head_blueprint_ratio_max", 1.0),
@@ -966,6 +1052,17 @@ def emit_ppo_update_event(
             head_alpha_curve_ratio_max=metrics.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=metrics.get("head_op_ratio_max", 1.0),
             joint_ratio_max=metrics.get("joint_ratio_max", 1.0),
+            # Per-head clip-fraction (factored-PPO trust-region telemetry).
+            # Surfaced alongside the joint clip_fraction so tuners can see which
+            # head the per-head surrogate is actually clipping.
+            head_slot_clip_fraction=metrics.get("head_slot_clip_fraction", 0.0),
+            head_blueprint_clip_fraction=metrics.get("head_blueprint_clip_fraction", 0.0),
+            head_style_clip_fraction=metrics.get("head_style_clip_fraction", 0.0),
+            head_tempo_clip_fraction=metrics.get("head_tempo_clip_fraction", 0.0),
+            head_alpha_target_clip_fraction=metrics.get("head_alpha_target_clip_fraction", 0.0),
+            head_alpha_speed_clip_fraction=metrics.get("head_alpha_speed_clip_fraction", 0.0),
+            head_alpha_curve_clip_fraction=metrics.get("head_alpha_curve_clip_fraction", 0.0),
+            head_op_clip_fraction=metrics.get("head_op_clip_fraction", 0.0),
             # Per-head NaN/Inf flags (for indicator lights)
             head_nan_detected=metrics.get("head_nan_detected"),
             head_inf_detected=metrics.get("head_inf_detected"),
@@ -992,6 +1089,19 @@ def emit_ppo_update_event(
             lstm_c_max=metrics.get("lstm_c_max"),
             lstm_has_nan=metrics.get("lstm_has_nan", False),
             lstm_has_inf=metrics.get("lstm_has_inf", False),
+            # Rollout-time LSTM health (SIMIC-PROD-003): distinct from update-time above.
+            rollout_lstm_h_l2_total=metrics.get("rollout_lstm_h_l2_total"),
+            rollout_lstm_c_l2_total=metrics.get("rollout_lstm_c_l2_total"),
+            rollout_lstm_h_rms=metrics.get("rollout_lstm_h_rms"),
+            rollout_lstm_c_rms=metrics.get("rollout_lstm_c_rms"),
+            rollout_lstm_h_env_rms_mean=metrics.get("rollout_lstm_h_env_rms_mean"),
+            rollout_lstm_h_env_rms_max=metrics.get("rollout_lstm_h_env_rms_max"),
+            rollout_lstm_c_env_rms_mean=metrics.get("rollout_lstm_c_env_rms_mean"),
+            rollout_lstm_c_env_rms_max=metrics.get("rollout_lstm_c_env_rms_max"),
+            rollout_lstm_h_max=metrics.get("rollout_lstm_h_max"),
+            rollout_lstm_c_max=metrics.get("rollout_lstm_c_max"),
+            rollout_lstm_has_nan=metrics.get("rollout_lstm_has_nan", False),
+            rollout_lstm_has_inf=metrics.get("rollout_lstm_has_inf", False),
             # Value function metrics (TELE-220 to TELE-228)
             v_return_correlation=metrics.get("v_return_correlation", 0.0),
             td_error_mean=metrics.get("td_error_mean", 0.0),
