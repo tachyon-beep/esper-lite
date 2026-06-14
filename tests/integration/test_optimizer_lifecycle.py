@@ -89,6 +89,10 @@ class SurgeonAgent:
                 res.log_prob = {k: torch.zeros(self.agent.n_envs) for k in actions}
                 res.hidden = (torch.zeros(1, self.agent.n_envs, 512), torch.zeros(1, self.agent.n_envs, 512))
                 res.op_logits = None
+                # Per-head rollout entropy: real policies (LSTMPolicyBundle / FactoredLSTM)
+                # always return this for ops telemetry; the mock must honour the same
+                # contract or the trainer's telemetry path raises AttributeError.
+                res.head_entropies = {k: torch.zeros(self.agent.n_envs) for k in actions}
                 return res
 
             def state_dict(self):

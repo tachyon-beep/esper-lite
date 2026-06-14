@@ -388,6 +388,7 @@ function createMockSnapshot(): SanctumSnapshot {
     batch_avg_reward: 0.5,
     batch_total_episodes: 8,
     mean_accuracy_history: [0.7, 0.75, 0.8, 0.82],
+    morphology_causal_log: [],
     event_log: [
       {
         timestamp: new Date().toISOString(),
