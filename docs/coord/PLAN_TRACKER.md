@@ -78,9 +78,9 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | Ready | 11 | Implementation-ready plans |
 | In Progress | 1 | phase3-tinystories (85%) |
 | Planning | 11 | Active design workspaces, including correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
-| Concept | 3 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals |
+| Concept | 4 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals, gil-throughput-profiler |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
-| **Total Active** | **30** |
+| **Total Active** | **31** |
 
 ---
 
@@ -143,6 +143,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | tamiyo4 | Slot Transformer Architecture | ready | low | L | medium | Updated 2026-01: Q(s,op) value, contrib predictor, ResidualLSTM |
 | emrakul-sketch | Immune System Sketch | concept | medium | XL | high | Concept version (see emrakul-immune for planning) |
 | scaled-counterfactuals | Shapley Validation | concept | low | S | low | Diagnostic approach |
+| gil-throughput-profiler | Tiered GIL/Throughput Profiler | concept | high | L | medium | Drafted 2026-06-16. Instrument to prove the GIL ceiling and attribute per-phase wall-clock; decision tool between free-threading (3.13t/3.14t), 3.x upgrade, and Rust offload. Designed via multi-agent workflow (pytorch/determinism/training-opt/system-architect lenses). reviewed_by: pytorch-expert + determinism-reviewer (design-input-folded), drl-expert pending. `docs/plans/concepts/2026-06-16-gil-throughput-profiler.md` |
 
 ### Completed (in docs/plans/completed/)
 
@@ -1241,6 +1242,7 @@ percent_complete: 0
 
 | Date | Change |
 |------|--------|
+| 2026-06-16 | **GIL/THROUGHPUT PROFILER DRAFTED (concept).** Added `docs/plans/concepts/2026-06-16-gil-throughput-profiler.md` to address the user's report that the vectorized PPO runtime hits a single-thread GIL ceiling before saturating GPU/VRAM. Tiered instrument (Tier 0 always-on per-phase wall+Python-CPU; Tier 1 CUDA-event occupancy/NVTX/torch.profiler; Tier 2 GIL HOLD/WAIT). Designed via multi-agent workflow across pytorch/determinism/training-opt/system-architect lenses; load-bearing file:line citations spot-verified. Reframed as the decision instrument between three remediations: (A) free-threaded CPython 3.13t/3.14t (interpreter upgrade authorized 2026-06-15), (B) plain 3.13/3.14 upgrade, (C) Rust/PyO3 offload of scalar reward/governor/telemetry. Corrected a workflow hallucination (runtime is 3.11.11, not 3.12.3 → `sys.monitoring` unavailable until upgrade). reviewed_by: pytorch-expert + determinism-reviewer (design-input-folded), drl-expert pending. |
 | 2026-06-13 | **ARCHITECTURE HEALTH REPORT TRIAGED.** Reviewed `docs/arch-analysis-2026-06-13-0836/01-kasmina-tolaria-blueprint-health.md`, added `docs/analysis/2026-06-13-arch-health-task-slotting.md`, and drafted `docs/plans/planning/2026-06-13-morphogenesis-governor-integrity.md`. The critical path now puts governor-integrity before PPO oracle sandbox and reward-efficiency proof runs. |
 | 2026-06-13 | **PROOF CONFOUNDER DRAIN IMPLEMENTED.** Moved plan to `docs/plans/completed/2026-06-13-proof-confounder-drain.md`. Implemented run-level confounder ledger, action-head learnability telemetry, fail-closed counterfactual freshness, reward-accounting closure, and generated proof packets. The rehearsal packet is `BLOCKED` by value-collapse and gradient-anomaly confounders, so the long reward-efficiency exam remains deferred. |
 | 2026-06-13 | **PROOF CONFOUNDER DRAIN DRAFTED.** Added `docs/plans/planning/2026-06-13-proof-confounder-drain.md` as the next major signal-recovery package. Framing: prior results strongly suggest Esper's underlying theory is sound, but weaker-than-expected effect size points to confounders. The package gates proof runs on anomaly/confounder ledger, action-head learnability, counterfactual freshness, reward-accounting closure, and a generated proof packet before the full reward-efficiency verdict. |
