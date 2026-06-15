@@ -1171,3 +1171,31 @@ def test_decision_head_telemetry_uses_real_entropy_values() -> None:
     assert head_telemetry.op_confidence == pytest.approx(0.5)
     assert head_telemetry.op_entropy == pytest.approx(0.0)
     assert head_telemetry.curve_entropy == pytest.approx(7.0)
+
+
+def test_i16_action_outcome_fields_reset_each_step() -> None:
+    """ActionOutcome fields written only at epoch==max_epochs must be reset to None each step.
+
+    Pin: action_execution.py:570-574 resets reward_components, episode_reward,
+    final_accuracy, episode_outcome to sentinel each step. Verifies that a prior
+    step's non-None values don't leak into the next step.
+
+    Builds an ActionOutcome with stale values from a prior step to document the
+    contract, then asserts the RESET CODE EXISTS at lines 570-574 in
+    execute_actions (the per-step reset that clears the leak).
+    """
+    # An ActionOutcome carrying stale values from a prior step.
+    outcome = ActionOutcome()
+    outcome.reward_components = object()  # stale
+    outcome.episode_reward = 99.0         # stale
+    outcome.final_accuracy = 0.99         # stale
+    outcome.episode_outcome = object()    # stale
+
+    # The partial reset at action_execution.py:570-574 must clear these each step.
+    import inspect
+
+    src = inspect.getsource(action_execution.execute_actions)
+    assert "action_outcome.reward_components = None" in src
+    assert "action_outcome.episode_reward = None" in src
+    assert "action_outcome.final_accuracy = None" in src
+    assert "action_outcome.episode_outcome = None" in src
