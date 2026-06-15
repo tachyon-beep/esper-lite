@@ -427,6 +427,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Sequential reward-mode A/B: train separate policies on separate GPUs",
     )
+    ppo_parser.add_argument(
+        "--proof-baseline",
+        type=str,
+        choices=["blueprint-health"],
+        default=None,
+        help=(
+            "Run the blueprint-health proof-baseline cohort plan (6 control "
+            "cohorts: off-switch, static-initial, static-final, fixed-schedule, "
+            "lockstep A/B) sequentially instead of a single policy run. Pair with "
+            "--telemetry-dir, then analyze via "
+            "scripts/proof_packet.py --proof-profile reward-efficiency."
+        ),
+    )
 
     # === Tamiyo Training Scale ===
     # These control how much and how Tamiyo learns, exposed with Tamiyo-centric names.
@@ -813,6 +826,10 @@ def main() -> None:
                 if args.entropy_anneal_episodes is not None:
                     config.entropy_anneal_episodes = args.entropy_anneal_episodes
 
+                if args.dual_ab and args.proof_baseline:
+                    raise ValueError(
+                        "--dual-ab and --proof-baseline are mutually exclusive run modes"
+                    )
                 # Handle dual-policy A/B testing
                 if args.dual_ab:
                     # Check for GPU availability
@@ -914,6 +931,72 @@ def main() -> None:
                         use_telemetry=config.use_telemetry,
                         slots=config.slots,
                         **dual_ab_kwargs,
+                    )
+                elif args.proof_baseline:
+                    # Blueprint-health proof: run the control cohorts sequentially
+                    # with the SAME config / telemetry / device wiring as a normal
+                    # run, so each cohort is comparable to a real policy run. Analyze
+                    # afterwards with scripts/proof_packet.py --proof-profile
+                    # reward-efficiency over the same --telemetry-dir.
+                    from esper.simic.rewards import RewardMode
+                    from esper.simic.training.proof_baselines import (
+                        build_blueprint_health_proof_plan,
+                        train_blueprint_health_proof_baselines,
+                    )
+
+                    print(config.summary())
+                    plan = build_blueprint_health_proof_plan(
+                        primary_reward_mode=RewardMode.SHAPED,
+                        comparison_reward_mode=RewardMode.SIMPLIFIED,
+                        base_seed=config.seed,
+                    )
+                    print(
+                        f"[Proof Baseline] Running plan '{plan.plan_id}' "
+                        f"({len(plan.cohorts)} cohorts) sequentially on {args.device}"
+                    )
+
+                    # Mirror the single-run kwargs (config + the call-site extras the
+                    # normal path passes), but OMIT save_path/resume_path: each cohort
+                    # is an isolated run and must not share or clobber a checkpoint.
+                    train_kwargs = config.to_train_kwargs()
+                    if "task" not in train_kwargs:
+                        train_kwargs["task"] = args.task
+                    train_kwargs.update(
+                        {
+                            "device": args.device,
+                            "devices": args.devices,
+                            "num_workers": args.num_workers,
+                            "gpu_preload": args.gpu_preload,
+                            "experimental_gpu_preload_gather": args.experimental_gpu_preload_gather,
+                            "gpu_preload_augment": args.gpu_preload_augment,
+                            "gpu_preload_precompute_augment": args.gpu_preload_precompute_augment,
+                            "telemetry_config": telemetry_config,
+                            "telemetry_lifecycle_only": args.telemetry_lifecycle_only,
+                            "quiet_analytics": use_sanctum,
+                            "force_compile": args.force_compile,
+                            "ready_event": dataloader_ready_event,
+                            "shutdown_event": shutdown_event,
+                            "torch_profiler": args.torch_profiler,
+                            "torch_profiler_dir": args.torch_profiler_dir,
+                            "torch_profiler_wait": args.torch_profiler_wait,
+                            "torch_profiler_warmup": args.torch_profiler_warmup,
+                            "torch_profiler_active": args.torch_profiler_active,
+                            "torch_profiler_repeat": args.torch_profiler_repeat,
+                            "torch_profiler_record_shapes": args.torch_profiler_record_shapes,
+                            "torch_profiler_profile_memory": args.torch_profiler_profile_memory,
+                            "torch_profiler_with_stack": args.torch_profiler_with_stack,
+                            "torch_profiler_summary": args.torch_profiler_summary,
+                        }
+                    )
+
+                    results = train_blueprint_health_proof_baselines(
+                        plan=plan,
+                        train_kwargs=train_kwargs,
+                    )
+                    print(
+                        f"[Proof Baseline] Completed {len(results)} cohort run(s). "
+                        "Analyze with: PYTHONPATH=src uv run python scripts/proof_packet.py "
+                        "--proof-profile reward-efficiency --telemetry-dir <telemetry-dir>"
                     )
                 else:
                     print(config.summary())
