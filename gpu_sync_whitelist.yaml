@@ -267,48 +267,12 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:tolist
   owner: John
   reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:2
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:tolist:2
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:3
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy:2
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:4
-  owner: John
-  reason: vectorized trainer sync point
 - key: src/esper/karn/overwatch/backend.py:_json_serializer:item
   owner: John
   reason: Dashboard JSON serialization boundary for NumPy scalar payloads; not a training hot path
 - key: src/esper/karn/overwatch/backend.py:_json_serializer:tolist
   owner: John
   reason: Dashboard JSON serialization boundary for NumPy array payloads; not a training hot path
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy:3
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:5
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy:4
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy:5
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:6
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:7
-  owner: John
-  reason: vectorized trainer sync point
 - key: src/esper/tamiyo/networks/factored_lstm.py:BlueprintEmbedding.forward:tolist
   owner: John
   reason: Validation error path - fail-fast detection of invalid blueprint indices; only executes on validation failure
@@ -345,3 +309,39 @@ allow_hits:
 - key: src/esper/utils/data.py:TinyStoriesDataset.__init__:tolist
   owner: John
   reason: Mock mode only - convert synthetic tokens to list during init; small data, one-time cost
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:cpu
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs batched actions D2H copy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:cpu:2
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs values D2H copy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:cpu:3
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs forced-head flags D2H copy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:cpu:4
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs op_probs D2H copy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:cpu:5
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs head confidences D2H copy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:cpu:6
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs head entropies D2H copy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:numpy
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs batched actions to numpy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:numpy:2
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs forced-head flags to numpy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:numpy:3
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs op_probs to numpy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:numpy:4
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs head confidences to numpy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:numpy:5
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs head entropies to numpy
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:tolist
+  owner: John
+  reason: vectorized trainer sync point - build_action_inputs values to host list

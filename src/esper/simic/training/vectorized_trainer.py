@@ -536,6 +536,37 @@ class FusedValResult:
     shapley_results: dict[int, dict[tuple[bool, ...], tuple[float, float]]]
 
 
+@dataclass(slots=True)
+class ActionInputBundle:
+    """Batch-level inputs computed before execute_actions() for one epoch step.
+
+    GPU tensors (masks_batch, head_log_probs, states_batch_normalized) are
+    structure-of-arrays; they must NOT move to per-env records (I8: avoids
+    N per-env GPU syncs).
+
+    batched_lstm_hidden_post_action carries the policy's post-get_action hidden
+    state back to the caller (the rollout get_action both consumes and replaces
+    the batched LSTM hidden).
+    """
+
+    all_signals: list[Any]
+    all_slot_reports: list[Any]
+    states_batch_normalized: torch.Tensor
+    blueprint_indices_batch: torch.Tensor
+    pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]]
+    head_log_probs: dict[str, torch.Tensor]
+    masks_batch: dict[str, torch.Tensor]
+    actions_np: np.ndarray
+    values: list[float]
+    head_confidences_cpu: np.ndarray | None
+    head_entropies_cpu: np.ndarray | None
+    op_probs_cpu: np.ndarray | None
+    masked_np: np.ndarray | None
+    step_obs_stats: Any | None
+    governor_panic_envs: list[int]
+    batched_lstm_hidden_post_action: tuple[torch.Tensor, torch.Tensor] | None
+
+
 @dataclass
 class VectorizedPPOTrainer:
     agent: Any
@@ -1689,6 +1720,405 @@ class VectorizedPPOTrainer:
 
         return env_grad_stats, dataloader_wait_ms
 
+    def _build_action_inputs(
+        self,
+        *,
+        env_states: list[ParallelEnvState],
+        env_grad_stats: list[dict[str, dict[Any, Any]] | None],
+        raw_states_for_normalizer_update: list[torch.Tensor],
+        ordered_slots: list[str],
+        epoch: int,
+        static_final_replay_validated: bool,
+        rollout_autocast: Callable[[], AbstractContextManager[None]],
+        batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None,
+    ) -> ActionInputBundle:
+        """Collect signals, build masks, run get_action for one epoch step.
+
+        I6 (BF16 symmetry): get_action runs under rollout_autocast() -- the SAME
+        factory as bootstrap and the PPO update. The factory is passed explicitly
+        (not captured by closure) so I6 is structurally verifiable.
+        I7: raw_states_for_normalizer_update accumulated here; obs_normalizer
+        stays frozen (normalize-only) during rollout collection.
+        I10: apply_proof_baseline_action_controls runs on masks_batch BEFORE
+        get_action.
+
+        RESUME SEAM (HEALTH_REPORT open item): shared_train_iter/shared_test_iter
+        iterator cursor is not serialized; the exact-resume fix belongs here.
+        """
+        agent = self.agent
+        task_spec = self.task_spec
+        slots = self.slots
+        slot_config = self.slot_config
+        max_epochs = self.max_epochs
+        num_train_batches = self.num_train_batches
+        obs_normalizer = self.obs_normalizer
+        initial_obs_normalizer_mean = self.initial_obs_normalizer_mean
+        ops_telemetry_enabled = self.ops_telemetry_enabled
+        use_telemetry = self.use_telemetry
+        emitters = self.emitters
+        device = self.device
+        effective_max_seeds = self.effective_max_seeds
+        disable_advance = self.disable_advance
+        last_obs_stats = None
+
+        # ===== Compute epoch metrics and get BATCHED actions =====
+        # NOTE: Telemetry sync (gradients/counterfactual) happens after record_accuracy()
+        # so telemetry reflects the current epoch's metrics.
+
+        # Collect signals, slot reports and action masks from all environments
+        all_signals = []
+        all_slot_reports = []
+        all_masks = []
+
+        governor_panic_envs = []  # Track which envs need rollback
+
+        for env_idx, env_state in enumerate(env_states):
+            model = env_state.model
+
+            train_loss = env_state.train_loss
+            train_acc = env_state.train_acc
+            val_loss = env_state.val_loss
+            val_acc = env_state.val_acc
+            # Track maximum accuracy for sparse reward
+            env_state.host_max_acc = max(
+                env_state.host_max_acc, env_state.val_acc
+            )
+
+            # Governor watchdog: check vital signs before blessing a snapshot.
+            is_panic = _check_vitals_before_snapshot(
+                env_state,
+                epoch=epoch,
+                val_loss=val_loss,
+            )
+            if is_panic:
+                governor_panic_envs.append(env_idx)
+
+            # Gather active seeds across ALL enabled slots (multi-seed support)
+            active_seeds = []
+            for slot_id in slots:
+                if model.has_active_seed_in_slot(slot_id):
+                    slot_obj = cast(
+                        SeedSlotProtocol, model.seed_slots[slot_id]
+                    )
+                    seed_state = slot_obj.state
+                    if seed_state is not None:
+                        active_seeds.append(seed_state)
+
+            # Record accuracy for all active seeds (per-slot stage counters + deltas)
+            for slot_id in slots:
+                slot_obj = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                slot_state = slot_obj.state
+                if slot_state is None:
+                    continue
+                slot_state.metrics.record_accuracy(val_acc)
+
+            # Sync gradient telemetry after record_accuracy so telemetry reflects this epoch's metrics.
+            grad_stats_for_env = env_grad_stats[env_idx]
+            synced_slot_ids: set[str] = set()
+            if use_telemetry and grad_stats_for_env is not None:
+                for slot_id, async_stats in grad_stats_for_env.items():
+                    if not model.has_active_seed_in_slot(slot_id):
+                        continue
+                    slot_obj_for_grad = cast(
+                        SeedSlotProtocol, model.seed_slots[slot_id]
+                    )
+                    seed_state = slot_obj_for_grad.state
+                    if seed_state is None or seed_state.metrics is None:
+                        continue
+
+                    dual_stats = materialize_dual_grad_stats(async_stats)
+                    current_ratio = dual_stats.normalized_ratio
+
+                    prev_ema = env_state.gradient_ratio_ema.get(slot_id)
+                    if prev_ema is None:
+                        ema = current_ratio
+                    else:
+                        ema = 0.9 * prev_ema + 0.1 * current_ratio
+                    env_state.gradient_ratio_ema[slot_id] = ema
+
+                    # Sync ratio to SeedMetrics for G2 gate evaluation
+                    seed_state.metrics.seed_gradient_norm_ratio = ema
+
+                    # Materialize health stats for gradient telemetry
+                    health_stats = materialize_grad_stats(
+                        async_stats["_health_stats"]
+                    )
+
+                    # Sync telemetry using real gradient health from collect_seed_gradients_async
+                    seed_state.sync_telemetry(
+                        gradient_norm=health_stats["gradient_norm"],
+                        gradient_health=health_stats["gradient_health"],
+                        has_vanishing=health_stats["has_vanishing"],
+                        has_exploding=health_stats["has_exploding"],
+                        epoch=epoch,
+                        max_epochs=max_epochs,
+                    )
+                    synced_slot_ids.add(slot_id)
+
+            # Fallback: sync telemetry for active seeds that didn't get gradient stats
+            # This ensures accuracy_delta is always populated from metrics.improvement_since_stage_start
+            # Gradient parameters are omitted - sync_telemetry leaves gradient fields
+            # UNMEASURED (None). KTS-001: an unmeasured seed must NOT look
+            # healthy; permissive G2 denies it until real gradient stats arrive.
+            for slot_id in slots:
+                if slot_id in synced_slot_ids:
+                    continue
+                if not model.has_active_seed_in_slot(slot_id):
+                    continue
+                slot_obj_fallback = cast(
+                    SeedSlotProtocol, model.seed_slots[slot_id]
+                )
+                seed_state_fallback = slot_obj_fallback.state
+                if seed_state_fallback is None:
+                    continue
+                # Only sync accuracy/stage telemetry - no gradient data available
+                seed_state_fallback.sync_telemetry(
+                    epoch=epoch, max_epochs=max_epochs
+                )
+
+            slot_reports = model.get_slot_reports()
+
+            # Consolidate environment-level telemetry emission
+            emitters[env_idx].on_epoch_completed(
+                epoch,
+                env_state,
+                slot_reports,
+                observation_stats=last_obs_stats if env_idx == 0 else None,
+            )
+
+            # Update signal tracker
+            # Phase 4: embargo/cooldown stages keep state while seed is removed.
+            # Availability for germination is therefore "no state", not merely "no active seed".
+            available_slots = sum(
+                1
+                for slot_id in slots
+                if model.seed_slots[slot_id].state is None
+            )
+            signals = env_state.signal_tracker.update(
+                epoch=epoch,
+                global_step=epoch * num_train_batches,
+                train_loss=train_loss,
+                train_accuracy=train_acc,
+                val_loss=val_loss,
+                val_accuracy=val_acc,
+                active_seeds=active_seeds,
+                available_slots=available_slots,
+            )
+
+            all_signals.append(signals)
+            all_slot_reports.append(slot_reports)
+            # Cache total_seeds for this env (used in action masking)
+            env_total_seeds = model.total_seeds() if model else 0
+
+            # Compute action mask based on current state (physical constraints only)
+            # Build slot states for ALL enabled slots (multi-slot masking)
+            slot_states = build_slot_states(slot_reports, ordered_slots)
+            mask = compute_action_masks(
+                slot_states=slot_states,
+                enabled_slots=ordered_slots,
+                total_seeds=env_total_seeds,
+                max_seeds=effective_max_seeds,
+                slot_config=slot_config,
+                device=torch.device(device),
+                topology=task_spec.topology,
+                disable_advance=disable_advance,
+            )
+            all_masks.append(mask)
+
+        # OPTIMIZATION: Batched tensor-driven feature extraction (Obs V3)
+        # Returns tuple: (obs [batch, obs_dim], blueprint_indices [batch, num_slots])
+        states_batch, blueprint_indices_batch = batch_obs_to_features(
+            batch_signals=all_signals,
+            batch_slot_reports=all_slot_reports,
+            batch_env_states=env_states,
+            slot_config=slot_config,
+            device=torch.device(device),
+            max_epochs=max_epochs,
+        )
+        # NOTE: blueprint_indices_batch is passed to get_action() for op-conditioned value (Phase 4)
+
+        # Stack dict masks into batched dict: {key: [n_envs, head_dim]}
+        # Use static HEAD_NAMES for torch.compile compatibility
+        masks_batch = {
+            key: torch.stack([m[key] for m in all_masks]).to(device)
+            for key in HEAD_NAMES
+        }
+        masks_batch["slot_by_op"] = torch.stack(
+            [m["slot_by_op"] for m in all_masks]
+        ).to(device)
+        apply_proof_baseline_action_controls(
+            masks_batch=masks_batch,
+            lifecycle_policy=self.proof_baseline_lifecycle_policy,
+            schedule_id=self.proof_baseline_schedule_id,
+            schedule_hash=self.proof_baseline_schedule_hash,
+            schedule_version=self.proof_baseline_schedule_version,
+            schedule_action_count=(
+                self.proof_baseline_schedule_action_count
+            ),
+            epoch=epoch,
+            static_final_replay_validated=static_final_replay_validated,
+        )
+
+        # Accumulate raw states for deferred normalizer update
+        raw_states_for_normalizer_update.append(states_batch.detach())
+
+        # Normalize using FROZEN statistics during rollout collection.
+        states_batch_normalized = obs_normalizer.normalize(states_batch)
+
+        # TELE-OBS: Compute observation stats once per step (for Sanctum ObservationStats panel)
+        # Only computed when ops telemetry is enabled to avoid overhead
+        step_obs_stats = None
+        if ops_telemetry_enabled:
+            step_obs_stats = compute_observation_stats(
+                states_batch,
+                normalized_obs_tensor=states_batch_normalized,
+                clip=10.0,
+                normalizer_mean=obs_normalizer.mean,
+                normalizer_var=obs_normalizer.var,
+                initial_normalizer_mean=initial_obs_normalizer_mean,
+            )
+            last_obs_stats = step_obs_stats
+
+        # Get BATCHED actions from policy network with action masking (single forward pass!)
+        pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]] = []
+
+        if batched_lstm_hidden is not None:
+            h_batch, c_batch = batched_lstm_hidden
+            for env_idx in range(len(env_states)):
+                env_h = h_batch[:, env_idx : env_idx + 1, :].clone()
+                env_c = c_batch[:, env_idx : env_idx + 1, :].clone()
+                pre_step_hiddens.append((env_h, env_c))
+        else:
+            batched_lstm_hidden = agent.policy.initial_hidden(
+                len(env_states)
+            )
+            if batched_lstm_hidden is not None:
+                init_h, init_c = batched_lstm_hidden
+                for env_idx in range(len(env_states)):
+                    env_h = init_h[:, env_idx : env_idx + 1, :].clone()
+                    env_c = init_c[:, env_idx : env_idx + 1, :].clone()
+                    pre_step_hiddens.append((env_h, env_c))
+
+        # get_action returns ActionResult dataclass.
+        # P1-BF16: wrap in the SAME BF16 autocast as the PPO update so the
+        # stored old_log_probs share the BF16 backbone (unbiased ratio).
+        with rollout_autocast():
+            action_result = agent.policy.get_action(
+                states_batch_normalized,
+                blueprint_indices=blueprint_indices_batch,
+                masks=masks_batch,
+                hidden=batched_lstm_hidden,
+                deterministic=False,
+                probability_floor=agent.probability_floor,
+            )
+        actions_dict = action_result.action
+        head_log_probs = action_result.log_prob
+        values_tensor = action_result.value
+
+        # OPTIMIZATION: Update batched hidden state directly (eliminates per-env slice/cat)
+        batched_lstm_hidden = action_result.hidden
+
+        # Convert to list of dicts for per-env processing
+        # PERF NOTE: Consolidate action head transfers into a single D2H copy.
+        # This matters for larger env counts (16+), where per-head transfers and
+        # per-env Python dict construction become a scaling bottleneck.
+        actions_stacked = torch.stack(
+            [actions_dict[name] for name in HEAD_NAMES]
+        )
+        actions_np = actions_stacked.cpu().numpy()  # [num_heads, num_envs]
+        values = (
+            values_tensor.cpu().tolist()
+        )  # .tolist() on CPU tensor is free
+
+        # Batch compute mask stats for telemetry
+        masked_np: np.ndarray | None = None  # [num_heads, num_envs]
+        if ops_telemetry_enabled:
+            # FORCED, not "any-masked": a head is forced only when a
+            # single valid candidate remains (no real choice). Heads
+            # that still have >=2 valid candidates retain agency even
+            # though some candidates were restricted.
+            masked_batch = compute_forced_head_flags(masks_batch)
+            masked_stacked = torch.stack(
+                [masked_batch[name] for name in HEAD_NAMES]
+            )
+            masked_np = masked_stacked.cpu().numpy()
+        else:
+            masked_np = None
+
+        # PERF: Pre-compute op_probs for telemetry ONCE before env loop.
+        # Previous code called .cpu() per-env inside the loop, causing N GPU syncs
+        # per step instead of 1. This was the root cause of 90% throughput drop.
+        op_probs_cpu: np.ndarray | None = None
+        if ops_telemetry_enabled and action_result.op_logits is not None:
+            # Batch masked distribution over all envs, single GPU->CPU transfer.
+            op_probs_all = _masked_op_probs_for_telemetry(
+                op_logits=action_result.op_logits,
+                op_mask=masks_batch["op"],
+                probability_floor=agent.probability_floor,
+            )
+            op_probs_cpu = op_probs_all.cpu().numpy()
+
+        # PERF: Pre-compute per-head confidences AND entropy for telemetry.
+        # Uses batched GPU->CPU transfer: stack all heads, single transfer.
+        #
+        # Confidence = exp(log_prob) = P(chosen_action | valid_mask)
+        # This properly handles masking via MaskedCategorical.
+        #
+        # Head names in order matching HeadTelemetry field positions.
+        # We stack log_probs in this order, then index [0..7] to get each head's value.
+        _HEAD_NAMES_FOR_TELEM = (
+            "op",
+            "slot",
+            "blueprint",
+            "style",
+            "tempo",
+            "alpha_target",
+            "alpha_speed",
+            "alpha_curve",
+        )
+        head_confidences_cpu: np.ndarray | None = None  # [8, num_envs]
+        head_entropies_cpu: np.ndarray | None = None
+
+        if ops_telemetry_enabled and head_log_probs:
+            # Stack all head log probs: [8, num_envs]
+            stacked_log_probs = torch.stack(
+                [head_log_probs[h] for h in _HEAD_NAMES_FOR_TELEM]
+            )
+            # Single exp + detach + transfer
+            head_confidences_cpu = (
+                torch.exp(stacked_log_probs).detach().cpu().numpy()
+            )
+            if action_result.head_entropies is None:
+                raise RuntimeError(
+                    "Policy action result is missing per-head rollout entropy"
+                )
+            stacked_head_entropies = torch.stack(
+                [action_result.head_entropies[h] for h in _HEAD_NAMES_FOR_TELEM]
+            )
+            head_entropies_cpu = (
+                stacked_head_entropies.detach().cpu().numpy()
+            )
+
+
+        return ActionInputBundle(
+            all_signals=all_signals,
+            all_slot_reports=all_slot_reports,
+            states_batch_normalized=states_batch_normalized,
+            blueprint_indices_batch=blueprint_indices_batch,
+            pre_step_hiddens=pre_step_hiddens,
+            head_log_probs=head_log_probs,
+            masks_batch=masks_batch,
+            actions_np=actions_np,
+            values=values,
+            head_confidences_cpu=head_confidences_cpu,
+            head_entropies_cpu=head_entropies_cpu,
+            op_probs_cpu=op_probs_cpu,
+            masked_np=masked_np,
+            step_obs_stats=step_obs_stats,
+            governor_panic_envs=governor_panic_envs,
+            batched_lstm_hidden_post_action=batched_lstm_hidden,
+        )
+
     def run(self) -> list[dict[str, Any]]:
         agent = self.agent
         task_spec = self.task_spec
@@ -1848,7 +2278,7 @@ class VectorizedPPOTrainer:
                 # Accumulate raw (unnormalized) states for the pre-update normalizer refresh.
                 # We freeze normalizer stats during rollout to keep normalization consistent,
                 # then update stats before PPO updates in _run_ppo_updates.
-                raw_states_for_normalizer_update = []
+                raw_states_for_normalizer_update: list[torch.Tensor] = []
 
                 # Pre-allocate per-env step records (one per env, reused across epochs).
                 # Each record owns its ActionSpec/ActionOutcome/ActionMaskFlags and
@@ -1868,7 +2298,6 @@ class VectorizedPPOTrainer:
                 for epoch in range(1, max_epochs + 1):
                     epoch_start = time.perf_counter()
                     dataloader_wait_ms_epoch = 0.0
-                    last_obs_stats = None
                     if telemetry_config is not None:
                         telemetry_config.tick_escalation()
                     for env_state in env_states:
@@ -1926,342 +2355,36 @@ class VectorizedPPOTrainer:
                     val_totals = fused_result.val_totals
 
                     # ===== Compute epoch metrics and get BATCHED actions =====
-                    # NOTE: Telemetry sync (gradients/counterfactual) happens after record_accuracy()
-                    # so telemetry reflects the current epoch's metrics.
-
-                    # Collect signals, slot reports and action masks from all environments
-                    all_signals = []
-                    all_slot_reports = []
-                    all_masks = []
-
-                    governor_panic_envs = []  # Track which envs need rollback
-
-                    for env_idx, env_state in enumerate(env_states):
-                        model = env_state.model
-
-                        train_loss = env_state.train_loss
-                        train_acc = env_state.train_acc
-                        val_loss = env_state.val_loss
-                        val_acc = env_state.val_acc
-                        # Track maximum accuracy for sparse reward
-                        env_state.host_max_acc = max(
-                            env_state.host_max_acc, env_state.val_acc
-                        )
-
-                        # Governor watchdog: check vital signs before blessing a snapshot.
-                        is_panic = _check_vitals_before_snapshot(
-                            env_state,
-                            epoch=epoch,
-                            val_loss=val_loss,
-                        )
-                        if is_panic:
-                            governor_panic_envs.append(env_idx)
-
-                        # Gather active seeds across ALL enabled slots (multi-seed support)
-                        active_seeds = []
-                        for slot_id in slots:
-                            if model.has_active_seed_in_slot(slot_id):
-                                slot_obj = cast(
-                                    SeedSlotProtocol, model.seed_slots[slot_id]
-                                )
-                                seed_state = slot_obj.state
-                                if seed_state is not None:
-                                    active_seeds.append(seed_state)
-
-                        # Record accuracy for all active seeds (per-slot stage counters + deltas)
-                        for slot_id in slots:
-                            slot_obj = cast(SeedSlotProtocol, model.seed_slots[slot_id])
-                            slot_state = slot_obj.state
-                            if slot_state is None:
-                                continue
-                            slot_state.metrics.record_accuracy(val_acc)
-
-                        # Sync gradient telemetry after record_accuracy so telemetry reflects this epoch's metrics.
-                        grad_stats_for_env = env_grad_stats[env_idx]
-                        synced_slot_ids: set[str] = set()
-                        if use_telemetry and grad_stats_for_env is not None:
-                            for slot_id, async_stats in grad_stats_for_env.items():
-                                if not model.has_active_seed_in_slot(slot_id):
-                                    continue
-                                slot_obj_for_grad = cast(
-                                    SeedSlotProtocol, model.seed_slots[slot_id]
-                                )
-                                seed_state = slot_obj_for_grad.state
-                                if seed_state is None or seed_state.metrics is None:
-                                    continue
-
-                                dual_stats = materialize_dual_grad_stats(async_stats)
-                                current_ratio = dual_stats.normalized_ratio
-
-                                prev_ema = env_state.gradient_ratio_ema.get(slot_id)
-                                if prev_ema is None:
-                                    ema = current_ratio
-                                else:
-                                    ema = 0.9 * prev_ema + 0.1 * current_ratio
-                                env_state.gradient_ratio_ema[slot_id] = ema
-
-                                # Sync ratio to SeedMetrics for G2 gate evaluation
-                                seed_state.metrics.seed_gradient_norm_ratio = ema
-
-                                # Materialize health stats for gradient telemetry
-                                health_stats = materialize_grad_stats(
-                                    async_stats["_health_stats"]
-                                )
-
-                                # Sync telemetry using real gradient health from collect_seed_gradients_async
-                                seed_state.sync_telemetry(
-                                    gradient_norm=health_stats["gradient_norm"],
-                                    gradient_health=health_stats["gradient_health"],
-                                    has_vanishing=health_stats["has_vanishing"],
-                                    has_exploding=health_stats["has_exploding"],
-                                    epoch=epoch,
-                                    max_epochs=max_epochs,
-                                )
-                                synced_slot_ids.add(slot_id)
-
-                        # Fallback: sync telemetry for active seeds that didn't get gradient stats
-                        # This ensures accuracy_delta is always populated from metrics.improvement_since_stage_start
-                        # Gradient parameters are omitted - sync_telemetry leaves gradient fields
-                        # UNMEASURED (None). KTS-001: an unmeasured seed must NOT look
-                        # healthy; permissive G2 denies it until real gradient stats arrive.
-                        for slot_id in slots:
-                            if slot_id in synced_slot_ids:
-                                continue
-                            if not model.has_active_seed_in_slot(slot_id):
-                                continue
-                            slot_obj_fallback = cast(
-                                SeedSlotProtocol, model.seed_slots[slot_id]
-                            )
-                            seed_state_fallback = slot_obj_fallback.state
-                            if seed_state_fallback is None:
-                                continue
-                            # Only sync accuracy/stage telemetry - no gradient data available
-                            seed_state_fallback.sync_telemetry(
-                                epoch=epoch, max_epochs=max_epochs
-                            )
-
-                        slot_reports = model.get_slot_reports()
-
-                        # Consolidate environment-level telemetry emission
-                        emitters[env_idx].on_epoch_completed(
-                            epoch,
-                            env_state,
-                            slot_reports,
-                            observation_stats=last_obs_stats if env_idx == 0 else None,
-                        )
-
-                        # Update signal tracker
-                        # Phase 4: embargo/cooldown stages keep state while seed is removed.
-                        # Availability for germination is therefore "no state", not merely "no active seed".
-                        available_slots = sum(
-                            1
-                            for slot_id in slots
-                            if model.seed_slots[slot_id].state is None
-                        )
-                        signals = env_state.signal_tracker.update(
-                            epoch=epoch,
-                            global_step=epoch * num_train_batches,
-                            train_loss=train_loss,
-                            train_accuracy=train_acc,
-                            val_loss=val_loss,
-                            val_accuracy=val_acc,
-                            active_seeds=active_seeds,
-                            available_slots=available_slots,
-                        )
-
-                        all_signals.append(signals)
-                        all_slot_reports.append(slot_reports)
-                        # Cache total_seeds for this env (used in action masking)
-                        env_total_seeds = model.total_seeds() if model else 0
-
-                        # Compute action mask based on current state (physical constraints only)
-                        # Build slot states for ALL enabled slots (multi-slot masking)
-                        slot_states = build_slot_states(slot_reports, ordered_slots)
-                        mask = compute_action_masks(
-                            slot_states=slot_states,
-                            enabled_slots=ordered_slots,
-                            total_seeds=env_total_seeds,
-                            max_seeds=effective_max_seeds,
-                            slot_config=slot_config,
-                            device=torch.device(device),
-                            topology=task_spec.topology,
-                            disable_advance=disable_advance,
-                        )
-                        all_masks.append(mask)
-
-                    # OPTIMIZATION: Batched tensor-driven feature extraction (Obs V3)
-                    # Returns tuple: (obs [batch, obs_dim], blueprint_indices [batch, num_slots])
-                    states_batch, blueprint_indices_batch = batch_obs_to_features(
-                        batch_signals=all_signals,
-                        batch_slot_reports=all_slot_reports,
-                        batch_env_states=env_states,
-                        slot_config=slot_config,
-                        device=torch.device(device),
-                        max_epochs=max_epochs,
-                    )
-                    # NOTE: blueprint_indices_batch is passed to get_action() for op-conditioned value (Phase 4)
-
-                    # Stack dict masks into batched dict: {key: [n_envs, head_dim]}
-                    # Use static HEAD_NAMES for torch.compile compatibility
-                    masks_batch = {
-                        key: torch.stack([m[key] for m in all_masks]).to(device)
-                        for key in HEAD_NAMES
-                    }
-                    masks_batch["slot_by_op"] = torch.stack(
-                        [m["slot_by_op"] for m in all_masks]
-                    ).to(device)
-                    apply_proof_baseline_action_controls(
-                        masks_batch=masks_batch,
-                        lifecycle_policy=self.proof_baseline_lifecycle_policy,
-                        schedule_id=self.proof_baseline_schedule_id,
-                        schedule_hash=self.proof_baseline_schedule_hash,
-                        schedule_version=self.proof_baseline_schedule_version,
-                        schedule_action_count=(
-                            self.proof_baseline_schedule_action_count
-                        ),
+                    # Extracted to _build_action_inputs(): collects per-env signals/slot
+                    # reports, builds batched masks (I10 proof controls), accumulates raw
+                    # states for the deferred normalizer refresh (I7), and runs the rollout
+                    # get_action under the shared rollout_autocast factory (I6 BF16 symmetry).
+                    _action_inputs = self._build_action_inputs(
+                        env_states=env_states,
+                        env_grad_stats=env_grad_stats,
+                        raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+                        ordered_slots=ordered_slots,
                         epoch=epoch,
                         static_final_replay_validated=static_final_replay_validated,
+                        rollout_autocast=rollout_autocast,
+                        batched_lstm_hidden=batched_lstm_hidden,
                     )
-
-                    # Accumulate raw states for deferred normalizer update
-                    raw_states_for_normalizer_update.append(states_batch.detach())
-
-                    # Normalize using FROZEN statistics during rollout collection.
-                    states_batch_normalized = obs_normalizer.normalize(states_batch)
-
-                    # TELE-OBS: Compute observation stats once per step (for Sanctum ObservationStats panel)
-                    # Only computed when ops telemetry is enabled to avoid overhead
-                    step_obs_stats = None
-                    if ops_telemetry_enabled:
-                        step_obs_stats = compute_observation_stats(
-                            states_batch,
-                            normalized_obs_tensor=states_batch_normalized,
-                            clip=10.0,
-                            normalizer_mean=obs_normalizer.mean,
-                            normalizer_var=obs_normalizer.var,
-                            initial_normalizer_mean=initial_obs_normalizer_mean,
-                        )
-                        last_obs_stats = step_obs_stats
-
-                    # Get BATCHED actions from policy network with action masking (single forward pass!)
-                    pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]] = []
-
-                    if batched_lstm_hidden is not None:
-                        h_batch, c_batch = batched_lstm_hidden
-                        for env_idx in range(len(env_states)):
-                            env_h = h_batch[:, env_idx : env_idx + 1, :].clone()
-                            env_c = c_batch[:, env_idx : env_idx + 1, :].clone()
-                            pre_step_hiddens.append((env_h, env_c))
-                    else:
-                        batched_lstm_hidden = agent.policy.initial_hidden(
-                            len(env_states)
-                        )
-                        if batched_lstm_hidden is not None:
-                            init_h, init_c = batched_lstm_hidden
-                            for env_idx in range(len(env_states)):
-                                env_h = init_h[:, env_idx : env_idx + 1, :].clone()
-                                env_c = init_c[:, env_idx : env_idx + 1, :].clone()
-                                pre_step_hiddens.append((env_h, env_c))
-
-                    # get_action returns ActionResult dataclass.
-                    # P1-BF16: wrap in the SAME BF16 autocast as the PPO update so the
-                    # stored old_log_probs share the BF16 backbone (unbiased ratio).
-                    with rollout_autocast():
-                        action_result = agent.policy.get_action(
-                            states_batch_normalized,
-                            blueprint_indices=blueprint_indices_batch,
-                            masks=masks_batch,
-                            hidden=batched_lstm_hidden,
-                            deterministic=False,
-                            probability_floor=agent.probability_floor,
-                        )
-                    actions_dict = action_result.action
-                    head_log_probs = action_result.log_prob
-                    values_tensor = action_result.value
-
-                    # OPTIMIZATION: Update batched hidden state directly (eliminates per-env slice/cat)
-                    batched_lstm_hidden = action_result.hidden
-
-                    # Convert to list of dicts for per-env processing
-                    # PERF NOTE: Consolidate action head transfers into a single D2H copy.
-                    # This matters for larger env counts (16+), where per-head transfers and
-                    # per-env Python dict construction become a scaling bottleneck.
-                    actions_stacked = torch.stack(
-                        [actions_dict[name] for name in HEAD_NAMES]
-                    )
-                    actions_np = actions_stacked.cpu().numpy()  # [num_heads, num_envs]
-                    values = (
-                        values_tensor.cpu().tolist()
-                    )  # .tolist() on CPU tensor is free
-
-                    # Batch compute mask stats for telemetry
-                    masked_np: np.ndarray | None = None  # [num_heads, num_envs]
-                    if ops_telemetry_enabled:
-                        # FORCED, not "any-masked": a head is forced only when a
-                        # single valid candidate remains (no real choice). Heads
-                        # that still have >=2 valid candidates retain agency even
-                        # though some candidates were restricted.
-                        masked_batch = compute_forced_head_flags(masks_batch)
-                        masked_stacked = torch.stack(
-                            [masked_batch[name] for name in HEAD_NAMES]
-                        )
-                        masked_np = masked_stacked.cpu().numpy()
-                    else:
-                        masked_np = None
-
-                    # PERF: Pre-compute op_probs for telemetry ONCE before env loop.
-                    # Previous code called .cpu() per-env inside the loop, causing N GPU syncs
-                    # per step instead of 1. This was the root cause of 90% throughput drop.
-                    op_probs_cpu: np.ndarray | None = None
-                    if ops_telemetry_enabled and action_result.op_logits is not None:
-                        # Batch masked distribution over all envs, single GPU->CPU transfer.
-                        op_probs_all = _masked_op_probs_for_telemetry(
-                            op_logits=action_result.op_logits,
-                            op_mask=masks_batch["op"],
-                            probability_floor=agent.probability_floor,
-                        )
-                        op_probs_cpu = op_probs_all.cpu().numpy()
-
-                    # PERF: Pre-compute per-head confidences AND entropy for telemetry.
-                    # Uses batched GPU->CPU transfer: stack all heads, single transfer.
-                    #
-                    # Confidence = exp(log_prob) = P(chosen_action | valid_mask)
-                    # This properly handles masking via MaskedCategorical.
-                    #
-                    # Head names in order matching HeadTelemetry field positions.
-                    # We stack log_probs in this order, then index [0..7] to get each head's value.
-                    _HEAD_NAMES_FOR_TELEM = (
-                        "op",
-                        "slot",
-                        "blueprint",
-                        "style",
-                        "tempo",
-                        "alpha_target",
-                        "alpha_speed",
-                        "alpha_curve",
-                    )
-                    head_confidences_cpu: np.ndarray | None = None  # [8, num_envs]
-                    head_entropies_cpu: np.ndarray | None = None
-
-                    if ops_telemetry_enabled and head_log_probs:
-                        # Stack all head log probs: [8, num_envs]
-                        stacked_log_probs = torch.stack(
-                            [head_log_probs[h] for h in _HEAD_NAMES_FOR_TELEM]
-                        )
-                        # Single exp + detach + transfer
-                        head_confidences_cpu = (
-                            torch.exp(stacked_log_probs).detach().cpu().numpy()
-                        )
-                        if action_result.head_entropies is None:
-                            raise RuntimeError(
-                                "Policy action result is missing per-head rollout entropy"
-                            )
-                        stacked_head_entropies = torch.stack(
-                            [action_result.head_entropies[h] for h in _HEAD_NAMES_FOR_TELEM]
-                        )
-                        head_entropies_cpu = (
-                            stacked_head_entropies.detach().cpu().numpy()
-                        )
+                    all_signals = _action_inputs.all_signals
+                    all_slot_reports = _action_inputs.all_slot_reports
+                    states_batch_normalized = _action_inputs.states_batch_normalized
+                    blueprint_indices_batch = _action_inputs.blueprint_indices_batch
+                    pre_step_hiddens = _action_inputs.pre_step_hiddens
+                    head_log_probs = _action_inputs.head_log_probs
+                    masks_batch = _action_inputs.masks_batch
+                    actions_np = _action_inputs.actions_np
+                    values = _action_inputs.values
+                    head_confidences_cpu = _action_inputs.head_confidences_cpu
+                    head_entropies_cpu = _action_inputs.head_entropies_cpu
+                    op_probs_cpu = _action_inputs.op_probs_cpu
+                    masked_np = _action_inputs.masked_np
+                    step_obs_stats = _action_inputs.step_obs_stats
+                    governor_panic_envs = _action_inputs.governor_panic_envs
+                    batched_lstm_hidden = _action_inputs.batched_lstm_hidden_post_action
 
                     action_result_bundle = execute_actions(
                         context=action_execution_context,
