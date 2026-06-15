@@ -231,9 +231,9 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:synchronize
   owner: John
   reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_action_transaction:cpu
   owner: John
-  reason: vectorized trainer sync point
+  reason: vectorized trainer sync point - bootstrap values moved to CPU before tolist to avoid per-value GPU sync (I13)
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_fused_val_pass:synchronize
   owner: John
   reason: vectorized trainer sync point - fused val pass single synchronize after all env launches (I8)
@@ -264,9 +264,9 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_train_pass:synchronize
   owner: John
   reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:tolist
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_action_transaction:tolist
   owner: John
-  reason: vectorized trainer sync point
+  reason: vectorized trainer sync point - bootstrap values host transfer for truncated-transition write-back (I13)
 - key: src/esper/karn/overwatch/backend.py:_json_serializer:item
   owner: John
   reason: Dashboard JSON serialization boundary for NumPy scalar payloads; not a training hot path

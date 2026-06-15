@@ -183,6 +183,10 @@ allow_hits:
     owner: "john"
     reason: "Pre-execute_actions batch input bundle for one epoch step, simic-internal"
 
+  - key: "src/esper/simic/training/vectorized_trainer.py:dataclass:ActionTransactionResult"
+    owner: "john"
+    reason: "Action execution + bootstrap phase result for one epoch step, simic-internal"
+
   - key: "src/esper/simic/training/parallel_env_state.py:dataclass:ParallelEnvState"
     owner: "john"
     reason: "CUDA stream state, simic-internal implementation"

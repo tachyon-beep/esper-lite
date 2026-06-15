@@ -567,6 +567,24 @@ class ActionInputBundle:
     batched_lstm_hidden_post_action: tuple[torch.Tensor, torch.Tensor] | None
 
 
+@dataclass(slots=True)
+class ActionTransactionResult:
+    """Result of one epoch's action execution + bootstrap phase.
+
+    Owned by one epoch; produced by _run_action_transaction. The post-action
+    signal/slot-report/mask lists are the inputs the bootstrap forward pass has
+    already consumed; they are surfaced so the orchestrator can carry telemetry
+    downstream. batched_lstm_hidden carries the terminal-reset hidden state back
+    to the epoch loop (I1).
+    """
+
+    truncated_bootstrap_targets: list[tuple[int, int]]
+    all_post_action_signals: list[Any]
+    all_post_action_slot_reports: list[Any]
+    all_post_action_masks: list[Any]
+    batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None
+
+
 @dataclass
 class VectorizedPPOTrainer:
     agent: Any
@@ -2119,6 +2137,156 @@ class VectorizedPPOTrainer:
             batched_lstm_hidden_post_action=batched_lstm_hidden,
         )
 
+    def _run_action_transaction(
+        self,
+        *,
+        env_states: list[ParallelEnvState],
+        step_records: list[EnvStepRecord],
+        fused_result: FusedValResult,
+        aib: ActionInputBundle,
+        reward_summary_accum: list[RewardSummaryAccumulator],
+        baseline_accs: list[dict[str, Any]],
+        episode_history: list[Any],
+        episode_outcomes: list[Any],
+        epoch: int,
+        episodes_completed: int,
+        batch_idx: int,
+        rollout_autocast: Callable[[], AbstractContextManager[None]],
+        batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None,
+    ) -> ActionTransactionResult:
+        """Execute actions, reset terminal hidden state, compute bootstrap values.
+
+        I1 (CRITICAL ordering): steps in this method MUST occur in this order:
+          1. execute_actions() -- sets step_records[i].rollback_occurred
+          2. _reset_hidden_for_terminal_envs() -- using rollback_occurred from step 1
+          3. bootstrap get_action() -- using reset hidden from step 2
+        Breaking this order biases GAE for rolled-back envs. There MUST be no code
+        between the LSTM reset and the bootstrap forward pass that consults the
+        pre-reset hidden state.
+
+        I4: execute_actions handles governor panic via continue; no buffer.add for
+        rolled-back envs. handle_rollbacks() applies death penalty post-epoch.
+        I6: bootstrap get_action runs under the SAME rollout_autocast factory as
+        the rollout get_action and the PPO update.
+        I13: truncated_bootstrap_targets collected inside execute_actions (post
+        mechanical-advance); bootstrap values written back to buffer here;
+        RuntimeError raised if targets present but values missing.
+        """
+        agent = self.agent
+        slot_config = self.slot_config
+        max_epochs = self.max_epochs
+        obs_normalizer = self.obs_normalizer
+        device = self.device
+
+        action_result_bundle = execute_actions(
+            context=self.action_execution_context,
+            env_states=env_states,
+            step_records=step_records,
+            actions_np=aib.actions_np,
+            values=aib.values,
+            all_signals=aib.all_signals,
+            all_slot_reports=aib.all_slot_reports,
+            states_batch_normalized=aib.states_batch_normalized,
+            blueprint_indices_batch=aib.blueprint_indices_batch,
+            pre_step_hiddens=aib.pre_step_hiddens,
+            head_log_probs=aib.head_log_probs,
+            masks_batch=aib.masks_batch,
+            head_confidences_cpu=aib.head_confidences_cpu,
+            head_entropies_cpu=aib.head_entropies_cpu,
+            op_probs_cpu=aib.op_probs_cpu,
+            masked_np=aib.masked_np,
+            baseline_accs=baseline_accs,
+            all_disabled_accs=fused_result.all_disabled_accs,
+            governor_panic_envs=aib.governor_panic_envs,
+            reward_summary_accum=reward_summary_accum,
+            episode_history=episode_history,
+            episode_outcomes=episode_outcomes,
+            step_obs_stats=aib.step_obs_stats,
+            epoch=epoch,
+            episodes_completed=episodes_completed,
+            batch_idx=batch_idx,
+            proof_controlled_step=_is_proof_controlled_lifecycle_policy(
+                self.proof_baseline_lifecycle_policy
+            ),
+        )
+
+        truncated_bootstrap_targets = (
+            action_result_bundle.truncated_bootstrap_targets
+        )
+        all_post_action_signals = action_result_bundle.post_action_signals
+        all_post_action_slot_reports = (
+            action_result_bundle.post_action_slot_reports
+        )
+        all_post_action_masks = action_result_bundle.post_action_masks
+
+        # I1: LSTM reset AFTER execute_actions, BEFORE bootstrap.
+        rollback_terminal_envs = [
+            env_idx
+            for env_idx, rec in enumerate(step_records)
+            if rec.rollback_occurred
+        ]
+        batched_lstm_hidden = _reset_hidden_for_terminal_envs(
+            batched_lstm_hidden,
+            terminal_envs=rollback_terminal_envs,
+        )
+
+        # PHASE 2: Compute all bootstrap values in single batched forward pass
+        bootstrap_values: list[float] = []
+        if all_post_action_signals:
+            # Unpack Obs V3 tuple (obs, blueprint_indices)
+            post_action_features_batch, post_action_bp_indices = (
+                batch_signals_to_features(
+                    batch_signals=all_post_action_signals,
+                    batch_slot_reports=all_post_action_slot_reports,
+                    slot_config=slot_config,
+                    env_states=env_states,
+                    device=torch.device(device),
+                    max_epochs=max_epochs,
+                )
+            )
+            post_action_features_normalized = obs_normalizer.normalize(
+                post_action_features_batch
+            )
+            post_masks_batch = {
+                k: torch.stack([m[k] for m in all_post_action_masks]).to(device)
+                for k in HEAD_NAMES
+            }
+            post_masks_batch["slot_by_op"] = torch.stack(
+                [m["slot_by_op"] for m in all_post_action_masks]
+            ).to(device)
+
+            # P1-BF16: bootstrap value under the same BF16 autocast as the
+            # update, so Q(s,op) used in GAE is precision-consistent.
+            with rollout_autocast(), torch.inference_mode():
+                bootstrap_result = agent.policy.get_action(
+                    post_action_features_normalized,
+                    blueprint_indices=post_action_bp_indices,
+                    masks=post_masks_batch,
+                    hidden=batched_lstm_hidden,
+                    deterministic=True,
+                    probability_floor=agent.probability_floor,
+                )
+            # PERF: Move to CPU before .tolist() to avoid per-value GPU sync
+            bootstrap_values = bootstrap_result.value.cpu().tolist()
+
+        if truncated_bootstrap_targets:
+            if not bootstrap_values:
+                raise RuntimeError(
+                    "Missing bootstrap values for truncated transitions."
+                )
+            for (env_id, step_idx), bootstrap_val in zip(
+                truncated_bootstrap_targets, bootstrap_values, strict=True
+            ):
+                agent.buffer.bootstrap_values[env_id, step_idx] = bootstrap_val
+
+        return ActionTransactionResult(
+            truncated_bootstrap_targets=truncated_bootstrap_targets,
+            all_post_action_signals=all_post_action_signals,
+            all_post_action_slot_reports=all_post_action_slot_reports,
+            all_post_action_masks=all_post_action_masks,
+            batched_lstm_hidden=batched_lstm_hidden,
+        )
+
     def run(self) -> list[dict[str, Any]]:
         agent = self.agent
         task_spec = self.task_spec
@@ -2350,7 +2518,6 @@ class VectorizedPPOTrainer:
                     #     inside execute_actions; a stale reference from a prior epoch
                     #     would corrupt counterfactual freshness.
                     baseline_accs = fused_result.baseline_accs
-                    all_disabled_accs = fused_result.all_disabled_accs
                     val_corrects = fused_result.val_corrects
                     val_totals = fused_result.val_totals
 
@@ -2369,125 +2536,27 @@ class VectorizedPPOTrainer:
                         rollout_autocast=rollout_autocast,
                         batched_lstm_hidden=batched_lstm_hidden,
                     )
-                    all_signals = _action_inputs.all_signals
-                    all_slot_reports = _action_inputs.all_slot_reports
-                    states_batch_normalized = _action_inputs.states_batch_normalized
-                    blueprint_indices_batch = _action_inputs.blueprint_indices_batch
-                    pre_step_hiddens = _action_inputs.pre_step_hiddens
-                    head_log_probs = _action_inputs.head_log_probs
-                    masks_batch = _action_inputs.masks_batch
-                    actions_np = _action_inputs.actions_np
-                    values = _action_inputs.values
-                    head_confidences_cpu = _action_inputs.head_confidences_cpu
-                    head_entropies_cpu = _action_inputs.head_entropies_cpu
-                    op_probs_cpu = _action_inputs.op_probs_cpu
-                    masked_np = _action_inputs.masked_np
-                    step_obs_stats = _action_inputs.step_obs_stats
-                    governor_panic_envs = _action_inputs.governor_panic_envs
-                    batched_lstm_hidden = _action_inputs.batched_lstm_hidden_post_action
 
-                    action_result_bundle = execute_actions(
-                        context=action_execution_context,
+                    # ===== ACTION TRANSACTION (I1 ordering: execute_actions ->
+                    # reset terminal hidden -> bootstrap forward pass) =====
+                    # Extracted to _run_action_transaction(): the three-step sequence
+                    # is structurally enforced by sequential calls inside the method.
+                    _action_txn = self._run_action_transaction(
                         env_states=env_states,
                         step_records=step_records,
-                        actions_np=actions_np,
-                        values=values,
-                        all_signals=all_signals,
-                        all_slot_reports=all_slot_reports,
-                        states_batch_normalized=states_batch_normalized,
-                        blueprint_indices_batch=blueprint_indices_batch,
-                        pre_step_hiddens=pre_step_hiddens,
-                        head_log_probs=head_log_probs,
-                        masks_batch=masks_batch,
-                        head_confidences_cpu=head_confidences_cpu,
-                        head_entropies_cpu=head_entropies_cpu,
-                        op_probs_cpu=op_probs_cpu,
-                        masked_np=masked_np,
-                        baseline_accs=baseline_accs,
-                        all_disabled_accs=all_disabled_accs,
-                        governor_panic_envs=governor_panic_envs,
+                        fused_result=fused_result,
+                        aib=_action_inputs,
                         reward_summary_accum=reward_summary_accum,
+                        baseline_accs=baseline_accs,
                         episode_history=episode_history,
                         episode_outcomes=episode_outcomes,
-                        step_obs_stats=step_obs_stats,
                         epoch=epoch,
                         episodes_completed=episodes_completed,
                         batch_idx=batch_idx,
-                        proof_controlled_step=_is_proof_controlled_lifecycle_policy(
-                            self.proof_baseline_lifecycle_policy
-                        ),
+                        rollout_autocast=rollout_autocast,
+                        batched_lstm_hidden=_action_inputs.batched_lstm_hidden_post_action,
                     )
-
-                    truncated_bootstrap_targets = (
-                        action_result_bundle.truncated_bootstrap_targets
-                    )
-                    all_post_action_signals = action_result_bundle.post_action_signals
-                    all_post_action_slot_reports = (
-                        action_result_bundle.post_action_slot_reports
-                    )
-                    all_post_action_masks = action_result_bundle.post_action_masks
-                    rollback_terminal_envs = [
-                        env_idx
-                        for env_idx, rec in enumerate(step_records)
-                        if rec.rollback_occurred
-                    ]
-                    batched_lstm_hidden = _reset_hidden_for_terminal_envs(
-                        batched_lstm_hidden,
-                        terminal_envs=rollback_terminal_envs,
-                    )
-
-                    # PHASE 2: Compute all bootstrap values in single batched forward pass
-                    bootstrap_values: list[float] = []
-                    if all_post_action_signals:
-                        # Unpack Obs V3 tuple (obs, blueprint_indices)
-                        post_action_features_batch, post_action_bp_indices = (
-                            batch_signals_to_features(
-                                batch_signals=all_post_action_signals,
-                                batch_slot_reports=all_post_action_slot_reports,
-                                slot_config=slot_config,
-                                env_states=env_states,
-                                device=torch.device(device),
-                                max_epochs=max_epochs,
-                            )
-                        )
-                        post_action_features_normalized = obs_normalizer.normalize(
-                            post_action_features_batch
-                        )
-                        post_masks_batch = {
-                            k: torch.stack([m[k] for m in all_post_action_masks]).to(
-                                device
-                            )
-                            for k in HEAD_NAMES
-                        }
-                        post_masks_batch["slot_by_op"] = torch.stack(
-                            [m["slot_by_op"] for m in all_post_action_masks]
-                        ).to(device)
-
-                        # P1-BF16: bootstrap value under the same BF16 autocast as the
-                        # update, so Q(s,op) used in GAE is precision-consistent.
-                        with rollout_autocast(), torch.inference_mode():
-                            bootstrap_result = agent.policy.get_action(
-                                post_action_features_normalized,
-                                blueprint_indices=post_action_bp_indices,
-                                masks=post_masks_batch,
-                                hidden=batched_lstm_hidden,
-                                deterministic=True,
-                                probability_floor=agent.probability_floor,
-                            )
-                        # PERF: Move to CPU before .tolist() to avoid per-value GPU sync
-                        bootstrap_values = bootstrap_result.value.cpu().tolist()
-
-                    if truncated_bootstrap_targets:
-                        if not bootstrap_values:
-                            raise RuntimeError(
-                                "Missing bootstrap values for truncated transitions."
-                            )
-                        for (env_id, step_idx), bootstrap_val in zip(
-                            truncated_bootstrap_targets, bootstrap_values, strict=True
-                        ):
-                            agent.buffer.bootstrap_values[env_id, step_idx] = (
-                                bootstrap_val
-                            )
+                    batched_lstm_hidden = _action_txn.batched_lstm_hidden
 
                     throughput_step_time_ms_sum += (
                         time.perf_counter() - epoch_start
