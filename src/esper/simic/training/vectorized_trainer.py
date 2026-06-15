@@ -770,6 +770,55 @@ class VectorizedPPOTrainer:
             )
         return records
 
+    def _make_batch_context(
+        self,
+        envs_this_batch: int,
+        reward_summary_accum: list[RewardSummaryAccumulator],
+    ) -> list[EnvStepRecord]:
+        """Pre-allocate per-env step records for one PPO batch.
+
+        Called once per batch. The returned list is reused across all epochs
+        within the batch — objects are mutated in place, not reallocated (I16).
+
+        RESUME SEAM (HEALTH_REPORT open item): ContributionRewardInputs and
+        LossRewardInputs objects are allocated here; they hold only CPU scalars,
+        no GPU tensors.
+        """
+        return [
+            EnvStepRecord(
+                env_idx=i,
+                action_spec=ActionSpec(),
+                action_outcome=ActionOutcome(),
+                mask_flags=ActionMaskFlags(),
+                reward_summary=reward_summary_accum[i],
+                contribution_reward_inputs=ContributionRewardInputs(
+                    action=LifecycleOp.WAIT,
+                    seed_contribution=None,
+                    val_acc=0.0,
+                    seed_info=None,
+                    epoch=0,
+                    max_epochs=self.max_epochs,
+                    total_params=0,
+                    host_params=1,
+                    acc_at_germination=None,
+                    acc_delta=0.0,
+                    config=self.env_reward_configs[i],
+                ),
+                loss_reward_inputs=LossRewardInputs(
+                    action=LifecycleOp.WAIT,
+                    loss_delta=0.0,
+                    val_loss=0.0,
+                    seed_info=None,
+                    epoch=0,
+                    max_epochs=self.max_epochs,
+                    total_params=0,
+                    host_params=1,
+                    config=self.loss_reward_config,
+                ),
+            )
+            for i in range(envs_this_batch)
+        ]
+
     def run(self) -> list[dict[str, Any]]:
         agent = self.agent
         task_spec = self.task_spec
@@ -787,8 +836,6 @@ class VectorizedPPOTrainer:
         shared_test_iter = self.shared_test_iter
         num_train_batches = self.num_train_batches
         num_test_batches = self.num_test_batches
-        env_reward_configs = self.env_reward_configs
-        loss_reward_config = self.loss_reward_config
         reward_normalizer = self.reward_normalizer
         obs_normalizer = self.obs_normalizer
         initial_obs_normalizer_mean = self.initial_obs_normalizer_mean
@@ -939,40 +986,9 @@ class VectorizedPPOTrainer:
                 # mutated in place each step (I16). reward_summary_accum is held by
                 # reference and also passed as a batch-level kwarg (D3). Per-env
                 # rollback state lives on record.rollback_occurred (I4).
-                step_records = [
-                    EnvStepRecord(
-                        env_idx=i,
-                        action_spec=ActionSpec(),
-                        action_outcome=ActionOutcome(),
-                        mask_flags=ActionMaskFlags(),
-                        reward_summary=reward_summary_accum[i],
-                        contribution_reward_inputs=ContributionRewardInputs(
-                            action=LifecycleOp.WAIT,
-                            seed_contribution=None,
-                            val_acc=0.0,
-                            seed_info=None,
-                            epoch=0,
-                            max_epochs=max_epochs,
-                            total_params=0,
-                            host_params=1,
-                            acc_at_germination=None,
-                            acc_delta=0.0,
-                            config=env_reward_configs[i],
-                        ),
-                        loss_reward_inputs=LossRewardInputs(
-                            action=LifecycleOp.WAIT,
-                            loss_delta=0.0,
-                            val_loss=0.0,
-                            seed_info=None,
-                            epoch=0,
-                            max_epochs=max_epochs,
-                            total_params=0,
-                            host_params=1,
-                            config=loss_reward_config,
-                        ),
-                    )
-                    for i in range(envs_this_batch)
-                ]
+                step_records = self._make_batch_context(
+                    envs_this_batch, reward_summary_accum
+                )
 
                 # Pre-compute ordered slots once per batch (not per-epoch)
                 # validate_slot_ids parses/sorts slot IDs - expensive to repeat 25x per episode
