@@ -1018,6 +1018,471 @@ class VectorizedPPOTrainer:
             val_batch_counts,
             env_cfg_correct_accums,
         )
+    def _run_fused_val_pass(
+        self,
+        *,
+        env_states: list[ParallelEnvState],
+        slots: list[str],
+        epoch: int,
+        envs_this_batch: int,
+        val_criterion: nn.CrossEntropyLoss,
+        batch_idx: int,
+    ) -> tuple[FusedValResult, float]:
+        """Run the fused validation + counterfactual ablation pass for one epoch.
+
+        Single pass over the test data stacking every ablation config into one
+        fused forward (config 0 == main). Returns the epoch-scoped validation
+        outputs (FusedValResult) plus the wall time spent waiting on the test
+        iterator (folded into the epoch's dataloader-wait throughput counter by
+        the caller).
+
+        I3: baseline_accs is rebuilt fresh each epoch here; the caller re-wires
+        the returned reference into the execute_actions kwarg so
+        build_fresh_contribution_targets reads the current-epoch freshness.
+
+        I8: single env_state.stream.synchronize() after all fused launches; the
+        GPU->CPU transfers (.cpu()/.item()/.tolist()) follow the sync.
+
+        I12: val_loss_accum accumulates ONLY config idx 0 (loss_per_config[0]),
+        the main config; ablation losses are intentionally worse and excluded.
+
+        RESUME SEAM (HEALTH_REPORT open item): shared_test_iter is consumed here;
+        iterator cursor state is not serialized for mid-run exact resume.
+        """
+        dataloader_wait_ms = 0.0
+        # ===== Validation + Counterfactual (FUSED): Single pass over test data =====
+        # Instead of iterating test data multiple times or performing sequential
+        # forward passes, we stack all configurations into a single fused pass.
+
+        # CRITICAL: Reset scaffolding metrics at START of counterfactual phase.
+        # These metrics accumulate per-epoch interaction/topology data.
+        # Feature extraction expects per-epoch values, not cross-epoch accumulation.
+        for env_state in env_states:
+            for slot_id in slots:
+                if env_state.model.has_active_seed_in_slot(slot_id):
+                    slot = cast(
+                        SeedSlotProtocol,
+                        env_state.model.seed_slots[slot_id],
+                    )
+                    seed_state = slot.state
+                    if seed_state and seed_state.metrics:
+                        seed_state.metrics.interaction_sum = 0.0
+                        seed_state.metrics.boost_received = 0.0
+                        seed_state.metrics.upstream_alpha_sum = 0.0
+                        seed_state.metrics.downstream_alpha_sum = 0.0
+
+        # 1. Determine configurations per environment + allocate
+        # per-env ablation accumulators (extracted to a named phase).
+        (
+            env_configs,
+            baseline_accs,
+            solo_on_accs,
+            all_disabled_accs,
+            pair_accs,
+            shapley_results,
+            val_totals,
+            val_batch_counts,
+            env_cfg_correct_accums,
+        ) = self._build_fused_val_configs(
+            env_states=env_states,
+            slots=slots,
+            epoch=epoch,
+            envs_this_batch=envs_this_batch,
+        )
+
+        # Iterate validation batches using shared iterator
+        validation_start = time.perf_counter()
+        test_iter = iter(self.shared_test_iter)
+        for batch_step in range(self.num_test_batches):
+            try:
+                fetch_start = time.perf_counter()
+                env_batches = next(test_iter)
+                dataloader_wait_ms += (
+                    time.perf_counter() - fetch_start
+                ) * 1000.0
+            except StopIteration:
+                break
+
+            for i, env_state in enumerate(env_states):
+                if i >= len(env_batches):
+                    continue
+                if env_state.stream:
+                    # CRITICAL: DataLoader .to(device, non_blocking=True) runs on the DEFAULT stream.
+                    # We must sync env_state.stream with default stream before using the data,
+                    # otherwise we may access partially-transferred data (race condition).
+                    # BUG FIX: Use default_stream(), NOT current_stream() - the transfer happens
+                    # on the default stream regardless of what stream is "current" in this context.
+                    loader_stream = torch.cuda.default_stream(
+                        torch.device(env_state.env_device)
+                    )
+                    env_state.stream.wait_stream(loader_stream)
+                inputs, targets = env_batches[i]
+
+                # SharedGPUBatchIterator now returns clones (not views) to fix race conditions.
+                # We still need record_stream to prevent premature deallocation when the
+                # tensor is used asynchronously by env_state.stream.
+                if env_state.stream and inputs.is_cuda:
+                    inputs.record_stream(env_state.stream)
+                    targets.record_stream(env_state.stream)
+
+                batch_size = inputs.size(0)
+                configs = env_configs[i]
+                num_configs = len(configs)
+
+                # Build alpha_overrides tensors for the fused pass
+                # Shape is topology-aware: [K*B, 1, 1, 1] for CNN, [K*B, 1, 1] for transformer
+                #
+                # IMPORTANT: Only pass alpha_override when at least one config
+                # actually overrides that slot's alpha. Passing a no-op override
+                # (e.g., alpha==0.0) forces SeedSlot.forward down the blending path
+                # and bypasses the TRAINING-stage STE shortcut, changing semantics
+                # and creating unnecessary alpha_schedule requirements.
+                alpha_overrides: dict[str, torch.Tensor] = {}
+                for slot_id in env_state.model._active_slots:
+                    needs_override = any(slot_id in cfg for cfg in configs)
+                    if not needs_override:
+                        continue
+                    slot = cast(
+                        SeedSlotProtocol,
+                        env_state.model.seed_slots[slot_id],
+                    )
+                    # Access concrete SeedSlot for alpha_schedule assignment
+                    from esper.kasmina.slot import SeedSlot
+
+                    assert isinstance(slot, SeedSlot), (
+                        "Expected SeedSlot for alpha_schedule manipulation"
+                    )
+                    slot_concrete: SeedSlot = slot
+
+                    # Enforce Phase 3 contract: alpha_schedule only valid for GATE.
+                    if slot_concrete.alpha_schedule is not None and (
+                        slot.state is None
+                        or slot.state.alpha_algorithm != AlphaAlgorithm.GATE
+                    ):
+                        slot_concrete.alpha_schedule = None
+
+                    # P4-FIX: Ensure alpha_schedule exists for GATE algorithm during fused pass.
+                    # This can happen if a seed is in HOLD mode and its schedule was cleared.
+                    if (
+                        slot.state
+                        and slot.state.alpha_algorithm
+                        == AlphaAlgorithm.GATE
+                        and slot_concrete.alpha_schedule is None
+                    ):
+                        from esper.kasmina.blending import BlendCatalog
+
+                        topology = self.task_spec.topology
+                        # Use default tempo steps since it's already in HOLD
+                        slot_concrete.alpha_schedule = BlendCatalog.create(
+                            "gated",
+                            channels=slot_concrete.channels,
+                            topology=topology,
+                            total_steps=5,
+                        ).to(slot_concrete.device)
+
+                    current_alpha = slot.alpha
+                    # Topology-aware shape for alpha_overrides
+                    if self.task_spec.topology == "cnn":
+                        alpha_shape = (num_configs * batch_size, 1, 1, 1)
+                    else:  # transformer
+                        alpha_shape = (num_configs * batch_size, 1, 1)
+                    override_vec = torch.full(
+                        alpha_shape,
+                        current_alpha,
+                        device=env_state.env_device,
+                        dtype=inputs.dtype,
+                    )
+
+                    for cfg_idx, cfg in enumerate(configs):
+                        if slot_id in cfg:
+                            start, end = (
+                                cfg_idx * batch_size,
+                                (cfg_idx + 1) * batch_size,
+                            )
+                            alpha_value = cfg[slot_id]
+                            assert isinstance(alpha_value, (int, float))
+                            override_vec[start:end].fill_(alpha_value)
+                    alpha_overrides[slot_id] = override_vec
+
+                # Run FUSED validation pass with per-sample loss criterion
+                loss_per_config, correct_per_config, total_per_config = (
+                    process_fused_val_batch(
+                        env_state,
+                        inputs,
+                        targets,
+                        val_criterion,
+                        alpha_overrides,
+                        num_configs,
+                        task_spec=self.task_spec,
+                        loss_and_correct_fn=self.compiled_loss_and_correct,
+                    )
+                )
+
+                stream_ctx = (
+                    torch.cuda.stream(env_state.stream)
+                    if env_state.stream
+                    else nullcontext()
+                )
+                with stream_ctx:
+                    env_cfg_correct_accums[i].add_(correct_per_config)
+                    # Accumulate ONLY main config loss (idx 0) for Governor telemetry.
+                    # Ablation losses would contaminate the signal since they're
+                    # intentionally worse - measuring seed contribution not model health.
+                    if env_state.val_loss_accum is not None:
+                        env_state.val_loss_accum.add_(loss_per_config[0])
+                val_totals[i] += total_per_config
+                val_batch_counts[i] += 1
+
+        # Single sync point at end
+        for env_state in env_states:
+            if env_state.stream:
+                env_state.stream.synchronize()
+        validation_elapsed_seconds = time.perf_counter() - validation_start
+
+        # PERF: Batch GPU→CPU transfer before iterating
+        # Moving tensors to CPU after sync is ~free (data already computed).
+        # But .tolist() on GPU tensor would force per-tensor sync without this.
+        env_cfg_correct_accums_cpu = [
+            accum.cpu() for accum in env_cfg_correct_accums
+        ]
+
+        # Sync val_loss to env_state (for Sanctum TUI display)
+        # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
+        for i, env_state in enumerate(env_states):
+            if (
+                env_state.val_loss_accum is not None
+                and val_batch_counts[i] > 0
+            ):
+                env_state.val_loss = (
+                    env_state.val_loss_accum.item() / val_batch_counts[i]
+                )
+            else:
+                env_state.val_loss = 0.0
+
+        # Process results for each config
+        val_corrects = [0] * envs_this_batch
+
+        for i, env_state in enumerate(env_states):
+            correct_counts = env_cfg_correct_accums_cpu[i].tolist()
+            configs = env_configs[i]
+            total = val_totals[i]
+
+            if total == 0:
+                continue
+
+            for cfg_idx, cfg in enumerate(configs):
+                acc = 100.0 * correct_counts[cfg_idx] / total
+                kind = cfg["_kind"]
+
+                if kind == "main":
+                    val_corrects[i] = int(correct_counts[cfg_idx])
+                    env_state.val_acc = acc
+                    env_state.committed_val_acc = acc
+                elif kind == "solo":
+                    slot_id = cfg["_slot"]
+                    baseline_accs[i][slot_id] = acc
+                    # Sync to metrics
+                    if env_state.model.has_active_seed_in_slot(slot_id):
+                        slot_for_state = cast(
+                            SeedSlotProtocol,
+                            env_state.model.seed_slots[slot_id],
+                        )
+                        seed_state = slot_for_state.state
+                        if seed_state and seed_state.metrics:
+                            new_contribution = env_state.val_acc - acc
+                            # Compute contribution velocity (EMA of delta)
+                            prev = seed_state.metrics._prev_contribution
+                            if prev is not None:
+                                delta = new_contribution - prev
+                                # EMA with decay 0.7 (responsive to recent changes)
+                                seed_state.metrics.contribution_velocity = (
+                                    0.7
+                                    * seed_state.metrics.contribution_velocity
+                                    + 0.3 * delta
+                                )
+                            seed_state.metrics._prev_contribution = (
+                                new_contribution
+                            )
+                            seed_state.metrics.counterfactual_contribution = new_contribution
+                            # Obs V3: Reset counterfactual staleness tracker on fresh measurement
+                            env_state.epochs_since_counterfactual[
+                                slot_id
+                            ] = 0
+                elif kind == "solo_on":
+                    slot_id = cfg["_slot"]
+                    solo_on_accs[i][slot_id] = acc
+                elif kind == "all_off":
+                    all_disabled_accs[i] = acc
+                elif kind == "pair":
+                    if i not in pair_accs:
+                        pair_accs[i] = {}
+                    pair_key = cfg["_pair"]
+                    assert isinstance(pair_key, tuple)
+                    pair_accs[i][pair_key] = acc
+                elif kind == "shapley":
+                    if i not in shapley_results:
+                        shapley_results[i] = {}
+                    # Validation loss approximated as 0.0 since we only track acc here
+                    shapley_tuple = cfg["_tuple"]
+                    assert isinstance(shapley_tuple, tuple)
+                    shapley_results[i][shapley_tuple] = (0.0, acc)
+                elif kind == "committed":
+                    env_state.committed_val_acc = acc
+
+            env_state.committed_acc_history.append(
+                env_state.committed_val_acc
+            )
+
+            # Consolidate matrix reporting
+            # CRITICAL: Sort active_slots for position-based topology computation.
+            # Dict.keys() order is NOT guaranteed to match slot positions (r0c0, r0c1, r0c2...).
+            # Lexicographic sort on slot IDs ensures correct upstream/downstream alpha sums.
+            active_slots = sorted(baseline_accs[i].keys())
+            if active_slots:
+                pair_accs_for_emitter = (
+                    _pair_index_accs_for_active_slots(
+                        pair_accs[i],
+                        active_slots,
+                    )
+                    if i in pair_accs
+                    else {}
+                )
+                self.emitters[i].on_counterfactual_matrix(
+                    active_slots=active_slots,
+                    baseline_accs=baseline_accs[i],
+                    val_acc=env_state.val_acc,
+                    all_disabled_acc=all_disabled_accs.get(
+                        i
+                    ),  # None triggers emitter fallback
+                    pair_accs=pair_accs_for_emitter,
+                    solo_accs=solo_on_accs[i],
+                )
+
+            # Compute interaction terms and populate scaffolding metrics
+            if len(active_slots) >= 2 and i in pair_accs:
+                # Use solo ablation fallback for single-seed: min(baseline_accs) = host-only acc
+                # Explicit None check: 0.0 is a valid baseline accuracy (model predicts nothing)
+                all_off_acc = all_disabled_accs.get(i)
+                if all_off_acc is None:
+                    all_off_acc = min(baseline_accs[i].values())
+                for (slot_a, slot_b), pair_acc in pair_accs[i].items():
+                    # I_ij requires single-seed-ON accuracies f({i}):
+                    # solo_on_accs holds "only this slot enabled" (f({i})),
+                    # NOT baseline_accs' leave-one-out (f(N\{i})), which would
+                    # corrupt the index when seeds interact. solo_on accs exist
+                    # for every active slot (kind="solo_on"), so indexing is safe.
+                    solo_on_a = solo_on_accs[i][slot_a]
+                    solo_on_b = solo_on_accs[i][slot_b]
+                    interaction = _pair_interaction_index(
+                        pair_acc, solo_on_a, solo_on_b, all_off_acc
+                    )
+
+                    # Track positive synergy in scaffold boost ledger for hindsight credit
+                    if interaction > 0:
+                        # Seed A boosted Seed B (symmetric relationship)
+                        env_state.scaffold_boost_ledger[slot_a].append(
+                            (interaction, slot_b, epoch)
+                        )
+                        # Seed B boosted Seed A
+                        env_state.scaffold_boost_ledger[slot_b].append(
+                            (interaction, slot_a, epoch)
+                        )
+
+                    # Update metrics for both seeds
+                    if env_state.model.has_active_seed_in_slot(slot_a):
+                        slot_obj_a = cast(
+                            SeedSlotProtocol,
+                            env_state.model.seed_slots[slot_a],
+                        )
+                        seed_a = slot_obj_a.state
+                        if seed_a and seed_a.metrics:
+                            seed_a.metrics.interaction_sum += interaction
+                            seed_a.metrics.boost_received = max(
+                                seed_a.metrics.boost_received, interaction
+                            )
+
+                    if env_state.model.has_active_seed_in_slot(slot_b):
+                        slot_obj_b = cast(
+                            SeedSlotProtocol,
+                            env_state.model.seed_slots[slot_b],
+                        )
+                        seed_b = slot_obj_b.state
+                        if seed_b and seed_b.metrics:
+                            seed_b.metrics.interaction_sum += interaction
+                            seed_b.metrics.boost_received = max(
+                                seed_b.metrics.boost_received, interaction
+                            )
+
+            # Compute topology features (upstream/downstream alpha sums)
+            # active_slots is now sorted by position (lexicographic), ensuring correct topology
+            for slot_idx, slot_id in enumerate(active_slots):
+                if not env_state.model.has_active_seed_in_slot(slot_id):
+                    continue
+                slot_obj = cast(
+                    SeedSlotProtocol,
+                    env_state.model.seed_slots[slot_id],
+                )
+                seed_state = slot_obj.state
+                if seed_state is None or seed_state.metrics is None:
+                    continue
+
+                upstream_sum = 0.0
+                downstream_sum = 0.0
+                for other_idx, other_id in enumerate(active_slots):
+                    if other_id == slot_id:
+                        continue
+                    if not env_state.model.has_active_seed_in_slot(
+                        other_id
+                    ):
+                        continue
+                    other_slot_obj = cast(
+                        SeedSlotProtocol,
+                        env_state.model.seed_slots[other_id],
+                    )
+                    other_state = other_slot_obj.state
+                    if other_state is None:
+                        continue
+
+                    other_alpha = (
+                        other_state.metrics.current_alpha
+                        if other_state.metrics
+                        else 0.0
+                    )
+                    if other_idx < slot_idx:
+                        upstream_sum += other_alpha
+                    else:
+                        downstream_sum += other_alpha
+
+                seed_state.metrics.upstream_alpha_sum = upstream_sum
+                seed_state.metrics.downstream_alpha_sum = downstream_sum
+
+            # Feed Shapley results to helper
+            if i in shapley_results and env_state.counterfactual_helper:
+                try:
+                    env_state.counterfactual_helper.compute_contributions_from_results(
+                        slot_ids=active_slots,
+                        results=shapley_results[i],
+                        compute_time_seconds=validation_elapsed_seconds,
+                        epoch=batch_idx + 1,
+                    )
+                except (KeyError, ZeroDivisionError, ValueError) as e:
+                    # HIGH-01 fix: Narrow to expected failures in Shapley computation
+                    self.logger.warning(
+                        f"Shapley computation failed for env {i}: {e}"
+                    )
+
+        return (
+            FusedValResult(
+                val_corrects=val_corrects,
+                val_totals=val_totals,
+                baseline_accs=baseline_accs,
+                solo_on_accs=solo_on_accs,
+                all_disabled_accs=all_disabled_accs,
+                pair_accs=pair_accs,
+                shapley_results=shapley_results,
+            ),
+            dataloader_wait_ms,
+        )
 
     def _run_train_pass(
         self,
@@ -1434,425 +1899,31 @@ class VectorizedPPOTrainer:
                     dataloader_wait_ms_epoch += train_dataloader_wait_ms
 
                     # ===== Validation + Counterfactual (FUSED): Single pass over test data =====
-                    # Instead of iterating test data multiple times or performing sequential
-                    # forward passes, we stack all configurations into a single fused pass.
-
-                    # CRITICAL: Reset scaffolding metrics at START of counterfactual phase.
-                    # These metrics accumulate per-epoch interaction/topology data.
-                    # Feature extraction expects per-epoch values, not cross-epoch accumulation.
-                    for env_state in env_states:
-                        for slot_id in slots:
-                            if env_state.model.has_active_seed_in_slot(slot_id):
-                                slot = cast(
-                                    SeedSlotProtocol,
-                                    env_state.model.seed_slots[slot_id],
-                                )
-                                seed_state = slot.state
-                                if seed_state and seed_state.metrics:
-                                    seed_state.metrics.interaction_sum = 0.0
-                                    seed_state.metrics.boost_received = 0.0
-                                    seed_state.metrics.upstream_alpha_sum = 0.0
-                                    seed_state.metrics.downstream_alpha_sum = 0.0
-
-                    # 1. Determine configurations per environment + allocate
-                    # per-env ablation accumulators (extracted to a named phase).
+                    # Extracted to _run_fused_val_pass(): one fused forward over
+                    # the test data stacking every ablation config (config 0 == main).
                     (
-                        env_configs,
-                        baseline_accs,
-                        solo_on_accs,
-                        all_disabled_accs,
-                        pair_accs,
-                        shapley_results,
-                        val_totals,
-                        val_batch_counts,
-                        env_cfg_correct_accums,
-                    ) = self._build_fused_val_configs(
+                        fused_result,
+                        val_dataloader_wait_ms,
+                    ) = self._run_fused_val_pass(
                         env_states=env_states,
                         slots=slots,
                         epoch=epoch,
                         envs_this_batch=envs_this_batch,
+                        val_criterion=val_criterion,
+                        batch_idx=batch_idx,
                     )
+                    dataloader_wait_ms_epoch += val_dataloader_wait_ms
 
-                    # Iterate validation batches using shared iterator
-                    validation_start = time.perf_counter()
-                    test_iter = iter(shared_test_iter)
-                    for batch_step in range(num_test_batches):
-                        try:
-                            fetch_start = time.perf_counter()
-                            env_batches = next(test_iter)
-                            dataloader_wait_ms_epoch += (
-                                time.perf_counter() - fetch_start
-                            ) * 1000.0
-                        except StopIteration:
-                            break
-
-                        for i, env_state in enumerate(env_states):
-                            if i >= len(env_batches):
-                                continue
-                            if env_state.stream:
-                                # CRITICAL: DataLoader .to(device, non_blocking=True) runs on the DEFAULT stream.
-                                # We must sync env_state.stream with default stream before using the data,
-                                # otherwise we may access partially-transferred data (race condition).
-                                # BUG FIX: Use default_stream(), NOT current_stream() - the transfer happens
-                                # on the default stream regardless of what stream is "current" in this context.
-                                loader_stream = torch.cuda.default_stream(
-                                    torch.device(env_state.env_device)
-                                )
-                                env_state.stream.wait_stream(loader_stream)
-                            inputs, targets = env_batches[i]
-
-                            # SharedGPUBatchIterator now returns clones (not views) to fix race conditions.
-                            # We still need record_stream to prevent premature deallocation when the
-                            # tensor is used asynchronously by env_state.stream.
-                            if env_state.stream and inputs.is_cuda:
-                                inputs.record_stream(env_state.stream)
-                                targets.record_stream(env_state.stream)
-
-                            batch_size = inputs.size(0)
-                            configs = env_configs[i]
-                            num_configs = len(configs)
-
-                            # Build alpha_overrides tensors for the fused pass
-                            # Shape is topology-aware: [K*B, 1, 1, 1] for CNN, [K*B, 1, 1] for transformer
-                            #
-                            # IMPORTANT: Only pass alpha_override when at least one config
-                            # actually overrides that slot's alpha. Passing a no-op override
-                            # (e.g., alpha==0.0) forces SeedSlot.forward down the blending path
-                            # and bypasses the TRAINING-stage STE shortcut, changing semantics
-                            # and creating unnecessary alpha_schedule requirements.
-                            alpha_overrides: dict[str, torch.Tensor] = {}
-                            for slot_id in env_state.model._active_slots:
-                                needs_override = any(slot_id in cfg for cfg in configs)
-                                if not needs_override:
-                                    continue
-                                slot = cast(
-                                    SeedSlotProtocol,
-                                    env_state.model.seed_slots[slot_id],
-                                )
-                                # Access concrete SeedSlot for alpha_schedule assignment
-                                from esper.kasmina.slot import SeedSlot
-
-                                assert isinstance(slot, SeedSlot), (
-                                    "Expected SeedSlot for alpha_schedule manipulation"
-                                )
-                                slot_concrete: SeedSlot = slot
-
-                                # Enforce Phase 3 contract: alpha_schedule only valid for GATE.
-                                if slot_concrete.alpha_schedule is not None and (
-                                    slot.state is None
-                                    or slot.state.alpha_algorithm != AlphaAlgorithm.GATE
-                                ):
-                                    slot_concrete.alpha_schedule = None
-
-                                # P4-FIX: Ensure alpha_schedule exists for GATE algorithm during fused pass.
-                                # This can happen if a seed is in HOLD mode and its schedule was cleared.
-                                if (
-                                    slot.state
-                                    and slot.state.alpha_algorithm
-                                    == AlphaAlgorithm.GATE
-                                    and slot_concrete.alpha_schedule is None
-                                ):
-                                    from esper.kasmina.blending import BlendCatalog
-
-                                    topology = task_spec.topology
-                                    # Use default tempo steps since it's already in HOLD
-                                    slot_concrete.alpha_schedule = BlendCatalog.create(
-                                        "gated",
-                                        channels=slot_concrete.channels,
-                                        topology=topology,
-                                        total_steps=5,
-                                    ).to(slot_concrete.device)
-
-                                current_alpha = slot.alpha
-                                # Topology-aware shape for alpha_overrides
-                                if task_spec.topology == "cnn":
-                                    alpha_shape = (num_configs * batch_size, 1, 1, 1)
-                                else:  # transformer
-                                    alpha_shape = (num_configs * batch_size, 1, 1)
-                                override_vec = torch.full(
-                                    alpha_shape,
-                                    current_alpha,
-                                    device=env_state.env_device,
-                                    dtype=inputs.dtype,
-                                )
-
-                                for cfg_idx, cfg in enumerate(configs):
-                                    if slot_id in cfg:
-                                        start, end = (
-                                            cfg_idx * batch_size,
-                                            (cfg_idx + 1) * batch_size,
-                                        )
-                                        alpha_value = cfg[slot_id]
-                                        assert isinstance(alpha_value, (int, float))
-                                        override_vec[start:end].fill_(alpha_value)
-                                alpha_overrides[slot_id] = override_vec
-
-                            # Run FUSED validation pass with per-sample loss criterion
-                            loss_per_config, correct_per_config, total_per_config = (
-                                process_fused_val_batch(
-                                    env_state,
-                                    inputs,
-                                    targets,
-                                    val_criterion,
-                                    alpha_overrides,
-                                    num_configs,
-                                    task_spec=task_spec,
-                                    loss_and_correct_fn=compiled_loss_and_correct,
-                                )
-                            )
-
-                            stream_ctx = (
-                                torch.cuda.stream(env_state.stream)
-                                if env_state.stream
-                                else nullcontext()
-                            )
-                            with stream_ctx:
-                                env_cfg_correct_accums[i].add_(correct_per_config)
-                                # Accumulate ONLY main config loss (idx 0) for Governor telemetry.
-                                # Ablation losses would contaminate the signal since they're
-                                # intentionally worse - measuring seed contribution not model health.
-                                if env_state.val_loss_accum is not None:
-                                    env_state.val_loss_accum.add_(loss_per_config[0])
-                            val_totals[i] += total_per_config
-                            val_batch_counts[i] += 1
-
-                    # Single sync point at end
-                    for env_state in env_states:
-                        if env_state.stream:
-                            env_state.stream.synchronize()
-                    validation_elapsed_seconds = time.perf_counter() - validation_start
-
-                    # PERF: Batch GPU→CPU transfer before iterating
-                    # Moving tensors to CPU after sync is ~free (data already computed).
-                    # But .tolist() on GPU tensor would force per-tensor sync without this.
-                    env_cfg_correct_accums_cpu = [
-                        accum.cpu() for accum in env_cfg_correct_accums
-                    ]
-
-                    # Sync val_loss to env_state (for Sanctum TUI display)
-                    # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
-                    for i, env_state in enumerate(env_states):
-                        if (
-                            env_state.val_loss_accum is not None
-                            and val_batch_counts[i] > 0
-                        ):
-                            env_state.val_loss = (
-                                env_state.val_loss_accum.item() / val_batch_counts[i]
-                            )
-                        else:
-                            env_state.val_loss = 0.0
-
-                    # Process results for each config
-                    val_corrects = [0] * envs_this_batch
-
-                    for i, env_state in enumerate(env_states):
-                        correct_counts = env_cfg_correct_accums_cpu[i].tolist()
-                        configs = env_configs[i]
-                        total = val_totals[i]
-
-                        if total == 0:
-                            continue
-
-                        for cfg_idx, cfg in enumerate(configs):
-                            acc = 100.0 * correct_counts[cfg_idx] / total
-                            kind = cfg["_kind"]
-
-                            if kind == "main":
-                                val_corrects[i] = int(correct_counts[cfg_idx])
-                                env_state.val_acc = acc
-                                env_state.committed_val_acc = acc
-                            elif kind == "solo":
-                                slot_id = cfg["_slot"]
-                                baseline_accs[i][slot_id] = acc
-                                # Sync to metrics
-                                if env_state.model.has_active_seed_in_slot(slot_id):
-                                    slot_for_state = cast(
-                                        SeedSlotProtocol,
-                                        env_state.model.seed_slots[slot_id],
-                                    )
-                                    seed_state = slot_for_state.state
-                                    if seed_state and seed_state.metrics:
-                                        new_contribution = env_state.val_acc - acc
-                                        # Compute contribution velocity (EMA of delta)
-                                        prev = seed_state.metrics._prev_contribution
-                                        if prev is not None:
-                                            delta = new_contribution - prev
-                                            # EMA with decay 0.7 (responsive to recent changes)
-                                            seed_state.metrics.contribution_velocity = (
-                                                0.7
-                                                * seed_state.metrics.contribution_velocity
-                                                + 0.3 * delta
-                                            )
-                                        seed_state.metrics._prev_contribution = (
-                                            new_contribution
-                                        )
-                                        seed_state.metrics.counterfactual_contribution = new_contribution
-                                        # Obs V3: Reset counterfactual staleness tracker on fresh measurement
-                                        env_state.epochs_since_counterfactual[
-                                            slot_id
-                                        ] = 0
-                            elif kind == "solo_on":
-                                slot_id = cfg["_slot"]
-                                solo_on_accs[i][slot_id] = acc
-                            elif kind == "all_off":
-                                all_disabled_accs[i] = acc
-                            elif kind == "pair":
-                                if i not in pair_accs:
-                                    pair_accs[i] = {}
-                                pair_key = cfg["_pair"]
-                                assert isinstance(pair_key, tuple)
-                                pair_accs[i][pair_key] = acc
-                            elif kind == "shapley":
-                                if i not in shapley_results:
-                                    shapley_results[i] = {}
-                                # Validation loss approximated as 0.0 since we only track acc here
-                                shapley_tuple = cfg["_tuple"]
-                                assert isinstance(shapley_tuple, tuple)
-                                shapley_results[i][shapley_tuple] = (0.0, acc)
-                            elif kind == "committed":
-                                env_state.committed_val_acc = acc
-
-                        env_state.committed_acc_history.append(
-                            env_state.committed_val_acc
-                        )
-
-                        # Consolidate matrix reporting
-                        # CRITICAL: Sort active_slots for position-based topology computation.
-                        # Dict.keys() order is NOT guaranteed to match slot positions (r0c0, r0c1, r0c2...).
-                        # Lexicographic sort on slot IDs ensures correct upstream/downstream alpha sums.
-                        active_slots = sorted(baseline_accs[i].keys())
-                        if active_slots:
-                            pair_accs_for_emitter = (
-                                _pair_index_accs_for_active_slots(
-                                    pair_accs[i],
-                                    active_slots,
-                                )
-                                if i in pair_accs
-                                else {}
-                            )
-                            emitters[i].on_counterfactual_matrix(
-                                active_slots=active_slots,
-                                baseline_accs=baseline_accs[i],
-                                val_acc=env_state.val_acc,
-                                all_disabled_acc=all_disabled_accs.get(
-                                    i
-                                ),  # None triggers emitter fallback
-                                pair_accs=pair_accs_for_emitter,
-                                solo_accs=solo_on_accs[i],
-                            )
-
-                        # Compute interaction terms and populate scaffolding metrics
-                        if len(active_slots) >= 2 and i in pair_accs:
-                            # Use solo ablation fallback for single-seed: min(baseline_accs) = host-only acc
-                            # Explicit None check: 0.0 is a valid baseline accuracy (model predicts nothing)
-                            all_off_acc = all_disabled_accs.get(i)
-                            if all_off_acc is None:
-                                all_off_acc = min(baseline_accs[i].values())
-                            for (slot_a, slot_b), pair_acc in pair_accs[i].items():
-                                # I_ij requires single-seed-ON accuracies f({i}):
-                                # solo_on_accs holds "only this slot enabled" (f({i})),
-                                # NOT baseline_accs' leave-one-out (f(N\{i})), which would
-                                # corrupt the index when seeds interact. solo_on accs exist
-                                # for every active slot (kind="solo_on"), so indexing is safe.
-                                solo_on_a = solo_on_accs[i][slot_a]
-                                solo_on_b = solo_on_accs[i][slot_b]
-                                interaction = _pair_interaction_index(
-                                    pair_acc, solo_on_a, solo_on_b, all_off_acc
-                                )
-
-                                # Track positive synergy in scaffold boost ledger for hindsight credit
-                                if interaction > 0:
-                                    # Seed A boosted Seed B (symmetric relationship)
-                                    env_state.scaffold_boost_ledger[slot_a].append(
-                                        (interaction, slot_b, epoch)
-                                    )
-                                    # Seed B boosted Seed A
-                                    env_state.scaffold_boost_ledger[slot_b].append(
-                                        (interaction, slot_a, epoch)
-                                    )
-
-                                # Update metrics for both seeds
-                                if env_state.model.has_active_seed_in_slot(slot_a):
-                                    slot_obj_a = cast(
-                                        SeedSlotProtocol,
-                                        env_state.model.seed_slots[slot_a],
-                                    )
-                                    seed_a = slot_obj_a.state
-                                    if seed_a and seed_a.metrics:
-                                        seed_a.metrics.interaction_sum += interaction
-                                        seed_a.metrics.boost_received = max(
-                                            seed_a.metrics.boost_received, interaction
-                                        )
-
-                                if env_state.model.has_active_seed_in_slot(slot_b):
-                                    slot_obj_b = cast(
-                                        SeedSlotProtocol,
-                                        env_state.model.seed_slots[slot_b],
-                                    )
-                                    seed_b = slot_obj_b.state
-                                    if seed_b and seed_b.metrics:
-                                        seed_b.metrics.interaction_sum += interaction
-                                        seed_b.metrics.boost_received = max(
-                                            seed_b.metrics.boost_received, interaction
-                                        )
-
-                        # Compute topology features (upstream/downstream alpha sums)
-                        # active_slots is now sorted by position (lexicographic), ensuring correct topology
-                        for slot_idx, slot_id in enumerate(active_slots):
-                            if not env_state.model.has_active_seed_in_slot(slot_id):
-                                continue
-                            slot_obj = cast(
-                                SeedSlotProtocol,
-                                env_state.model.seed_slots[slot_id],
-                            )
-                            seed_state = slot_obj.state
-                            if seed_state is None or seed_state.metrics is None:
-                                continue
-
-                            upstream_sum = 0.0
-                            downstream_sum = 0.0
-                            for other_idx, other_id in enumerate(active_slots):
-                                if other_id == slot_id:
-                                    continue
-                                if not env_state.model.has_active_seed_in_slot(
-                                    other_id
-                                ):
-                                    continue
-                                other_slot_obj = cast(
-                                    SeedSlotProtocol,
-                                    env_state.model.seed_slots[other_id],
-                                )
-                                other_state = other_slot_obj.state
-                                if other_state is None:
-                                    continue
-
-                                other_alpha = (
-                                    other_state.metrics.current_alpha
-                                    if other_state.metrics
-                                    else 0.0
-                                )
-                                if other_idx < slot_idx:
-                                    upstream_sum += other_alpha
-                                else:
-                                    downstream_sum += other_alpha
-
-                            seed_state.metrics.upstream_alpha_sum = upstream_sum
-                            seed_state.metrics.downstream_alpha_sum = downstream_sum
-
-                        # Feed Shapley results to helper
-                        if i in shapley_results and env_state.counterfactual_helper:
-                            try:
-                                env_state.counterfactual_helper.compute_contributions_from_results(
-                                    slot_ids=active_slots,
-                                    results=shapley_results[i],
-                                    compute_time_seconds=validation_elapsed_seconds,
-                                    epoch=batch_idx + 1,
-                                )
-                            except (KeyError, ZeroDivisionError, ValueError) as e:
-                                # HIGH-01 fix: Narrow to expected failures in Shapley computation
-                                logger.warning(
-                                    f"Shapley computation failed for env {i}: {e}"
-                                )
+                    # CRITICAL: baseline_accs is rebuilt fresh each epoch by
+                    # _run_fused_val_pass. Re-wire the per-epoch fresh dict into the
+                    # locals consumed below (and the execute_actions kwarg, per D4).
+                    # I3: baseline_accs[env_idx] is read by build_fresh_contribution_targets
+                    #     inside execute_actions; a stale reference from a prior epoch
+                    #     would corrupt counterfactual freshness.
+                    baseline_accs = fused_result.baseline_accs
+                    all_disabled_accs = fused_result.all_disabled_accs
+                    val_corrects = fused_result.val_corrects
+                    val_totals = fused_result.val_totals
 
                     # ===== Compute epoch metrics and get BATCHED actions =====
                     # NOTE: Telemetry sync (gradients/counterfactual) happens after record_accuracy()

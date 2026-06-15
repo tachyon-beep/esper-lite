@@ -228,18 +228,24 @@ allow_hits:
 - key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:4
   owner: John
   reason: Per-epoch sync - extract validation accuracy after accumulation; validation phase
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:item
-  owner: John
-  reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:synchronize
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:synchronize:2
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu
   owner: John
   reason: vectorized trainer sync point
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_fused_val_pass:synchronize
+  owner: John
+  reason: vectorized trainer sync point - fused val pass single synchronize after all env launches (I8)
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_fused_val_pass:cpu
+  owner: John
+  reason: vectorized trainer sync point - fused val pass per-epoch GPU->CPU transfer of cfg-correct accumulators
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_fused_val_pass:item
+  owner: John
+  reason: vectorized trainer sync point - fused val pass extracts main-config val loss after accumulation (I12)
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_fused_val_pass:tolist
+  owner: John
+  reason: vectorized trainer sync point - fused val pass per-env config-correct counts to host
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_train_pass:cuda_synchronize
   owner: John
   reason: vectorized trainer sync point
@@ -300,13 +306,7 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:6
   owner: John
   reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:tolist:3
-  owner: John
-  reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:7
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:8
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/tamiyo/networks/factored_lstm.py:BlueprintEmbedding.forward:tolist
