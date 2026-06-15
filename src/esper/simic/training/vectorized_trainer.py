@@ -2464,6 +2464,414 @@ class VectorizedPPOTrainer:
             prof_stepped,
         )
 
+    def _run_batch(
+        self,
+        *,
+        batch_idx: int,
+        episodes_completed: int,
+        best_avg_acc: float,
+        prev_rolling_avg_acc: float | None,
+        consecutive_finiteness_failures: int,
+        prof_steps: int,
+        static_final_replay_validated: bool,
+        history: list[dict[str, Any]],
+        episode_history: list[EpisodeRecord],
+        episode_outcomes: list[Any],
+        recent_accuracies: list[float],
+        recent_rewards: list[float],
+        grad_ema_tracker: GradientEMATracker | None,
+        rollout_autocast: Callable[[], AbstractContextManager[None]],
+        prof: Any | None,
+    ) -> tuple[
+        int,  # batch_idx (incremented unless finiteness-gate retry / continue path)
+        int,  # episodes_completed
+        float,  # best_avg_acc
+        float | None,  # prev_rolling_avg_acc
+        int,  # consecutive_finiteness_failures
+        int,  # prof_steps
+        bool,  # static_final_replay_validated
+        bool,  # shutdown requested (caller breaks the while-batch loop)
+    ]:
+        """Run one batch: env creation (I9) -> epoch loop -> PPO update (I7) ->
+        finiteness gate (I2) -> batch telemetry -> stream teardown (I8) ->
+        checkpoint (I15).
+
+        Counters/state that span batches are threaded in and returned exactly as
+        _run_epoch threads epoch-spanning state: lists (history, episode_history,
+        episode_outcomes, recent_accuracies, recent_rewards) are passed by
+        reference and mutated in place; scalars (batch_idx, episodes_completed,
+        best_avg_acc, prev_rolling_avg_acc, consecutive_finiteness_failures,
+        prof_steps, static_final_replay_validated) are returned by tuple.
+
+        I2 finiteness-gate semantics: on a true gate failure the method returns
+        early with batch_idx UNCHANGED (matching the original `continue`, which
+        skipped batch_idx += 1, the teardown, and history.append), so the caller
+        reprocesses the same batch index next iteration.
+        """
+        topology_manifest_records: list[dict[str, Any]] = []
+        log_frag(self.device, f"batch{batch_idx}.start")
+        # One PPO update per full batch of environments.
+        envs_this_batch = self.n_envs
+        # Monotonic epoch id for all per-batch snapshot events (commit barrier, PPO, analytics).
+        # We use "episodes completed after this batch" so resumed runs stay monotonic.
+        batch_epoch_id = episodes_completed + envs_this_batch
+
+        # Create fresh environments for this batch
+        # DataLoaders are shared via SharedBatchIterator (not per-env)
+        # RESUME SEAM (HEALTH_REPORT open item)
+        env_states = [
+            create_env_state(
+                i,
+                make_env_seed(
+                    root_seed=self.seed,
+                    batch_idx=batch_idx,
+                    env_idx=i,
+                    envs_per_batch=envs_this_batch,
+                ),
+                self.env_factory,
+            )
+            for i in range(envs_this_batch)
+        ]
+        criterion = nn.CrossEntropyLoss()
+        # Per-sample loss for fused validation - enables separating main config
+        # from ablations for Governor telemetry (fixes ablation signal contamination)
+        val_criterion = nn.CrossEntropyLoss(reduction="none")
+
+        # Initialize episode for vectorized training
+        for env_idx in range(envs_this_batch):
+            env_states[env_idx].reset_episode_state(self.slots)
+            self.agent.buffer.start_episode(env_id=env_idx)
+            # Set episode context for telemetry (used by seed lifecycle events via emit_with_env_context)
+            episode_ctx = env_states[env_idx].episode_context
+            if episode_ctx is not None:
+                episode_ctx.episode_idx = episodes_completed + env_idx
+            # Also set on VectorizedEmitter (used by on_epoch_completed, on_last_action)
+            self.emitters[env_idx].set_episode_idx(episodes_completed + env_idx)
+
+        if self.proof_baseline_lifecycle_policy == "freeze_replayed_final_topology":
+            self._materialize_static_final_replay(
+                env_states=env_states,
+                emitters=self.emitters,
+            )
+            static_final_replay_validated = True
+
+        # Initialize batched LSTM hidden state for all environments
+        # (Batched hidden management avoids per-step cat/slice overhead)
+        batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
+
+        throughput_step_time_ms_sum = 0.0
+        throughput_dataloader_wait_ms_sum = 0.0
+        last_train_corrects = [0] * envs_this_batch
+        last_train_totals = [0] * envs_this_batch
+        reward_summary_accum = [
+            RewardSummaryAccumulator() for _ in range(envs_this_batch)
+        ]
+
+        # Accumulate raw (unnormalized) states for the pre-update normalizer refresh.
+        # We freeze normalizer stats during rollout to keep normalization consistent,
+        # then update stats before PPO updates in _run_ppo_updates.
+        raw_states_for_normalizer_update: list[torch.Tensor] = []
+
+        # Pre-allocate per-env step records (one per env, reused across epochs).
+        # Each record owns its ActionSpec/ActionOutcome/ActionMaskFlags and
+        # contribution/loss reward-input objects by composition; they are
+        # mutated in place each step (I16). reward_summary_accum is held by
+        # reference and also passed as a batch-level kwarg (D3). Per-env
+        # rollback state lives on record.rollback_occurred (I4).
+        step_records = self._make_batch_context(
+            envs_this_batch, reward_summary_accum
+        )
+
+        # Pre-compute ordered slots once per batch (not per-epoch)
+        # validate_slot_ids parses/sorts slot IDs - expensive to repeat 25x per episode
+        ordered_slots = validate_slot_ids(list(self.slots))
+
+        # Run epochs with INVERTED CONTROL FLOW. Each epoch is one
+        # orchestrated transaction sequence (_run_epoch): train ->
+        # fused-val -> build-action-inputs -> action-transaction. The
+        # invariant ordering is enforced by the sequential method calls
+        # inside _run_epoch. val_corrects/val_totals carry the final
+        # epoch's main-config validation tallies out for batch telemetry (I12).
+        val_corrects: list[int] = []
+        val_totals: list[int] = []
+        for epoch in range(1, self.max_epochs + 1):
+            (
+                epoch_completed,
+                batched_lstm_hidden,
+                throughput_step_time_ms_sum,
+                throughput_dataloader_wait_ms_sum,
+                val_corrects,
+                val_totals,
+                epoch_prof_stepped,
+            ) = self._run_epoch(
+                epoch=epoch,
+                envs_this_batch=envs_this_batch,
+                env_states=env_states,
+                step_records=step_records,
+                reward_summary_accum=reward_summary_accum,
+                raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+                last_train_corrects=last_train_corrects,
+                last_train_totals=last_train_totals,
+                ordered_slots=ordered_slots,
+                static_final_replay_validated=static_final_replay_validated,
+                rollout_autocast=rollout_autocast,
+                criterion=criterion,
+                val_criterion=val_criterion,
+                episodes_completed=episodes_completed,
+                batch_idx=batch_idx,
+                batch_epoch_id=batch_epoch_id,
+                episode_history=episode_history,
+                episode_outcomes=episode_outcomes,
+                batched_lstm_hidden=batched_lstm_hidden,
+                throughput_step_time_ms_sum=throughput_step_time_ms_sum,
+                throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
+                prof=prof,
+            )
+            if epoch_prof_stepped:
+                prof_steps += 1
+            if not epoch_completed:
+                break  # Shutdown requested; batch-level break below handles cleanup
+
+        # PPO Update (delegated to PPOCoordinator)
+        ppo_coordinator = self.ppo_coordinator
+
+        # Handle rollbacks: inject death penalty and recompute metrics
+        ppo_coordinator.handle_rollbacks(
+            env_states=env_states,
+            env_rollback_occurred=[r.rollback_occurred for r in step_records],
+            env_total_rewards=[r.env_total_reward for r in step_records],
+            episode_history=episode_history,
+            episode_outcomes=episode_outcomes,
+        )
+
+        # Execute PPO updates
+        metrics, update_skipped, ppo_update_time_ms = ppo_coordinator.run_update(
+            raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+            obs_normalizer=self.obs_normalizer,
+            envs_this_batch=envs_this_batch,
+            throughput_step_time_ms_sum=throughput_step_time_ms_sum,
+            throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
+        )
+
+        ppo_grad_norm = None
+        if metrics:
+            # Clear after the normalizer update in _run_ppo_updates.
+            raw_states_for_normalizer_update = []
+
+            ppo_update_time_ms = metrics["ppo_update_time_ms"]
+
+            if update_skipped:
+                # Distinguish benign "no optimizer step" cases (for example
+                # epoch-0 KL early-stop) from true finiteness-gate failures.
+                consecutive_finiteness_failures, should_continue = (
+                    ppo_coordinator.check_finiteness_gate(
+                        metrics, consecutive_finiteness_failures
+                    )
+                )
+                if not should_continue:
+                    # Skip anomaly detection for this batch - metrics are NaN.
+                    # Matches the original loop's `continue`: batch_idx is NOT
+                    # incremented, teardown/history.append are skipped, and the
+                    # same batch index is reprocessed next iteration (I2).
+                    return (
+                        batch_idx,
+                        episodes_completed,
+                        best_avg_acc,
+                        prev_rolling_avg_acc,
+                        consecutive_finiteness_failures,
+                        prof_steps,
+                        static_final_replay_validated,
+                        False,
+                    )
+            else:
+                ppo_grad_norm = metrics["ppo_grad_norm"]
+
+                # Check gradient drift
+                drift_metrics = ppo_coordinator.check_gradient_drift(
+                    grad_ema_tracker, ppo_grad_norm
+                )
+
+                # Run anomaly detection (includes LSTM health, per-head entropy)
+                ppo_coordinator.run_anomaly_detection(
+                    metrics=metrics,
+                    drift_metrics=drift_metrics,
+                    batched_lstm_hidden=batched_lstm_hidden,
+                    batch_epoch_id=batch_epoch_id,
+                    batch_idx=batch_idx,
+                )
+
+        # If the epoch loop exited early (e.g. graceful shutdown), ensure the batch
+        # summary reflects the partial episode outcomes instead of the default zeros.
+        if epoch < self.max_epochs:
+            for env_idx, env_state in enumerate(env_states):
+                step_records[env_idx].env_final_acc = env_state.val_acc
+                step_records[env_idx].env_total_reward = sum(
+                    env_state.episode_rewards
+                )
+
+        # Track results and aggregate batch-level metrics
+        avg_acc = sum(r.env_final_acc for r in step_records) / len(step_records)
+        avg_reward = sum(r.env_total_reward for r in step_records) / len(
+            step_records
+        )
+
+        recent_accuracies.append(avg_acc)
+        recent_rewards.append(avg_reward)
+        if len(recent_accuracies) > 10:
+            recent_accuracies.pop(0)
+            recent_rewards.pop(0)
+
+        rolling_avg_acc = sum(recent_accuracies) / len(recent_accuracies)
+
+        if self.hub:
+            if not update_skipped:
+                # Assert non-None: values assigned in same `if not update_skipped` block above
+                assert (
+                    ppo_grad_norm is not None and ppo_update_time_ms is not None
+                )
+                self.batch_emitter.on_ppo_update(
+                    metrics=metrics,
+                    episodes_completed=batch_epoch_id,
+                    batch_idx=batch_idx,
+                    epoch=epoch,
+                    agent=self.agent,
+                    ppo_grad_norm=ppo_grad_norm,
+                    ppo_update_time_ms=ppo_update_time_ms,
+                    avg_acc=avg_acc,
+                    avg_reward=avg_reward,
+                    rolling_avg_acc=rolling_avg_acc,
+                )
+
+            # Aggregate per-environment metrics for the BATCH_EPOCH_COMPLETED event
+            batch_train_losses = [es.train_loss for es in env_states]
+            batch_train_corrects = last_train_corrects
+            batch_train_totals = last_train_totals
+
+            batch_val_losses = [es.val_loss for es in env_states]
+            batch_val_corrects = val_corrects
+            batch_val_totals = val_totals
+
+            self.batch_emitter.on_batch_completed(
+                batch_idx=batch_idx,
+                episodes_completed=batch_epoch_id,
+                rolling_avg_acc=rolling_avg_acc,
+                avg_acc=avg_acc,
+                metrics=metrics,
+                env_states=env_states,
+                update_skipped=update_skipped,
+                plateau_threshold=self.plateau_threshold,
+                improvement_threshold=self.improvement_threshold,
+                prev_rolling_avg_acc=prev_rolling_avg_acc,
+                total_episodes=self.total_env_episodes,
+                start_episode=self.start_episode,
+                n_episodes=self.total_env_episodes,
+                env_final_accs=[r.env_final_acc for r in step_records],
+                avg_reward=avg_reward,
+                train_losses=batch_train_losses,
+                train_corrects=batch_train_corrects,
+                train_totals=batch_train_totals,
+                val_losses=batch_val_losses,
+                val_corrects=batch_val_corrects,
+                val_totals=batch_val_totals,
+                num_train_batches=self.num_train_batches,
+                num_test_batches=self.num_test_batches,
+                analytics=self.analytics,
+                epoch=epoch,
+            )
+            prev_rolling_avg_acc = rolling_avg_acc
+
+            # B7-DRL-02: Check for performance degradation (was previously unwired)
+            # Detects catastrophic forgetting, reward hacking, and training decay
+            training_progress = batch_epoch_id / self.total_env_episodes
+            check_performance_degradation(
+                self.hub,
+                current_acc=avg_acc,
+                rolling_avg_acc=rolling_avg_acc,
+                env_id=0,  # Aggregate metric across all envs
+                training_progress=training_progress,
+                group_id=self.group_id,
+            )
+
+            # P2-FRAGMETRIC: per-device CUDA caching-allocator snapshot (host-side,
+            # no sync) into Karn raw_events. Emitted while env_states is still alive
+            # (before the P2-DEL teardown); validates P0-ALLOC + the structural
+            # fragmentation cure (reserved-vs-allocated, retries, OOMs).
+            for frag_device in sorted({es.env_device for es in env_states}):
+                if torch.device(frag_device).type != "cuda":
+                    continue
+                alloc_stats = torch.cuda.memory_stats(frag_device)
+                frag_allocated = alloc_stats["allocated_bytes.all.current"]
+                frag_reserved = alloc_stats["reserved_bytes.all.current"]
+                self.batch_emitter.on_allocator_stats(
+                    batch_idx=batch_idx,
+                    device=str(frag_device),
+                    allocated_bytes=frag_allocated,
+                    reserved_bytes=frag_reserved,
+                    fragmentation_bytes=frag_reserved - frag_allocated,
+                    num_alloc_retries=alloc_stats["num_alloc_retries"],
+                    num_ooms=alloc_stats["num_ooms"],
+                )
+
+        if (
+            self.proof_baseline_lifecycle_policy
+            == STATIC_FINAL_SOURCE_LIFECYCLE_POLICY
+        ):
+            topology_manifest_records.extend(
+                self._emit_source_final_manifests(
+                    env_states=env_states,
+                    emitters=self.emitters,
+                    epoch=epoch,
+                )
+            )
+
+        # P2-DEL: the batch's telemetry consumers (on_batch_completed, the P2-FRAGMETRIC
+        # emit) have read env_states. Sync each persistent stream so no async kernel still
+        # references the model/optimizer tensors we are about to drop, then release the
+        # refs so the caching allocator can reuse their segments next batch. At LOOP-BODY
+        # indent (NOT inside `if hub:`) so the fence + release run even with telemetry off.
+        # Never empty_cache() here (governor.py NOTE: it fights expandable_segments).
+        for env_state in env_states:
+            if env_state.stream is not None:
+                env_state.stream.synchronize()
+        # Drop the list AND the loop variable: a dangling `env_state` would pin the
+        # last env's model/optimizer for another batch, defeating the segment release.
+        del env_states, env_state
+        del step_records  # Release ContributionRewardInputs/LossRewardInputs (Python objects, not GPU tensors)
+
+        batch_summary = BatchSummary(
+            batch=batch_idx + 1,
+            episodes=batch_epoch_id,
+            avg_accuracy=avg_acc,
+            rolling_avg_accuracy=rolling_avg_acc,
+            metrics=metrics,
+            reward_summary=reward_summary_accum,
+            episode_history=episode_history,
+            topology_manifests=topology_manifest_records,
+        )
+        history.append(batch_summary.to_dict())
+
+        if rolling_avg_acc > best_avg_acc:
+            best_avg_acc = rolling_avg_acc
+
+        episodes_completed = batch_epoch_id
+        log_frag(self.device, f"batch{batch_idx}.end")
+        batch_idx += 1
+
+        # Check for graceful shutdown request (e.g., user quit TUI)
+        # Per-epoch check already printed progress; signal the caller to break.
+        shutdown = self.shutdown_event is not None and self.shutdown_event.is_set()
+
+        return (
+            batch_idx,
+            episodes_completed,
+            best_avg_acc,
+            prev_rolling_avg_acc,
+            consecutive_finiteness_failures,
+            prof_steps,
+            static_final_replay_validated,
+            shutdown,
+        )
+
     def run(self) -> list[dict[str, Any]]:
         static_final_replay_validated = False
 
@@ -2495,8 +2903,8 @@ class VectorizedPPOTrainer:
             ] = []  # Per-episode tracking for A/B testing
             episode_outcomes: list[Any] = []  # Pareto analysis outcomes
             best_avg_acc = 0.0
-            recent_accuracies = []
-            recent_rewards = []
+            recent_accuracies: list[float] = []
+            recent_rewards: list[float] = []
             consecutive_finiteness_failures = (
                 0  # Track PPO updates with all epochs skipped
             )
@@ -2509,345 +2917,33 @@ class VectorizedPPOTrainer:
             grad_ema_tracker = GradientEMATracker() if self.use_telemetry else None
 
             while batch_idx < self.total_batches:
-                topology_manifest_records: list[dict[str, Any]] = []
-                log_frag(self.device, f"batch{batch_idx}.start")
-                # One PPO update per full batch of environments.
-                envs_this_batch = self.n_envs
-                # Monotonic epoch id for all per-batch snapshot events (commit barrier, PPO, analytics).
-                # We use "episodes completed after this batch" so resumed runs stay monotonic.
-                batch_epoch_id = episodes_completed + envs_this_batch
-
-                # Create fresh environments for this batch
-                # DataLoaders are shared via SharedBatchIterator (not per-env)
-                env_states = [
-                    create_env_state(
-                        i,
-                        make_env_seed(
-                            root_seed=self.seed,
-                            batch_idx=batch_idx,
-                            env_idx=i,
-                            envs_per_batch=envs_this_batch,
-                        ),
-                        self.env_factory,
-                    )
-                    for i in range(envs_this_batch)
-                ]
-                criterion = nn.CrossEntropyLoss()
-                # Per-sample loss for fused validation - enables separating main config
-                # from ablations for Governor telemetry (fixes ablation signal contamination)
-                val_criterion = nn.CrossEntropyLoss(reduction="none")
-
-                # Initialize episode for vectorized training
-                for env_idx in range(envs_this_batch):
-                    env_states[env_idx].reset_episode_state(self.slots)
-                    self.agent.buffer.start_episode(env_id=env_idx)
-                    # Set episode context for telemetry (used by seed lifecycle events via emit_with_env_context)
-                    episode_ctx = env_states[env_idx].episode_context
-                    if episode_ctx is not None:
-                        episode_ctx.episode_idx = episodes_completed + env_idx
-                    # Also set on VectorizedEmitter (used by on_epoch_completed, on_last_action)
-                    self.emitters[env_idx].set_episode_idx(episodes_completed + env_idx)
-
-                if self.proof_baseline_lifecycle_policy == "freeze_replayed_final_topology":
-                    self._materialize_static_final_replay(
-                        env_states=env_states,
-                        emitters=self.emitters,
-                    )
-                    static_final_replay_validated = True
-
-                # Initialize batched LSTM hidden state for all environments
-                # (Batched hidden management avoids per-step cat/slice overhead)
-                batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
-
-                throughput_step_time_ms_sum = 0.0
-                throughput_dataloader_wait_ms_sum = 0.0
-                last_train_corrects = [0] * envs_this_batch
-                last_train_totals = [0] * envs_this_batch
-                reward_summary_accum = [
-                    RewardSummaryAccumulator() for _ in range(envs_this_batch)
-                ]
-
-                # Accumulate raw (unnormalized) states for the pre-update normalizer refresh.
-                # We freeze normalizer stats during rollout to keep normalization consistent,
-                # then update stats before PPO updates in _run_ppo_updates.
-                raw_states_for_normalizer_update: list[torch.Tensor] = []
-
-                # Pre-allocate per-env step records (one per env, reused across epochs).
-                # Each record owns its ActionSpec/ActionOutcome/ActionMaskFlags and
-                # contribution/loss reward-input objects by composition; they are
-                # mutated in place each step (I16). reward_summary_accum is held by
-                # reference and also passed as a batch-level kwarg (D3). Per-env
-                # rollback state lives on record.rollback_occurred (I4).
-                step_records = self._make_batch_context(
-                    envs_this_batch, reward_summary_accum
-                )
-
-                # Pre-compute ordered slots once per batch (not per-epoch)
-                # validate_slot_ids parses/sorts slot IDs - expensive to repeat 25x per episode
-                ordered_slots = validate_slot_ids(list(self.slots))
-
-                # Run epochs with INVERTED CONTROL FLOW. Each epoch is one
-                # orchestrated transaction sequence (_run_epoch): train ->
-                # fused-val -> build-action-inputs -> action-transaction. The
-                # invariant ordering is enforced by the sequential method calls
-                # inside _run_epoch. val_corrects/val_totals carry the final
-                # epoch's main-config validation tallies out for batch telemetry (I12).
-                val_corrects: list[int] = []
-                val_totals: list[int] = []
-                for epoch in range(1, self.max_epochs + 1):
-                    (
-                        epoch_completed,
-                        batched_lstm_hidden,
-                        throughput_step_time_ms_sum,
-                        throughput_dataloader_wait_ms_sum,
-                        val_corrects,
-                        val_totals,
-                        epoch_prof_stepped,
-                    ) = self._run_epoch(
-                        epoch=epoch,
-                        envs_this_batch=envs_this_batch,
-                        env_states=env_states,
-                        step_records=step_records,
-                        reward_summary_accum=reward_summary_accum,
-                        raw_states_for_normalizer_update=raw_states_for_normalizer_update,
-                        last_train_corrects=last_train_corrects,
-                        last_train_totals=last_train_totals,
-                        ordered_slots=ordered_slots,
-                        static_final_replay_validated=static_final_replay_validated,
-                        rollout_autocast=rollout_autocast,
-                        criterion=criterion,
-                        val_criterion=val_criterion,
-                        episodes_completed=episodes_completed,
-                        batch_idx=batch_idx,
-                        batch_epoch_id=batch_epoch_id,
-                        episode_history=episode_history,
-                        episode_outcomes=episode_outcomes,
-                        batched_lstm_hidden=batched_lstm_hidden,
-                        throughput_step_time_ms_sum=throughput_step_time_ms_sum,
-                        throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
-                        prof=prof,
-                    )
-                    if epoch_prof_stepped:
-                        prof_steps += 1
-                    if not epoch_completed:
-                        break  # Shutdown requested; batch-level break below handles cleanup
-
-                # PPO Update (delegated to PPOCoordinator)
-                ppo_coordinator = self.ppo_coordinator
-
-                # Handle rollbacks: inject death penalty and recompute metrics
-                ppo_coordinator.handle_rollbacks(
-                    env_states=env_states,
-                    env_rollback_occurred=[r.rollback_occurred for r in step_records],
-                    env_total_rewards=[r.env_total_reward for r in step_records],
+                (
+                    batch_idx,
+                    episodes_completed,
+                    best_avg_acc,
+                    prev_rolling_avg_acc,
+                    consecutive_finiteness_failures,
+                    prof_steps,
+                    static_final_replay_validated,
+                    shutdown_requested,
+                ) = self._run_batch(
+                    batch_idx=batch_idx,
+                    episodes_completed=episodes_completed,
+                    best_avg_acc=best_avg_acc,
+                    prev_rolling_avg_acc=prev_rolling_avg_acc,
+                    consecutive_finiteness_failures=consecutive_finiteness_failures,
+                    prof_steps=prof_steps,
+                    static_final_replay_validated=static_final_replay_validated,
+                    history=history,
                     episode_history=episode_history,
                     episode_outcomes=episode_outcomes,
+                    recent_accuracies=recent_accuracies,
+                    recent_rewards=recent_rewards,
+                    grad_ema_tracker=grad_ema_tracker,
+                    rollout_autocast=rollout_autocast,
+                    prof=prof,
                 )
-
-                # Execute PPO updates
-                metrics, update_skipped, ppo_update_time_ms = ppo_coordinator.run_update(
-                    raw_states_for_normalizer_update=raw_states_for_normalizer_update,
-                    obs_normalizer=self.obs_normalizer,
-                    envs_this_batch=envs_this_batch,
-                    throughput_step_time_ms_sum=throughput_step_time_ms_sum,
-                    throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
-                )
-
-                ppo_grad_norm = None
-                if metrics:
-                    # Clear after the normalizer update in _run_ppo_updates.
-                    raw_states_for_normalizer_update = []
-
-                    ppo_update_time_ms = metrics["ppo_update_time_ms"]
-
-                    if update_skipped:
-                        # Distinguish benign "no optimizer step" cases (for example
-                        # epoch-0 KL early-stop) from true finiteness-gate failures.
-                        consecutive_finiteness_failures, should_continue = (
-                            ppo_coordinator.check_finiteness_gate(
-                                metrics, consecutive_finiteness_failures
-                            )
-                        )
-                        if not should_continue:
-                            # Skip anomaly detection for this batch - metrics are NaN
-                            continue
-                    else:
-                        ppo_grad_norm = metrics["ppo_grad_norm"]
-
-                        # Check gradient drift
-                        drift_metrics = ppo_coordinator.check_gradient_drift(
-                            grad_ema_tracker, ppo_grad_norm
-                        )
-
-                        # Run anomaly detection (includes LSTM health, per-head entropy)
-                        ppo_coordinator.run_anomaly_detection(
-                            metrics=metrics,
-                            drift_metrics=drift_metrics,
-                            batched_lstm_hidden=batched_lstm_hidden,
-                            batch_epoch_id=batch_epoch_id,
-                            batch_idx=batch_idx,
-                        )
-
-                # If the epoch loop exited early (e.g. graceful shutdown), ensure the batch
-                # summary reflects the partial episode outcomes instead of the default zeros.
-                if epoch < self.max_epochs:
-                    for env_idx, env_state in enumerate(env_states):
-                        step_records[env_idx].env_final_acc = env_state.val_acc
-                        step_records[env_idx].env_total_reward = sum(
-                            env_state.episode_rewards
-                        )
-
-                # Track results and aggregate batch-level metrics
-                avg_acc = sum(r.env_final_acc for r in step_records) / len(step_records)
-                avg_reward = sum(r.env_total_reward for r in step_records) / len(
-                    step_records
-                )
-
-                recent_accuracies.append(avg_acc)
-                recent_rewards.append(avg_reward)
-                if len(recent_accuracies) > 10:
-                    recent_accuracies.pop(0)
-                    recent_rewards.pop(0)
-
-                rolling_avg_acc = sum(recent_accuracies) / len(recent_accuracies)
-
-                if self.hub:
-                    if not update_skipped:
-                        # Assert non-None: values assigned in same `if not update_skipped` block above
-                        assert (
-                            ppo_grad_norm is not None and ppo_update_time_ms is not None
-                        )
-                        self.batch_emitter.on_ppo_update(
-                            metrics=metrics,
-                            episodes_completed=batch_epoch_id,
-                            batch_idx=batch_idx,
-                            epoch=epoch,
-                            agent=self.agent,
-                            ppo_grad_norm=ppo_grad_norm,
-                            ppo_update_time_ms=ppo_update_time_ms,
-                            avg_acc=avg_acc,
-                            avg_reward=avg_reward,
-                            rolling_avg_acc=rolling_avg_acc,
-                        )
-
-                    # Aggregate per-environment metrics for the BATCH_EPOCH_COMPLETED event
-                    batch_train_losses = [es.train_loss for es in env_states]
-                    batch_train_corrects = last_train_corrects
-                    batch_train_totals = last_train_totals
-
-                    batch_val_losses = [es.val_loss for es in env_states]
-                    batch_val_corrects = val_corrects
-                    batch_val_totals = val_totals
-
-                    self.batch_emitter.on_batch_completed(
-                        batch_idx=batch_idx,
-                        episodes_completed=batch_epoch_id,
-                        rolling_avg_acc=rolling_avg_acc,
-                        avg_acc=avg_acc,
-                        metrics=metrics,
-                        env_states=env_states,
-                        update_skipped=update_skipped,
-                        plateau_threshold=self.plateau_threshold,
-                        improvement_threshold=self.improvement_threshold,
-                        prev_rolling_avg_acc=prev_rolling_avg_acc,
-                        total_episodes=self.total_env_episodes,
-                        start_episode=self.start_episode,
-                        n_episodes=self.total_env_episodes,
-                        env_final_accs=[r.env_final_acc for r in step_records],
-                        avg_reward=avg_reward,
-                        train_losses=batch_train_losses,
-                        train_corrects=batch_train_corrects,
-                        train_totals=batch_train_totals,
-                        val_losses=batch_val_losses,
-                        val_corrects=batch_val_corrects,
-                        val_totals=batch_val_totals,
-                        num_train_batches=self.num_train_batches,
-                        num_test_batches=self.num_test_batches,
-                        analytics=self.analytics,
-                        epoch=epoch,
-                    )
-                    prev_rolling_avg_acc = rolling_avg_acc
-
-                    # B7-DRL-02: Check for performance degradation (was previously unwired)
-                    # Detects catastrophic forgetting, reward hacking, and training decay
-                    training_progress = batch_epoch_id / self.total_env_episodes
-                    check_performance_degradation(
-                        self.hub,
-                        current_acc=avg_acc,
-                        rolling_avg_acc=rolling_avg_acc,
-                        env_id=0,  # Aggregate metric across all envs
-                        training_progress=training_progress,
-                        group_id=self.group_id,
-                    )
-
-                    # P2-FRAGMETRIC: per-device CUDA caching-allocator snapshot (host-side,
-                    # no sync) into Karn raw_events. Emitted while env_states is still alive
-                    # (before the P2-DEL teardown); validates P0-ALLOC + the structural
-                    # fragmentation cure (reserved-vs-allocated, retries, OOMs).
-                    for frag_device in sorted({es.env_device for es in env_states}):
-                        if torch.device(frag_device).type != "cuda":
-                            continue
-                        alloc_stats = torch.cuda.memory_stats(frag_device)
-                        frag_allocated = alloc_stats["allocated_bytes.all.current"]
-                        frag_reserved = alloc_stats["reserved_bytes.all.current"]
-                        self.batch_emitter.on_allocator_stats(
-                            batch_idx=batch_idx,
-                            device=str(frag_device),
-                            allocated_bytes=frag_allocated,
-                            reserved_bytes=frag_reserved,
-                            fragmentation_bytes=frag_reserved - frag_allocated,
-                            num_alloc_retries=alloc_stats["num_alloc_retries"],
-                            num_ooms=alloc_stats["num_ooms"],
-                        )
-
-                if (
-                    self.proof_baseline_lifecycle_policy
-                    == STATIC_FINAL_SOURCE_LIFECYCLE_POLICY
-                ):
-                    topology_manifest_records.extend(
-                        self._emit_source_final_manifests(
-                            env_states=env_states,
-                            emitters=self.emitters,
-                            epoch=epoch,
-                        )
-                    )
-
-                # P2-DEL: the batch's telemetry consumers (on_batch_completed, the P2-FRAGMETRIC
-                # emit) have read env_states. Sync each persistent stream so no async kernel still
-                # references the model/optimizer tensors we are about to drop, then release the
-                # refs so the caching allocator can reuse their segments next batch. At LOOP-BODY
-                # indent (NOT inside `if hub:`) so the fence + release run even with telemetry off.
-                # Never empty_cache() here (governor.py NOTE: it fights expandable_segments).
-                for env_state in env_states:
-                    if env_state.stream is not None:
-                        env_state.stream.synchronize()
-                # Drop the list AND the loop variable: a dangling `env_state` would pin the
-                # last env's model/optimizer for another batch, defeating the segment release.
-                del env_states, env_state
-                del step_records  # Release ContributionRewardInputs/LossRewardInputs (Python objects, not GPU tensors)
-
-                batch_summary = BatchSummary(
-                    batch=batch_idx + 1,
-                    episodes=batch_epoch_id,
-                    avg_accuracy=avg_acc,
-                    rolling_avg_accuracy=rolling_avg_acc,
-                    metrics=metrics,
-                    reward_summary=reward_summary_accum,
-                    episode_history=episode_history,
-                    topology_manifests=topology_manifest_records,
-                )
-                history.append(batch_summary.to_dict())
-
-                if rolling_avg_acc > best_avg_acc:
-                    best_avg_acc = rolling_avg_acc
-
-                episodes_completed = batch_epoch_id
-                log_frag(self.device, f"batch{batch_idx}.end")
-                batch_idx += 1
-
-                # Check for graceful shutdown request (e.g., user quit TUI)
-                # Per-epoch check already printed progress; just break here
-                if self.shutdown_event is not None and self.shutdown_event.is_set():
+                if shutdown_requested:
                     break
 
         finally:

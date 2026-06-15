@@ -228,7 +228,7 @@ allow_hits:
 - key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:4
   owner: John
   reason: Per-epoch sync - extract validation accuracy after accumulation; validation phase
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:synchronize
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_batch:synchronize
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_action_transaction:cpu
