@@ -37,22 +37,26 @@ blocks: []
 
 # Status
 status_notes: >
-  Concept. Tier 0 is buildable immediately against existing seams. Tier 1/2 are
-  opt-in and gated. Characterization (Phase A) must run BEFORE any Rust migration
-  decision. Awaiting specialist sign-off (see reviewed_by) before promotion to ready.
-percent_complete: 0
+  Tier 0 IMPLEMENTED AND MERGED (Phase A1 done): core committed 0ee51801, wiring
+  1af4e22b on branch 0.1.1. leyline PhaseTiming/PhaseProfileReport + phase_profiler
+  module + run-loop wiring + nissa PHASE_PROFILE_COMPLETED + Karn phase_occupancy
+  view. Gates V1 (bit-identical-when-disabled), V3 (import fence), V5 (reconciliation
+  + final-batch ppo_update guard) green; gpu_sync 118/0; mypy clean. Tier 1/2 are
+  opt-in and gated (Phase A2/B, not yet built). Characterization run (A3) must
+  precede any Rust/free-threading migration decision.
+percent_complete: 25   # A1 (Tier 0 build+wire) complete; A2 (Tier 1), B (Tier 2), C/D remain
 
 # Expert Review
 reviewed_by:
   - reviewer: pytorch-expert
-    scope: CUDA-event occupancy windows, stream-context placement, torch.profiler/NVTX overhead
-    status: design-input-folded   # adversarial verdict folded; sign-off pending on built artifact
+    scope: CUDA-event occupancy windows, stream-context placement, torch.profiler/NVTX overhead; A1 hot-path overhead
+    status: approved   # design folded; A1 wiring reviewed -> approve (no per-step alloc, no sync, no compile-region break)
   - reviewer: determinism-reviewer
     scope: no-new-sync guarantee, seeded-ordering safety, timing-as-external-effect, bit-identical-when-disabled
-    status: design-input-folded   # consolidated determinism review folded as Rules 1-6
+    status: approved   # Rules 1-6 folded; A1 wiring reviewed -> approve (determinism_safe)
   - reviewer: drl-expert
     scope: phase boundaries match PPO rollout/update semantics; reward/governor as migration targets
-    status: pending
+    status: signed-off   # A1 review: flagged ppo_update batch-misattribution + final-batch drop; FIXED in 1af4e22b
 ```
 
 ---
