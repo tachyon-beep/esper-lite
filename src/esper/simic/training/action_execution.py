@@ -53,7 +53,6 @@ from esper.simic.rewards import (
     SeedInfo,
     STAGE_POTENTIALS,
 )
-from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 
 from .helpers import compute_rent_and_shock_inputs
@@ -69,6 +68,7 @@ from esper.simic.vectorized_types import (
     ActionMaskFlags,
     ActionOutcome,
     ActionSpec,
+    EnvStepRecord,
     EpisodeRecord,
     RewardSummaryAccumulator,
 )
@@ -456,6 +456,7 @@ def execute_actions(
     *,
     context: ActionExecutionContext,
     env_states: list[ParallelEnvState],
+    step_records: list[EnvStepRecord],
     actions_np: np.ndarray,
     values: list[float],
     all_signals: list[TrainingSignals],
@@ -465,11 +466,6 @@ def execute_actions(
     pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]],
     head_log_probs: dict[str, torch.Tensor],
     masks_batch: dict[str, torch.Tensor],
-    action_specs: list[ActionSpec],
-    action_outcomes: list[ActionOutcome],
-    mask_flags: list[ActionMaskFlags],
-    contribution_reward_inputs: list[ContributionRewardInputs],
-    loss_reward_inputs: list[LossRewardInputs],
     head_confidences_cpu: np.ndarray | None,
     head_entropies_cpu: np.ndarray | None,
     op_probs_cpu: np.ndarray | None,
@@ -477,10 +473,7 @@ def execute_actions(
     baseline_accs: list[dict[str, Any]],
     all_disabled_accs: dict[int, float],
     governor_panic_envs: list[int],
-    env_rollback_occurred: list[bool],
     reward_summary_accum: list[RewardSummaryAccumulator],
-    env_final_accs: list[float],
-    env_total_rewards: list[float],
     episode_history: list[EpisodeRecord],
     episode_outcomes: list[EpisodeOutcome],
     step_obs_stats: Any | None,
@@ -557,7 +550,8 @@ def execute_actions(
         alpha_curve_action = int(actions_np[_HEAD_ALPHA_CURVE_IDX, env_idx])
         op_action = int(actions_np[_HEAD_OP_IDX, env_idx])
 
-        action_spec = action_specs[env_idx]
+        record = step_records[env_idx]
+        action_spec = record.action_spec
         action_spec.slot_idx = slot_action
         action_spec.blueprint_idx = blueprint_action
         action_spec.style_idx = style_action
@@ -567,7 +561,7 @@ def execute_actions(
         action_spec.alpha_curve_idx = alpha_curve_action
         action_spec.op_idx = op_action
 
-        action_outcome = action_outcomes[env_idx]
+        action_outcome = record.action_outcome
         action_outcome.reward_components = None
         action_outcome.episode_reward = None
         action_outcome.final_accuracy = None
@@ -638,7 +632,7 @@ def execute_actions(
                     rollback_severity=rollback_severity,
                     watch_window_evidence=rollback_watch_window_evidence,
                 )
-            env_rollback_occurred[env_idx] = True
+            record.rollback_occurred = True
 
             # CRITICAL: Clear optimizer momentum after rollback.
             # PyTorch's load_state_dict() copies weights IN-PLACE, so
@@ -904,7 +898,7 @@ def execute_actions(
                 or collect_reward_summary
                 or force_reward_components
             )
-            reward_inputs = contribution_reward_inputs[env_idx]
+            reward_inputs = record.contribution_reward_inputs
             reward_inputs.action = action_for_reward
             reward_inputs.seed_contribution = seed_contribution
             reward_inputs.val_acc = env_state.val_acc
@@ -969,7 +963,7 @@ def execute_actions(
             else:
                 reward = cast(float, reward_result)
         else:
-            loss_inputs = loss_reward_inputs[env_idx]
+            loss_inputs = record.loss_reward_inputs
             loss_inputs.action = action_for_reward
             loss_inputs.loss_delta = signals.metrics.loss_delta
             loss_inputs.val_loss = env_state.val_loss
@@ -1277,7 +1271,7 @@ def execute_actions(
 
         # Consolidate telemetry via emitter
         if ops_telemetry_enabled and masked_np is not None:
-            masked_flags = mask_flags[env_idx]
+            masked_flags = record.mask_flags
             masked_flags.op_masked = bool(masked_np[_HEAD_OP_IDX, env_idx])
             masked_flags.slot_masked = bool(masked_np[_HEAD_SLOT_IDX, env_idx])
             masked_flags.blueprint_masked = bool(
@@ -1511,19 +1505,19 @@ def execute_actions(
             )
 
         if epoch == max_epochs:
-            env_final_accs[env_idx] = env_state.val_acc
-            env_total_rewards[env_idx] = sum(env_state.episode_rewards)
+            record.env_final_acc = env_state.val_acc
+            record.env_total_reward = sum(env_state.episode_rewards)
 
             # Track episode completion for A/B testing
             episode_history.append(
                 EpisodeRecord(
                     env_id=env_idx,
-                    episode_reward=env_total_rewards[env_idx],
-                    final_accuracy=env_final_accs[env_idx],
+                    episode_reward=record.env_total_reward,
+                    final_accuracy=record.env_final_acc,
                 )
             )
-            action_outcome.episode_reward = env_total_rewards[env_idx]
-            action_outcome.final_accuracy = env_final_accs[env_idx]
+            action_outcome.episode_reward = record.env_total_reward
+            action_outcome.final_accuracy = record.env_final_acc
 
             # Compute stability score from reward variance
             recent_ep_rewards = (
@@ -1545,7 +1539,7 @@ def execute_actions(
                 param_ratio=model.total_params / max(1, host_params_baseline),
                 num_fossilized=env_state.seeds_fossilized,
                 num_contributing_fossilized=env_state.contributing_fossilized,
-                episode_reward=env_total_rewards[env_idx],
+                episode_reward=record.env_total_reward,
                 stability_score=stability,
                 reward_mode=env_reward_configs[env_idx].reward_mode.value,
             )
@@ -1554,7 +1548,7 @@ def execute_actions(
 
             # Emit EPISODE_OUTCOME telemetry for Pareto analysis
             # B11-CR-04 fix: Skip emission for rollback episodes (will emit corrected outcome later)
-            if env_state.telemetry_cb and not env_rollback_occurred[env_idx]:
+            if env_state.telemetry_cb and not record.rollback_occurred:
                 # TELE-610: Classify episode outcome (percent-scale accuracy).
                 outcome_type = classify_episode_outcome(env_state.val_acc)
 

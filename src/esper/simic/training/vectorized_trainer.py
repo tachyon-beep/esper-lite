@@ -920,10 +920,6 @@ class VectorizedPPOTrainer:
                 # (Batched hidden management avoids per-step cat/slice overhead)
                 batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
 
-                # Per-env accumulators
-                env_final_accs = [0.0] * envs_this_batch
-                env_total_rewards = [0.0] * envs_this_batch
-
                 throughput_step_time_ms_sum = 0.0
                 throughput_dataloader_wait_ms_sum = 0.0
                 last_train_corrects = [0] * envs_this_batch
@@ -932,61 +928,48 @@ class VectorizedPPOTrainer:
                     RewardSummaryAccumulator() for _ in range(envs_this_batch)
                 ]
 
-                action_specs = [ActionSpec() for _ in range(envs_this_batch)]
-                action_outcomes = [ActionOutcome() for _ in range(envs_this_batch)]
-                action_mask_flags = [ActionMaskFlags() for _ in range(envs_this_batch)]
-                contribution_reward_inputs = [
-                    ContributionRewardInputs(
-                        action=LifecycleOp.WAIT,
-                        seed_contribution=None,
-                        val_acc=0.0,
-                        seed_info=None,
-                        epoch=0,
-                        max_epochs=max_epochs,
-                        total_params=0,
-                        host_params=1,
-                        acc_at_germination=None,
-                        acc_delta=0.0,
-                        config=env_reward_configs[env_idx],
-                    )
-                    for env_idx in range(envs_this_batch)
-                ]
-                loss_reward_inputs = [
-                    LossRewardInputs(
-                        action=LifecycleOp.WAIT,
-                        loss_delta=0.0,
-                        val_loss=0.0,
-                        seed_info=None,
-                        epoch=0,
-                        max_epochs=max_epochs,
-                        total_params=0,
-                        host_params=1,
-                        config=loss_reward_config,
-                    )
-                    for _ in range(envs_this_batch)
-                ]
-
                 # Accumulate raw (unnormalized) states for the pre-update normalizer refresh.
                 # We freeze normalizer stats during rollout to keep normalization consistent,
                 # then update stats before PPO updates in _run_ppo_updates.
                 raw_states_for_normalizer_update = []
 
-                # Track per-environment rollback (more sample-efficient than batch-level).
-                # Only envs that experienced rollback have stale transitions.
-                env_rollback_occurred = [False] * envs_this_batch
-
                 # Pre-allocate per-env step records (one per env, reused across epochs).
-                # COMMIT 3 will replace the separate parallel lists; this commit
-                # only allocates the records alongside them for the transition.
+                # Each record owns its ActionSpec/ActionOutcome/ActionMaskFlags and
+                # contribution/loss reward-input objects by composition; they are
+                # mutated in place each step (I16). reward_summary_accum is held by
+                # reference and also passed as a batch-level kwarg (D3). Per-env
+                # rollback state lives on record.rollback_occurred (I4).
                 step_records = [
                     EnvStepRecord(
                         env_idx=i,
-                        action_spec=action_specs[i],
-                        action_outcome=action_outcomes[i],
-                        mask_flags=action_mask_flags[i],
+                        action_spec=ActionSpec(),
+                        action_outcome=ActionOutcome(),
+                        mask_flags=ActionMaskFlags(),
                         reward_summary=reward_summary_accum[i],
-                        contribution_reward_inputs=contribution_reward_inputs[i],
-                        loss_reward_inputs=loss_reward_inputs[i],
+                        contribution_reward_inputs=ContributionRewardInputs(
+                            action=LifecycleOp.WAIT,
+                            seed_contribution=None,
+                            val_acc=0.0,
+                            seed_info=None,
+                            epoch=0,
+                            max_epochs=max_epochs,
+                            total_params=0,
+                            host_params=1,
+                            acc_at_germination=None,
+                            acc_delta=0.0,
+                            config=env_reward_configs[i],
+                        ),
+                        loss_reward_inputs=LossRewardInputs(
+                            action=LifecycleOp.WAIT,
+                            loss_delta=0.0,
+                            val_loss=0.0,
+                            seed_info=None,
+                            epoch=0,
+                            max_epochs=max_epochs,
+                            total_params=0,
+                            host_params=1,
+                            config=loss_reward_config,
+                        ),
                     )
                     for i in range(envs_this_batch)
                 ]
@@ -2075,6 +2058,7 @@ class VectorizedPPOTrainer:
                     action_result_bundle = execute_actions(
                         context=action_execution_context,
                         env_states=env_states,
+                        step_records=step_records,
                         actions_np=actions_np,
                         values=values,
                         all_signals=all_signals,
@@ -2084,11 +2068,6 @@ class VectorizedPPOTrainer:
                         pre_step_hiddens=pre_step_hiddens,
                         head_log_probs=head_log_probs,
                         masks_batch=masks_batch,
-                        action_specs=action_specs,
-                        action_outcomes=action_outcomes,
-                        mask_flags=action_mask_flags,
-                        contribution_reward_inputs=contribution_reward_inputs,
-                        loss_reward_inputs=loss_reward_inputs,
                         head_confidences_cpu=head_confidences_cpu,
                         head_entropies_cpu=head_entropies_cpu,
                         op_probs_cpu=op_probs_cpu,
@@ -2096,10 +2075,7 @@ class VectorizedPPOTrainer:
                         baseline_accs=baseline_accs,
                         all_disabled_accs=all_disabled_accs,
                         governor_panic_envs=governor_panic_envs,
-                        env_rollback_occurred=env_rollback_occurred,
                         reward_summary_accum=reward_summary_accum,
-                        env_final_accs=env_final_accs,
-                        env_total_rewards=env_total_rewards,
                         episode_history=episode_history,
                         episode_outcomes=episode_outcomes,
                         step_obs_stats=step_obs_stats,
@@ -2121,8 +2097,8 @@ class VectorizedPPOTrainer:
                     all_post_action_masks = action_result_bundle.post_action_masks
                     rollback_terminal_envs = [
                         env_idx
-                        for env_idx, rolled_back in enumerate(env_rollback_occurred)
-                        if rolled_back
+                        for env_idx, rec in enumerate(step_records)
+                        if rec.rollback_occurred
                     ]
                     batched_lstm_hidden = _reset_hidden_for_terminal_envs(
                         batched_lstm_hidden,
@@ -2204,8 +2180,8 @@ class VectorizedPPOTrainer:
                 # Handle rollbacks: inject death penalty and recompute metrics
                 ppo_coordinator.handle_rollbacks(
                     env_states=env_states,
-                    env_rollback_occurred=env_rollback_occurred,
-                    env_total_rewards=env_total_rewards,
+                    env_rollback_occurred=[r.rollback_occurred for r in step_records],
+                    env_total_rewards=[r.env_total_reward for r in step_records],
                     episode_history=episode_history,
                     episode_outcomes=episode_outcomes,
                 )
@@ -2258,12 +2234,16 @@ class VectorizedPPOTrainer:
                 # summary reflects the partial episode outcomes instead of the default zeros.
                 if epoch < max_epochs:
                     for env_idx, env_state in enumerate(env_states):
-                        env_final_accs[env_idx] = env_state.val_acc
-                        env_total_rewards[env_idx] = sum(env_state.episode_rewards)
+                        step_records[env_idx].env_final_acc = env_state.val_acc
+                        step_records[env_idx].env_total_reward = sum(
+                            env_state.episode_rewards
+                        )
 
                 # Track results and aggregate batch-level metrics
-                avg_acc = sum(env_final_accs) / len(env_final_accs)
-                avg_reward = sum(env_total_rewards) / len(env_total_rewards)
+                avg_acc = sum(r.env_final_acc for r in step_records) / len(step_records)
+                avg_reward = sum(r.env_total_reward for r in step_records) / len(
+                    step_records
+                )
 
                 recent_accuracies.append(avg_acc)
                 recent_rewards.append(avg_reward)
@@ -2315,7 +2295,7 @@ class VectorizedPPOTrainer:
                         total_episodes=total_env_episodes,
                         start_episode=start_episode,
                         n_episodes=total_env_episodes,
-                        env_final_accs=env_final_accs,
+                        env_final_accs=[r.env_final_acc for r in step_records],
                         avg_reward=avg_reward,
                         train_losses=batch_train_losses,
                         train_corrects=batch_train_corrects,
