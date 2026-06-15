@@ -13,6 +13,7 @@ from esper.utils.data import (
     _cifar10_pad_value,
     _ensure_cifar10_cached,
     _stable_device_index,
+    _split_batch_span,
     augment_cifar10_batch,
     clear_gpu_dataset_cache,
     load_cifar10,
@@ -43,65 +44,78 @@ class TestData:
         inputs, labels = next(iter(trainloader))
         assert inputs.shape == (32, 3, 32, 32)  # CIFAR-10 is 32x32 RGB
 
-    def test_shared_batch_iterator_retains_env_splits_on_partial_batch(self):
-        """SharedBatchIterator should keep one batch per env on partial batches."""
-        dataset = TensorDataset(
-            torch.arange(10).float().unsqueeze(1),
-            torch.arange(10),
-        )
-        iterator = SharedBatchIterator(
-            dataset=dataset,
-            batch_size_per_env=2,
-            n_envs=3,
-            env_devices=["cpu"] * 3,
-            num_workers=0,
-            shuffle=False,
-            pin_memory=False,
-            drop_last=False,
-        )
+def test_shared_batch_iterator_retains_env_splits_on_partial_batch() -> None:
+    """SharedBatchIterator should keep one batch per env on partial batches."""
+    dataset = TensorDataset(
+        torch.arange(10).float().unsqueeze(1),
+        torch.arange(10),
+    )
+    iterator = SharedBatchIterator(
+        dataset=dataset,
+        batch_size_per_env=2,
+        n_envs=3,
+        env_devices=["cpu"] * 3,
+        num_workers=0,
+        shuffle=False,
+        pin_memory=False,
+        drop_last=False,
+    )
 
-        batches = list(iter(iterator))
-        assert len(batches) == 2
-        assert len(batches[0]) == 3
-        assert len(batches[1]) == 3
-        assert [batch[0].shape[0] for batch in batches[0]] == [2, 2, 2]
-        assert [batch[0].shape[0] for batch in batches[1]] == [2, 1, 1]
+    batches = list(iter(iterator))
+    assert len(batches) == 2
+    assert len(batches[0]) == 3
+    assert len(batches[1]) == 3
+    assert [batch[0].shape[0] for batch in batches[0]] == [2, 2, 2]
+    assert [batch[0].shape[0] for batch in batches[1]] == [2, 1, 1]
 
-    def test_load_cifar10_gpu_cache_key_includes_data_root(self, monkeypatch):
-        """GPU dataset cache should not serve tensors across different data_root values."""
-        import torchvision
 
-        class FakeCIFAR10(torch.utils.data.Dataset):
-            def __init__(self, root, train, download, transform):
-                self.root = str(root)
-                self.train = bool(train)
-                self.transform = transform
+def test_split_batch_span_preserves_global_env_order_for_partial_tail() -> None:
+    assert _split_batch_span(start=0, end=6, n_chunks=3) == [
+        (0, 2),
+        (2, 4),
+        (4, 6),
+    ]
+    assert _split_batch_span(start=0, end=5, n_chunks=3) == [
+        (0, 2),
+        (2, 4),
+        (4, 5),
+    ]
 
-            def __len__(self) -> int:
-                return 4
+def test_load_cifar10_gpu_cache_key_includes_data_root(monkeypatch) -> None:
+    """GPU dataset cache should not serve tensors across different data_root values."""
+    import torchvision
 
-            def __getitem__(self, idx):
-                value = 1.0 if "root_a" in self.root else 2.0
-                x = torch.full((3, 32, 32), value, dtype=torch.float32)
-                y = 0
-                return x, y
+    class FakeCIFAR10(torch.utils.data.Dataset):
+        def __init__(self, root, train, download, transform):
+            self.root = str(root)
+            self.train = bool(train)
+            self.transform = transform
 
-        clear_gpu_dataset_cache()
-        monkeypatch.setattr(torchvision.datasets, "CIFAR10", FakeCIFAR10)
+        def __len__(self) -> int:
+            return 4
 
-        gen = torch.Generator().manual_seed(0)
-        trainloader_a, _ = load_cifar10_gpu(
-            batch_size=2, generator=gen, data_root="root_a", device="cpu"
-        )
-        x_a, _ = next(iter(trainloader_a))
+        def __getitem__(self, idx):
+            value = 1.0 if "root_a" in self.root else 2.0
+            x = torch.full((3, 32, 32), value, dtype=torch.float32)
+            y = 0
+            return x, y
 
-        trainloader_b, _ = load_cifar10_gpu(
-            batch_size=2, generator=gen, data_root="root_b", device="cpu"
-        )
-        x_b, _ = next(iter(trainloader_b))
+    clear_gpu_dataset_cache()
+    monkeypatch.setattr(torchvision.datasets, "CIFAR10", FakeCIFAR10)
 
-        assert x_a.mean().item() == 1.0
-        assert x_b.mean().item() == 2.0
+    gen = torch.Generator().manual_seed(0)
+    trainloader_a, _ = load_cifar10_gpu(
+        batch_size=2, generator=gen, data_root="root_a", device="cpu"
+    )
+    x_a, _ = next(iter(trainloader_a))
+
+    trainloader_b, _ = load_cifar10_gpu(
+        batch_size=2, generator=gen, data_root="root_b", device="cpu"
+    )
+    x_b, _ = next(iter(trainloader_b))
+
+    assert x_a.mean().item() == 1.0
+    assert x_b.mean().item() == 2.0
 
 
 def test_cifar10_pad_value_normalizes_per_channel() -> None:
@@ -379,4 +393,64 @@ def test_shared_gpu_gather_iterator_splits_cached_batches(monkeypatch) -> None:
     assert len(batches) == 2
     assert batches[0][0].shape == (2, 3, 4, 4)
     assert batches[1][1].tolist() == [2, 3]
+    assert clear_gpu_dataset_cache() == 1
+
+
+def test_shared_gpu_gather_iterator_rejects_mismatched_cached_tensor_lengths(
+    monkeypatch,
+) -> None:
+    clear_gpu_dataset_cache()
+    key = _cifar10_cache_key("cpu", "./data")
+    data._GPU_DATASET_CACHE[key] = (
+        torch.zeros(4, 3, 4, 4),
+        torch.zeros(3, dtype=torch.long),
+        torch.zeros(2, 3, 4, 4),
+        torch.zeros(2, dtype=torch.long),
+    )
+    monkeypatch.setattr(data, "_ensure_cifar10_cached", lambda *args, **kwargs: None)
+
+    try:
+        SharedGPUGatherBatchIterator(
+            batch_size_per_env=2,
+            n_envs=1,
+            env_devices=["cpu"],
+            shuffle=False,
+            seed=11,
+        )
+    except ValueError as exc:
+        assert "cached CIFAR train tensors length mismatch" in str(exc)
+    else:
+        raise AssertionError("Expected cached tensor length validation failure")
+    finally:
+        clear_gpu_dataset_cache()
+
+
+def test_shared_gpu_gather_iterator_non_shuffle_avoids_epoch_permutation(
+    monkeypatch,
+) -> None:
+    clear_gpu_dataset_cache()
+    _cached_cpu_cifar()
+    monkeypatch.setattr(data, "_ensure_cifar10_cached", lambda *args, **kwargs: None)
+
+    iterator = SharedGPUGatherBatchIterator(
+        batch_size_per_env=2,
+        n_envs=3,
+        env_devices=["cpu", "cpu", "cpu"],
+        shuffle=False,
+        data_root="./data",
+        is_train=False,
+        seed=11,
+    )
+
+    batches = list(iterator)
+
+    assert iterator._global_perm is None
+    assert [[targets.tolist() for _inputs, targets in batch] for batch in batches] == [
+        [[0, 1], [2, 3], [4]]
+    ]
+    input_storage_ptrs = [
+        inputs.untyped_storage().data_ptr()
+        for inputs, _targets in batches[0]
+    ]
+    assert len(set(input_storage_ptrs)) == 3
     assert clear_gpu_dataset_cache() == 1

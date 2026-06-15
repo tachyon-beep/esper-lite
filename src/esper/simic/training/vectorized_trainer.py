@@ -1069,6 +1069,7 @@ class VectorizedPPOTrainer:
                                 assert env_state.augment_generator is not None
                                 if env_state.stream:
                                     with torch.cuda.stream(env_state.stream):
+                                        inputs.record_stream(env_state.stream)
                                         inputs = augment_cifar10_batch(
                                             inputs,
                                             generator=env_state.augment_generator,
