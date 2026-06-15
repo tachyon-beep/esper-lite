@@ -187,6 +187,13 @@ class PhaseTiming:
     python_cpu_ms: float
     python_cpu_ratio: float
 
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "wall_ms": self.wall_ms,
+            "python_cpu_ms": self.python_cpu_ms,
+            "python_cpu_ratio": self.python_cpu_ratio,
+        }
+
 
 @dataclass(slots=True)
 class PhaseProfileReport:
@@ -205,3 +212,11 @@ class PhaseProfileReport:
     def total_wall_ms(self) -> float:
         """Sum of per-phase wall_ms (reconciles against throughput_step_time_ms_sum)."""
         return sum(t.wall_ms for t in self.phases.values())
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for nissa telemetry (phases -> {name: PhaseTiming dict})."""
+        return {
+            "phases": {name: timing.to_dict() for name, timing in self.phases.items()},
+            "epoch": self.epoch,
+            "batch_idx": self.batch_idx,
+        }

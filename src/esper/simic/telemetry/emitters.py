@@ -27,6 +27,7 @@ from esper.leyline import (
     DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
     EpochCompletedPayload,
     OP_NAMES,
+    PhaseProfileReport,
     PPOUpdatePayload,
     STYLE_ALPHA_ALGORITHMS,
     STYLE_BLEND_IDS,
@@ -597,6 +598,23 @@ class VectorizedEmitter:
                 num_alloc_retries=num_alloc_retries,
                 num_ooms=num_ooms,
             ),
+        ))
+
+    def on_phase_profile(self, phase_report: PhaseProfileReport) -> None:
+        """Emit a per-epoch Tier-0 phase-timing report.
+
+        Observation-only (Rule 4 of the GIL throughput profiler plan): the report
+        flows ONE-WAY to telemetry. It is a batch-level event (not per-env), emitted
+        directly via the hub like ALLOCATOR_STATS. The report's own epoch field is
+        carried on the event for the Karn phase_occupancy view; group_id keys A/B.
+        """
+        if not self.hub:
+            return
+        self.hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.PHASE_PROFILE_COMPLETED,
+            epoch=phase_report.epoch,
+            group_id=self.group_id,
+            data=phase_report,
         ))
 
 

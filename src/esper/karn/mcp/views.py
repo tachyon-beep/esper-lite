@@ -534,6 +534,34 @@ VIEW_DEFINITIONS: dict[str, str] = {
             event_type = 'ANALYTICS_SNAPSHOT'
             AND json_extract_string(data, '$.kind') = 'batch_stats'
     """,
+    "phase_occupancy": """
+        CREATE OR REPLACE VIEW phase_occupancy AS
+        WITH reports AS (
+            SELECT
+                event_id,
+                timestamp,
+                run_dir,
+                group_id,
+                json_extract(data, '$.epoch')::INTEGER as epoch,
+                json_extract(data, '$.batch_idx')::INTEGER as batch_idx,
+                json_extract(data, '$.phases') as phases
+            FROM raw_events
+            WHERE event_type = 'PHASE_PROFILE_COMPLETED'
+        )
+        SELECT
+            r.event_id,
+            r.timestamp,
+            r.run_dir,
+            r.group_id,
+            r.epoch,
+            r.batch_idx,
+            je.key as phase_name,
+            json_extract(je.value, '$.wall_ms')::DOUBLE as wall_ms,
+            json_extract(je.value, '$.python_cpu_ms')::DOUBLE as python_cpu_ms,
+            json_extract(je.value, '$.python_cpu_ratio')::DOUBLE as python_cpu_ratio
+        FROM reports r
+        CROSS JOIN json_each(r.phases) AS je
+    """,
     "shapley_computed": """
         CREATE OR REPLACE VIEW shapley_computed AS
         SELECT

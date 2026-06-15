@@ -42,8 +42,10 @@ from esper.simic.telemetry import (
     compute_observation_stats,
     materialize_dual_grad_stats,
     materialize_grad_stats,
+    phase_profiler,
     training_profiler,
 )
+from esper.simic.telemetry.phase_profiler import NullProfiler, PhaseProfiler
 from esper.simic.telemetry.emitters import check_performance_degradation
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import (
@@ -637,6 +639,7 @@ class VectorizedPPOTrainer:
     torch_profiler_profile_memory: bool
     torch_profiler_with_stack: bool
     torch_profiler_summary: bool
+    phase_profiler: bool
     gpu_preload_augment: bool
     amp_enabled: bool
     resolved_amp_dtype: torch.dtype | None
@@ -667,6 +670,11 @@ class VectorizedPPOTrainer:
     logger: logging.Logger
     action_execution_context: ActionExecutionContext = field(init=False)
     ppo_coordinator: PPOCoordinator = field(init=False)
+    # Tier-0 phase-profiler handle. NullProfiler until run() enters the real
+    # instrument; safe to call .phase()/.drain() before run() (no-op).
+    _phase_profiler: PhaseProfiler | NullProfiler = field(
+        init=False, default_factory=NullProfiler
+    )
 
     def __post_init__(self) -> None:
         # Ada sm_89 TF32: ~2x FP32 matmul/conv on tensor cores at ~1e-3 rel error.
@@ -2353,33 +2361,35 @@ class VectorizedPPOTrainer:
         train_batch_counts = [0] * envs_this_batch
 
         # ===== TRAINING PASS (I8: CUDA stream fences) =====
-        env_grad_stats, train_dataloader_wait_ms = self._run_train_pass(
-            env_states=env_states,
-            step_records=step_records,
-            ordered_slots=ordered_slots,
-            epoch=epoch,
-            criterion=criterion,
-            last_train_corrects=last_train_corrects,
-            last_train_totals=last_train_totals,
-            train_totals=train_totals,
-            train_batch_counts=train_batch_counts,
-        )
+        with self._phase_profiler.phase("train"):
+            env_grad_stats, train_dataloader_wait_ms = self._run_train_pass(
+                env_states=env_states,
+                step_records=step_records,
+                ordered_slots=ordered_slots,
+                epoch=epoch,
+                criterion=criterion,
+                last_train_corrects=last_train_corrects,
+                last_train_totals=last_train_totals,
+                train_totals=train_totals,
+                train_batch_counts=train_batch_counts,
+            )
         dataloader_wait_ms_epoch += train_dataloader_wait_ms
 
         # ===== Validation + Counterfactual (FUSED): Single pass over test data =====
         # Extracted to _run_fused_val_pass(): one fused forward over
         # the test data stacking every ablation config (config 0 == main).
-        (
-            fused_result,
-            val_dataloader_wait_ms,
-        ) = self._run_fused_val_pass(
-            env_states=env_states,
-            slots=self.slots,
-            epoch=epoch,
-            envs_this_batch=envs_this_batch,
-            val_criterion=val_criterion,
-            batch_idx=batch_idx,
-        )
+        with self._phase_profiler.phase("val"):
+            (
+                fused_result,
+                val_dataloader_wait_ms,
+            ) = self._run_fused_val_pass(
+                env_states=env_states,
+                slots=self.slots,
+                epoch=epoch,
+                envs_this_batch=envs_this_batch,
+                val_criterion=val_criterion,
+                batch_idx=batch_idx,
+            )
         dataloader_wait_ms_epoch += val_dataloader_wait_ms
 
         # CRITICAL: baseline_accs is rebuilt fresh each epoch by
@@ -2397,42 +2407,54 @@ class VectorizedPPOTrainer:
         # reports, builds batched masks (I10 proof controls), accumulates raw
         # states for the deferred normalizer refresh (I7), and runs the rollout
         # get_action under the shared rollout_autocast factory (I6 BF16 symmetry).
-        _action_inputs = self._build_action_inputs(
-            env_states=env_states,
-            env_grad_stats=env_grad_stats,
-            raw_states_for_normalizer_update=raw_states_for_normalizer_update,
-            ordered_slots=ordered_slots,
-            epoch=epoch,
-            static_final_replay_validated=static_final_replay_validated,
-            rollout_autocast=rollout_autocast,
-            batched_lstm_hidden=batched_lstm_hidden,
-        )
+        with self._phase_profiler.phase("rollout"):
+            _action_inputs = self._build_action_inputs(
+                env_states=env_states,
+                env_grad_stats=env_grad_stats,
+                raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+                ordered_slots=ordered_slots,
+                epoch=epoch,
+                static_final_replay_validated=static_final_replay_validated,
+                rollout_autocast=rollout_autocast,
+                batched_lstm_hidden=batched_lstm_hidden,
+            )
 
         # ===== ACTION TRANSACTION (I1 ordering: execute_actions ->
         # reset terminal hidden -> bootstrap forward pass) =====
         # Extracted to _run_action_transaction(): the three-step sequence
         # is structurally enforced by sequential calls inside the method.
-        _action_txn = self._run_action_transaction(
-            env_states=env_states,
-            step_records=step_records,
-            fused_result=fused_result,
-            aib=_action_inputs,
-            reward_summary_accum=reward_summary_accum,
-            baseline_accs=baseline_accs,
-            episode_history=episode_history,
-            episode_outcomes=episode_outcomes,
-            epoch=epoch,
-            episodes_completed=episodes_completed,
-            batch_idx=batch_idx,
-            rollout_autocast=rollout_autocast,
-            batched_lstm_hidden=_action_inputs.batched_lstm_hidden_post_action,
-        )
+        with self._phase_profiler.phase("action"):
+            _action_txn = self._run_action_transaction(
+                env_states=env_states,
+                step_records=step_records,
+                fused_result=fused_result,
+                aib=_action_inputs,
+                reward_summary_accum=reward_summary_accum,
+                baseline_accs=baseline_accs,
+                episode_history=episode_history,
+                episode_outcomes=episode_outcomes,
+                epoch=epoch,
+                episodes_completed=episodes_completed,
+                batch_idx=batch_idx,
+                rollout_autocast=rollout_autocast,
+                batched_lstm_hidden=_action_inputs.batched_lstm_hidden_post_action,
+            )
         batched_lstm_hidden = _action_txn.batched_lstm_hidden
 
         throughput_step_time_ms_sum += (
             time.perf_counter() - epoch_start
         ) * 1000.0
         throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch
+
+        # Tier-0 phase profiler: drain once per epoch at the throughput-counter site.
+        # CPU counters only (perf_counter_ns/thread_time_ns) -- no CUDA call, no sync,
+        # so this is safe here without a stream synchronize (Rule 1 binds Tier-1).
+        # drain() returns None under NullProfiler (disabled), keeping disabled runs
+        # byte-identical. The report flows ONE-WAY to telemetry (Rule 4).
+        phase_report = self._phase_profiler.drain(epoch=epoch, batch_idx=batch_idx)
+        if phase_report is not None:
+            self.batch_emitter.on_phase_profile(phase_report)
+
         # Check for graceful shutdown at end of each epoch (not just batch end)
         # This gives user faster response (~seconds) instead of waiting for full batch
         if self.shutdown_event is not None and self.shutdown_event.is_set():
@@ -2646,13 +2668,25 @@ class VectorizedPPOTrainer:
         )
 
         # Execute PPO updates
-        metrics, update_skipped, ppo_update_time_ms = ppo_coordinator.run_update(
-            raw_states_for_normalizer_update=raw_states_for_normalizer_update,
-            obs_normalizer=self.obs_normalizer,
-            envs_this_batch=envs_this_batch,
-            throughput_step_time_ms_sum=throughput_step_time_ms_sum,
-            throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
+        with self._phase_profiler.phase("ppo_update"):
+            metrics, update_skipped, ppo_update_time_ms = ppo_coordinator.run_update(
+                raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+                obs_normalizer=self.obs_normalizer,
+                envs_this_batch=envs_this_batch,
+                throughput_step_time_ms_sum=throughput_step_time_ms_sum,
+                throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
+            )
+
+        # Tier-0: ppo_update accrues here in _run_batch, AFTER the per-epoch drain at
+        # the epoch-loop site has already cleared the in-epoch phases. Drain it at the
+        # point it completes so it is tagged with the correct batch_idx and the final
+        # batch is never silently dropped. At this point the accumulator holds only
+        # ppo_update (in-epoch phases were drained per-epoch), so this report is clean.
+        ppo_phase_report = self._phase_profiler.drain(
+            epoch=self.max_epochs, batch_idx=batch_idx
         )
+        if ppo_phase_report is not None:
+            self.batch_emitter.on_phase_profile(ppo_phase_report)
 
         ppo_grad_norm = None
         if metrics:
@@ -2897,6 +2931,11 @@ class VectorizedPPOTrainer:
         prof = profiler_cm.__enter__()
         prof_steps = 0
 
+        # Tier-0 phase profiler: same lifetime as training_profiler. Drained once
+        # per epoch (CPU counters only, no CUDA sync); observation-only (Rule 4).
+        phase_profiler_cm = phase_profiler(enabled=self.phase_profiler)
+        self._phase_profiler = phase_profiler_cm.__enter__()
+
         try:
             history: list[dict[str, Any]] = []
             episode_history: list[
@@ -2949,6 +2988,8 @@ class VectorizedPPOTrainer:
 
         finally:
             # Ensure profiler context is always closed, even on exceptions
+            phase_profiler_cm.__exit__(None, None, None)
+            self._phase_profiler = NullProfiler()
             profiler_cm.__exit__(None, None, None)
             if self.torch_profiler_summary and prof is not None:
                 print("\n=== torch.profiler: CUDA time (top 30) ===")

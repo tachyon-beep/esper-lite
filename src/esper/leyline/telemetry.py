@@ -25,6 +25,7 @@ from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.factored_actions import NUM_OPS
+from esper.leyline.reports import PhaseProfileReport
 from esper.leyline.stages import SeedStage
 
 # =============================================================================
@@ -73,6 +74,7 @@ class TelemetryEventType(Enum):
     # Training events
     EPOCH_COMPLETED = auto()  # Per-env epoch (has env_id in data)
     BATCH_EPOCH_COMPLETED = auto()  # Batch-level epoch summary + progress (commit barrier)
+    PHASE_PROFILE_COMPLETED = auto()  # Per-epoch transaction-phase timing (Tier-0 profiler)
     PLATEAU_DETECTED = auto()
     DEGRADATION_DETECTED = auto()
     IMPROVEMENT_DETECTED = auto()
@@ -2506,6 +2508,7 @@ TelemetryPayload = (
     | GovernorRollbackPayload
     | MorphologyCausalLogPayload
     | TopologyManifestPayload
+    | PhaseProfileReport
 )
 
 

@@ -40,6 +40,7 @@ def test_view_definitions_exist():
         "shapley_computed",
         "morphology_causal_log",
         "topology_manifests",
+        "phase_occupancy",
     }
     assert set(VIEW_DEFINITIONS.keys()) == expected
 
@@ -154,6 +155,68 @@ def test_runs_view_exposes_proof_baseline_lifecycle_policy(tmp_path):
     assert schedule_hash == FIXED_SCHEDULE_GERMINATE_R0C0_HASH
     assert schedule_version == FIXED_SCHEDULE_GERMINATE_R0C0_VERSION
     assert schedule_action_count == FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+
+
+def test_phase_occupancy_view_expands_phase_timings(tmp_path):
+    """phase_occupancy expands the per-epoch phases dict into one row per phase."""
+    run_dir = tmp_path / "phase_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "phase-1",
+        "event_type": "PHASE_PROFILE_COMPLETED",
+        "timestamp": "2026-06-16T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 3,
+        "group_id": "default",
+        "message": None,
+        "data": {
+            "phases": {
+                "train": {
+                    "wall_ms": 12.5,
+                    "python_cpu_ms": 11.0,
+                    "python_cpu_ratio": 0.88,
+                },
+                "rollout": {
+                    "wall_ms": 4.0,
+                    "python_cpu_ms": 3.8,
+                    "python_cpu_ratio": 0.95,
+                },
+            },
+            "epoch": 3,
+            "batch_idx": 2,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    rows = conn.execute(
+        """
+        SELECT run_dir, epoch, batch_idx, phase_name, wall_ms,
+               python_cpu_ms, python_cpu_ratio
+        FROM phase_occupancy
+        ORDER BY phase_name
+        """
+    ).fetchall()
+
+    assert len(rows) == 2  # one row per phase
+    by_name = {r[3]: r for r in rows}
+    assert set(by_name) == {"train", "rollout"}
+
+    run_dir_val, epoch, batch_idx, _name, wall_ms, cpu_ms, ratio = by_name["train"]
+    assert run_dir_val == "phase_run"
+    assert epoch == 3
+    assert batch_idx == 2
+    assert wall_ms == pytest.approx(12.5)
+    assert cpu_ms == pytest.approx(11.0)
+    assert ratio == pytest.approx(0.88)
+
+    assert by_name["rollout"][4] == pytest.approx(4.0)
 
 
 def test_morphology_causal_log_view_extracts_joinable_fields(tmp_path):

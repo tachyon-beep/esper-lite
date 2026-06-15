@@ -42,6 +42,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "GradientEMATracker": ("esper.simic.telemetry.gradient_ema", "GradientEMATracker"),
     # torch.profiler integration (P4-5)
     "training_profiler": ("esper.simic.telemetry.profiler", "training_profiler"),
+    # Tier-0 phase profiler (GIL throughput instrument)
+    "phase_profiler": ("esper.simic.telemetry.phase_profiler", "phase_profiler"),
+    "PhaseProfiler": ("esper.simic.telemetry.phase_profiler", "PhaseProfiler"),
+    "NullProfiler": ("esper.simic.telemetry.phase_profiler", "NullProfiler"),
     # Telemetry emitters
     "emit_with_env_context": ("esper.simic.telemetry.emitters", "emit_with_env_context"),
     "emit_batch_completed": ("esper.simic.telemetry.emitters", "emit_batch_completed"),
@@ -94,6 +98,10 @@ __all__ = [
     "GradientEMATracker",
     # torch.profiler integration (P4-5)
     "training_profiler",
+    # Tier-0 phase profiler (GIL throughput instrument)
+    "phase_profiler",
+    "PhaseProfiler",
+    "NullProfiler",
     # Emitters
     "emit_with_env_context",
     "emit_batch_completed",
@@ -167,6 +175,11 @@ if TYPE_CHECKING:
         compute_observation_stats as compute_observation_stats,
     )
     from esper.simic.telemetry.profiler import training_profiler as training_profiler
+    from esper.simic.telemetry.phase_profiler import (
+        NullProfiler as NullProfiler,
+        PhaseProfiler as PhaseProfiler,
+        phase_profiler as phase_profiler,
+    )
     from esper.simic.telemetry.telemetry_config import (
         TelemetryConfig as TelemetryConfig,
         TelemetryLevel as TelemetryLevel,

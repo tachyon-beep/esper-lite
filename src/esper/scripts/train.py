@@ -169,6 +169,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print a compact torch.profiler op summary at the end of training",
     )
     telemetry_parent.add_argument(
+        "--no-phase-profiler",
+        dest="phase_profiler",
+        action="store_false",
+        help="Disable the always-on Tier-0 phase profiler (per-epoch phase timing)",
+    )
+    telemetry_parent.set_defaults(phase_profiler=True)
+    telemetry_parent.add_argument(
         "--gradient-telemetry-stride",
         type=int,
         default=None,
@@ -911,6 +918,7 @@ def main() -> None:
                             "torch_profiler_profile_memory": args.torch_profiler_profile_memory,
                             "torch_profiler_with_stack": args.torch_profiler_with_stack,
                             "torch_profiler_summary": args.torch_profiler_summary,
+                            "phase_profiler": args.phase_profiler,
                         }
                     )
                     train_dual_policy_ab(
@@ -986,6 +994,7 @@ def main() -> None:
                             "torch_profiler_profile_memory": args.torch_profiler_profile_memory,
                             "torch_profiler_with_stack": args.torch_profiler_with_stack,
                             "torch_profiler_summary": args.torch_profiler_summary,
+                            "phase_profiler": args.phase_profiler,
                         }
                     )
 
@@ -1038,6 +1047,7 @@ def main() -> None:
                         torch_profiler_profile_memory=args.torch_profiler_profile_memory,
                         torch_profiler_with_stack=args.torch_profiler_with_stack,
                         torch_profiler_summary=args.torch_profiler_summary,
+                        phase_profiler=args.phase_profiler,
                         **train_kwargs,
                     )
         except Exception:

@@ -10,6 +10,8 @@ See docs/plans/concepts/2026-06-16-gil-throughput-profiler.md (Tier 0).
 """
 from __future__ import annotations
 
+import pytest
+
 from esper.leyline import PhaseProfileReport
 from esper.simic.telemetry.phase_profiler import (
     NullProfiler,
@@ -62,6 +64,24 @@ def test_repeated_phase_accumulates() -> None:
 
     report = prof.drain()
     assert report.phases["reward"].wall_ms == 3.0
+
+
+def test_phase_records_time_even_when_body_raises() -> None:
+    """R-exc-safe: the try/finally in phase() must record timing even if the body
+    raises (the governor-rollback / panic-continue path). Without this the rollback
+    phase would be invisible exactly when it matters most.
+    """
+    wall = _FakeClock([0, 2 * _MS])
+    cpu = _FakeClock([0, 1 * _MS])
+    prof = PhaseProfiler(wall_clock=wall, cpu_clock=cpu)
+
+    with pytest.raises(ValueError):
+        with prof.phase("rollback"):
+            raise ValueError("governor rollback")
+
+    report = prof.drain()
+    assert report.phases["rollback"].wall_ms == 2.0
+    assert report.phases["rollback"].python_cpu_ms == 1.0
 
 
 def test_drain_resets_accumulators_each_epoch() -> None:
