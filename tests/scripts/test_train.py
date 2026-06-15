@@ -566,6 +566,8 @@ class TestTrainMainWiring:
         train.main()
 
         assert hub.closed is True
+        assert hub.backends.count(shared_karn_collector) == 1
+        assert sum(isinstance(backend, FakeKarnCollector) for backend in hub.backends) == 1
         assert ppo_calls["telemetry_config"].level == TelemetryLevel.OFF
         assert ppo_calls["n_episodes"] == 2
         assert ppo_calls["n_envs"] == 3

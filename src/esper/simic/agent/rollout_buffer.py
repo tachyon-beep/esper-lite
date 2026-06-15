@@ -795,6 +795,9 @@ class TamiyoRolloutBuffer:
             return False  # No transitions to modify
 
         last_idx = step_count - 1
+        episode_start = self._terminal_penalty_episode_start(env_id, step_count)
+        if episode_start < last_idx:
+            self.rewards[env_id, episode_start:last_idx] = 0.0
         self.rewards[env_id, last_idx] = penalty
         self.dones[env_id, last_idx] = True
         self.truncated[env_id, last_idx] = False  # True terminal, not truncation
@@ -809,6 +812,32 @@ class TamiyoRolloutBuffer:
             abs(penalty) if watch_window_evidence is None else watch_window_evidence
         )
         return True
+
+    def _terminal_penalty_episode_start(self, env_id: int, step_count: int) -> int:
+        """Return the start index for the episode receiving a rollback penalty."""
+        if env_id in self._current_episode_start:
+            start = self._current_episode_start[env_id]
+            if start > step_count:
+                raise RuntimeError(
+                    f"current episode start {start} exceeds step_count {step_count} "
+                    f"for env_id {env_id}"
+                )
+            return start
+
+        if env_id in self.episode_boundaries:
+            boundaries = self.episode_boundaries[env_id]
+            if boundaries:
+                start, end = boundaries[-1]
+                if end > step_count:
+                    raise RuntimeError(
+                        f"episode boundary end {end} exceeds step_count {step_count} "
+                        f"for env_id {env_id}"
+                    )
+                if end == step_count:
+                    return start
+                return end
+
+        return 0
 
     def __len__(self) -> int:
         """Total transitions across all environments."""

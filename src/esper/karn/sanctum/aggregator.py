@@ -1875,7 +1875,7 @@ class SanctumAggregator:
                 alternatives=payload.alternatives or [],
                 action_success=payload.action_success,
                 decision_id=str(uuid.uuid4())[:8],
-                decision_entropy=payload.decision_entropy or 0.0,
+                decision_entropy=payload.decision_entropy,
                 env_id=env_id,
                 episode=self._current_episode,
                 epoch=self._current_epoch,
@@ -1899,14 +1899,14 @@ class SanctumAggregator:
                 alpha_speed_confidence=ht.alpha_speed_confidence if ht else 0.0,
                 curve_confidence=ht.curve_confidence if ht else 0.0,
                 # Per-head entropy values (from HeadTelemetry)
-                op_entropy=ht.op_entropy if ht else 0.0,
-                slot_entropy=ht.slot_entropy if ht else 0.0,
-                blueprint_entropy=ht.blueprint_entropy if ht else 0.0,
-                style_entropy=ht.style_entropy if ht else 0.0,
-                tempo_entropy=ht.tempo_entropy if ht else 0.0,
-                alpha_target_entropy=ht.alpha_target_entropy if ht else 0.0,
-                alpha_speed_entropy=ht.alpha_speed_entropy if ht else 0.0,
-                curve_entropy=ht.curve_entropy if ht else 0.0,
+                op_entropy=ht.op_entropy if ht is not None else None,
+                slot_entropy=ht.slot_entropy if ht is not None else None,
+                blueprint_entropy=ht.blueprint_entropy if ht is not None else None,
+                style_entropy=ht.style_entropy if ht is not None else None,
+                tempo_entropy=ht.tempo_entropy if ht is not None else None,
+                alpha_target_entropy=ht.alpha_target_entropy if ht is not None else None,
+                alpha_speed_entropy=ht.alpha_speed_entropy if ht is not None else None,
+                curve_entropy=ht.curve_entropy if ht is not None else None,
             )
 
             # Store as pending for TD advantage computation on next decision

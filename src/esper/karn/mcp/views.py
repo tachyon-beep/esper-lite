@@ -20,7 +20,16 @@ VIEW_DEFINITIONS: dict[str, str] = {
             timestamp,
             seed_id,
             slot_id,
-            epoch,
+            COALESCE(
+                epoch,
+                TRY_CAST(
+                    regexp_extract(
+                        json_extract_string(data, '$.action_id'),
+                        '-e([0-9]+)-',
+                        1
+                    ) AS BIGINT
+                )
+            ) as epoch,
             group_id,
             message,
             data,
@@ -59,6 +68,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             timestamp as started_at,
             json_extract_string(data, '$.task') as task,
             json_extract_string(data, '$.reward_mode') as reward_mode,
+            json_extract(data, '$.seed')::INTEGER as seed,
             json_extract(data, '$.n_envs')::INTEGER as n_envs,
             json_extract(data, '$.n_episodes')::INTEGER as n_episodes,
             json_extract(data, '$.max_epochs')::INTEGER as max_epochs,
@@ -68,9 +78,16 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.clip_ratio')::DOUBLE as clip_ratio,
             json_extract(data, '$.param_budget')::INTEGER as param_budget,
             json_extract_string(data, '$.policy_device') as policy_device,
+            json_extract(data, '$.amp_enabled')::BOOLEAN as amp_enabled,
+            json_extract_string(data, '$.amp_dtype') as amp_dtype,
             json_extract(data, '$.host_params')::INTEGER as host_params,
             json_extract_string(data, '$.proof_baseline_mode') as proof_baseline_mode,
-            json_extract_string(data, '$.proof_baseline_pair_id') as proof_baseline_pair_id
+            json_extract_string(data, '$.proof_baseline_pair_id') as proof_baseline_pair_id,
+            json_extract_string(data, '$.proof_baseline_lifecycle_policy') as proof_baseline_lifecycle_policy,
+            json_extract_string(data, '$.proof_baseline_schedule_id') as proof_baseline_schedule_id,
+            json_extract_string(data, '$.proof_baseline_schedule_hash') as proof_baseline_schedule_hash,
+            json_extract(data, '$.proof_baseline_schedule_version')::INTEGER as proof_baseline_schedule_version,
+            json_extract(data, '$.proof_baseline_schedule_action_count')::INTEGER as proof_baseline_schedule_action_count
         FROM raw_events
         WHERE event_type = 'TRAINING_STARTED'
     """,
@@ -143,6 +160,12 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.op_valid_mask') as op_valid_mask,
             json_extract(data, '$.q_variance')::DOUBLE as q_variance,
             json_extract(data, '$.q_spread')::DOUBLE as q_spread,
+            -- D5 slot-saturation / actor-agency diagnostics
+            json_extract(data, '$.forced_step_ratio')::DOUBLE as forced_step_ratio,
+            json_extract(data, '$.usable_actor_timesteps')::INTEGER as usable_actor_timesteps,
+            json_extract(data, '$.decision_density')::DOUBLE as decision_density,
+            json_extract(data, '$.advantage_std_floored')::BOOLEAN as advantage_std_floored,
+            json_extract(data, '$.d5_pre_norm_advantage_std')::DOUBLE as d5_pre_norm_advantage_std,
             -- Per-head entropy
             json_extract(data, '$.head_slot_entropy')::DOUBLE as head_slot_entropy,
             json_extract(data, '$.head_blueprint_entropy')::DOUBLE as head_blueprint_entropy,
@@ -259,7 +282,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.morphology_verdict_id') as morphology_verdict_id,
             json_extract_string(data, '$.morphology_mutation_id') as morphology_mutation_id,
             json_extract_string(data, '$.rng_stream') as rng_stream,
-            json_extract(data, '$.rng_seed')::BIGINT as rng_seed
+            json_extract(data, '$.rng_seed')::UBIGINT as rng_seed
         FROM raw_events
         WHERE event_type IN (
             'SEED_GERMINATED',
@@ -288,7 +311,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.mutation_id') as mutation_id,
             json_extract_string(data, '$.observation_hash') as observation_hash,
             json_extract_string(data, '$.rng_stream') as rng_stream,
-            json_extract(data, '$.rng_seed')::BIGINT as rng_seed,
+            json_extract(data, '$.rng_seed')::UBIGINT as rng_seed,
             json_extract_string(data, '$.topology') as topology,
             json_extract_string(data, '$.blueprint_id') as blueprint_id,
             json_extract(data, '$.governor_approved')::BOOLEAN as governor_approved,
@@ -298,6 +321,40 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.linked_event_id') as linked_event_id
         FROM raw_events
         WHERE event_type = 'MORPHOLOGY_CAUSAL_LOG'
+    """,
+    "topology_manifests": """
+        CREATE OR REPLACE VIEW topology_manifests AS
+        SELECT
+            event_id,
+            timestamp,
+            run_dir,
+            group_id,
+            epoch,
+            severity,
+            message,
+            json_extract_string(data, '$.manifest_role') as manifest_role,
+            json_extract_string(data, '$.proof_baseline_pair_id') as proof_baseline_pair_id,
+            json_extract(data, '$.topology_manifest_version')::INTEGER as topology_manifest_version,
+            json_extract_string(data, '$.topology_manifest_hash') as topology_manifest_hash,
+            json_extract_string(data, '$.topology_manifest_json') as topology_manifest_json,
+            json_extract_string(data, '$.task') as task,
+            json_extract_string(data, '$.host_topology') as host_topology,
+            json_extract_string(data, '$.slot_config_hash') as slot_config_hash,
+            json_extract(data, '$.slot_count')::INTEGER as slot_count,
+            json_extract(data, '$.fossilized_seed_count')::INTEGER as fossilized_seed_count,
+            json_extract(data, '$.topology_delta_count')::INTEGER as topology_delta_count,
+            json_extract_string(data, '$.source_run_dir') as source_run_dir,
+            json_extract_string(data, '$.source_group_id') as source_group_id,
+            json_extract(data, '$.source_episode_idx')::INTEGER as source_episode_idx,
+            json_extract_string(data, '$.source_event_id') as source_event_id,
+            json_extract_string(data, '$.source_topology_manifest_hash') as source_topology_manifest_hash,
+            json_extract_string(data, '$.replay_weight_policy') as replay_weight_policy,
+            json_extract(data, '$.replay_env_id')::INTEGER as replay_env_id,
+            json_extract(data, '$.replay_episode_idx')::INTEGER as replay_episode_idx,
+            json_extract_string(data, '$.replayed_topology_manifest_hash') as replayed_topology_manifest_hash,
+            json_extract(data, '$.manifest_match')::BOOLEAN as manifest_match
+        FROM raw_events
+        WHERE event_type = 'TOPOLOGY_MANIFEST_RECORDED'
     """,
     "decisions": """
         CREATE OR REPLACE VIEW decisions AS
@@ -590,7 +647,12 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.num_contributing_fossilized')::INTEGER as num_contributing_fossilized,
             json_extract(data, '$.episode_reward')::DOUBLE as episode_reward,
             json_extract(data, '$.stability_score')::DOUBLE as stability_score,
-            json_extract_string(data, '$.reward_mode') as reward_mode
+            json_extract_string(data, '$.reward_mode') as reward_mode,
+            json_extract(data, '$.episode_length')::INTEGER as episode_length,
+            json_extract_string(data, '$.outcome_type') as outcome_type,
+            json_extract(data, '$.germinate_count')::INTEGER as germinate_count,
+            json_extract(data, '$.prune_count')::INTEGER as prune_count,
+            json_extract(data, '$.fossilize_count')::INTEGER as fossilize_count
         FROM raw_events
         WHERE event_type = 'EPISODE_OUTCOME'
     """,

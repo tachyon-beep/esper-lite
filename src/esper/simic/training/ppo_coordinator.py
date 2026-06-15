@@ -134,11 +134,10 @@ class PPOCoordinator:
             # silently shrink the penalty toward the ordinary-reward scale. Clamping makes
             # the penalty land at a fixed, dominating magnitude every time, regardless of
             # the running reward statistics.
-            # NOTE: this alone does not guarantee dominance over the highest-return
-            # episodes -- a single -clip terminal step cannot outweigh a long run of
-            # positives that sums beyond clip. Sizing/propagation for that tail-dominance
-            # case is tracked separately (it changes training dynamics and needs a
-            # retraining run to tune).
+            # P1-ROLLBACK-TAIL fix: a catastrophe forfeits the current episode's
+            # positive prefix. The terminal penalty must be the episode payoff; otherwise
+            # long high-return prefixes can dominate the final rollback penalty in both
+            # telemetry totals and PPO return targets.
             penalty = env_states[env_idx].governor.get_punishment_reward()
             normalized_penalty = float(max(-clip, min(clip, penalty)))
             # Do NOT resolve triggering_action_id eagerly: last_action_id() raises
@@ -165,6 +164,8 @@ class PPOCoordinator:
             # Buffer gets normalized_penalty (for PPO training stability).
             # Telemetry gets raw penalty (for cross-run comparability).
             if env_states[env_idx].episode_rewards:
+                for reward_idx in range(len(env_states[env_idx].episode_rewards) - 1):
+                    env_states[env_idx].episode_rewards[reward_idx] = 0.0
                 env_states[env_idx].episode_rewards[-1] = penalty
 
         # B11-CR-02 fix: Recompute metrics after penalty injection
@@ -487,11 +488,14 @@ class PPOCoordinator:
             # MANDATORY metrics after PPO update - fail loudly if missing
             ratio_max=metrics["ratio_max"],
             ratio_min=metrics["ratio_min"],
-            explained_variance=metrics.get("explained_variance", 0.0),
+            explained_variance=metrics["explained_variance"],
             has_nan=any(math.isnan(v) for v in metric_values),
             has_inf=any(math.isinf(v) for v in metric_values),
             current_episode=batch_epoch_id,
             total_episodes=self.config.total_env_episodes,
+            # Fully forced proof-control rollouts still report EV, but there was
+            # no actor agency to diagnose as PPO value collapse.
+            value_collapse_applicable=metrics["usable_actor_timesteps"] > 0,
         )
 
         # B7-DRL-01: Check gradient drift and merge into anomaly report

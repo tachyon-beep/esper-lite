@@ -523,7 +523,8 @@ class DirectoryOutput(OutputBackend):
     """Output telemetry events to a timestamped directory.
 
     Creates a subdirectory with format `telemetry_YYYY-MM-DD_HHMMSS/` and
-    writes events to `events.jsonl` inside it.
+    writes events to `events.jsonl` inside it. When multiple runs start within
+    the same second, a numeric suffix keeps each run in its own directory.
 
     Args:
         base_path: Base directory where timestamped subdirectory will be created.
@@ -534,10 +535,20 @@ class DirectoryOutput(OutputBackend):
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
 
-        # Generate timestamped subdirectory
+        # Generate timestamped subdirectory, avoiding same-second collisions
+        # between fast proof cohorts in one process or concurrent writers.
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        self._output_dir = self.base_path / f"telemetry_{timestamp}"
-        self._output_dir.mkdir(parents=True, exist_ok=True)
+        run_dir_name = f"telemetry_{timestamp}"
+        candidate = self.base_path / run_dir_name
+        collision_index = 0
+        while True:
+            try:
+                candidate.mkdir(exist_ok=False)
+                break
+            except FileExistsError:
+                collision_index += 1
+                candidate = self.base_path / f"{run_dir_name}_{collision_index:03d}"
+        self._output_dir = candidate
 
         # Create internal FileOutput for actual writing
         self._file_output = FileOutput(self._output_dir / "events.jsonl", buffer_size)

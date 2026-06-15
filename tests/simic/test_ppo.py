@@ -980,6 +980,75 @@ def test_ppo_update_collects_q_values():
     assert math.isclose(metrics["q_spread"], expected_spread, rel_tol=1e-6, abs_tol=1e-6)
 
 
+def test_ppo_update_singleton_valid_op_q_metrics_are_finite():
+    """Singleton op masks should not look like numerical instability."""
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm",
+        slot_config=slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
+    agent = PPOAgent(
+        policy=policy,
+        slot_config=slot_config,
+        num_envs=1,
+        max_steps_per_env=5,
+        target_kl=None,
+        device="cpu",
+    )
+
+    agent.buffer.start_episode(env_id=0)
+    op_mask = torch.tensor([True, False, False, False, False, False], dtype=torch.bool)
+    for i in range(5):
+        agent.buffer.add(
+            env_id=0,
+            state=torch.randn(agent.policy.network.state_dim),
+            slot_action=0,
+            blueprint_action=0,
+            style_action=0,
+            tempo_action=0,
+            alpha_target_action=0,
+            alpha_speed_action=0,
+            alpha_curve_action=0,
+            op_action=0,
+            effective_op_action=0,
+            slot_log_prob=-1.0,
+            blueprint_log_prob=-1.0,
+            style_log_prob=-1.0,
+            tempo_log_prob=-1.0,
+            alpha_target_log_prob=-1.0,
+            alpha_speed_log_prob=-1.0,
+            alpha_curve_log_prob=-1.0,
+            op_log_prob=-1.0,
+            value=1.0,
+            reward=1.0,
+            done=(i == 4),
+            truncated=False,
+            slot_mask=torch.ones(3, dtype=torch.bool),
+            blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
+            style_mask=torch.ones(NUM_STYLES, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+            alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+            alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+            op_mask=op_mask,
+            hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
+            hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
+            bootstrap_value=0.0,
+            blueprint_indices=torch.zeros(3, dtype=torch.long),
+        )
+    agent.buffer.end_episode(env_id=0)
+
+    metrics = agent.update()
+
+    assert metrics["op_valid_mask"] == tuple(op_mask.tolist())
+    assert math.isfinite(metrics["q_variance"])
+    assert math.isfinite(metrics["q_spread"])
+    assert metrics["q_variance"] == 0.0
+    assert metrics["q_spread"] == 0.0
+
+
 def test_bptt_invariant_assertion_fires():
     """PPOAgent must reject max_steps_per_env > chunk_length (BPTT invariant guard).
 

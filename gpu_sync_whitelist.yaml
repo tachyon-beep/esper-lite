@@ -126,6 +126,15 @@ allow_hits:
 - key: src/esper/simic/control/normalization.py:ValueNormalizer.load_state_dict:item
   owner: John
   reason: checkpoint restore is not a hot path
+- key: src/esper/simic/training/normalizer_checkpoint.py:obs_normalizer_metadata:tolist
+  owner: John
+  reason: checkpoint save serialization - observation normalizer mean is copied only when writing resume metadata
+- key: src/esper/simic/training/normalizer_checkpoint.py:obs_normalizer_metadata:tolist:2
+  owner: John
+  reason: checkpoint save serialization - observation normalizer variance is copied only when writing resume metadata
+- key: src/esper/simic/training/normalizer_checkpoint.py:obs_normalizer_metadata:item
+  owner: John
+  reason: checkpoint save serialization - observation normalizer count is copied only when writing resume metadata
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu
   owner: John
   reason: Debug - transfer bad indices to CPU for diagnostic payload; capped to 100 exemplars
@@ -292,15 +301,6 @@ allow_hits:
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:8
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:tolist:4
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:tolist:5
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:item:6
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/tamiyo/networks/factored_lstm.py:BlueprintEmbedding.forward:tolist

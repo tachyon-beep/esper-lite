@@ -73,6 +73,7 @@ from esper.leyline.factored_actions import NUM_OPS
 
 _LITERAL_VALUES: dict[str, Any] = {
     "phase": "verdict",  # MorphologyCausalLogPhase
+    "manifest_role": "static_final_replay",  # TopologyManifestRole
     "pattern": "ransomware_signature",  # RewardHackingPattern
     "panic_reason": "governor_nan",  # GovernorPanicReason
 }
@@ -309,6 +310,7 @@ def test_round_trip_covers_every_payload_with_from_dict() -> None:
         "EpisodeOutcomePayload",
         "GovernorRollbackPayload",
         "MorphologyCausalLogPayload",
+        "TopologyManifestPayload",
         "AnomalyDetectedPayload",
         "TrainingStartedPayload",
     }
@@ -347,6 +349,7 @@ def test_every_union_payload_has_a_serialization_path() -> None:
         T.EpisodeOutcomePayload,
         T.GovernorRollbackPayload,
         T.MorphologyCausalLogPayload,
+        T.TopologyManifestPayload,
     ]
     for cls in union_members:
         if hasattr(cls, "from_dict"):

@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, cast
 
 import numpy as np
@@ -13,10 +13,27 @@ import torch.nn as nn
 
 from esper.leyline import (
     AlphaAlgorithm,
+    FactoredAction,
     HEAD_NAMES,
     LifecycleOp,
     SeedSlotProtocol,
     SeedStage,
+    TelemetryEvent,
+    TelemetryEventType,
+    TopologyManifestPayload,
+)
+from esper.leyline.proof_baselines import (
+    FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT,
+    FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
+    FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
+    FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+    STATIC_FINAL_SOURCE_LIFECYCLE_POLICY,
+    STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT,
+    STATIC_FINAL_SOURCE_TOPOLOGY_HASH,
+    STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
+    STATIC_FINAL_SOURCE_TOPOLOGY_V1,
+    fixed_schedule_action_for_epoch,
+    static_final_source_action_for_epoch,
 )
 from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry import (
@@ -40,6 +57,7 @@ from esper.utils.data import augment_cifar10_batch
 from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .helpers import policy_amp_context
+from .normalizer_checkpoint import obs_normalizer_metadata
 from .counterfactual_eval import process_fused_val_batch
 from .env_factory import (
     EnvFactoryContext,
@@ -48,6 +66,12 @@ from .env_factory import (
     make_env_seed,
 )
 from .ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
+from .static_final_replay import (
+    TOPOLOGY_ONLY_REPLAY_WEIGHT_POLICY,
+    capture_source_final_manifest,
+    capture_static_final_replay_manifest,
+    materialize_static_final_topology,
+)
 from esper.simic.vectorized_types import (
     ActionMaskFlags,
     ActionOutcome,
@@ -58,6 +82,17 @@ from esper.simic.vectorized_types import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+_PROOF_CONTROLLED_LIFECYCLE_POLICIES = (
+    "apply_declared_lifecycle_schedule",
+    "freeze_replayed_final_topology",
+    STATIC_FINAL_SOURCE_LIFECYCLE_POLICY,
+)
+
+
+def _is_proof_controlled_lifecycle_policy(lifecycle_policy: str | None) -> bool:
+    return lifecycle_policy in _PROOF_CONTROLLED_LIFECYCLE_POLICIES
 
 
 def log_frag(device: str | torch.device, tag: str) -> None:
@@ -182,27 +217,85 @@ def apply_proof_baseline_action_controls(
     *,
     masks_batch: dict[str, torch.Tensor],
     lifecycle_policy: str | None,
+    schedule_id: str | None,
+    schedule_hash: str | None = None,
+    schedule_version: int | None = None,
+    schedule_action_count: int | None = None,
+    epoch: int,
+    static_final_replay_validated: bool = False,
 ) -> None:
     """Apply proof-baseline lifecycle controls before action sampling."""
     if lifecycle_policy is None:
+        if (
+            schedule_id is not None
+            or schedule_hash is not None
+            or schedule_version is not None
+            or schedule_action_count is not None
+        ):
+            raise ValueError(
+                "proof_baseline schedule provenance requires a proof baseline lifecycle policy"
+            )
         return
     if lifecycle_policy == "paired_lockstep_reward_comparison":
+        if (
+            schedule_id is not None
+            or schedule_hash is not None
+            or schedule_version is not None
+            or schedule_action_count is not None
+        ):
+            raise ValueError(
+                "paired_lockstep_reward_comparison must not carry schedule provenance"
+            )
+        return
+    if lifecycle_policy == STATIC_FINAL_SOURCE_LIFECYCLE_POLICY:
+        if (
+            schedule_id != STATIC_FINAL_SOURCE_TOPOLOGY_V1
+            or schedule_hash != STATIC_FINAL_SOURCE_TOPOLOGY_HASH
+            or schedule_version != STATIC_FINAL_SOURCE_TOPOLOGY_VERSION
+            or schedule_action_count != STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT
+        ):
+            raise ValueError(
+                f"{STATIC_FINAL_SOURCE_LIFECYCLE_POLICY} requires "
+                f"proof_baseline_schedule_id={STATIC_FINAL_SOURCE_TOPOLOGY_V1!r}, "
+                "the matching hash, version, and action count"
+            )
+        action = static_final_source_action_for_epoch(epoch)
+        _force_scheduled_action_masks(
+            masks_batch=masks_batch,
+            action=action,
+            epoch=epoch,
+        )
         return
 
-    # These policies would require real control machinery that does not exist:
-    #   - freeze_replayed_final_topology (static_final) needs topology
-    #     persistence + replay so envs start at a previously-evolved FINAL
-    #     topology and hold it fixed.
-    #   - apply_declared_lifecycle_schedule (fixed_schedule) needs a schedule
-    #     injector that emits non-WAIT ops on a predetermined schedule while
-    #     bypassing the policy.
-    # Masking the op head to WAIT does NEITHER — it would produce a fake
-    # control (a run frozen at its INITIAL topology, applying no ops). Refuse
-    # loudly rather than silently degrade to WAIT-only and invalidate the proof.
-    unsupported_policies = (
-        "freeze_replayed_final_topology",
-        "apply_declared_lifecycle_schedule",
-    )
+    if lifecycle_policy == "freeze_replayed_final_topology":
+        if (
+            schedule_id is not None
+            or schedule_hash is not None
+            or schedule_version is not None
+            or schedule_action_count is not None
+        ):
+            raise ValueError(
+                "freeze_replayed_final_topology must not carry schedule provenance"
+            )
+        if not static_final_replay_validated:
+            # Masking the op head to WAIT without prior replay would produce a
+            # fake control frozen at INITIAL topology. Refuse loudly rather
+            # than silently invalidating the proof.
+            raise RuntimeError(
+                "Proof baseline lifecycle policy "
+                f"{lifecycle_policy!r} is not supported by this runner without "
+                "validated static-final replay evidence: masking the op head to "
+                "WAIT would produce a fake control that invalidates the "
+                "morphogenesis proof. Materialize a source-final topology and "
+                "emit topology manifest evidence before freezing the policy."
+            )
+        wait_idx = LifecycleOp.WAIT.value
+        controlled_op_mask = torch.zeros_like(masks_batch["op"])
+        controlled_op_mask[:, wait_idx] = True
+        masks_batch["op"] = controlled_op_mask
+        return
+
+    unsupported_policies: tuple[str, ...] = ()
     if lifecycle_policy in unsupported_policies:
         raise RuntimeError(
             "Proof baseline lifecycle policy "
@@ -213,10 +306,39 @@ def apply_proof_baseline_action_controls(
             "real control."
         )
 
+    if lifecycle_policy == "apply_declared_lifecycle_schedule":
+        if (
+            schedule_id != FIXED_SCHEDULE_GERMINATE_R0C0_V1
+            or schedule_hash != FIXED_SCHEDULE_GERMINATE_R0C0_HASH
+            or schedule_version != FIXED_SCHEDULE_GERMINATE_R0C0_VERSION
+            or schedule_action_count != FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+        ):
+            raise ValueError(
+                "apply_declared_lifecycle_schedule requires "
+                f"proof_baseline_schedule_id={FIXED_SCHEDULE_GERMINATE_R0C0_V1!r}, "
+                "the matching hash, version, and action count"
+            )
+        action = fixed_schedule_action_for_epoch(epoch)
+        _force_scheduled_action_masks(
+            masks_batch=masks_batch,
+            action=action,
+            epoch=epoch,
+        )
+        return
+
     wait_only_policies = (
         "force_wait_only",
         "freeze_initial_topology",
     )
+    if (
+        schedule_id is not None
+        or schedule_hash is not None
+        or schedule_version is not None
+        or schedule_action_count is not None
+    ):
+        raise ValueError(
+            f"proof_baseline schedule provenance is not valid for lifecycle policy {lifecycle_policy!r}"
+        )
     if lifecycle_policy not in wait_only_policies:
         raise ValueError(f"Unknown proof baseline lifecycle policy: {lifecycle_policy}")
 
@@ -224,6 +346,158 @@ def apply_proof_baseline_action_controls(
     controlled_op_mask = torch.zeros_like(masks_batch["op"])
     controlled_op_mask[:, wait_idx] = True
     masks_batch["op"] = controlled_op_mask
+
+
+def _force_scheduled_action_masks(
+    *,
+    masks_batch: dict[str, torch.Tensor],
+    action: FactoredAction,
+    epoch: int,
+) -> None:
+    """Force one declared fixed-schedule action without bypassing masks."""
+    original_masks = {head: mask.clone() for head, mask in masks_batch.items()}
+    try:
+        _force_head_choice(
+            masks_batch=masks_batch,
+            head="op",
+            index=action.op.value,
+            epoch=epoch,
+        )
+        if action.op == LifecycleOp.WAIT:
+            return
+
+        _force_head_choice(
+            masks_batch=masks_batch,
+            head="slot",
+            index=action.slot_idx,
+            epoch=epoch,
+        )
+        _force_slot_by_op_choice(
+            masks_batch=masks_batch,
+            op_idx=action.op.value,
+            slot_idx=action.slot_idx,
+            epoch=epoch,
+        )
+
+        if action.op == LifecycleOp.GERMINATE:
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="blueprint",
+                index=action.blueprint.value,
+                epoch=epoch,
+            )
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="style",
+                index=action.style.value,
+                epoch=epoch,
+            )
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="tempo",
+                index=action.tempo.value,
+                epoch=epoch,
+            )
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="alpha_target",
+                index=action.alpha_target.value,
+                epoch=epoch,
+            )
+            return
+
+        if action.op == LifecycleOp.SET_ALPHA_TARGET:
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="style",
+                index=action.style.value,
+                epoch=epoch,
+            )
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="alpha_target",
+                index=action.alpha_target.value,
+                epoch=epoch,
+            )
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="alpha_speed",
+                index=action.alpha_speed.value,
+                epoch=epoch,
+            )
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="alpha_curve",
+                index=action.alpha_curve.value,
+                epoch=epoch,
+            )
+            return
+
+        if action.op == LifecycleOp.PRUNE:
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="alpha_speed",
+                index=action.alpha_speed.value,
+                epoch=epoch,
+            )
+            _force_head_choice(
+                masks_batch=masks_batch,
+                head="alpha_curve",
+                index=action.alpha_curve.value,
+                epoch=epoch,
+            )
+    except RuntimeError:
+        masks_batch.clear()
+        masks_batch.update(original_masks)
+        raise
+
+
+def _force_head_choice(
+    *,
+    masks_batch: dict[str, torch.Tensor],
+    head: str,
+    index: int,
+    epoch: int,
+) -> None:
+    mask = masks_batch[head]
+    if index < 0 or index >= mask.shape[1]:
+        raise RuntimeError(
+            f"Fixed-schedule action index {index} is out of range for head {head!r}"
+        )
+    if not bool(mask[:, index].all()):
+        raise RuntimeError(
+            "Fixed-schedule action is invalid under current action masks: "
+            f"epoch={epoch} head={head!r} index={index}"
+        )
+    controlled_mask = torch.zeros_like(mask)
+    controlled_mask[:, index] = True
+    masks_batch[head] = controlled_mask
+
+
+def _force_slot_by_op_choice(
+    *,
+    masks_batch: dict[str, torch.Tensor],
+    op_idx: int,
+    slot_idx: int,
+    epoch: int,
+) -> None:
+    slot_by_op = masks_batch["slot_by_op"]
+    if op_idx < 0 or op_idx >= slot_by_op.shape[1]:
+        raise RuntimeError(
+            f"Fixed-schedule op index {op_idx} is out of range for slot_by_op"
+        )
+    if slot_idx < 0 or slot_idx >= slot_by_op.shape[2]:
+        raise RuntimeError(
+            f"Fixed-schedule slot index {slot_idx} is out of range for slot_by_op"
+        )
+    if not bool(slot_by_op[:, op_idx, slot_idx].all()):
+        raise RuntimeError(
+            "Fixed-schedule action is invalid under current op-conditioned slot masks: "
+            f"epoch={epoch} op_index={op_idx} slot_index={slot_idx}"
+        )
+    controlled_slot_by_op = torch.zeros_like(slot_by_op)
+    controlled_slot_by_op[:, op_idx, slot_idx] = True
+    masks_batch["slot_by_op"] = controlled_slot_by_op
 
 
 def _check_vitals_before_snapshot(
@@ -299,7 +573,18 @@ class VectorizedPPOTrainer:
     gpu_preload_augment: bool
     amp_enabled: bool
     resolved_amp_dtype: torch.dtype | None
+    proof_baseline_pair_id: str | None
     proof_baseline_lifecycle_policy: str | None
+    proof_baseline_schedule_id: str | None
+    proof_baseline_schedule_hash: str | None
+    proof_baseline_schedule_version: int | None
+    proof_baseline_schedule_action_count: int | None
+    static_final_source_manifest: TopologyManifestPayload | None
+    static_final_source_run_dir: str | None
+    static_final_source_group_id: str | None
+    static_final_source_episode_idx: int | None
+    static_final_source_event_id: str | None
+    telemetry_run_dir: str | None
     env_factory: EnvFactoryContext
     compiled_loss_and_correct: Callable[..., tuple[torch.Tensor, torch.Tensor, int]]
     run_ppo_updates: Callable[..., dict[str, Any]]
@@ -371,6 +656,119 @@ class VectorizedPPOTrainer:
             logger=self.logger,
         )
 
+    def _materialize_static_final_replay(
+        self,
+        *,
+        env_states: list[Any],
+        emitters: list[Any],
+    ) -> None:
+        if self.static_final_source_manifest is None:
+            raise RuntimeError(
+                "freeze_replayed_final_topology requires static_final_source_manifest"
+            )
+        if self.static_final_source_run_dir is None:
+            raise RuntimeError(
+                "freeze_replayed_final_topology requires static_final_source_run_dir"
+            )
+        if self.static_final_source_group_id is None:
+            raise RuntimeError(
+                "freeze_replayed_final_topology requires static_final_source_group_id"
+            )
+        if self.static_final_source_episode_idx is None:
+            raise RuntimeError(
+                "freeze_replayed_final_topology requires static_final_source_episode_idx"
+            )
+        if self.static_final_source_event_id is None:
+            raise RuntimeError(
+                "freeze_replayed_final_topology requires static_final_source_event_id"
+            )
+
+        for env_idx, env_state in enumerate(env_states):
+            materialize_static_final_topology(
+                model=env_state.model,
+                source_manifest_json=(
+                    self.static_final_source_manifest.topology_manifest_json
+                ),
+            )
+            env_state.governor.snapshot()
+            replay_episode_idx = emitters[env_idx].episode_idx
+            if replay_episode_idx is None:
+                raise RuntimeError(
+                    "static-final replay capture requires emitter episode_idx"
+                )
+            replay_payload = capture_static_final_replay_manifest(
+                model=env_state.model,
+                task=self.task_spec.name,
+                proof_baseline_pair_id=(
+                    self.static_final_source_manifest.proof_baseline_pair_id
+                ),
+                source_manifest=self.static_final_source_manifest,
+                source_run_dir=self.static_final_source_run_dir,
+                source_group_id=self.static_final_source_group_id,
+                source_episode_idx=self.static_final_source_episode_idx,
+                source_event_id=self.static_final_source_event_id,
+                replay_weight_policy=TOPOLOGY_ONLY_REPLAY_WEIGHT_POLICY,
+                replay_env_id=env_idx,
+                replay_episode_idx=replay_episode_idx,
+            )
+            emitters[env_idx].emit(
+                TelemetryEvent(
+                    event_type=TelemetryEventType.TOPOLOGY_MANIFEST_RECORDED,
+                    epoch=0,
+                    data=replay_payload,
+                    message="Static-final replay manifest",
+                    severity="info",
+                )
+            )
+
+    def _emit_source_final_manifests(
+        self,
+        *,
+        env_states: list[Any],
+        emitters: list[Any],
+        epoch: int,
+    ) -> list[dict[str, Any]]:
+        if self.proof_baseline_pair_id is None:
+            raise RuntimeError(
+                "static-final source capture requires proof_baseline_pair_id"
+            )
+        if self.telemetry_run_dir is None:
+            raise RuntimeError(
+                "static-final source capture requires telemetry_dir so source_run_dir "
+                "can be linked by the proof packet"
+            )
+
+        records: list[dict[str, Any]] = []
+        for env_idx, env_state in enumerate(env_states):
+            payload = capture_source_final_manifest(
+                model=env_state.model,
+                task=self.task_spec.name,
+                proof_baseline_pair_id=self.proof_baseline_pair_id,
+            )
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.TOPOLOGY_MANIFEST_RECORDED,
+                epoch=epoch,
+                data=payload,
+                message="Source-final topology manifest",
+                severity="info",
+            )
+            emitters[env_idx].emit(event)
+            episode_idx = emitters[env_idx].episode_idx
+            if episode_idx is None:
+                raise RuntimeError(
+                    "static-final source capture requires emitter episode_idx"
+                )
+            records.append(
+                {
+                    "event_id": event.event_id,
+                    "run_dir": self.telemetry_run_dir,
+                    "group_id": emitters[env_idx].group_id,
+                    "episode_idx": episode_idx,
+                    "payload": asdict(payload),
+                }
+            )
+        return records
+
     def run(self) -> list[dict[str, Any]]:
         agent = self.agent
         task_spec = self.task_spec
@@ -419,6 +817,7 @@ class VectorizedPPOTrainer:
         torch_profiler_summary = self.torch_profiler_summary
         gpu_preload_augment = self.gpu_preload_augment
         resolved_amp_dtype = self.resolved_amp_dtype
+        static_final_replay_validated = False
 
         def rollout_autocast() -> AbstractContextManager[None]:
             # P1-BF16 (CRITICAL-1): rollout get_action must run under the SAME policy-AMP
@@ -470,6 +869,7 @@ class VectorizedPPOTrainer:
             grad_ema_tracker = GradientEMATracker() if use_telemetry else None
 
             while batch_idx < total_batches:
+                topology_manifest_records: list[dict[str, Any]] = []
                 log_frag(self.device, f"batch{batch_idx}.start")
                 # One PPO update per full batch of environments.
                 envs_this_batch = n_envs
@@ -507,6 +907,13 @@ class VectorizedPPOTrainer:
                         episode_ctx.episode_idx = episodes_completed + env_idx
                     # Also set on VectorizedEmitter (used by on_epoch_completed, on_last_action)
                     emitters[env_idx].set_episode_idx(episodes_completed + env_idx)
+
+                if self.proof_baseline_lifecycle_policy == "freeze_replayed_final_topology":
+                    self._materialize_static_final_replay(
+                        env_states=env_states,
+                        emitters=emitters,
+                    )
+                    static_final_replay_validated = True
 
                 # Initialize batched LSTM hidden state for all environments
                 # (Batched hidden management avoids per-step cat/slice overhead)
@@ -1498,6 +1905,14 @@ class VectorizedPPOTrainer:
                     apply_proof_baseline_action_controls(
                         masks_batch=masks_batch,
                         lifecycle_policy=self.proof_baseline_lifecycle_policy,
+                        schedule_id=self.proof_baseline_schedule_id,
+                        schedule_hash=self.proof_baseline_schedule_hash,
+                        schedule_version=self.proof_baseline_schedule_version,
+                        schedule_action_count=(
+                            self.proof_baseline_schedule_action_count
+                        ),
+                        epoch=epoch,
+                        static_final_replay_validated=static_final_replay_validated,
                     )
 
                     # Accumulate raw states for deferred normalizer update
@@ -1674,6 +2089,9 @@ class VectorizedPPOTrainer:
                         epoch=epoch,
                         episodes_completed=episodes_completed,
                         batch_idx=batch_idx,
+                        proof_controlled_step=_is_proof_controlled_lifecycle_policy(
+                            self.proof_baseline_lifecycle_policy
+                        ),
                     )
 
                     truncated_bootstrap_targets = (
@@ -1927,6 +2345,18 @@ class VectorizedPPOTrainer:
                             num_ooms=alloc_stats["num_ooms"],
                         )
 
+                if (
+                    self.proof_baseline_lifecycle_policy
+                    == STATIC_FINAL_SOURCE_LIFECYCLE_POLICY
+                ):
+                    topology_manifest_records.extend(
+                        self._emit_source_final_manifests(
+                            env_states=env_states,
+                            emitters=emitters,
+                            epoch=epoch,
+                        )
+                    )
+
                 # P2-DEL: the batch's telemetry consumers (on_batch_completed, the P2-FRAGMETRIC
                 # emit) have read env_states. Sync each persistent stream so no async kernel still
                 # references the model/optimizer tensors we are about to drop, then release the
@@ -1948,6 +2378,7 @@ class VectorizedPPOTrainer:
                     metrics=metrics,
                     reward_summary=reward_summary_accum,
                     episode_history=episode_history,
+                    topology_manifests=topology_manifest_records,
                 )
                 history.append(batch_summary.to_dict())
 
@@ -1987,14 +2418,10 @@ class VectorizedPPOTrainer:
 
         if save_path:
             # B5-PT-02 FIX: Save normalizer state for correct training resume.
-            # Resume expects these keys in metadata.
+            # Observation stats are only valid for the exact Obs V3 contract they fit.
             checkpoint_metadata = {
                 "checkpoint_kind": "last",
-                # Observation normalizer (RunningMeanStd)
-                "obs_normalizer_mean": obs_normalizer.mean.tolist(),
-                "obs_normalizer_var": obs_normalizer.var.tolist(),
-                "obs_normalizer_count": obs_normalizer.count.item(),
-                "obs_normalizer_momentum": obs_normalizer.momentum,
+                **obs_normalizer_metadata(obs_normalizer, slot_config=slot_config),
                 # Reward normalizer (RewardNormalizer)
                 "reward_normalizer_mean": reward_normalizer.mean,
                 "reward_normalizer_m2": reward_normalizer.m2,

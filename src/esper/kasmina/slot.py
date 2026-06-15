@@ -1535,6 +1535,7 @@ class SeedSlot(nn.Module):
             metrics = self.state.metrics
             improvement = metrics.total_improvement
             counterfactual = metrics.counterfactual_contribution
+            blending_delta = metrics.blending_delta
             epochs_total = metrics.epochs_total
             epochs_in_stage = metrics.epochs_in_current_stage
             blueprint_id = self.state.blueprint_id
@@ -1584,6 +1585,7 @@ class SeedSlot(nn.Module):
                             alpha=self.state.alpha,
                             epochs_total=epochs_total,
                             counterfactual=counterfactual,
+                            blending_delta=blending_delta,
                         )
                     )
             else:
@@ -1620,6 +1622,7 @@ class SeedSlot(nn.Module):
         # Capture metrics before transition clears state
         improvement = self.state.metrics.total_improvement
         counterfactual = self.state.metrics.counterfactual_contribution
+        blending_delta = self.state.metrics.blending_delta
         epochs_total = self.state.metrics.epochs_total
         epochs_in_stage = self.state.metrics.epochs_in_current_stage
         blueprint_id = self.state.blueprint_id
@@ -1697,6 +1700,7 @@ class SeedSlot(nn.Module):
                 auto_pruned=is_auto_prune,
                 epochs_total=epochs_total,
                 counterfactual=counterfactual,
+                blending_delta=blending_delta,
                 initiator=initiator,
             )
         )

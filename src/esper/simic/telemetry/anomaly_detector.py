@@ -451,6 +451,7 @@ class AnomalyDetector:
         explained_variance: float,
         current_episode: int,
         total_episodes: int,
+        value_collapse_applicable: bool,
         has_nan: bool = False,
         has_inf: bool = False,
         entropy: float | None = None,
@@ -464,6 +465,7 @@ class AnomalyDetector:
             explained_variance: Explained variance metric
             current_episode: Current episode for phase-dependent value collapse threshold (required)
             total_episodes: Total configured episodes for phase detection (required)
+            value_collapse_applicable: Whether low EV can be interpreted as critic collapse
             has_nan: Whether NaN values were detected
             has_inf: Whether Inf values were detected
             entropy: Policy entropy (0-1 normalized). If provided, checks for entropy collapse.
@@ -476,9 +478,12 @@ class AnomalyDetector:
 
         checks = [
             self.check_ratios(ratio_max, ratio_min),
-            self.check_value_function(explained_variance, current_episode, total_episodes),
             self.check_numerical_stability(has_nan, has_inf),
         ]
+        if value_collapse_applicable:
+            checks.append(
+                self.check_value_function(explained_variance, current_episode, total_episodes)
+            )
 
         # Add entropy check if provided (H1: entropy collapse detection)
         if entropy is not None:

@@ -258,6 +258,22 @@ class WandbBackend(OutputBackend):
             config_update["proof_baseline_mode"] = d.proof_baseline_mode
         if d.proof_baseline_pair_id is not None:
             config_update["proof_baseline_pair_id"] = d.proof_baseline_pair_id
+        if d.proof_baseline_lifecycle_policy is not None:
+            config_update["proof_baseline_lifecycle_policy"] = (
+                d.proof_baseline_lifecycle_policy
+            )
+        if d.proof_baseline_schedule_id is not None:
+            config_update["proof_baseline_schedule_id"] = d.proof_baseline_schedule_id
+        if d.proof_baseline_schedule_hash is not None:
+            config_update["proof_baseline_schedule_hash"] = d.proof_baseline_schedule_hash
+        if d.proof_baseline_schedule_version is not None:
+            config_update["proof_baseline_schedule_version"] = (
+                d.proof_baseline_schedule_version
+            )
+        if d.proof_baseline_schedule_action_count is not None:
+            config_update["proof_baseline_schedule_action_count"] = (
+                d.proof_baseline_schedule_action_count
+            )
 
         wandb.config.update(config_update)
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from esper.leyline import AlphaAlgorithm, LifecycleOp
@@ -102,6 +102,7 @@ class BatchSummary:
     metrics: dict[str, Any]
     reward_summary: list[RewardSummaryAccumulator]
     episode_history: list[EpisodeRecord]
+    topology_manifests: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -117,6 +118,7 @@ class BatchSummary:
         data["episode_history"] = [
             record.to_dict() for record in self.episode_history
         ]
+        data["topology_manifests"] = self.topology_manifests
         return data
 
 

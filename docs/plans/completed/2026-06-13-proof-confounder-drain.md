@@ -383,7 +383,8 @@ uv run --python 3.11 pytest tests/karn/mcp/test_views.py tests/karn/mcp/test_ser
    ```bash
    PYTHONPATH=src uv run python scripts/proof_packet.py \
      --telemetry-dir telemetry/proof-rehearsal \
-     --output docs/analysis/2026-06-13-proof-rehearsal.md
+     --output docs/analysis/2026-06-13-proof-rehearsal.md \
+     --proof-profile generic
    ```
 3. If rehearsal has no proof-blocking instrumentation defects, run the real exam. Confirm task and env count based on available hardware before execution:
    ```bash
@@ -399,7 +400,8 @@ uv run --python 3.11 pytest tests/karn/mcp/test_views.py tests/karn/mcp/test_ser
    ```bash
    PYTHONPATH=src uv run python scripts/proof_packet.py \
      --telemetry-dir telemetry/reward-efficiency-2026-06-13 \
-     --output docs/analysis/2026-06-13-reward-efficiency-proof-packet.md
+     --output docs/analysis/2026-06-13-reward-efficiency-proof-packet.md \
+     --proof-profile reward-efficiency
    ```
 
 **Definition of Done:**

@@ -155,9 +155,27 @@ class TestAnomalyDetector:
             has_inf=False,
             current_episode=1,
             total_episodes=100,
+            value_collapse_applicable=True,
         )
         assert report.has_anomaly is True
         assert "ratio_explosion" in report.anomaly_types
+
+    def test_combined_check_skips_value_collapse_when_not_applicable(self):
+        """Combined checks should preserve other anomalies when value collapse is out of scope."""
+        detector = AnomalyDetector()
+        report = detector.check_all(
+            ratio_max=6.0,
+            ratio_min=0.5,
+            explained_variance=-1.0,
+            has_nan=False,
+            has_inf=False,
+            current_episode=100,
+            total_episodes=100,
+            value_collapse_applicable=False,
+        )
+        assert report.has_anomaly is True
+        assert "ratio_explosion" in report.anomaly_types
+        assert "value_collapse" not in report.anomaly_types
 
     def test_requires_total_episodes_for_value_collapse_thresholds(self):
         """Value collapse thresholds require total_episodes (no shims)."""

@@ -105,3 +105,31 @@ def test_per_head_clip_fraction_is_per_head() -> None:
     # The joint clip_fraction is its own (joint-ratio) quantity, computed
     # independently: joint ratio = exp(10) for every sample -> fully clipped.
     assert metrics.clip_fraction.item() == pytest.approx(1.0)
+
+
+def test_per_head_clip_fraction_uses_causal_mask() -> None:
+    """Masked timesteps do not count as clipped for sparse action heads."""
+    old_log_probs = {
+        "op": torch.zeros(4),
+        "blueprint": torch.zeros(4),
+    }
+    log_probs = {
+        "op": torch.zeros(4),
+        "blueprint": torch.log(torch.tensor([1.0, 2.0, 2.0, 2.0])),
+    }
+    head_masks = {
+        "op": torch.ones(4),
+        "blueprint": torch.tensor([1.0, 0.0, 0.0, 0.0]),
+    }
+
+    metrics = compute_ratio_metrics(
+        log_probs=log_probs,
+        old_log_probs=old_log_probs,
+        head_masks=head_masks,
+        clip_ratio=0.2,
+        target_kl=None,
+        head_names=("op", "blueprint"),
+        total_timesteps=torch.tensor(4.0),
+    )
+
+    assert metrics.per_head_clip_fraction["blueprint"].item() == pytest.approx(0.0)

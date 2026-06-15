@@ -56,7 +56,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 - **Performance:** Expensive; profiles control scope. Hooks require `cleanup()` to remove.
 
 ## Unused/Defined-but-Unwired Events
-- Defined but not emitted: `MEMORY_WARNING`, `REWARD_HACKING_SUSPECTED`, command events (`COMMAND_*`), `ISOLATION_VIOLATION`, `PERFORMANCE_DEGRADATION`. Hook points exist in telemetry contracts but no producers currently wire them.
+- Defined but not emitted: `MEMORY_WARNING`, `REWARD_HACKING_SUSPECTED`, command events (`COMMAND_*`), `PERFORMANCE_DEGRADATION`. Hook points exist in telemetry contracts but no producers currently wire them.
 
 ## Notable Behaviors / Correctness Notes
 - Slot telemetry is skipped when `fast_mode=True` or `use_telemetry=False`; Obs V3 keeps telemetry fields with default values (dims unchanged).

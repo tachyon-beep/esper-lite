@@ -22,9 +22,14 @@ class TestTelemetryEventTypes:
         assert TelemetryEventType.MEMORY_WARNING
         assert TelemetryEventType.REWARD_HACKING_SUSPECTED
 
+    def test_dead_isolation_violation_event_is_removed(self):
+        """ISOLATION_VIOLATION had no payload, producer, or consumer."""
+        assert "ISOLATION_VIOLATION" not in TelemetryEventType.__members__
+
     def test_governor_event_types_exist(self):
         """Governor event types exist."""
         assert TelemetryEventType.GOVERNOR_ROLLBACK
+        assert TelemetryEventType.TOPOLOGY_MANIFEST_RECORDED
 
     def test_checkpoint_event_types_exist(self):
         """Checkpoint event types exist."""

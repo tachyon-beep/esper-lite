@@ -127,13 +127,14 @@ class AnomalyDetector:
                 )
 
         # Check accuracy drop
-        if snapshot.host.val_accuracy > 0 or self.stats.accuracy_initialized:
-            acc_drop = self.stats.update_accuracy(snapshot.host.val_accuracy)
+        val_accuracy = snapshot.host.val_accuracy
+        if val_accuracy is not None:
+            acc_drop = self.stats.update_accuracy(val_accuracy)
             if acc_drop > self.config.accuracy_drop_threshold:
                 reasons.append(f"accuracy_drop:{acc_drop:.1f}pp")
                 _logger.warning(
                     f"Accuracy drop detected: {acc_drop:.1f}pp "
-                    f"(acc={snapshot.host.val_accuracy:.1f}%)"
+                    f"(acc={val_accuracy:.1f}%)"
                 )
 
         # Check gradient explosion (only if gradient norm was computed)

@@ -342,6 +342,28 @@ class TestMarkTerminalWithPenalty:
 
         assert buffer.rewards[0, 4].item() == -10.0
 
+    def test_rollback_forfeits_positive_prefix_before_gae(self) -> None:
+        """Rollback catastrophe must dominate value targets, not just the last reward."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=10,
+            state_dim=64,
+        )
+        buffer.start_episode(0)
+        self._add_steps(buffer, 0, 5)
+        buffer.rewards[0, :5] = torch.tensor([5.0, 5.0, 5.0, 5.0, 5.0])
+        buffer.end_episode(0)
+
+        buffer.mark_terminal_with_penalty(0, penalty=-10.0)
+        buffer.compute_advantages_and_returns(gamma=1.0, gae_lambda=1.0)
+
+        assert torch.allclose(
+            buffer.rewards[0, :5],
+            torch.tensor([0.0, 0.0, 0.0, 0.0, -10.0]),
+        )
+        assert torch.all(buffer.returns[0, :5] < 0.0)
+        assert torch.allclose(buffer.returns[0, :5], torch.full((5,), -10.0))
+
     def test_records_rollback_attribution_metadata(self) -> None:
         """Rollback penalties must retain causal metadata for PPO diagnostics."""
         buffer = TamiyoRolloutBuffer(

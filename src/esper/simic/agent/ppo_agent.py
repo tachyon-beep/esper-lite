@@ -802,6 +802,9 @@ class PPOAgent:
                 if valid_q_values.numel() >= 2:
                     q_variance = valid_q_values.var()
                     q_spread = valid_q_values.max() - valid_q_values.min()
+                elif valid_q_values.numel() == 1:
+                    q_variance = torch.zeros((), device=self.device, dtype=valid_q_values.dtype)
+                    q_spread = torch.zeros((), device=self.device, dtype=valid_q_values.dtype)
                 else:
                     q_variance = torch.tensor(float("nan"), device=self.device)
                     q_spread = torch.tensor(float("nan"), device=self.device)

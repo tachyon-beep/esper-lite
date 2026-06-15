@@ -9,6 +9,8 @@ import pytest
 import torch
 
 from esper.leyline import EpisodeOutcome, TelemetryEventType
+from esper.simic.agent.rollout_buffer import TamiyoRolloutBuffer
+from esper.simic.telemetry import AnomalyDetector
 from esper.simic.training.ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 
 
@@ -125,6 +127,51 @@ def _make_outcome(env_id: int, episode_idx: int, reward: float) -> EpisodeOutcom
     )
 
 
+def _add_buffer_transition(
+    buffer: TamiyoRolloutBuffer,
+    *,
+    env_id: int,
+    step_idx: int,
+    reward: float,
+) -> None:
+    buffer.add(
+        env_id=env_id,
+        state=torch.zeros(buffer.state_dim),
+        blueprint_indices=torch.zeros(buffer.num_slots, dtype=torch.long),
+        slot_action=0,
+        blueprint_action=0,
+        style_action=0,
+        tempo_action=0,
+        alpha_target_action=0,
+        alpha_speed_action=0,
+        alpha_curve_action=0,
+        op_action=0,
+        effective_op_action=0,
+        slot_log_prob=0.0,
+        blueprint_log_prob=0.0,
+        style_log_prob=0.0,
+        tempo_log_prob=0.0,
+        alpha_target_log_prob=0.0,
+        alpha_speed_log_prob=0.0,
+        alpha_curve_log_prob=0.0,
+        op_log_prob=0.0,
+        value=0.0,
+        reward=reward,
+        done=False,
+        slot_mask=torch.ones(buffer.num_slots, dtype=torch.bool),
+        blueprint_mask=torch.ones(buffer.num_blueprints, dtype=torch.bool),
+        style_mask=torch.ones(buffer.num_styles, dtype=torch.bool),
+        tempo_mask=torch.ones(buffer.num_tempo, dtype=torch.bool),
+        alpha_target_mask=torch.ones(buffer.num_alpha_targets, dtype=torch.bool),
+        alpha_speed_mask=torch.ones(buffer.num_alpha_speeds, dtype=torch.bool),
+        alpha_curve_mask=torch.ones(buffer.num_alpha_curves, dtype=torch.bool),
+        op_mask=torch.ones(buffer.num_ops, dtype=torch.bool),
+        hidden_h=torch.zeros(buffer.lstm_layers, 1, buffer.lstm_hidden_dim),
+        hidden_c=torch.zeros(buffer.lstm_layers, 1, buffer.lstm_hidden_dim),
+        action_id=f"morph-b0-e1-env{env_id}-r0c{step_idx}-op0",
+    )
+
+
 def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     """Rollback correction must update the most recent outcome for the env."""
     coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
@@ -160,11 +207,84 @@ def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     assert coordinator.agent.buffer.penalty_calls == [
         (0, -10.0, 10.0, "morph-b0-e1-env0-r0c0-op3")
     ]
-    assert env_total_rewards == [-9.0]
+    assert env_states[0].episode_rewards == [0.0, -10.0]
+    assert env_total_rewards == [-10.0]
     assert episode_history[0].episode_reward == 100.0
-    assert episode_history[1].episode_reward == -9.0
+    assert episode_history[1].episode_reward == -10.0
     assert episode_outcomes[0].episode_reward == 100.0
-    assert episode_outcomes[1].episode_reward == -9.0
+    assert episode_outcomes[1].episode_reward == -10.0
+
+
+def test_handle_rollbacks_forfeits_high_return_prefix():
+    """Rollback outcomes must stay negative after a high positive prefix."""
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    emitted: list[object] = []
+    env_states = [
+        SimpleNamespace(
+            governor=SimpleNamespace(get_punishment_reward=lambda: -10.0),
+            episode_rewards=[5.0, 5.0, 5.0, 5.0, 5.0],
+            telemetry_cb=emitted.append,
+            val_acc=12.5,
+            action_counts={"GERMINATE": 4, "PRUNE": 0, "FOSSILIZE": 0},
+        )
+    ]
+    episode_history = [SimpleNamespace(env_id=0, episode_reward=25.0)]
+    episode_outcomes = [_make_outcome(env_id=0, episode_idx=9, reward=25.0)]
+
+    coordinator.handle_rollbacks(
+        env_states=env_states,
+        env_rollback_occurred=[True],
+        env_total_rewards=[25.0],
+        episode_history=episode_history,
+        episode_outcomes=episode_outcomes,
+    )
+
+    assert env_states[0].episode_rewards == [0.0, 0.0, 0.0, 0.0, -10.0]
+    assert episode_history[0].episode_reward == -10.0
+    assert episode_outcomes[0].episode_reward == -10.0
+    outcome_events = [
+        event for event in emitted
+        if event.event_type == TelemetryEventType.EPISODE_OUTCOME
+    ]
+    assert len(outcome_events) == 1
+    assert outcome_events[0].data.episode_reward == -10.0
+
+
+def test_handle_rollbacks_penalty_dominates_high_return_tail_in_ppo_returns():
+    """Coordinator rollback rewrite must reach PPO returns, not only telemetry."""
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    buffer = TamiyoRolloutBuffer(
+        num_envs=1,
+        max_steps_per_env=6,
+        state_dim=8,
+    )
+    coordinator.agent.buffer = buffer
+    buffer.start_episode(0)
+    for step_idx in range(6):
+        _add_buffer_transition(buffer, env_id=0, step_idx=step_idx, reward=4.0)
+    buffer.end_episode(0)
+
+    env_states = [
+        SimpleNamespace(
+            governor=SimpleNamespace(get_punishment_reward=lambda: -50.0),
+            episode_rewards=[4.0, 4.0, 4.0, 4.0, 4.0, 4.0],
+            telemetry_cb=lambda _event: None,
+            val_acc=12.5,
+            action_counts={"GERMINATE": 6, "PRUNE": 0, "FOSSILIZE": 0},
+        )
+    ]
+
+    coordinator.handle_rollbacks(
+        env_states=env_states,
+        env_rollback_occurred=[True],
+        env_total_rewards=[24.0],
+        episode_history=[SimpleNamespace(env_id=0, episode_reward=24.0)],
+        episode_outcomes=[_make_outcome(env_id=0, episode_idx=11, reward=24.0)],
+    )
+
+    buffer.compute_advantages_and_returns(gamma=0.99, gae_lambda=0.95)
+    valid_returns = buffer.returns[0, : buffer.step_counts[0]]
+    assert torch.all(valid_returns < 0.0)
 
 
 def test_handle_rollbacks_clamps_death_penalty_std_independently():
@@ -298,14 +418,14 @@ def test_handle_rollbacks_emits_exactly_one_corrected_episode_outcome():
     assert len(outcome_events) == 1
 
     payload = outcome_events[0].data
-    # Penalty-adjusted reward (3.0 episode reward overwritten to penalty -10.0 -> sum -9.0)
+    # Penalty-adjusted reward (positive prefix forfeited, terminal penalty retained).
     # MUST match the corrected in-memory outcome, not the pre-penalty value.
-    assert payload.episode_reward == -9.0
+    assert payload.episode_reward == -10.0
     assert payload.episode_reward == episode_outcomes[0].episode_reward
-    # Recomputed stability from post-penalty variance of [1.0, -10.0], not the default 1.0.
+    # Recomputed stability from post-penalty variance of [0.0, -10.0], not the default 1.0.
     import numpy as np
 
-    expected_stability = 1.0 / (1.0 + float(np.var([1.0, -10.0])))
+    expected_stability = 1.0 / (1.0 + float(np.var([0.0, -10.0])))
     assert payload.stability_score == pytest.approx(expected_stability)
     assert payload.stability_score == pytest.approx(episode_outcomes[0].stability_score)
     # Real post-episode diagnostics taken from env_state (not placeholders).
@@ -546,6 +666,8 @@ def test_run_anomaly_detection_threads_ratio_diagnostic_into_emitter():
         metrics={
             "ratio_max": 12.0,
             "ratio_min": 0.9,
+            "explained_variance": 0.5,
+            "usable_actor_timesteps": 4,
             "ratio_diagnostic": ratio_diag,
         },
         drift_metrics=None,
@@ -555,6 +677,102 @@ def test_run_anomaly_detection_threads_ratio_diagnostic_into_emitter():
     )
 
     assert captured["ratio_diagnostic"] == ratio_diag
+
+
+def test_run_anomaly_detection_skips_value_collapse_for_all_forced_rollout():
+    """All-forced proof-control batches should not emit value-collapse anomalies."""
+    captured: dict[str, object] = {}
+
+    def _emit_anomaly_diagnostics_fn(_hub, anomaly_report, *_args, **_kwargs):
+        captured["report"] = anomaly_report
+
+    coordinator = PPOCoordinator(
+        agent=_StubAgent(),
+        config=PPOCoordinatorConfig(
+            ppo_updates_per_batch=1,
+            max_epochs=4,
+            total_env_episodes=16,
+            amp_enabled=False,
+            resolved_amp_dtype=None,
+        ),
+        reward_normalizer=SimpleNamespace(clip=10.0),
+        anomaly_detector=AnomalyDetector(),
+        env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
+        reward_family_enum=SimpleNamespace(value="dense"),
+        hub=_CaptureHub(),
+        telemetry_config=None,
+        group_id="test-group",
+        run_ppo_updates_fn=lambda **_kw: {},
+        handle_telemetry_escalation_fn=lambda *a, **k: None,
+        emit_anomaly_diagnostics_fn=_emit_anomaly_diagnostics_fn,
+        logger=logging.getLogger(__name__),
+    )
+
+    coordinator.run_anomaly_detection(
+        metrics={
+            "ratio_max": 1.0,
+            "ratio_min": 1.0,
+            "explained_variance": -1.0,
+            "usable_actor_timesteps": 0,
+            "forced_step_ratio": 1.0,
+        },
+        drift_metrics=None,
+        batched_lstm_hidden=None,
+        batch_epoch_id=16,
+        batch_idx=1,
+    )
+
+    report = captured["report"]
+    assert report.has_anomaly is False
+    assert "value_collapse" not in report.anomaly_types
+
+
+def test_run_anomaly_detection_keeps_value_collapse_for_actor_rollout():
+    """Low EV remains proof-blocking when the rollout contains actor decisions."""
+    captured: dict[str, object] = {}
+
+    def _emit_anomaly_diagnostics_fn(_hub, anomaly_report, *_args, **_kwargs):
+        captured["report"] = anomaly_report
+
+    coordinator = PPOCoordinator(
+        agent=_StubAgent(),
+        config=PPOCoordinatorConfig(
+            ppo_updates_per_batch=1,
+            max_epochs=4,
+            total_env_episodes=16,
+            amp_enabled=False,
+            resolved_amp_dtype=None,
+        ),
+        reward_normalizer=SimpleNamespace(clip=10.0),
+        anomaly_detector=AnomalyDetector(),
+        env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
+        reward_family_enum=SimpleNamespace(value="dense"),
+        hub=_CaptureHub(),
+        telemetry_config=None,
+        group_id="test-group",
+        run_ppo_updates_fn=lambda **_kw: {},
+        handle_telemetry_escalation_fn=lambda *a, **k: None,
+        emit_anomaly_diagnostics_fn=_emit_anomaly_diagnostics_fn,
+        logger=logging.getLogger(__name__),
+    )
+
+    coordinator.run_anomaly_detection(
+        metrics={
+            "ratio_max": 1.0,
+            "ratio_min": 1.0,
+            "explained_variance": -1.0,
+            "usable_actor_timesteps": 4,
+            "forced_step_ratio": 0.0,
+        },
+        drift_metrics=None,
+        batched_lstm_hidden=None,
+        batch_epoch_id=16,
+        batch_idx=1,
+    )
+
+    report = captured["report"]
+    assert report.has_anomaly is True
+    assert "value_collapse" in report.anomaly_types
 
 
 def test_run_anomaly_detection_preserves_update_lstm_and_adds_rollout_lstm():
@@ -597,6 +815,8 @@ def test_run_anomaly_detection_preserves_update_lstm_and_adds_rollout_lstm():
         "lstm_h_rms": 0.5,
         "lstm_c_rms": 0.7,
         "lstm_h_max": 1.0,
+        "explained_variance": 0.5,
+        "usable_actor_timesteps": 4,
     }
 
     coordinator.run_anomaly_detection(

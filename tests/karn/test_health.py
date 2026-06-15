@@ -343,6 +343,19 @@ class TestVitalSignsTrends:
         assert monitor._epochs_since_improvement == 0
         assert monitor._loss_history == []
 
+    def test_missing_accuracy_does_not_count_as_stagnation(self) -> None:
+        store = TelemetryStore()
+        monitor = VitalSignsMonitor(store=store, stagnation_epochs=1)
+        for epoch in range(1, 4):
+            snapshot = EpochSnapshot(epoch=epoch)
+            snapshot.host.val_loss = 1.0
+            store.epoch_snapshots.append(snapshot)
+            vitals = monitor.check_vitals()
+
+        assert vitals.critical is False
+        assert vitals.epochs_without_improvement == 0
+        assert monitor._epochs_since_improvement == 0
+
     def test_high_seed_failure_rate_becomes_critical(self) -> None:
         store = TelemetryStore()
         snapshot = EpochSnapshot(epoch=1)

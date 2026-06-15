@@ -615,13 +615,6 @@ def main() -> None:
         hub.add_backend(dir_backend)
         print(f"Telemetry will be saved to: {dir_backend.output_dir}")
 
-    # Setup Karn collector for stateful telemetry (P1-04)
-    karn_collector = None
-    if args.export_karn:
-        from esper.karn import KarnCollector
-        karn_collector = KarnCollector()
-        hub.add_backend(karn_collector)
-
     # Add Wandb backend if requested
     wandb_backend = None
     if args.wandb:

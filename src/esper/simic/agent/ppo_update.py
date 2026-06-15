@@ -110,15 +110,15 @@ def compute_ratio_metrics(
         clip_pos = (joint_ratio > 1.0 + clip_ratio).float().mean()
         clip_neg = (joint_ratio < 1.0 - clip_ratio).float().mean()
 
-        # PER-HEAD clip-fraction: fraction of samples where this head's ratio is
-        # outside [1-clip, 1+clip] -- i.e. where compute_losses actually clipped
-        # this head's surrogate. Mean is unmasked to match the joint clip_fraction
-        # above (which is also taken over all samples), keeping the two directly
-        # comparable in telemetry.
-        per_head_clip_fraction = {
-            key: ((per_head_ratios[key] - 1.0).abs() > clip_ratio).float().mean()
-            for key in head_names
-        }
+        # PER-HEAD clip-fraction: fraction of causally relevant samples where
+        # this head's ratio is outside [1-clip, 1+clip], matching the head mask
+        # used by compute_losses for the clipped surrogate.
+        per_head_clip_fraction = {}
+        for key in head_names:
+            clipped = ((per_head_ratios[key] - 1.0).abs() > clip_ratio).float()
+            mask = head_masks[key]
+            n_valid = mask.sum().float()
+            per_head_clip_fraction[key] = (clipped * mask).sum() / n_valid.clamp(min=1)
 
         if target_kl is None:
             early_stop = torch.tensor(False, device=approx_kl.device)

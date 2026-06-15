@@ -720,6 +720,65 @@ def test_decision_snapshot_populates_from_head_telemetry():
     assert decision.curve_entropy == 0.35
 
 
+def test_decision_snapshot_preserves_missing_entropy_as_unavailable():
+    """Missing entropy evidence must not be converted into zero entropy."""
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import (
+        AnalyticsSnapshotPayload,
+        TelemetryEvent,
+        TelemetryEventType,
+        TrainingStartedPayload,
+    )
+
+    agg = SanctumAggregator()
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        epoch=0,
+        data=TrainingStartedPayload(
+            n_envs=1,
+            max_epochs=25,
+            max_batches=100,
+            task="mnist",
+            host_params=1000000,
+            slot_ids=("r0c0",),
+            seed=42,
+            n_episodes=100,
+            lr=3e-4,
+            clip_ratio=0.2,
+            entropy_coef=0.01,
+            param_budget=500000,
+            policy_device="cuda:0",
+            env_devices=("cuda:0",),
+            reward_mode="shaped",
+        ),
+    ))
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=1,
+        timestamp=datetime.now(timezone.utc),
+        data=AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            action_name="WAIT",
+            action_confidence=0.85,
+            action_success=True,
+        ),
+    ))
+
+    decision = agg.get_snapshot().tamiyo.recent_decisions[0]
+    assert decision.decision_entropy is None
+    assert decision.op_entropy is None
+    assert decision.slot_entropy is None
+    assert decision.blueprint_entropy is None
+    assert decision.style_entropy is None
+    assert decision.tempo_entropy is None
+    assert decision.alpha_target_entropy is None
+    assert decision.alpha_speed_entropy is None
+    assert decision.curve_entropy is None
+
+
 def test_aggregator_populates_compile_status():
     """Aggregator should populate compile status from TrainingStartedPayload."""
     from esper.karn.sanctum.aggregator import SanctumAggregator

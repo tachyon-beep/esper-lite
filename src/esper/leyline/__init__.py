@@ -325,9 +325,27 @@ from esper.leyline.lifecycle_mutation import (
 )
 from esper.leyline.proof_baselines import (
     REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES,
+    STATIC_FINAL_SOURCE_BLEND_RAMP_EPOCHS,
+    STATIC_FINAL_SOURCE_COHORT_ID,
+    STATIC_FINAL_SOURCE_FOSSILIZE_EPOCH,
+    STATIC_FINAL_SOURCE_GERMINATE_EPOCH,
+    STATIC_FINAL_SOURCE_LIFECYCLE_POLICY,
+    STATIC_FINAL_SOURCE_MODE,
+    STATIC_FINAL_SOURCE_TO_BLENDING_EPOCH,
+    STATIC_FINAL_SOURCE_TO_HOLDING_EPOCH,
+    STATIC_FINAL_SOURCE_TO_TRAINING_EPOCH,
+    STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT,
+    STATIC_FINAL_SOURCE_TOPOLOGY_HASH,
+    STATIC_FINAL_SOURCE_TOPOLOGY_MIN_EPOCHS,
+    STATIC_FINAL_SOURCE_TOPOLOGY_STEPS,
+    STATIC_FINAL_SOURCE_TOPOLOGY_V1,
+    STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
+    STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS,
     ProofBaselineCohort,
     ProofBaselineMode,
     ProofBaselinePlan,
+    StaticFinalSourceManifestRef,
+    static_final_source_action_for_epoch,
 )
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
@@ -585,9 +603,11 @@ DEFAULT_BLUEPRINT_EMBED_DIM = 4
 # For DEFAULT_NUM_SLOTS=3: 23 + (31 × 3) = 116 dims.
 # The full Obs V3 input to the network is:
 #   OBS_V3_NON_BLUEPRINT_DIM + (DEFAULT_NUM_SLOTS × DEFAULT_BLUEPRINT_EMBED_DIM) = 128 dims.
+OBS_V3_FEATURE_SCHEMA_VERSION = 1
 OBS_V3_BASE_FEATURE_SIZE = 23
 OBS_V3_SLOT_FEATURE_SIZE = 31
 OBS_V3_NON_BLUEPRINT_DIM = OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * DEFAULT_NUM_SLOTS)
+OBS_V3_UNKNOWN_SENTINEL = -1.0
 
 # Number of independent action heads in Tamiyo's factored action space.
 # Heads: op, slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve.
@@ -748,6 +768,8 @@ from esper.leyline.telemetry import (
     GovernorRollbackPayload,
     MorphologyCausalLogPhase,
     MorphologyCausalLogPayload,
+    TopologyManifestRole,
+    TopologyManifestPayload,
     GovernorPanicReason,
 )
 
@@ -875,6 +897,24 @@ __all__ = [
     "ProofBaselineMode",
     "ProofBaselinePlan",
     "REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES",
+    "STATIC_FINAL_SOURCE_BLEND_RAMP_EPOCHS",
+    "STATIC_FINAL_SOURCE_COHORT_ID",
+    "STATIC_FINAL_SOURCE_FOSSILIZE_EPOCH",
+    "STATIC_FINAL_SOURCE_GERMINATE_EPOCH",
+    "STATIC_FINAL_SOURCE_LIFECYCLE_POLICY",
+    "STATIC_FINAL_SOURCE_MODE",
+    "STATIC_FINAL_SOURCE_TO_BLENDING_EPOCH",
+    "STATIC_FINAL_SOURCE_TO_HOLDING_EPOCH",
+    "STATIC_FINAL_SOURCE_TO_TRAINING_EPOCH",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_HASH",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_MIN_EPOCHS",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_STEPS",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_V1",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_VERSION",
+    "STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS",
+    "StaticFinalSourceManifestRef",
+    "static_final_source_action_for_epoch",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
     "NUM_ALPHA_SPEEDS",
@@ -960,9 +1000,11 @@ __all__ = [
     "NUM_BLUEPRINTS",
     "BLUEPRINT_NULL_INDEX",
     "DEFAULT_BLUEPRINT_EMBED_DIM",
+    "OBS_V3_FEATURE_SCHEMA_VERSION",
     "OBS_V3_BASE_FEATURE_SIZE",
     "OBS_V3_SLOT_FEATURE_SIZE",
     "OBS_V3_NON_BLUEPRINT_DIM",
+    "OBS_V3_UNKNOWN_SENTINEL",
     "NUM_ACTION_HEADS",
     "LOG_PROB_MIN",
 
@@ -1067,6 +1109,8 @@ __all__ = [
     "GovernorRollbackPayload",
     "MorphologyCausalLogPhase",
     "MorphologyCausalLogPayload",
+    "TopologyManifestRole",
+    "TopologyManifestPayload",
     "GovernorPanicReason",
 
     # Alpha controller

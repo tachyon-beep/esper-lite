@@ -714,17 +714,18 @@ class KarnCollector:
     # =========================================================================
 
     @property
-    def latest_accuracy(self) -> float:
+    def latest_accuracy(self) -> float | None:
         """Get the most recent validation accuracy."""
         if self.store.latest_epoch:
             return self.store.latest_epoch.host.val_accuracy
-        return 0.0
+        return None
 
     @property
     def accuracy_trajectory(self) -> list[tuple[int, float]]:
         """Get (epoch, accuracy) pairs for all stored epochs."""
         return [
             (snap.epoch, snap.host.val_accuracy) for snap in self.store.epoch_snapshots
+            if snap.host.val_accuracy is not None
         ]
 
     def get_slot_contributions(self) -> dict[str, float]:

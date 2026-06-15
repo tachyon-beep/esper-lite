@@ -59,6 +59,7 @@ from esper.leyline import (
     SlotConfig,
     TelemetryEvent,
     TelemetryEventType,
+    TopologyManifestPayload,
     TrainingStartedPayload,
 )
 from esper.simic.telemetry import (
@@ -79,10 +80,13 @@ from esper.simic.rewards import (
     RewardFamily,
     RewardMode,
 )
-from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
+from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput, NissaHub
 from esper.simic.telemetry.emitters import VectorizedEmitter
 from .env_factory import EnvFactoryContext
 from .helpers import policy_amp_context
+from .normalizer_checkpoint import (
+    restore_obs_normalizer_from_metadata as _restore_obs_normalizer_from_metadata,
+)
 from .parallel_env_state import ParallelEnvState
 from .vectorized_trainer import VectorizedPPOTrainer
 
@@ -600,6 +604,25 @@ def loss_and_correct(
 _compiled_loss_and_correct = loss_and_correct
 
 
+def _finalize_run_scoped_nissa_backends(
+    *,
+    hub: NissaHub,
+    analytics: BlueprintAnalytics,
+    directory_output: DirectoryOutput | None,
+    require_telemetry_flush: bool,
+) -> None:
+    telemetry_flush_succeeded = True
+    if directory_output is not None:
+        telemetry_flush_succeeded = hub.flush(timeout=10.0)
+        hub.remove_backend(directory_output)
+    hub.remove_backend(analytics)
+    if require_telemetry_flush and not telemetry_flush_succeeded:
+        raise RuntimeError(
+            "Nissa telemetry flush timed out before removing run-scoped telemetry "
+            "backend; proof evidence for this run is incomplete."
+        )
+
+
 # =============================================================================
 # Vectorized PPO Training
 # =============================================================================
@@ -683,6 +706,15 @@ def train_ppo_vectorized(
     proof_baseline_mode: str | None = None,
     proof_baseline_pair_id: str | None = None,
     proof_baseline_lifecycle_policy: str | None = None,
+    proof_baseline_schedule_id: str | None = None,
+    proof_baseline_schedule_hash: str | None = None,
+    proof_baseline_schedule_version: int | None = None,
+    proof_baseline_schedule_action_count: int | None = None,
+    static_final_source_manifest: TopologyManifestPayload | None = None,
+    static_final_source_run_dir: str | None = None,
+    static_final_source_group_id: str | None = None,
+    static_final_source_episode_idx: int | None = None,
+    static_final_source_event_id: str | None = None,
 ) -> tuple[PPOAgent, list[dict[str, Any]]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -921,6 +953,7 @@ def train_ppo_vectorized(
     hub = get_hub()
     analytics = BlueprintAnalytics(quiet=quiet_analytics)
     hub.add_backend(analytics)
+    directory_output: DirectoryOutput | None = None
 
     # Ops-normal telemetry gates (UI snapshots, per-step decisions, etc).
     # NOTE: `use_telemetry` controls whether telemetry features are part of the
@@ -931,8 +964,12 @@ def train_ppo_vectorized(
 
     # Optional file-based telemetry logging (for programmatic callers that bypass scripts/train.py)
     if telemetry_dir and use_telemetry:
-        hub.add_backend(DirectoryOutput(telemetry_dir))
-        _logger.info("Telemetry logging to: %s", telemetry_dir)
+        directory_output = DirectoryOutput(telemetry_dir)
+        hub.add_backend(directory_output)
+        telemetry_run_dir = directory_output.output_dir.name
+        _logger.info("Telemetry logging to: %s", directory_output.output_dir)
+    else:
+        telemetry_run_dir = None
 
     anomaly_detector = AnomalyDetector()
     start_episode = 0
@@ -998,22 +1035,13 @@ def train_ppo_vectorized(
             compile_mode=effective_compile_mode,
         )
 
-        # Restore observation normalizer state
         metadata = checkpoint["metadata"]
-        if "obs_normalizer_mean" in metadata:
-            obs_normalizer.mean = torch.tensor(
-                metadata["obs_normalizer_mean"], device=device
-            )
-            obs_normalizer.var = torch.tensor(
-                metadata["obs_normalizer_var"], device=device
-            )
-            obs_normalizer._device = device
-            if "obs_normalizer_count" in metadata:
-                obs_normalizer.count = torch.tensor(
-                    metadata["obs_normalizer_count"], device=device
-                )
-            if "obs_normalizer_momentum" in metadata:
-                obs_normalizer.momentum = metadata["obs_normalizer_momentum"]
+        _restore_obs_normalizer_from_metadata(
+            metadata,
+            obs_normalizer=obs_normalizer,
+            slot_config=slot_config,
+            device=device,
+        )
 
         # Restore reward normalizer state
         if "reward_normalizer_mean" in metadata:
@@ -1134,6 +1162,11 @@ def train_ppo_vectorized(
                 else None,
                 proof_baseline_mode=proof_baseline_mode,
                 proof_baseline_pair_id=proof_baseline_pair_id,
+                proof_baseline_lifecycle_policy=proof_baseline_lifecycle_policy,
+                proof_baseline_schedule_id=proof_baseline_schedule_id,
+                proof_baseline_schedule_hash=proof_baseline_schedule_hash,
+                proof_baseline_schedule_version=proof_baseline_schedule_version,
+                proof_baseline_schedule_action_count=proof_baseline_schedule_action_count,
             ),
         )
     )
@@ -1404,7 +1437,18 @@ def train_ppo_vectorized(
         gpu_preload_augment=gpu_preload_augment,
         amp_enabled=amp_enabled,
         resolved_amp_dtype=resolved_amp_dtype,
+        proof_baseline_pair_id=proof_baseline_pair_id,
         proof_baseline_lifecycle_policy=proof_baseline_lifecycle_policy,
+        proof_baseline_schedule_id=proof_baseline_schedule_id,
+        proof_baseline_schedule_hash=proof_baseline_schedule_hash,
+        proof_baseline_schedule_version=proof_baseline_schedule_version,
+        proof_baseline_schedule_action_count=proof_baseline_schedule_action_count,
+        static_final_source_manifest=static_final_source_manifest,
+        static_final_source_run_dir=static_final_source_run_dir,
+        static_final_source_group_id=static_final_source_group_id,
+        static_final_source_episode_idx=static_final_source_episode_idx,
+        static_final_source_event_id=static_final_source_event_id,
+        telemetry_run_dir=telemetry_run_dir,
         env_factory=env_factory,
         compiled_loss_and_correct=_compiled_loss_and_correct,
         run_ppo_updates=_run_ppo_updates,
@@ -1420,7 +1464,23 @@ def train_ppo_vectorized(
         logger=_logger,
     )
 
-    history = trainer.run()
+    try:
+        history = trainer.run()
+    except Exception:
+        _finalize_run_scoped_nissa_backends(
+            hub=hub,
+            analytics=analytics,
+            directory_output=directory_output,
+            require_telemetry_flush=False,
+        )
+        raise
+
+    _finalize_run_scoped_nissa_backends(
+        hub=hub,
+        analytics=analytics,
+        directory_output=directory_output,
+        require_telemetry_flush=True,
+    )
 
     return agent, history
 

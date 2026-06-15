@@ -391,6 +391,30 @@ class TestContributionRewardComponents:
         # Use isinstance instead of hasattr (per CLAUDE.md policy)
         assert isinstance(components, RewardComponentsTelemetry)
 
+    def test_counterfactual_path_requires_total_improvement_measurement(self):
+        """Counterfactual-present attribution still needs measured total improvement."""
+        seed_info = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=None,
+            total_improvement=None,
+            epochs_in_stage=5,
+            counterfactual_total_improvement=1.0,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="counterfactual attribution discount requires seed_info.total_improvement",
+        ):
+            compute_contribution_reward(
+                action=LifecycleOp.WAIT,
+                seed_contribution=1.0,
+                val_acc=70.0,
+                seed_info=seed_info,
+                epoch=10,
+                max_epochs=25,
+                acc_at_germination=65.0,
+            )
+
     def test_components_sum_to_total(self):
         """Test that component values sum to total_reward."""
         from esper.leyline import SeedStage
@@ -782,7 +806,7 @@ class TestRansomwareSeedDetection:
         assert warning_epoch_6 >= -0.5, f"Warning should cap around -0.4: {warning_epoch_6}"
 
     def test_no_blending_warning_for_positive_trajectory(self):
-        """No blending warning when total_improvement is positive."""
+        """No blending warning when counterfactual trajectory is positive."""
         seed_info = SeedInfo(
             stage=STAGE_BLENDING,
             improvement_since_stage_start=1.0,
@@ -804,6 +828,54 @@ class TestRansomwareSeedDetection:
         )
 
         assert components.blending_warning == 0.0, "No warning for positive trajectory"
+
+    def test_no_blending_warning_for_host_drift_when_counterfactual_positive(self):
+        """Host-drift-negative total_improvement must not penalize a helpful seed."""
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-1.0,
+            total_improvement=-2.0,
+            epochs_in_stage=5,
+            seed_age_epochs=15,
+            counterfactual_total_improvement=1.25,
+        )
+
+        _, components = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=1.25,
+            val_acc=61.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        assert components.blending_warning == 0.0
+
+    def test_no_blending_warning_without_counterfactual_data(self):
+        """Missing counterfactual data is not enough to blame the seed."""
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-1.0,
+            total_improvement=-2.0,
+            epochs_in_stage=5,
+            seed_age_epochs=15,
+            counterfactual_total_improvement=None,
+        )
+
+        _, components = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            val_acc=61.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        assert components.blending_warning == 0.0
 
     def test_attribution_discount_for_negative_total_improvement(self):
         """Attribution should be discounted when total_improvement is negative."""

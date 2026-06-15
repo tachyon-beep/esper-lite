@@ -641,6 +641,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         alpha_speed_mask: torch.Tensor | None = None,
         alpha_curve_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
+        probability_floor: dict[str, float] | None = None,
     ) -> _ForwardOutput:
         """Forward pass returning logits, value, and new hidden state.
 
@@ -650,6 +651,9 @@ class FactoredRecurrentActorCritic(nn.Module):
                 Values 0-12 for active blueprints, -1 for inactive slots.
             hidden: (h, c) tuple, each [num_layers, batch, hidden_dim]
             *_mask: Boolean masks [batch, seq_len, action_dim], True = valid
+            probability_floor: Optional per-head probability floors. Only the
+                op floor is used here because forward() samples op for value
+                conditioning.
 
         Returns:
             _ForwardOutput with logits, Q(s, sampled_op) value, sampled_op, and hidden
@@ -723,26 +727,29 @@ class FactoredRecurrentActorCritic(nn.Module):
             # Validate logits for inf/nan
             _validate_logits(op_logits)
 
-        # Sample op from policy for op-conditioned value
+        # Sample op from policy for op-conditioned value.
         # PERFORMANCE OPTIMIZATION: Use direct multinomial sampling instead of
         # MaskedCategorical. PyTorch's Categorical.sample() triggers 2 CPU-GPU syncs
         # per call via internal validation (aten::item, aten::is_nonzero). Direct
         # multinomial avoids this overhead while maintaining correctness.
-        # Note: op_logits is already masked (see above), so we can
-        # compute softmax directly without re-masking.
-        #
-        # TODO: [FUTURE FUNCTIONALITY] sampler/scorer asymmetry for the op head — the op
-        # action is SAMPLED here from the unfloored op_probs in the call-site dtype, but
-        # get_action SCORES its stored old_log_prob against the FP32 + probability-floored
-        # op distribution. The PPO importance ratio stays UNBIASED (old and new log_prob
-        # both score the floored FP32 distribution), so this is not a ratio bug; it only
-        # means the rollout is mildly off-policy w.r.t. its own stored behavior log-prob
-        # when an "op" floor is configured. Closing it (apply the floor + FP32 here before
-        # sampling) changes the value-conditioned forward graph and needs its own parity
-        # gate/review — tracked separately. See tests/.../test_masked_logit_seam_parity.py
-        # (stochastic-op ratio symmetry is still pinned).
-        op_probs = F.softmax(op_logits, dim=-1)  # [batch, seq_len, num_ops]
-        op_probs_flat = op_probs.reshape(-1, self.num_ops)  # [batch*seq_len, num_ops]
+        # The sampler uses the same FP32 + probability-floor seam as get_action()
+        # scoring and evaluate_actions(), so sampled_op and stored old_log_prob
+        # describe one behavior policy.
+        op_sampling_mask = (
+            op_mask
+            if op_mask is not None
+            else torch.ones_like(op_logits, dtype=torch.bool)
+        )
+        op_logits_flat = op_logits.float().reshape(-1, self.num_ops)
+        op_mask_flat = op_sampling_mask.reshape(-1, self.num_ops)
+        op_min_prob = probability_floor.get("op") if probability_floor else None
+        if op_min_prob is not None and op_min_prob > 0:
+            op_logits_flat = _apply_floor_to_logits(
+                op_logits_flat,
+                op_mask_flat,
+                op_min_prob,
+            )
+        op_probs_flat = F.softmax(op_logits_flat, dim=-1)  # [batch*seq_len, num_ops]
         sampled_op_flat = torch.multinomial(op_probs_flat, num_samples=1).squeeze(-1)
         sampled_op = sampled_op_flat.reshape(batch_size, seq_len)
 
@@ -872,6 +879,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 blueprint_indices=blueprint_indices,
                 hidden=hidden,
                 op_mask=op_mask,
+                probability_floor=probability_floor,
             )
 
             # Sample from each head using MaskedCategorical for safety

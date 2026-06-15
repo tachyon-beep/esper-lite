@@ -79,9 +79,6 @@ class TelemetryEventType(Enum):
     TAMIYO_INITIATED = auto()  # Host stabilized, germination now allowed
 
     # Health events
-    # TODO: [DEAD CODE] - ISOLATION_VIOLATION is defined but never emitted or handled.
-    # Appears to be planned functionality that was never implemented. Delete or implement.
-    ISOLATION_VIOLATION = auto()
     GRADIENT_ANOMALY = auto()
     PERFORMANCE_DEGRADATION = auto()
 
@@ -100,6 +97,7 @@ class TelemetryEventType(Enum):
     # === Governor Events (Tolaria) ===
     GOVERNOR_ROLLBACK = auto()        # Emergency rollback executed
     MORPHOLOGY_CAUSAL_LOG = auto()    # Proposal/verdict/mutation/watch causal log row
+    TOPOLOGY_MANIFEST_RECORDED = auto()  # Source/replay topology proof manifest evidence
 
     # === Training Progress Events ===
     TRAINING_STARTED = auto()         # Training run initialized
@@ -493,6 +491,11 @@ class TrainingStartedPayload:
     # Proof-control identity for blueprint-health baseline cohorts.
     proof_baseline_mode: str | None = None
     proof_baseline_pair_id: str | None = None
+    proof_baseline_lifecycle_policy: str | None = None
+    proof_baseline_schedule_id: str | None = None
+    proof_baseline_schedule_hash: str | None = None
+    proof_baseline_schedule_version: int | None = None
+    proof_baseline_schedule_action_count: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainingStartedPayload":
@@ -536,6 +539,23 @@ class TrainingStartedPayload:
             else None,
             proof_baseline_pair_id=data["proof_baseline_pair_id"]
             if "proof_baseline_pair_id" in data
+            else None,
+            proof_baseline_lifecycle_policy=data["proof_baseline_lifecycle_policy"]
+            if "proof_baseline_lifecycle_policy" in data
+            else None,
+            proof_baseline_schedule_id=data["proof_baseline_schedule_id"]
+            if "proof_baseline_schedule_id" in data
+            else None,
+            proof_baseline_schedule_hash=data["proof_baseline_schedule_hash"]
+            if "proof_baseline_schedule_hash" in data
+            else None,
+            proof_baseline_schedule_version=data["proof_baseline_schedule_version"]
+            if "proof_baseline_schedule_version" in data
+            else None,
+            proof_baseline_schedule_action_count=data[
+                "proof_baseline_schedule_action_count"
+            ]
+            if "proof_baseline_schedule_action_count" in data
             else None,
         )
 
@@ -2303,6 +2323,83 @@ class MorphologyCausalLogPayload:
         )
 
 
+TopologyManifestRole = Literal["source_final", "static_final_replay"]
+
+
+@dataclass(slots=True, frozen=True)
+class TopologyManifestPayload:
+    """Proof evidence for source-final and replayed topology manifests."""
+
+    manifest_role: TopologyManifestRole
+    proof_baseline_pair_id: str
+    topology_manifest_version: int
+    topology_manifest_hash: str
+    topology_manifest_json: str
+    task: str
+    host_topology: str
+    slot_config_hash: str
+    slot_count: int
+    fossilized_seed_count: int
+    topology_delta_count: int
+    source_run_dir: str | None = None
+    source_group_id: str | None = None
+    source_episode_idx: int | None = None
+    source_event_id: str | None = None
+    source_topology_manifest_hash: str | None = None
+    replay_weight_policy: str | None = None
+    replay_env_id: int | None = None
+    replay_episode_idx: int | None = None
+    replayed_topology_manifest_hash: str | None = None
+    manifest_match: bool | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TopologyManifestPayload":
+        """Parse from dict. Raises KeyError on missing manifest identity fields."""
+        return cls(
+            manifest_role=data["manifest_role"],
+            proof_baseline_pair_id=data["proof_baseline_pair_id"],
+            topology_manifest_version=data["topology_manifest_version"],
+            topology_manifest_hash=data["topology_manifest_hash"],
+            topology_manifest_json=data["topology_manifest_json"],
+            task=data["task"],
+            host_topology=data["host_topology"],
+            slot_config_hash=data["slot_config_hash"],
+            slot_count=data["slot_count"],
+            fossilized_seed_count=data["fossilized_seed_count"],
+            topology_delta_count=data["topology_delta_count"],
+            source_run_dir=data["source_run_dir"]
+            if "source_run_dir" in data
+            else None,
+            source_group_id=data["source_group_id"]
+            if "source_group_id" in data
+            else None,
+            source_episode_idx=data["source_episode_idx"]
+            if "source_episode_idx" in data
+            else None,
+            source_event_id=data["source_event_id"]
+            if "source_event_id" in data
+            else None,
+            source_topology_manifest_hash=data["source_topology_manifest_hash"]
+            if "source_topology_manifest_hash" in data
+            else None,
+            replay_weight_policy=data["replay_weight_policy"]
+            if "replay_weight_policy" in data
+            else None,
+            replay_env_id=data["replay_env_id"]
+            if "replay_env_id" in data
+            else None,
+            replay_episode_idx=data["replay_episode_idx"]
+            if "replay_episode_idx" in data
+            else None,
+            replayed_topology_manifest_hash=data["replayed_topology_manifest_hash"]
+            if "replayed_topology_manifest_hash" in data
+            else None,
+            manifest_match=data["manifest_match"]
+            if "manifest_match" in data
+            else None,
+        )
+
+
 @dataclass(slots=True, frozen=True)
 class GovernorRollbackPayload:
     """Payload for GOVERNOR_ROLLBACK telemetry events.
@@ -2329,6 +2426,13 @@ class GovernorRollbackPayload:
     consecutive_panics: int | None = None
     panic_reason: GovernorPanicReason | None = None
 
+    # Simic attribution context (present when rollback is tied to a prior action)
+    triggering_action_id: str | None = None
+    raw_penalty: float | None = None
+    normalized_penalty: float | None = None
+    rollback_severity: float | None = None
+    watch_window_evidence: float | None = None
+
     # State dict mismatch context (present for key mismatch warnings)
     missing_keys: list[str] | None = None
     unexpected_keys: list[str] | None = None
@@ -2352,6 +2456,20 @@ class GovernorRollbackPayload:
             loss_threshold=data.get("loss_threshold"),
             consecutive_panics=data.get("consecutive_panics"),
             panic_reason=data.get("panic_reason"),
+            # OPTIONAL: Simic attribution context.
+            triggering_action_id=data["triggering_action_id"]
+            if "triggering_action_id" in data
+            else None,
+            raw_penalty=data["raw_penalty"] if "raw_penalty" in data else None,
+            normalized_penalty=data["normalized_penalty"]
+            if "normalized_penalty" in data
+            else None,
+            rollback_severity=data["rollback_severity"]
+            if "rollback_severity" in data
+            else None,
+            watch_window_evidence=data["watch_window_evidence"]
+            if "watch_window_evidence" in data
+            else None,
             # OPTIONAL: State dict mismatch context (present for key mismatch warnings).
             missing_keys=list(data["missing_keys"]) if data.get("missing_keys") else None,
             unexpected_keys=list(data["unexpected_keys"]) if data.get("unexpected_keys") else None,
@@ -2387,6 +2505,7 @@ TelemetryPayload = (
     | EpisodeOutcomePayload
     | GovernorRollbackPayload
     | MorphologyCausalLogPayload
+    | TopologyManifestPayload
 )
 
 

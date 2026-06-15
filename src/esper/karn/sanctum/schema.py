@@ -1352,7 +1352,7 @@ class DecisionSnapshot:
     td_advantage: float | None = None  # r + γV(s') - V(s): true TD(0) advantage (None until next step)
 
     # Decision-specific entropy (per DRL review - more useful than policy entropy)
-    decision_entropy: float = 0.0  # -sum(p*log(p)) for this action distribution
+    decision_entropy: float | None = None  # -sum(p*log(p)) when available
 
     # Head choice details for factored action heads (per DRL/UX specialist review)
     # These enable decision cards to show sub-decisions like 'bpnt:conv_l(87%) tmp:STD'
@@ -1376,14 +1376,14 @@ class DecisionSnapshot:
 
     # Per-head entropy values (distribution spread - higher means more uncertain)
     # Useful for diagnosing policy collapse (entropy -> 0) or exploration issues
-    op_entropy: float = 0.0
-    slot_entropy: float = 0.0
-    blueprint_entropy: float = 0.0
-    style_entropy: float = 0.0
-    tempo_entropy: float = 0.0
-    alpha_target_entropy: float = 0.0
-    alpha_speed_entropy: float = 0.0
-    curve_entropy: float = 0.0
+    op_entropy: float | None = None
+    slot_entropy: float | None = None
+    blueprint_entropy: float | None = None
+    style_entropy: float | None = None
+    tempo_entropy: float | None = None
+    alpha_target_entropy: float | None = None
+    alpha_speed_entropy: float | None = None
+    curve_entropy: float | None = None
 
 
 @dataclass

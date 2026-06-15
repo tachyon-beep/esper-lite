@@ -283,7 +283,7 @@ python -m esper.scripts.train ppo --reward-mode minimal
 **Objective:** Validate the “Rent & Churn Economy” and select the winning reward signal for Phase 3 (Transformers).
 
 **Context:**
-We have successfully trained `cifar_blind`, a model that achieves ~60% accuracy on CIFAR-10 with only +10% parameter growth using a heuristic/random strategy. This sets the **Baseline for Competence**.
+Current proof rehearsals target `cifar_impaired`, the valid CIFAR task used by the reward-efficiency packet and tracker commands. The heuristic/random control sets the **Baseline for Competence**.
 
 For the RL agent (`Simic`) to justify its existence, it must outperform this baseline not just in accuracy, but in **structural efficiency** (getting more accuracy *per unit of growth*).
 
@@ -293,14 +293,14 @@ We have observed that the current 7-component `SHAPED` reward might be creating 
 
 | Cohort             | Description        | Reward Function                                         | Hypothesis                                                            |
 | :----------------- | :----------------- | :------------------------------------------------------ | :-------------------------------------------------------------------- |
-| **Control**        | `cifar_blind`      | Heuristic / Random                                      | **Baseline.** The floor for performance.                              |
+| **Control**        | `cifar_impaired` heuristic | Heuristic / Random                                      | **Baseline.** The floor for performance.                              |
 | **A (Shaped)**     | Current Default    | 7-component (PBRS + Attribution + Warnings + Rent...)   | **Over-engineered.** likely to cause confusion/instability.           |
 | **B (Simplified)** | **The Challenger** | 3-component (PBRS + Intervention Cost + Terminal Bonus) | **Optimal.** Cleanest gradient for temporal credit assignment.        |
 | **C (Sparse)**     | Hard Mode          | Terminal Accuracy - Rent                                | **The Truth.** Hardest to learn, but theoretically perfect alignment. |
 
 ##### Configuration
 
-* **Task:** `cifar_blind` topology (ResNet host + 2 seed slots)
+* **Task:** `cifar_impaired` topology (ResNet host + seed slots)
 * **Duration:** 100 Episodes
 * **Envs:** 8–12 concurrent environments (split evenly across cohorts)
 * **Seed Budget:** Max 2 active seeds
@@ -314,7 +314,7 @@ We have observed that the current 7-component `SHAPED` reward might be creating 
 ##### Pass Criteria
 
 * **Essential:** Cohort B (Simplified) outperforms Cohort A (Shaped) in Accuracy ROI
-* **Essential:** Cohort B outperforms Control (`cifar_blind`) in Final Accuracy
+* **Essential:** Cohort B outperforms Control (`cifar_impaired` heuristic) in Final Accuracy
 * **Stretch:** Cohort C (Sparse) learns anything better than random chance
 
 ##### Execution Plan

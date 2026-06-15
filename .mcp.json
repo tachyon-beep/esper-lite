@@ -9,6 +9,11 @@
       ],
       "command": "uv"
     },
+    "filigree": {
+      "args": [],
+      "command": "/home/john/.local/bin/filigree-mcp",
+      "type": "stdio"
+    },
     "legis": {
       "args": [
         "mcp",
@@ -38,11 +43,11 @@
       "command": "/home/john/.local/bin/wardline",
       "type": "stdio"
     },
-    "filigree": {
-      "type": "stdio",
-      "command": "/home/john/.local/bin/filigree-mcp",
+    "warpline": {
       "args": [],
-      "env": {}
+      "command": "/home/john/.local/bin/warpline-mcp",
+      "env": {},
+      "type": "stdio"
     }
   }
 }

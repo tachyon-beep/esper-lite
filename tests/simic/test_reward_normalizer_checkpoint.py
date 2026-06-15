@@ -12,25 +12,40 @@ class _StopAfterCheckpointLoaded(RuntimeError):
     pass
 
 
+def _obs_normalizer_metadata_for_slots(slot_ids: tuple[str, ...]) -> dict[str, object]:
+    from esper.leyline import SlotConfig
+    from esper.simic.control.normalization import RunningMeanStd
+    from esper.simic.training.normalizer_checkpoint import obs_normalizer_metadata
+    from esper.tamiyo.policy.features import get_feature_size
+
+    slot_config = SlotConfig(slot_ids=slot_ids)
+    state_dim = get_feature_size(slot_config)
+    obs_normalizer = RunningMeanStd(shape=(state_dim,), device="cpu", momentum=0.99)
+    return obs_normalizer_metadata(obs_normalizer, slot_config=slot_config)
+
+
 class TestNormalizerCheckpointSave:
     """B5-PT-02 regression tests: verify save path populates normalizer metadata."""
 
     def test_checkpoint_metadata_format_obs_normalizer(self):
         """Observation normalizer state serializes correctly for checkpoint."""
+        from esper.leyline import SlotConfig
         from esper.simic.control.normalization import RunningMeanStd
+        from esper.simic.training.normalizer_checkpoint import obs_normalizer_metadata
+        from esper.tamiyo.policy.features import get_feature_size
 
         # Create normalizer with some accumulated state
-        obs_normalizer = RunningMeanStd(shape=(10,), device="cpu", momentum=0.99)
-        obs_normalizer.update(torch.randn(32, 10))
-        obs_normalizer.update(torch.randn(32, 10))
+        slot_config = SlotConfig(slot_ids=("s0", "s1"))
+        state_dim = get_feature_size(slot_config)
+        obs_normalizer = RunningMeanStd(shape=(state_dim,), device="cpu", momentum=0.99)
+        obs_normalizer.update(torch.randn(32, state_dim))
+        obs_normalizer.update(torch.randn(32, state_dim))
 
-        # Build metadata dict using same format as vectorized.py:3769-3774
-        metadata = {
-            "obs_normalizer_mean": obs_normalizer.mean.tolist(),
-            "obs_normalizer_var": obs_normalizer.var.tolist(),
-            "obs_normalizer_count": obs_normalizer.count.item(),
-            "obs_normalizer_momentum": obs_normalizer.momentum,
-        }
+        # Build metadata dict using the same helper as the checkpoint save path.
+        metadata = obs_normalizer_metadata(
+            obs_normalizer,
+            slot_config=slot_config,
+        )
 
         # Verify round-trip: metadata -> torch.tensor (as load code does)
         restored_mean = torch.tensor(metadata["obs_normalizer_mean"], device="cpu")
@@ -41,6 +56,7 @@ class TestNormalizerCheckpointSave:
         assert torch.allclose(obs_normalizer.var, restored_var)
         assert torch.isclose(obs_normalizer.count, restored_count)
         assert metadata["obs_normalizer_momentum"] == 0.99
+        assert metadata["obs_normalizer_contract"]["state_dim"] == state_dim
 
     def test_checkpoint_metadata_format_reward_normalizer(self):
         """Reward normalizer state serializes correctly for checkpoint."""
@@ -65,21 +81,26 @@ class TestNormalizerCheckpointSave:
 
     def test_full_checkpoint_roundtrip(self, tmp_path):
         """B5-PT-02: Full checkpoint save/load preserves normalizer state."""
+        from esper.leyline import SlotConfig
         from esper.simic.control.normalization import RunningMeanStd, RewardNormalizer
+        from esper.simic.training.normalizer_checkpoint import (
+            obs_normalizer_metadata,
+            restore_obs_normalizer_from_metadata,
+        )
+        from esper.tamiyo.policy.features import get_feature_size
 
         # Create normalizers with accumulated state
-        obs_normalizer = RunningMeanStd(shape=(5,), device="cpu", momentum=0.99)
-        obs_normalizer.update(torch.randn(16, 5))
+        slot_config = SlotConfig(slot_ids=("s0",))
+        state_dim = get_feature_size(slot_config)
+        obs_normalizer = RunningMeanStd(shape=(state_dim,), device="cpu", momentum=0.99)
+        obs_normalizer.update(torch.randn(16, state_dim))
         reward_normalizer = RewardNormalizer(clip=10.0)
         for _ in range(30):
             reward_normalizer.update_and_normalize(torch.randn(1).item())
 
         # Build checkpoint metadata (exactly as vectorized.py does)
         checkpoint_metadata = {
-            "obs_normalizer_mean": obs_normalizer.mean.tolist(),
-            "obs_normalizer_var": obs_normalizer.var.tolist(),
-            "obs_normalizer_count": obs_normalizer.count.item(),
-            "obs_normalizer_momentum": obs_normalizer.momentum,
+            **obs_normalizer_metadata(obs_normalizer, slot_config=slot_config),
             "reward_normalizer_mean": reward_normalizer.mean,
             "reward_normalizer_m2": reward_normalizer.m2,
             "reward_normalizer_count": reward_normalizer.count,
@@ -93,11 +114,17 @@ class TestNormalizerCheckpointSave:
         metadata = loaded["metadata"]
 
         # Simulate load path (vectorized.py:859-880)
-        obs_normalizer_restored = RunningMeanStd(shape=(5,), device="cpu", momentum=0.99)
-        obs_normalizer_restored.mean = torch.tensor(metadata["obs_normalizer_mean"], device="cpu")
-        obs_normalizer_restored.var = torch.tensor(metadata["obs_normalizer_var"], device="cpu")
-        obs_normalizer_restored.count = torch.tensor(metadata["obs_normalizer_count"], device="cpu")
-        obs_normalizer_restored.momentum = metadata["obs_normalizer_momentum"]
+        obs_normalizer_restored = RunningMeanStd(
+            shape=(state_dim,),
+            device="cpu",
+            momentum=0.99,
+        )
+        restore_obs_normalizer_from_metadata(
+            metadata,
+            obs_normalizer=obs_normalizer_restored,
+            slot_config=slot_config,
+            device="cpu",
+        )
 
         reward_normalizer_restored = RewardNormalizer(clip=10.0)
         reward_normalizer_restored.mean = metadata["reward_normalizer_mean"]
@@ -113,6 +140,70 @@ class TestNormalizerCheckpointSave:
         assert reward_normalizer.mean == reward_normalizer_restored.mean
         assert reward_normalizer.m2 == reward_normalizer_restored.m2
         assert reward_normalizer.count == reward_normalizer_restored.count
+
+    def test_obs_normalizer_resume_requires_contract(self):
+        """Resume fails closed when old checkpoints lack an obs contract."""
+        from esper.leyline import SlotConfig
+        from esper.simic.control.normalization import RunningMeanStd
+        from esper.simic.training.normalizer_checkpoint import (
+            restore_obs_normalizer_from_metadata,
+        )
+        from esper.tamiyo.policy.features import get_feature_size
+
+        slot_config = SlotConfig(slot_ids=("s0",))
+        state_dim = get_feature_size(slot_config)
+
+        metadata = {
+            "obs_normalizer_mean": [0.0] * state_dim,
+            "obs_normalizer_var": [1.0] * state_dim,
+            "obs_normalizer_count": 10.0,
+            "obs_normalizer_momentum": 0.99,
+        }
+        obs_normalizer = RunningMeanStd(shape=(state_dim,), device="cpu", momentum=0.99)
+
+        with pytest.raises(RuntimeError, match="obs_normalizer_contract"):
+            restore_obs_normalizer_from_metadata(
+                metadata,
+                obs_normalizer=obs_normalizer,
+                slot_config=slot_config,
+                device="cpu",
+            )
+
+    def test_obs_normalizer_resume_rejects_stale_contract(self):
+        """Resume fails closed when normalizer stats fit a different obs contract."""
+        from esper.leyline import SlotConfig
+        from esper.simic.control.normalization import RunningMeanStd
+        from esper.simic.training.normalizer_checkpoint import (
+            obs_normalizer_metadata,
+            restore_obs_normalizer_from_metadata,
+        )
+        from esper.tamiyo.policy.features import get_feature_size
+
+        checkpoint_slot_config = SlotConfig(slot_ids=("s0",))
+        runtime_slot_config = SlotConfig(slot_ids=("s0", "s1"))
+        checkpoint_state_dim = get_feature_size(checkpoint_slot_config)
+        runtime_state_dim = get_feature_size(runtime_slot_config)
+        obs_normalizer = RunningMeanStd(
+            shape=(checkpoint_state_dim,),
+            device="cpu",
+            momentum=0.99,
+        )
+        metadata = obs_normalizer_metadata(
+            obs_normalizer,
+            slot_config=checkpoint_slot_config,
+        )
+
+        with pytest.raises(RuntimeError, match="Observation normalizer contract mismatch"):
+            restore_obs_normalizer_from_metadata(
+                metadata,
+                obs_normalizer=RunningMeanStd(
+                    shape=(runtime_state_dim,),
+                    device="cpu",
+                    momentum=0.99,
+                ),
+                slot_config=runtime_slot_config,
+                device="cpu",
+            )
 
 
 def test_resume_restores_reward_normalizer_state(monkeypatch, tmp_path):
@@ -170,6 +261,7 @@ def test_resume_restores_reward_normalizer_state(monkeypatch, tmp_path):
                 "n_episodes": 0,
                 "batches_completed": 0,
                 "n_envs": 1,
+                **_obs_normalizer_metadata_for_slots(("r0c1",)),
                 "reward_normalizer_mean": 1.23,
                 "reward_normalizer_m2": 4.56,
                 "reward_normalizer_count": 7,
@@ -260,6 +352,7 @@ def test_resume_uses_single_preloaded_checkpoint_for_agent_and_metadata(
                 "n_episodes": 0,
                 "batches_completed": 0,
                 "n_envs": 1,
+                **_obs_normalizer_metadata_for_slots(("r0c1",)),
             }
         },
         checkpoint_path,
@@ -337,6 +430,7 @@ def test_resume_force_compile_overrides_quiet_analytics(monkeypatch, tmp_path):
                 "n_episodes": 0,
                 "batches_completed": 0,
                 "n_envs": 1,
+                **_obs_normalizer_metadata_for_slots(("r0c1",)),
             }
         },
         checkpoint_path,

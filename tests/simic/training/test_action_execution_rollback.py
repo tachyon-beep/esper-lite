@@ -24,16 +24,21 @@ from esper.simic.vectorized_types import (
 class _FakeBuffer:
     def __init__(self) -> None:
         self.step_counts = [0]
+        self.action_ids = [[]]
         self.add_calls: list[dict[str, object]] = []
         self.ended_envs: list[int] = []
 
     def add(self, **kwargs: object) -> None:
         self.add_calls.append(kwargs)
         env_id = int(kwargs["env_id"])
+        self.action_ids[env_id].append(str(kwargs["action_id"]))
         self.step_counts[env_id] += 1
 
     def end_episode(self, env_id: int) -> None:
         self.ended_envs.append(env_id)
+
+    def last_action_id(self, env_id: int) -> str:
+        return self.action_ids[env_id][self.step_counts[env_id] - 1]
 
 
 class _FakeModel:
@@ -76,10 +81,13 @@ class _FakeGovernor:
     consecutive_panics = 1
 
     def __init__(self) -> None:
-        self.rollback_calls = 0
+        self.rollback_calls: list[dict[str, object]] = []
 
-    def execute_rollback(self, *, env_id: int) -> None:
-        self.rollback_calls += 1
+    def get_punishment_reward(self) -> float:
+        return -10.0
+
+    def execute_rollback(self, **kwargs: object) -> None:
+        self.rollback_calls.append(kwargs)
 
 
 class _VetoGovernor:
@@ -193,7 +201,7 @@ def test_rollback_step_skips_stale_lifecycle_action(monkeypatch: pytest.MonkeyPa
         reward_family_enum=RewardFamily.CONTRIBUTION,
         reward_config=SimpleNamespace(auto_prune_penalty=-1.0),
         loss_reward_config=SimpleNamespace(),
-        reward_normalizer=SimpleNamespace(update_and_normalize=lambda reward: reward),
+        reward_normalizer=SimpleNamespace(clip=10.0, update_and_normalize=lambda reward: reward),
         telemetry_config=None,
         ops_telemetry_enabled=False,
         disable_advance=False,
@@ -255,7 +263,12 @@ def test_rollback_step_skips_stale_lifecycle_action(monkeypatch: pytest.MonkeyPa
         batch_idx=0,
     )
 
-    assert governor.rollback_calls == 1
+    assert len(governor.rollback_calls) == 1
+    assert governor.rollback_calls[0]["triggering_action_id"] is None
+    assert governor.rollback_calls[0]["raw_penalty"] == -10.0
+    assert governor.rollback_calls[0]["normalized_penalty"] == -10.0
+    assert governor.rollback_calls[0]["rollback_severity"] == 10.0
+    assert governor.rollback_calls[0]["watch_window_evidence"] == 10.0
     assert model.germinate_calls == []
     assert env_state.germinate_count == 0
     assert env_state.last_action_success is False
@@ -347,7 +360,7 @@ def test_tolaria_preflight_veto_blocks_lifecycle_mutation(
         reward_family_enum=RewardFamily.CONTRIBUTION,
         reward_config=SimpleNamespace(auto_prune_penalty=-1.0),
         loss_reward_config=SimpleNamespace(),
-        reward_normalizer=SimpleNamespace(update_and_normalize=lambda reward: reward),
+        reward_normalizer=SimpleNamespace(clip=10.0, update_and_normalize=lambda reward: reward),
         telemetry_config=None,
         ops_telemetry_enabled=False,
         disable_advance=False,
@@ -518,7 +531,7 @@ def test_execute_actions_dispatches_lifecycle_mutation_through_handler_registry(
         reward_family_enum=RewardFamily.CONTRIBUTION,
         reward_config=SimpleNamespace(auto_prune_penalty=-1.0),
         loss_reward_config=SimpleNamespace(),
-        reward_normalizer=SimpleNamespace(update_and_normalize=lambda reward: reward),
+        reward_normalizer=SimpleNamespace(clip=10.0, update_and_normalize=lambda reward: reward),
         telemetry_config=None,
         ops_telemetry_enabled=False,
         disable_advance=False,
@@ -681,7 +694,7 @@ def test_execute_actions_emits_joinable_morphology_causal_log(
         reward_family_enum=RewardFamily.CONTRIBUTION,
         reward_config=SimpleNamespace(auto_prune_penalty=-1.0),
         loss_reward_config=SimpleNamespace(),
-        reward_normalizer=SimpleNamespace(update_and_normalize=lambda reward: reward),
+        reward_normalizer=SimpleNamespace(clip=10.0, update_and_normalize=lambda reward: reward),
         telemetry_config=None,
         ops_telemetry_enabled=False,
         disable_advance=False,
@@ -871,7 +884,7 @@ def test_execute_actions_failed_handler_does_not_emit_commit(
         reward_family_enum=RewardFamily.CONTRIBUTION,
         reward_config=SimpleNamespace(auto_prune_penalty=-1.0),
         loss_reward_config=SimpleNamespace(),
-        reward_normalizer=SimpleNamespace(update_and_normalize=lambda reward: reward),
+        reward_normalizer=SimpleNamespace(clip=10.0, update_and_normalize=lambda reward: reward),
         telemetry_config=None,
         ops_telemetry_enabled=False,
         disable_advance=False,
@@ -1010,6 +1023,8 @@ def test_rollback_step_emits_cooldown_and_audit_causal_log(
     )
 
     buffer = _FakeBuffer()
+    buffer.step_counts[0] = 1
+    buffer.action_ids[0].append("morph-b0-e0-env0-r0c0-op0")
     slot_config = SlotConfig.default()
     reward_config = SimpleNamespace(
         reward_mode=RewardMode.SHAPED,
@@ -1025,7 +1040,7 @@ def test_rollback_step_emits_cooldown_and_audit_causal_log(
         reward_family_enum=RewardFamily.CONTRIBUTION,
         reward_config=SimpleNamespace(auto_prune_penalty=-1.0),
         loss_reward_config=SimpleNamespace(),
-        reward_normalizer=SimpleNamespace(update_and_normalize=lambda reward: reward),
+        reward_normalizer=SimpleNamespace(clip=10.0, update_and_normalize=lambda reward: reward),
         telemetry_config=None,
         ops_telemetry_enabled=False,
         disable_advance=False,
@@ -1095,6 +1110,12 @@ def test_rollback_step_emits_cooldown_and_audit_causal_log(
     assert [event.data.phase for event in causal_events] == ["rollback", "cooldown", "audit"]
     assert {event.data.action_id for event in causal_events} == {"morph-b0-e1-env0-r0c0-op1"}
     assert causal_events[0].data.watch_window_evidence != 0.0
+    assert len(governor.rollback_calls) == 1
+    assert governor.rollback_calls[0]["triggering_action_id"] == "morph-b0-e0-env0-r0c0-op0"
+    assert governor.rollback_calls[0]["raw_penalty"] == -10.0
+    assert governor.rollback_calls[0]["normalized_penalty"] == -10.0
+    assert governor.rollback_calls[0]["rollback_severity"] == 10.0
+    assert governor.rollback_calls[0]["watch_window_evidence"] == 10.0
 
 
 def test_rollback_emits_morphology_causal_log_with_watch_evidence() -> None:

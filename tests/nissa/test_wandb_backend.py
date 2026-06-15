@@ -15,6 +15,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.proof_baselines import (
+    FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT,
+    FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
+    FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+    FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
+)
 from esper.leyline.telemetry import (
     BatchEpochCompletedPayload,
     EpochCompletedPayload,
@@ -580,6 +586,60 @@ class TestTrainingStartedDiagnostics:
         # Optional absent fields omitted
         assert "amp_dtype" not in cfg
         assert "proof_baseline_mode" not in cfg
+
+    def test_training_started_logs_proof_baseline_lifecycle_policy(
+        self,
+        backend,
+        mock_wandb,
+    ):
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=4,
+                max_epochs=150,
+                max_batches=100,
+                task="cifar10",
+                host_params=1_200_000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=400,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=2_000_000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                reward_mode="shaped",
+                proof_baseline_mode="fixed_schedule",
+                proof_baseline_pair_id="blueprint-health-proof",
+                proof_baseline_lifecycle_policy="apply_declared_lifecycle_schedule",
+                proof_baseline_schedule_id=FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+                proof_baseline_schedule_hash=FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
+                proof_baseline_schedule_version=FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
+                proof_baseline_schedule_action_count=(
+                    FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+                ),
+            ),
+        )
+
+        backend.emit(event)
+
+        cfg = mock_wandb.config.update.call_args[0][0]
+        assert cfg["proof_baseline_mode"] == "fixed_schedule"
+        assert cfg["proof_baseline_pair_id"] == "blueprint-health-proof"
+        assert cfg["proof_baseline_lifecycle_policy"] == (
+            "apply_declared_lifecycle_schedule"
+        )
+        assert cfg["proof_baseline_schedule_id"] == FIXED_SCHEDULE_GERMINATE_R0C0_V1
+        assert cfg["proof_baseline_schedule_hash"] == (
+            FIXED_SCHEDULE_GERMINATE_R0C0_HASH
+        )
+        assert cfg["proof_baseline_schedule_version"] == (
+            FIXED_SCHEDULE_GERMINATE_R0C0_VERSION
+        )
+        assert cfg["proof_baseline_schedule_action_count"] == (
+            FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+        )
 
 
 class TestPayloadOnlySlotId:

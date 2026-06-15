@@ -487,6 +487,7 @@ def execute_actions(
     epoch: int,
     episodes_completed: int,
     batch_idx: int,
+    proof_controlled_step: bool = False,
 ) -> ActionExecutionResult:
     slots = context.slots
     slot_config = context.slot_config
@@ -606,6 +607,20 @@ def execute_actions(
             # authoritative GOVERNOR_ROLLBACK panic record is emitted by the governor.
             panic_reason = env_state.governor._panic_reason
             panic_loss = env_state.governor._panic_loss
+            rollback_raw_penalty = env_state.governor.get_punishment_reward()
+            rollback_normalized_penalty = float(
+                max(
+                    -reward_normalizer.clip,
+                    min(reward_normalizer.clip, rollback_raw_penalty),
+                )
+            )
+            rollback_triggering_action_id = (
+                agent.buffer.last_action_id(env_idx)
+                if agent.buffer.step_counts[env_idx] > 0
+                else None
+            )
+            rollback_severity = abs(rollback_raw_penalty)
+            rollback_watch_window_evidence = rollback_severity
 
             # Stream safety: rollback mutates model tensors; ensure it runs on the
             # per-env CUDA stream to avoid default-stream leakage and races.
@@ -615,7 +630,14 @@ def execute_actions(
                 else nullcontext()
             )
             with rollback_ctx:
-                env_state.governor.execute_rollback(env_id=env_idx)
+                env_state.governor.execute_rollback(
+                    env_id=env_idx,
+                    triggering_action_id=rollback_triggering_action_id,
+                    raw_penalty=rollback_raw_penalty,
+                    normalized_penalty=rollback_normalized_penalty,
+                    rollback_severity=rollback_severity,
+                    watch_window_evidence=rollback_watch_window_evidence,
+                )
             env_rollback_occurred[env_idx] = True
 
             # CRITICAL: Clear optimizer momentum after rollback.
@@ -633,7 +655,8 @@ def execute_actions(
             # KTS-003: The GOVERNOR_ROLLBACK telemetry event is emitted by the
             # SINGLE authoritative source — TolariaGovernor.execute_rollback() — which
             # carries the complete panic context (loss_at_panic, loss_threshold,
-            # consecutive_panics, panic_reason, and any state_dict key mismatches).
+            # consecutive_panics, panic_reason, any state_dict key mismatches, and
+            # Simic's rollback attribution context).
             # Simic must NOT emit a second, partial GOVERNOR_ROLLBACK here; the governor
             # is the panic authority. Simic only records the joinable morphology causal
             # log rows below (which describe the *aborted lifecycle action*, not the
@@ -1353,7 +1376,7 @@ def execute_actions(
         # When all slots are occupied and no operations are valid, the action space
         # collapses to WAIT-only. These timesteps should be excluded from actor loss
         # (no agency, no gradient) but still included in GAE/LSTM unrolling.
-        forced_step = forced_batch_cpu[env_idx]
+        forced_step = proof_controlled_step or forced_batch_cpu[env_idx]
 
         # Phase 2.2: Build contribution targets from counterfactual ablation
         # baseline_accs[env_idx][slot_id] = accuracy with that slot disabled
