@@ -732,6 +732,8 @@ from esper.leyline.reports import (
     SeedMetrics,
     SeedStateReport,
     FieldReport,
+    PhaseTiming,
+    PhaseProfileReport,
 )
 
 # Telemetry contracts
@@ -1075,6 +1077,8 @@ __all__ = [
     "SeedMetrics",
     "SeedStateReport",
     "FieldReport",
+    "PhaseTiming",
+    "PhaseProfileReport",
 
     # Telemetry
     "TelemetryEventType",
