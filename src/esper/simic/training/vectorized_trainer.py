@@ -2287,52 +2287,184 @@ class VectorizedPPOTrainer:
             batched_lstm_hidden=batched_lstm_hidden,
         )
 
+    def _run_epoch(
+        self,
+        *,
+        epoch: int,
+        envs_this_batch: int,
+        env_states: list[ParallelEnvState],
+        step_records: list[EnvStepRecord],
+        reward_summary_accum: list[RewardSummaryAccumulator],
+        raw_states_for_normalizer_update: list[torch.Tensor],
+        last_train_corrects: list[int],
+        last_train_totals: list[int],
+        ordered_slots: list[str],
+        static_final_replay_validated: bool,
+        rollout_autocast: Callable[[], AbstractContextManager[None]],
+        criterion: nn.CrossEntropyLoss,
+        val_criterion: nn.CrossEntropyLoss,
+        episodes_completed: int,
+        batch_idx: int,
+        batch_epoch_id: int,
+        episode_history: list[EpisodeRecord],
+        episode_outcomes: list[Any],
+        batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None,
+        throughput_step_time_ms_sum: float,
+        throughput_dataloader_wait_ms_sum: float,
+        prof: Any | None,
+    ) -> tuple[
+        bool,  # completed normally (False = shutdown requested)
+        tuple[torch.Tensor, torch.Tensor] | None,  # updated lstm hidden
+        float,  # updated throughput_step_time_ms_sum
+        float,  # updated throughput_dataloader_wait_ms_sum
+        list[int],  # val_corrects (main config, I12)
+        list[int],  # val_totals (main config, I12)
+        bool,  # prof.step() was called this epoch
+    ]:
+        """Run one epoch: train -> fused-val -> action-transaction -> bookkeeping.
+
+        Invariant ordering (enforced by sequential method calls):
+          _run_train_pass      (I8: stream fences)
+          _run_fused_val_pass  (I12: val tail retention, main-config-only loss)
+          _build_action_inputs (I6/I7/I10: AMP, normalizer freeze, proof controls)
+          _run_action_transaction (I1/I4/I6/I13: LSTM reset, bootstrap)
+
+        Returns completed=False if shutdown_event fired (caller breaks epoch loop).
+        val_corrects/val_totals come from the main config (config 0) of the final
+        epoch's fused validation pass and are consumed by the caller's batch
+        telemetry (I12).
+        """
+        epoch_start = time.perf_counter()
+        dataloader_wait_ms_epoch = 0.0
+        if self.telemetry_config is not None:
+            self.telemetry_config.tick_escalation()
+        for env_state in env_states:
+            configure_slot_telemetry(
+                env_state,
+                ops_telemetry_enabled=self.ops_telemetry_enabled,
+                telemetry_lifecycle_only=self.telemetry_lifecycle_only,
+                inner_epoch=epoch,
+                global_epoch=batch_epoch_id,
+            )
+        # Reset per-epoch training accumulators (fresh per epoch;
+        # mutated in place by _run_train_pass).
+        train_totals = [0] * envs_this_batch
+        train_batch_counts = [0] * envs_this_batch
+
+        # ===== TRAINING PASS (I8: CUDA stream fences) =====
+        env_grad_stats, train_dataloader_wait_ms = self._run_train_pass(
+            env_states=env_states,
+            step_records=step_records,
+            ordered_slots=ordered_slots,
+            epoch=epoch,
+            criterion=criterion,
+            last_train_corrects=last_train_corrects,
+            last_train_totals=last_train_totals,
+            train_totals=train_totals,
+            train_batch_counts=train_batch_counts,
+        )
+        dataloader_wait_ms_epoch += train_dataloader_wait_ms
+
+        # ===== Validation + Counterfactual (FUSED): Single pass over test data =====
+        # Extracted to _run_fused_val_pass(): one fused forward over
+        # the test data stacking every ablation config (config 0 == main).
+        (
+            fused_result,
+            val_dataloader_wait_ms,
+        ) = self._run_fused_val_pass(
+            env_states=env_states,
+            slots=self.slots,
+            epoch=epoch,
+            envs_this_batch=envs_this_batch,
+            val_criterion=val_criterion,
+            batch_idx=batch_idx,
+        )
+        dataloader_wait_ms_epoch += val_dataloader_wait_ms
+
+        # CRITICAL: baseline_accs is rebuilt fresh each epoch by
+        # _run_fused_val_pass. Re-wire the per-epoch fresh dict into the
+        # locals consumed below (and the execute_actions kwarg, per D4).
+        # I3: baseline_accs[env_idx] is read by build_fresh_contribution_targets
+        #     inside execute_actions; a stale reference from a prior epoch
+        #     would corrupt counterfactual freshness.
+        baseline_accs = fused_result.baseline_accs
+        val_corrects = fused_result.val_corrects
+        val_totals = fused_result.val_totals
+
+        # ===== Compute epoch metrics and get BATCHED actions =====
+        # Extracted to _build_action_inputs(): collects per-env signals/slot
+        # reports, builds batched masks (I10 proof controls), accumulates raw
+        # states for the deferred normalizer refresh (I7), and runs the rollout
+        # get_action under the shared rollout_autocast factory (I6 BF16 symmetry).
+        _action_inputs = self._build_action_inputs(
+            env_states=env_states,
+            env_grad_stats=env_grad_stats,
+            raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+            ordered_slots=ordered_slots,
+            epoch=epoch,
+            static_final_replay_validated=static_final_replay_validated,
+            rollout_autocast=rollout_autocast,
+            batched_lstm_hidden=batched_lstm_hidden,
+        )
+
+        # ===== ACTION TRANSACTION (I1 ordering: execute_actions ->
+        # reset terminal hidden -> bootstrap forward pass) =====
+        # Extracted to _run_action_transaction(): the three-step sequence
+        # is structurally enforced by sequential calls inside the method.
+        _action_txn = self._run_action_transaction(
+            env_states=env_states,
+            step_records=step_records,
+            fused_result=fused_result,
+            aib=_action_inputs,
+            reward_summary_accum=reward_summary_accum,
+            baseline_accs=baseline_accs,
+            episode_history=episode_history,
+            episode_outcomes=episode_outcomes,
+            epoch=epoch,
+            episodes_completed=episodes_completed,
+            batch_idx=batch_idx,
+            rollout_autocast=rollout_autocast,
+            batched_lstm_hidden=_action_inputs.batched_lstm_hidden_post_action,
+        )
+        batched_lstm_hidden = _action_txn.batched_lstm_hidden
+
+        throughput_step_time_ms_sum += (
+            time.perf_counter() - epoch_start
+        ) * 1000.0
+        throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch
+        # Check for graceful shutdown at end of each epoch (not just batch end)
+        # This gives user faster response (~seconds) instead of waiting for full batch
+        if self.shutdown_event is not None and self.shutdown_event.is_set():
+            print(
+                f"\n[Shutdown requested] Stopping at epoch {epoch}/{self.max_epochs} "
+                f"(batch {batch_idx + 1}, {episodes_completed}/{self.total_env_episodes} episodes)"
+            )
+            # Exit epoch loop; batch-level break below will handle cleanup
+            return (
+                False,
+                batched_lstm_hidden,
+                throughput_step_time_ms_sum,
+                throughput_dataloader_wait_ms_sum,
+                val_corrects,
+                val_totals,
+                False,
+            )
+        prof_stepped = False
+        if prof is not None:
+            prof.step()
+            prof_stepped = True
+
+        return (
+            True,
+            batched_lstm_hidden,
+            throughput_step_time_ms_sum,
+            throughput_dataloader_wait_ms_sum,
+            val_corrects,
+            val_totals,
+            prof_stepped,
+        )
+
     def run(self) -> list[dict[str, Any]]:
-        agent = self.agent
-        task_spec = self.task_spec
-        slots = self.slots
-        slot_config = self.slot_config
-        n_envs = self.n_envs
-        max_epochs = self.max_epochs
-        total_batches = self.total_batches
-        total_env_episodes = self.total_env_episodes
-        start_episode = self.start_episode
-        start_batch = self.start_batch
-        save_path = self.save_path
-        seed = self.seed
-        shared_train_iter = self.shared_train_iter
-        shared_test_iter = self.shared_test_iter
-        num_train_batches = self.num_train_batches
-        num_test_batches = self.num_test_batches
-        reward_normalizer = self.reward_normalizer
-        obs_normalizer = self.obs_normalizer
-        initial_obs_normalizer_mean = self.initial_obs_normalizer_mean
-        telemetry_config = self.telemetry_config
-        telemetry_lifecycle_only = self.telemetry_lifecycle_only
-        ops_telemetry_enabled = self.ops_telemetry_enabled
-        use_telemetry = self.use_telemetry
-        gradient_telemetry_stride = self.gradient_telemetry_stride
-        max_grad_norm = self.max_grad_norm
-        plateau_threshold = self.plateau_threshold
-        improvement_threshold = self.improvement_threshold
-        hub = self.hub
-        analytics = self.analytics
-        emitters = self.emitters
-        batch_emitter = self.batch_emitter
-        shutdown_event = self.shutdown_event
-        group_id = self.group_id
-        torch_profiler = self.torch_profiler
-        torch_profiler_dir = self.torch_profiler_dir
-        torch_profiler_wait = self.torch_profiler_wait
-        torch_profiler_warmup = self.torch_profiler_warmup
-        torch_profiler_active = self.torch_profiler_active
-        torch_profiler_repeat = self.torch_profiler_repeat
-        torch_profiler_record_shapes = self.torch_profiler_record_shapes
-        torch_profiler_profile_memory = self.torch_profiler_profile_memory
-        torch_profiler_with_stack = self.torch_profiler_with_stack
-        torch_profiler_summary = self.torch_profiler_summary
-        gpu_preload_augment = self.gpu_preload_augment
-        resolved_amp_dtype = self.resolved_amp_dtype
         static_final_replay_validated = False
 
         def rollout_autocast() -> AbstractContextManager[None]:
@@ -2340,26 +2472,18 @@ class VectorizedPPOTrainer:
             # context as the PPO update (_run_ppo_updates), so old_log_probs and the update's
             # log_probs share one precision decision -> unbiased importance ratio. Both legs
             # call the single shared factory, so the symmetry is structural, not coincidental.
-            return policy_amp_context(self.amp_enabled, resolved_amp_dtype)
-
-        env_factory = self.env_factory
-        compiled_loss_and_correct = self.compiled_loss_and_correct
-        action_execution_context = self.action_execution_context
-        effective_max_seeds = self.effective_max_seeds
-        disable_advance = self.disable_advance
-        device = self.device
-        logger = self.logger
+            return policy_amp_context(self.amp_enabled, self.resolved_amp_dtype)
 
         profiler_cm = training_profiler(
-            output_dir=torch_profiler_dir,
-            enabled=torch_profiler,
-            wait=torch_profiler_wait,
-            warmup=torch_profiler_warmup,
-            active=torch_profiler_active,
-            repeat=torch_profiler_repeat,
-            record_shapes=torch_profiler_record_shapes,
-            profile_memory=torch_profiler_profile_memory,
-            with_stack=torch_profiler_with_stack,
+            output_dir=self.torch_profiler_dir,
+            enabled=self.torch_profiler,
+            wait=self.torch_profiler_wait,
+            warmup=self.torch_profiler_warmup,
+            active=self.torch_profiler_active,
+            repeat=self.torch_profiler_repeat,
+            record_shapes=self.torch_profiler_record_shapes,
+            profile_memory=self.torch_profiler_profile_memory,
+            with_stack=self.torch_profiler_with_stack,
         )
         prof = profiler_cm.__enter__()
         prof_steps = 0
@@ -2378,17 +2502,17 @@ class VectorizedPPOTrainer:
             )
             prev_rolling_avg_acc: float | None = None
 
-            episodes_completed = start_episode
-            batch_idx = start_batch
+            episodes_completed = self.start_episode
+            batch_idx = self.start_batch
             # Gradient EMA tracker for drift detection (P4-9)
             # Persists across batches to track slow degradation
-            grad_ema_tracker = GradientEMATracker() if use_telemetry else None
+            grad_ema_tracker = GradientEMATracker() if self.use_telemetry else None
 
-            while batch_idx < total_batches:
+            while batch_idx < self.total_batches:
                 topology_manifest_records: list[dict[str, Any]] = []
                 log_frag(self.device, f"batch{batch_idx}.start")
                 # One PPO update per full batch of environments.
-                envs_this_batch = n_envs
+                envs_this_batch = self.n_envs
                 # Monotonic epoch id for all per-batch snapshot events (commit barrier, PPO, analytics).
                 # We use "episodes completed after this batch" so resumed runs stay monotonic.
                 batch_epoch_id = episodes_completed + envs_this_batch
@@ -2399,12 +2523,12 @@ class VectorizedPPOTrainer:
                     create_env_state(
                         i,
                         make_env_seed(
-                            root_seed=seed,
+                            root_seed=self.seed,
                             batch_idx=batch_idx,
                             env_idx=i,
                             envs_per_batch=envs_this_batch,
                         ),
-                        env_factory,
+                        self.env_factory,
                     )
                     for i in range(envs_this_batch)
                 ]
@@ -2415,19 +2539,19 @@ class VectorizedPPOTrainer:
 
                 # Initialize episode for vectorized training
                 for env_idx in range(envs_this_batch):
-                    env_states[env_idx].reset_episode_state(slots)
-                    agent.buffer.start_episode(env_id=env_idx)
+                    env_states[env_idx].reset_episode_state(self.slots)
+                    self.agent.buffer.start_episode(env_id=env_idx)
                     # Set episode context for telemetry (used by seed lifecycle events via emit_with_env_context)
                     episode_ctx = env_states[env_idx].episode_context
                     if episode_ctx is not None:
                         episode_ctx.episode_idx = episodes_completed + env_idx
                     # Also set on VectorizedEmitter (used by on_epoch_completed, on_last_action)
-                    emitters[env_idx].set_episode_idx(episodes_completed + env_idx)
+                    self.emitters[env_idx].set_episode_idx(episodes_completed + env_idx)
 
                 if self.proof_baseline_lifecycle_policy == "freeze_replayed_final_topology":
                     self._materialize_static_final_replay(
                         env_states=env_states,
-                        emitters=emitters,
+                        emitters=self.emitters,
                     )
                     static_final_replay_validated = True
 
@@ -2460,119 +2584,53 @@ class VectorizedPPOTrainer:
 
                 # Pre-compute ordered slots once per batch (not per-epoch)
                 # validate_slot_ids parses/sorts slot IDs - expensive to repeat 25x per episode
-                ordered_slots = validate_slot_ids(list(slots))
+                ordered_slots = validate_slot_ids(list(self.slots))
 
-                # Run epochs with INVERTED CONTROL FLOW
-                for epoch in range(1, max_epochs + 1):
-                    epoch_start = time.perf_counter()
-                    dataloader_wait_ms_epoch = 0.0
-                    if telemetry_config is not None:
-                        telemetry_config.tick_escalation()
-                    for env_state in env_states:
-                        configure_slot_telemetry(
-                            env_state,
-                            ops_telemetry_enabled=ops_telemetry_enabled,
-                            telemetry_lifecycle_only=telemetry_lifecycle_only,
-                            inner_epoch=epoch,
-                            global_epoch=batch_epoch_id,
-                        )
-                    # Reset per-epoch training accumulators (fresh per epoch;
-                    # mutated in place by _run_train_pass).
-                    train_totals = [0] * envs_this_batch
-                    train_batch_counts = [0] * envs_this_batch
-
-                    # ===== TRAINING PASS (I8: CUDA stream fences) =====
-                    env_grad_stats, train_dataloader_wait_ms = self._run_train_pass(
-                        env_states=env_states,
-                        step_records=step_records,
-                        ordered_slots=ordered_slots,
-                        epoch=epoch,
-                        criterion=criterion,
-                        last_train_corrects=last_train_corrects,
-                        last_train_totals=last_train_totals,
-                        train_totals=train_totals,
-                        train_batch_counts=train_batch_counts,
-                    )
-                    dataloader_wait_ms_epoch += train_dataloader_wait_ms
-
-                    # ===== Validation + Counterfactual (FUSED): Single pass over test data =====
-                    # Extracted to _run_fused_val_pass(): one fused forward over
-                    # the test data stacking every ablation config (config 0 == main).
+                # Run epochs with INVERTED CONTROL FLOW. Each epoch is one
+                # orchestrated transaction sequence (_run_epoch): train ->
+                # fused-val -> build-action-inputs -> action-transaction. The
+                # invariant ordering is enforced by the sequential method calls
+                # inside _run_epoch. val_corrects/val_totals carry the final
+                # epoch's main-config validation tallies out for batch telemetry (I12).
+                val_corrects: list[int] = []
+                val_totals: list[int] = []
+                for epoch in range(1, self.max_epochs + 1):
                     (
-                        fused_result,
-                        val_dataloader_wait_ms,
-                    ) = self._run_fused_val_pass(
-                        env_states=env_states,
-                        slots=slots,
+                        epoch_completed,
+                        batched_lstm_hidden,
+                        throughput_step_time_ms_sum,
+                        throughput_dataloader_wait_ms_sum,
+                        val_corrects,
+                        val_totals,
+                        epoch_prof_stepped,
+                    ) = self._run_epoch(
                         epoch=epoch,
                         envs_this_batch=envs_this_batch,
-                        val_criterion=val_criterion,
-                        batch_idx=batch_idx,
-                    )
-                    dataloader_wait_ms_epoch += val_dataloader_wait_ms
-
-                    # CRITICAL: baseline_accs is rebuilt fresh each epoch by
-                    # _run_fused_val_pass. Re-wire the per-epoch fresh dict into the
-                    # locals consumed below (and the execute_actions kwarg, per D4).
-                    # I3: baseline_accs[env_idx] is read by build_fresh_contribution_targets
-                    #     inside execute_actions; a stale reference from a prior epoch
-                    #     would corrupt counterfactual freshness.
-                    baseline_accs = fused_result.baseline_accs
-                    val_corrects = fused_result.val_corrects
-                    val_totals = fused_result.val_totals
-
-                    # ===== Compute epoch metrics and get BATCHED actions =====
-                    # Extracted to _build_action_inputs(): collects per-env signals/slot
-                    # reports, builds batched masks (I10 proof controls), accumulates raw
-                    # states for the deferred normalizer refresh (I7), and runs the rollout
-                    # get_action under the shared rollout_autocast factory (I6 BF16 symmetry).
-                    _action_inputs = self._build_action_inputs(
-                        env_states=env_states,
-                        env_grad_stats=env_grad_stats,
-                        raw_states_for_normalizer_update=raw_states_for_normalizer_update,
-                        ordered_slots=ordered_slots,
-                        epoch=epoch,
-                        static_final_replay_validated=static_final_replay_validated,
-                        rollout_autocast=rollout_autocast,
-                        batched_lstm_hidden=batched_lstm_hidden,
-                    )
-
-                    # ===== ACTION TRANSACTION (I1 ordering: execute_actions ->
-                    # reset terminal hidden -> bootstrap forward pass) =====
-                    # Extracted to _run_action_transaction(): the three-step sequence
-                    # is structurally enforced by sequential calls inside the method.
-                    _action_txn = self._run_action_transaction(
                         env_states=env_states,
                         step_records=step_records,
-                        fused_result=fused_result,
-                        aib=_action_inputs,
                         reward_summary_accum=reward_summary_accum,
-                        baseline_accs=baseline_accs,
-                        episode_history=episode_history,
-                        episode_outcomes=episode_outcomes,
-                        epoch=epoch,
+                        raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+                        last_train_corrects=last_train_corrects,
+                        last_train_totals=last_train_totals,
+                        ordered_slots=ordered_slots,
+                        static_final_replay_validated=static_final_replay_validated,
+                        rollout_autocast=rollout_autocast,
+                        criterion=criterion,
+                        val_criterion=val_criterion,
                         episodes_completed=episodes_completed,
                         batch_idx=batch_idx,
-                        rollout_autocast=rollout_autocast,
-                        batched_lstm_hidden=_action_inputs.batched_lstm_hidden_post_action,
+                        batch_epoch_id=batch_epoch_id,
+                        episode_history=episode_history,
+                        episode_outcomes=episode_outcomes,
+                        batched_lstm_hidden=batched_lstm_hidden,
+                        throughput_step_time_ms_sum=throughput_step_time_ms_sum,
+                        throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
+                        prof=prof,
                     )
-                    batched_lstm_hidden = _action_txn.batched_lstm_hidden
-
-                    throughput_step_time_ms_sum += (
-                        time.perf_counter() - epoch_start
-                    ) * 1000.0
-                    throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch
-                    # Check for graceful shutdown at end of each epoch (not just batch end)
-                    # This gives user faster response (~seconds) instead of waiting for full batch
-                    if shutdown_event is not None and shutdown_event.is_set():
-                        print(
-                            f"\n[Shutdown requested] Stopping at epoch {epoch}/{max_epochs} "
-                            f"(batch {batch_idx + 1}, {episodes_completed}/{total_env_episodes} episodes)"
-                        )
-                        break  # Exit epoch loop; batch-level break below will handle cleanup
-                    if prof is not None:
-                        prof.step()
+                    if epoch_prof_stepped:
                         prof_steps += 1
+                    if not epoch_completed:
+                        break  # Shutdown requested; batch-level break below handles cleanup
 
                 # PPO Update (delegated to PPOCoordinator)
                 ppo_coordinator = self.ppo_coordinator
@@ -2589,7 +2647,7 @@ class VectorizedPPOTrainer:
                 # Execute PPO updates
                 metrics, update_skipped, ppo_update_time_ms = ppo_coordinator.run_update(
                     raw_states_for_normalizer_update=raw_states_for_normalizer_update,
-                    obs_normalizer=obs_normalizer,
+                    obs_normalizer=self.obs_normalizer,
                     envs_this_batch=envs_this_batch,
                     throughput_step_time_ms_sum=throughput_step_time_ms_sum,
                     throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
@@ -2632,7 +2690,7 @@ class VectorizedPPOTrainer:
 
                 # If the epoch loop exited early (e.g. graceful shutdown), ensure the batch
                 # summary reflects the partial episode outcomes instead of the default zeros.
-                if epoch < max_epochs:
+                if epoch < self.max_epochs:
                     for env_idx, env_state in enumerate(env_states):
                         step_records[env_idx].env_final_acc = env_state.val_acc
                         step_records[env_idx].env_total_reward = sum(
@@ -2653,18 +2711,18 @@ class VectorizedPPOTrainer:
 
                 rolling_avg_acc = sum(recent_accuracies) / len(recent_accuracies)
 
-                if hub:
+                if self.hub:
                     if not update_skipped:
                         # Assert non-None: values assigned in same `if not update_skipped` block above
                         assert (
                             ppo_grad_norm is not None and ppo_update_time_ms is not None
                         )
-                        batch_emitter.on_ppo_update(
+                        self.batch_emitter.on_ppo_update(
                             metrics=metrics,
                             episodes_completed=batch_epoch_id,
                             batch_idx=batch_idx,
                             epoch=epoch,
-                            agent=agent,
+                            agent=self.agent,
                             ppo_grad_norm=ppo_grad_norm,
                             ppo_update_time_ms=ppo_update_time_ms,
                             avg_acc=avg_acc,
@@ -2681,7 +2739,7 @@ class VectorizedPPOTrainer:
                     batch_val_corrects = val_corrects
                     batch_val_totals = val_totals
 
-                    batch_emitter.on_batch_completed(
+                    self.batch_emitter.on_batch_completed(
                         batch_idx=batch_idx,
                         episodes_completed=batch_epoch_id,
                         rolling_avg_acc=rolling_avg_acc,
@@ -2689,12 +2747,12 @@ class VectorizedPPOTrainer:
                         metrics=metrics,
                         env_states=env_states,
                         update_skipped=update_skipped,
-                        plateau_threshold=plateau_threshold,
-                        improvement_threshold=improvement_threshold,
+                        plateau_threshold=self.plateau_threshold,
+                        improvement_threshold=self.improvement_threshold,
                         prev_rolling_avg_acc=prev_rolling_avg_acc,
-                        total_episodes=total_env_episodes,
-                        start_episode=start_episode,
-                        n_episodes=total_env_episodes,
+                        total_episodes=self.total_env_episodes,
+                        start_episode=self.start_episode,
+                        n_episodes=self.total_env_episodes,
                         env_final_accs=[r.env_final_acc for r in step_records],
                         avg_reward=avg_reward,
                         train_losses=batch_train_losses,
@@ -2703,23 +2761,23 @@ class VectorizedPPOTrainer:
                         val_losses=batch_val_losses,
                         val_corrects=batch_val_corrects,
                         val_totals=batch_val_totals,
-                        num_train_batches=num_train_batches,
-                        num_test_batches=num_test_batches,
-                        analytics=analytics,
+                        num_train_batches=self.num_train_batches,
+                        num_test_batches=self.num_test_batches,
+                        analytics=self.analytics,
                         epoch=epoch,
                     )
                     prev_rolling_avg_acc = rolling_avg_acc
 
                     # B7-DRL-02: Check for performance degradation (was previously unwired)
                     # Detects catastrophic forgetting, reward hacking, and training decay
-                    training_progress = batch_epoch_id / total_env_episodes
+                    training_progress = batch_epoch_id / self.total_env_episodes
                     check_performance_degradation(
-                        hub,
+                        self.hub,
                         current_acc=avg_acc,
                         rolling_avg_acc=rolling_avg_acc,
                         env_id=0,  # Aggregate metric across all envs
                         training_progress=training_progress,
-                        group_id=group_id,
+                        group_id=self.group_id,
                     )
 
                     # P2-FRAGMETRIC: per-device CUDA caching-allocator snapshot (host-side,
@@ -2732,7 +2790,7 @@ class VectorizedPPOTrainer:
                         alloc_stats = torch.cuda.memory_stats(frag_device)
                         frag_allocated = alloc_stats["allocated_bytes.all.current"]
                         frag_reserved = alloc_stats["reserved_bytes.all.current"]
-                        batch_emitter.on_allocator_stats(
+                        self.batch_emitter.on_allocator_stats(
                             batch_idx=batch_idx,
                             device=str(frag_device),
                             allocated_bytes=frag_allocated,
@@ -2749,7 +2807,7 @@ class VectorizedPPOTrainer:
                     topology_manifest_records.extend(
                         self._emit_source_final_manifests(
                             env_states=env_states,
-                            emitters=emitters,
+                            emitters=self.emitters,
                             epoch=epoch,
                         )
                     )
@@ -2789,45 +2847,49 @@ class VectorizedPPOTrainer:
 
                 # Check for graceful shutdown request (e.g., user quit TUI)
                 # Per-epoch check already printed progress; just break here
-                if shutdown_event is not None and shutdown_event.is_set():
+                if self.shutdown_event is not None and self.shutdown_event.is_set():
                     break
 
         finally:
             # Ensure profiler context is always closed, even on exceptions
             profiler_cm.__exit__(None, None, None)
-            if torch_profiler_summary and prof is not None:
+            if self.torch_profiler_summary and prof is not None:
                 print("\n=== torch.profiler: CUDA time (top 30) ===")
                 print(
                     prof.key_averages().table(sort_by="cuda_time_total", row_limit=30)
                 )
                 print("\n=== torch.profiler: CPU time (top 30) ===")
                 print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
-            if torch_profiler:
+            if self.torch_profiler:
                 min_steps_for_trace = (
-                    torch_profiler_wait + torch_profiler_warmup + torch_profiler_active
+                    self.torch_profiler_wait
+                    + self.torch_profiler_warmup
+                    + self.torch_profiler_active
                 )
                 if prof_steps < min_steps_for_trace:
                     print(
                         f"\n[torch.profiler] No trace captured (ran {prof_steps} steps; "
-                        f"need >= {min_steps_for_trace} for wait={torch_profiler_wait} "
-                        f"warmup={torch_profiler_warmup} active={torch_profiler_active}). "
+                        f"need >= {min_steps_for_trace} for wait={self.torch_profiler_wait} "
+                        f"warmup={self.torch_profiler_warmup} active={self.torch_profiler_active}). "
                         "Run longer or reduce --torch-profiler-wait/--torch-profiler-warmup."
                     )
 
-        if save_path:
+        if self.save_path:
             # B5-PT-02 FIX: Save normalizer state for correct training resume.
             # Observation stats are only valid for the exact Obs V3 contract they fit.
             checkpoint_metadata = {
                 "checkpoint_kind": "last",
-                **obs_normalizer_metadata(obs_normalizer, slot_config=slot_config),
+                **obs_normalizer_metadata(
+                    self.obs_normalizer, slot_config=self.slot_config
+                ),
                 # Reward normalizer (RewardNormalizer)
-                "reward_normalizer_mean": reward_normalizer.mean,
-                "reward_normalizer_m2": reward_normalizer.m2,
-                "reward_normalizer_count": reward_normalizer.count,
+                "reward_normalizer_mean": self.reward_normalizer.mean,
+                "reward_normalizer_m2": self.reward_normalizer.m2,
+                "reward_normalizer_count": self.reward_normalizer.count,
                 # Resume counters
                 "batches_completed": batch_idx,
-                "n_envs": n_envs,
+                "n_envs": self.n_envs,
             }
-            agent.save(save_path, metadata=checkpoint_metadata)
+            self.agent.save(self.save_path, metadata=checkpoint_metadata)
 
         return history
