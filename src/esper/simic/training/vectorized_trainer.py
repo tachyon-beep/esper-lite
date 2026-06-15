@@ -77,6 +77,7 @@ from esper.simic.vectorized_types import (
     ActionOutcome,
     ActionSpec,
     BatchSummary,
+    EnvStepRecord,
     EpisodeRecord,
     RewardSummaryAccumulator,
 )
@@ -973,6 +974,22 @@ class VectorizedPPOTrainer:
                 # Track per-environment rollback (more sample-efficient than batch-level).
                 # Only envs that experienced rollback have stale transitions.
                 env_rollback_occurred = [False] * envs_this_batch
+
+                # Pre-allocate per-env step records (one per env, reused across epochs).
+                # COMMIT 3 will replace the separate parallel lists; this commit
+                # only allocates the records alongside them for the transition.
+                step_records = [
+                    EnvStepRecord(
+                        env_idx=i,
+                        action_spec=action_specs[i],
+                        action_outcome=action_outcomes[i],
+                        mask_flags=action_mask_flags[i],
+                        reward_summary=reward_summary_accum[i],
+                        contribution_reward_inputs=contribution_reward_inputs[i],
+                        loss_reward_inputs=loss_reward_inputs[i],
+                    )
+                    for i in range(envs_this_batch)
+                ]
 
                 # Pre-compute ordered slots once per batch (not per-epoch)
                 # validate_slot_ids parses/sorts slot IDs - expensive to repeat 25x per episode
@@ -2369,6 +2386,7 @@ class VectorizedPPOTrainer:
                 # Drop the list AND the loop variable: a dangling `env_state` would pin the
                 # last env's model/optimizer for another batch, defeating the segment release.
                 del env_states, env_state
+                del step_records  # Release ContributionRewardInputs/LossRewardInputs (Python objects, not GPU tensors)
 
                 batch_summary = BatchSummary(
                     batch=batch_idx + 1,
