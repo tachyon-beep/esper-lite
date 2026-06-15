@@ -147,6 +147,10 @@ allow_hits:
     owner: "john"
     reason: "Batch training summary, simic-internal"
 
+  - key: "src/esper/simic/vectorized_types.py:dataclass:EnvStepRecord"
+    owner: "john"
+    reason: "Per-env per-step training workspace, simic-internal"
+
   - key: "src/esper/simic/training/action_execution.py:protocol:ResolveTargetSlot"
     owner: "john"
     reason: "Protocol for slot resolution callback, simic-internal"
