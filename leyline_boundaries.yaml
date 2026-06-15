@@ -175,6 +175,10 @@ allow_hits:
     owner: "john"
     reason: "Vectorized training orchestrator, simic-internal"
 
+  - key: "src/esper/simic/training/vectorized_trainer.py:dataclass:FusedValResult"
+    owner: "john"
+    reason: "Fused validation + counterfactual pass result, simic-internal"
+
   - key: "src/esper/simic/training/parallel_env_state.py:dataclass:ParallelEnvState"
     owner: "john"
     reason: "CUDA stream state, simic-internal implementation"

@@ -520,6 +520,22 @@ def _check_vitals_before_snapshot(
     return False
 
 
+@dataclass(slots=True)
+class FusedValResult:
+    """Output of the fused validation + counterfactual pass.
+
+    Owned by one epoch; consumed by _build_action_inputs and _run_action_transaction.
+    """
+
+    val_corrects: list[int]
+    val_totals: list[int]
+    baseline_accs: list[dict[str, Any]]
+    solo_on_accs: list[dict[str, float]]
+    all_disabled_accs: dict[int, float]
+    pair_accs: dict[int, dict[tuple[str, str], float]]
+    shapley_results: dict[int, dict[tuple[bool, ...], tuple[float, float]]]
+
+
 @dataclass
 class VectorizedPPOTrainer:
     agent: Any
@@ -819,6 +835,189 @@ class VectorizedPPOTrainer:
             )
             for i in range(envs_this_batch)
         ]
+
+    def _build_fused_val_configs(
+        self,
+        *,
+        env_states: list[ParallelEnvState],
+        slots: list[str],
+        epoch: int,
+        envs_this_batch: int,
+    ) -> tuple[
+        list[list[dict[str, Any]]],  # env_configs (ablation schedule)
+        list[dict[str, Any]],  # baseline_accs (empty dicts, filled by pass)
+        list[dict[str, float]],  # solo_on_accs
+        dict[int, float],  # all_disabled_accs
+        dict[int, dict[tuple[str, str], float]],  # pair_accs
+        dict[int, dict[tuple[bool, ...], tuple[float, float]]],  # shapley_results
+        list[int],  # val_totals
+        list[int],  # val_batch_counts
+        list[torch.Tensor],  # env_cfg_correct_accums
+    ]:
+        """Build the per-env ablation config structures for the fused val pass.
+
+        I12: val_totals drop_last=False semantics enforced by shared_test_iter
+        configuration, not here. This method builds the ablation schedule only.
+
+        The returned empty accumulators (baseline_accs, solo_on_accs,
+        all_disabled_accs, pair_accs, shapley_results, val_totals,
+        val_batch_counts, env_cfg_correct_accums) are filled by the iteration
+        and result-dispatch phases that still run inline in run().
+        """
+        max_epochs = self.max_epochs
+        # 1. Determine configurations per environment
+        env_configs: list[list[dict[str, Any]]] = []
+        for i, env_state in enumerate(env_states):
+            model = env_state.model
+            # CRITICAL: Exclude FOSSILIZED seeds from ablation in most modes.
+            # Fossilized seeds are permanently integrated - disabling them
+            # measures damage to the host, not the seed's contribution.
+            # The host was trained WITH the fossilized seed's output;
+            # suddenly removing it causes catastrophic accuracy drops.
+            #
+            # EXCEPTION: In BASIC_PLUS mode (drip_fraction > 0), we need
+            # contribution data for fossilized seeds to compute drip payouts.
+            active_slot_list = []
+            for sid in slots:
+                if not model.has_active_seed_in_slot(sid):
+                    continue
+                slot = cast(SeedSlotProtocol, model.seed_slots[sid])
+                if slot.state is None or slot.alpha <= 0:
+                    continue
+                if slot.state.stage == SeedStage.FOSSILIZED:
+                    # Only skip fossilized seeds when drip is disabled
+                    # In BASIC_PLUS mode, we need contribution data for drip payouts
+                    if self.reward_config.drip_fraction == 0.0:
+                        continue
+                active_slot_list.append(sid)
+
+            # Config 0: Main (current alphas)
+            configs = [{"_kind": "main"}]
+
+            if active_slot_list:
+                # Configs 1..N: Solo ablation (one slot off)
+                for slot_id in active_slot_list:
+                    solo_config: dict[str, Any] = {
+                        "_kind": "solo",
+                        "_slot": slot_id,
+                        slot_id: 0.0,
+                    }
+                    configs.append(solo_config)
+
+                # Solo-on configs: only this slot active (others forced off)
+                for slot_id in active_slot_list:
+                    solo_on_config: dict[str, Any] = {
+                        sid: 0.0
+                        for sid in active_slot_list
+                        if sid != slot_id
+                    }
+                    solo_on_config["_kind"] = "solo_on"
+                    solo_on_config["_slot"] = slot_id
+                    configs.append(solo_on_config)
+
+                n_active = len(active_slot_list)
+                # Config N+1: All disabled (for 2-4 seeds)
+                if 2 <= n_active <= 4:
+                    all_off: dict[str, Any] = {
+                        sid: 0.0 for sid in active_slot_list
+                    }
+                    all_off["_kind"] = "all_off"
+                    configs.append(all_off)
+
+                # Pair configs (for 3-4 seeds)
+                if 3 <= n_active <= 4:
+                    for idx_i in range(n_active):
+                        for idx_j in range(idx_i + 1, n_active):
+                            pair_config: dict[str, Any] = {
+                                sid: 0.0
+                                for k, sid in enumerate(active_slot_list)
+                                if k != idx_i and k != idx_j
+                            }
+                            pair_config["_kind"] = "pair"
+                            pair_config["_pair"] = _pair_slot_key(
+                                active_slot_list,
+                                (idx_i, idx_j),
+                            )
+                            configs.append(pair_config)
+
+                # Committed accuracy: only fossilized seeds enabled.
+                # This is the ground-truth metric for "permanent" value.
+                committed_cfg: dict[str, Any] = {"_kind": "committed"}
+                has_nonfossilized = False
+                for slot_id in active_slot_list:
+                    slot_obj = cast(
+                        SeedSlotProtocol, model.seed_slots[slot_id]
+                    )
+                    seed_state = slot_obj.state
+                    if seed_state is None:
+                        continue
+                    if seed_state.stage != SeedStage.FOSSILIZED:
+                        committed_cfg[slot_id] = 0.0
+                        has_nonfossilized = True
+                if has_nonfossilized:
+                    configs.append(committed_cfg)
+
+            # Inject exact Shapley configurations at episode end
+            # This uses the Fused Validation kernel to compute analytics in parallel
+            # with the main validation pass, mitigating the O(N!) overhead.
+            if (
+                active_slot_list
+                and env_state.counterfactual_helper
+                and epoch == max_epochs
+            ):
+                required_configs = (
+                    env_state.counterfactual_helper.get_required_configs(
+                        active_slot_list
+                    )
+                )
+                for config_tuple in required_configs:
+                    # Convert tuple[bool] to alpha dict
+                    shapley_cfg: dict[str, Any] = {
+                        sid: 1.0 if enabled else 0.0
+                        for sid, enabled in zip(
+                            active_slot_list, config_tuple
+                        )
+                    }
+                    shapley_cfg["_kind"] = "shapley"
+                    shapley_cfg["_tuple"] = config_tuple
+                    configs.append(shapley_cfg)
+
+            env_configs.append(configs)
+
+        # baseline_accs[env_idx][slot_id] = accuracy with that slot's seed disabled
+        baseline_accs: list[dict[str, Any]] = [
+            {} for _ in range(envs_this_batch)
+        ]
+        # solo_on_accs[env_idx][slot_id] = accuracy with ONLY that slot enabled
+        solo_on_accs: list[dict[str, float]] = [
+            {} for _ in range(envs_this_batch)
+        ]
+        all_disabled_accs: dict[int, float] = {}
+        pair_accs: dict[int, dict[tuple[str, str], float]] = {}
+        shapley_results: dict[
+            int, dict[tuple[bool, ...], tuple[float, float]]
+        ] = {}
+        val_totals = [0] * envs_this_batch
+        val_batch_counts = [0] * envs_this_batch
+
+        # Accumulators for fused counts: env_cfg_correct_accums[env_idx] = [K] tensor
+        env_cfg_correct_accums: list[torch.Tensor] = []
+        for i, configs in enumerate(env_configs):
+            env_cfg_correct_accums.append(
+                torch.zeros(len(configs), device=env_states[i].env_device)
+            )
+
+        return (
+            env_configs,
+            baseline_accs,
+            solo_on_accs,
+            all_disabled_accs,
+            pair_accs,
+            shapley_results,
+            val_totals,
+            val_batch_counts,
+            env_cfg_correct_accums,
+        )
 
     def _run_train_pass(
         self,
@@ -1255,147 +1454,24 @@ class VectorizedPPOTrainer:
                                     seed_state.metrics.upstream_alpha_sum = 0.0
                                     seed_state.metrics.downstream_alpha_sum = 0.0
 
-                    # 1. Determine configurations per environment
-                    env_configs: list[list[dict[str, Any]]] = []
-                    for i, env_state in enumerate(env_states):
-                        model = env_state.model
-                        # CRITICAL: Exclude FOSSILIZED seeds from ablation in most modes.
-                        # Fossilized seeds are permanently integrated - disabling them
-                        # measures damage to the host, not the seed's contribution.
-                        # The host was trained WITH the fossilized seed's output;
-                        # suddenly removing it causes catastrophic accuracy drops.
-                        #
-                        # EXCEPTION: In BASIC_PLUS mode (drip_fraction > 0), we need
-                        # contribution data for fossilized seeds to compute drip payouts.
-                        active_slot_list = []
-                        for sid in slots:
-                            if not model.has_active_seed_in_slot(sid):
-                                continue
-                            slot = cast(SeedSlotProtocol, model.seed_slots[sid])
-                            if slot.state is None or slot.alpha <= 0:
-                                continue
-                            if slot.state.stage == SeedStage.FOSSILIZED:
-                                # Only skip fossilized seeds when drip is disabled
-                                # In BASIC_PLUS mode, we need contribution data for drip payouts
-                                if self.reward_config.drip_fraction == 0.0:
-                                    continue
-                            active_slot_list.append(sid)
-
-                        # Config 0: Main (current alphas)
-                        configs = [{"_kind": "main"}]
-
-                        if active_slot_list:
-                            # Configs 1..N: Solo ablation (one slot off)
-                            for slot_id in active_slot_list:
-                                solo_config: dict[str, Any] = {
-                                    "_kind": "solo",
-                                    "_slot": slot_id,
-                                    slot_id: 0.0,
-                                }
-                                configs.append(solo_config)
-
-                            # Solo-on configs: only this slot active (others forced off)
-                            for slot_id in active_slot_list:
-                                solo_on_config: dict[str, Any] = {
-                                    sid: 0.0
-                                    for sid in active_slot_list
-                                    if sid != slot_id
-                                }
-                                solo_on_config["_kind"] = "solo_on"
-                                solo_on_config["_slot"] = slot_id
-                                configs.append(solo_on_config)
-
-                            n_active = len(active_slot_list)
-                            # Config N+1: All disabled (for 2-4 seeds)
-                            if 2 <= n_active <= 4:
-                                all_off: dict[str, Any] = {
-                                    sid: 0.0 for sid in active_slot_list
-                                }
-                                all_off["_kind"] = "all_off"
-                                configs.append(all_off)
-
-                            # Pair configs (for 3-4 seeds)
-                            if 3 <= n_active <= 4:
-                                for idx_i in range(n_active):
-                                    for idx_j in range(idx_i + 1, n_active):
-                                        pair_config: dict[str, Any] = {
-                                            sid: 0.0
-                                            for k, sid in enumerate(active_slot_list)
-                                            if k != idx_i and k != idx_j
-                                        }
-                                        pair_config["_kind"] = "pair"
-                                        pair_config["_pair"] = _pair_slot_key(
-                                            active_slot_list,
-                                            (idx_i, idx_j),
-                                        )
-                                        configs.append(pair_config)
-
-                            # Committed accuracy: only fossilized seeds enabled.
-                            # This is the ground-truth metric for "permanent" value.
-                            committed_cfg: dict[str, Any] = {"_kind": "committed"}
-                            has_nonfossilized = False
-                            for slot_id in active_slot_list:
-                                slot_obj = cast(
-                                    SeedSlotProtocol, model.seed_slots[slot_id]
-                                )
-                                seed_state = slot_obj.state
-                                if seed_state is None:
-                                    continue
-                                if seed_state.stage != SeedStage.FOSSILIZED:
-                                    committed_cfg[slot_id] = 0.0
-                                    has_nonfossilized = True
-                            if has_nonfossilized:
-                                configs.append(committed_cfg)
-
-                        # Inject exact Shapley configurations at episode end
-                        # This uses the Fused Validation kernel to compute analytics in parallel
-                        # with the main validation pass, mitigating the O(N!) overhead.
-                        if (
-                            active_slot_list
-                            and env_state.counterfactual_helper
-                            and epoch == max_epochs
-                        ):
-                            required_configs = (
-                                env_state.counterfactual_helper.get_required_configs(
-                                    active_slot_list
-                                )
-                            )
-                            for config_tuple in required_configs:
-                                # Convert tuple[bool] to alpha dict
-                                shapley_cfg: dict[str, Any] = {
-                                    sid: 1.0 if enabled else 0.0
-                                    for sid, enabled in zip(
-                                        active_slot_list, config_tuple
-                                    )
-                                }
-                                shapley_cfg["_kind"] = "shapley"
-                                shapley_cfg["_tuple"] = config_tuple
-                                configs.append(shapley_cfg)
-
-                        env_configs.append(configs)
-
-                    # baseline_accs[env_idx][slot_id] = accuracy with that slot's seed disabled
-                    baseline_accs: list[dict[str, Any]] = [
-                        {} for _ in range(envs_this_batch)
-                    ]
-                    # solo_on_accs[env_idx][slot_id] = accuracy with ONLY that slot enabled
-                    solo_on_accs: list[dict[str, float]] = [
-                        {} for _ in range(envs_this_batch)
-                    ]
-                    all_disabled_accs: dict[int, float] = {}
-                    pair_accs: dict[int, dict[tuple[str, str], float]] = {}
-                    shapley_results: dict[
-                        int, dict[tuple[bool, ...], tuple[float, float]]
-                    ] = {}
-                    val_totals = [0] * envs_this_batch
-                    val_batch_counts = [0] * envs_this_batch
-
-                    # Accumulators for fused counts: env_cfg_correct_accums[env_idx] = [K] tensor
-                    env_cfg_correct_accums: list[torch.Tensor] = []
-                    for i, configs in enumerate(env_configs):
-                        env_cfg_correct_accums.append(
-                            torch.zeros(len(configs), device=env_states[i].env_device)
-                        )
+                    # 1. Determine configurations per environment + allocate
+                    # per-env ablation accumulators (extracted to a named phase).
+                    (
+                        env_configs,
+                        baseline_accs,
+                        solo_on_accs,
+                        all_disabled_accs,
+                        pair_accs,
+                        shapley_results,
+                        val_totals,
+                        val_batch_counts,
+                        env_cfg_correct_accums,
+                    ) = self._build_fused_val_configs(
+                        env_states=env_states,
+                        slots=slots,
+                        epoch=epoch,
+                        envs_this_batch=envs_this_batch,
+                    )
 
                     # Iterate validation batches using shared iterator
                     validation_start = time.perf_counter()
