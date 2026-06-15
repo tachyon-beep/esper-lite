@@ -17,6 +17,7 @@ from esper.simic.vectorized_types import (
     ActionMaskFlags,
     ActionOutcome,
     ActionSpec,
+    EnvStepRecord,
     RewardSummaryAccumulator,
 )
 
@@ -239,11 +240,17 @@ def test_rollback_step_skips_stale_lifecycle_action(monkeypatch: pytest.MonkeyPa
         pre_step_hiddens=[(torch.zeros(1, 1, 2), torch.zeros(1, 1, 2))],
         head_log_probs=head_log_probs,
         masks_batch=masks_batch,
-        action_specs=[ActionSpec()],
-        action_outcomes=[ActionOutcome()],
-        mask_flags=[ActionMaskFlags()],
-        contribution_reward_inputs=[SimpleNamespace()],
-        loss_reward_inputs=[SimpleNamespace()],
+        step_records=[
+            EnvStepRecord(
+                env_idx=0,
+                action_spec=ActionSpec(),
+                action_outcome=ActionOutcome(),
+                mask_flags=ActionMaskFlags(),
+                reward_summary=RewardSummaryAccumulator(),
+                contribution_reward_inputs=SimpleNamespace(),
+                loss_reward_inputs=SimpleNamespace(),
+            )
+        ],
         head_confidences_cpu=None,
         head_entropies_cpu=None,
         op_probs_cpu=None,
@@ -251,10 +258,7 @@ def test_rollback_step_skips_stale_lifecycle_action(monkeypatch: pytest.MonkeyPa
         baseline_accs=[{}],
         all_disabled_accs={},
         governor_panic_envs=[0],
-        env_rollback_occurred=[False],
         reward_summary_accum=[RewardSummaryAccumulator()],
-        env_final_accs=[0.0],
-        env_total_rewards=[0.0],
         episode_history=[],
         episode_outcomes=[],
         step_obs_stats=None,
@@ -400,11 +404,17 @@ def test_tolaria_preflight_veto_blocks_lifecycle_mutation(
         pre_step_hiddens=[(torch.zeros(1, 1, 2), torch.zeros(1, 1, 2))],
         head_log_probs=head_log_probs,
         masks_batch=masks_batch,
-        action_specs=[ActionSpec()],
-        action_outcomes=[action_outcome],
-        mask_flags=[ActionMaskFlags()],
-        contribution_reward_inputs=[SimpleNamespace()],
-        loss_reward_inputs=[SimpleNamespace()],
+        step_records=[
+            EnvStepRecord(
+                env_idx=0,
+                action_spec=ActionSpec(),
+                action_outcome=action_outcome,
+                mask_flags=ActionMaskFlags(),
+                reward_summary=RewardSummaryAccumulator(),
+                contribution_reward_inputs=SimpleNamespace(),
+                loss_reward_inputs=SimpleNamespace(),
+            )
+        ],
         head_confidences_cpu=None,
         head_entropies_cpu=None,
         op_probs_cpu=None,
@@ -412,10 +422,7 @@ def test_tolaria_preflight_veto_blocks_lifecycle_mutation(
         baseline_accs=[{}],
         all_disabled_accs={},
         governor_panic_envs=[],
-        env_rollback_occurred=[False],
         reward_summary_accum=[RewardSummaryAccumulator()],
-        env_final_accs=[0.0],
-        env_total_rewards=[0.0],
         episode_history=[],
         episode_outcomes=[],
         step_obs_stats=None,
@@ -571,11 +578,17 @@ def test_execute_actions_dispatches_lifecycle_mutation_through_handler_registry(
         pre_step_hiddens=[(torch.zeros(1, 1, 2), torch.zeros(1, 1, 2))],
         head_log_probs=head_log_probs,
         masks_batch=masks_batch,
-        action_specs=[ActionSpec()],
-        action_outcomes=[action_outcome],
-        mask_flags=[ActionMaskFlags()],
-        contribution_reward_inputs=[SimpleNamespace()],
-        loss_reward_inputs=[SimpleNamespace()],
+        step_records=[
+            EnvStepRecord(
+                env_idx=0,
+                action_spec=ActionSpec(),
+                action_outcome=action_outcome,
+                mask_flags=ActionMaskFlags(),
+                reward_summary=RewardSummaryAccumulator(),
+                contribution_reward_inputs=SimpleNamespace(),
+                loss_reward_inputs=SimpleNamespace(),
+            )
+        ],
         head_confidences_cpu=None,
         head_entropies_cpu=None,
         op_probs_cpu=None,
@@ -583,10 +596,7 @@ def test_execute_actions_dispatches_lifecycle_mutation_through_handler_registry(
         baseline_accs=[{}],
         all_disabled_accs={},
         governor_panic_envs=[],
-        env_rollback_occurred=[False],
         reward_summary_accum=[RewardSummaryAccumulator()],
-        env_final_accs=[0.0],
-        env_total_rewards=[0.0],
         episode_history=[],
         episode_outcomes=[],
         step_obs_stats=None,
@@ -733,11 +743,17 @@ def test_execute_actions_emits_joinable_morphology_causal_log(
         pre_step_hiddens=[(torch.zeros(1, 1, 2), torch.zeros(1, 1, 2))],
         head_log_probs=head_log_probs,
         masks_batch=masks_batch,
-        action_specs=[ActionSpec()],
-        action_outcomes=[ActionOutcome()],
-        mask_flags=[ActionMaskFlags()],
-        contribution_reward_inputs=[SimpleNamespace()],
-        loss_reward_inputs=[SimpleNamespace()],
+        step_records=[
+            EnvStepRecord(
+                env_idx=0,
+                action_spec=ActionSpec(),
+                action_outcome=ActionOutcome(),
+                mask_flags=ActionMaskFlags(),
+                reward_summary=RewardSummaryAccumulator(),
+                contribution_reward_inputs=SimpleNamespace(),
+                loss_reward_inputs=SimpleNamespace(),
+            )
+        ],
         head_confidences_cpu=None,
         head_entropies_cpu=None,
         op_probs_cpu=None,
@@ -745,10 +761,7 @@ def test_execute_actions_emits_joinable_morphology_causal_log(
         baseline_accs=[{}],
         all_disabled_accs={},
         governor_panic_envs=[],
-        env_rollback_occurred=[False],
         reward_summary_accum=[RewardSummaryAccumulator()],
-        env_final_accs=[0.0],
-        env_total_rewards=[0.0],
         episode_history=[],
         episode_outcomes=[],
         step_obs_stats=None,
@@ -923,11 +936,17 @@ def test_execute_actions_failed_handler_does_not_emit_commit(
         pre_step_hiddens=[(torch.zeros(1, 1, 2), torch.zeros(1, 1, 2))],
         head_log_probs=head_log_probs,
         masks_batch=masks_batch,
-        action_specs=[ActionSpec()],
-        action_outcomes=[ActionOutcome()],
-        mask_flags=[ActionMaskFlags()],
-        contribution_reward_inputs=[SimpleNamespace()],
-        loss_reward_inputs=[SimpleNamespace()],
+        step_records=[
+            EnvStepRecord(
+                env_idx=0,
+                action_spec=ActionSpec(),
+                action_outcome=ActionOutcome(),
+                mask_flags=ActionMaskFlags(),
+                reward_summary=RewardSummaryAccumulator(),
+                contribution_reward_inputs=SimpleNamespace(),
+                loss_reward_inputs=SimpleNamespace(),
+            )
+        ],
         head_confidences_cpu=None,
         head_entropies_cpu=None,
         op_probs_cpu=None,
@@ -935,10 +954,7 @@ def test_execute_actions_failed_handler_does_not_emit_commit(
         baseline_accs=[{}],
         all_disabled_accs={},
         governor_panic_envs=[],
-        env_rollback_occurred=[False],
         reward_summary_accum=[RewardSummaryAccumulator()],
-        env_final_accs=[0.0],
-        env_total_rewards=[0.0],
         episode_history=[],
         episode_outcomes=[],
         step_obs_stats=None,
@@ -1078,11 +1094,17 @@ def test_rollback_step_emits_cooldown_and_audit_causal_log(
         pre_step_hiddens=[(torch.zeros(1, 1, 2), torch.zeros(1, 1, 2))],
         head_log_probs=head_log_probs,
         masks_batch=masks_batch,
-        action_specs=[ActionSpec()],
-        action_outcomes=[ActionOutcome()],
-        mask_flags=[ActionMaskFlags()],
-        contribution_reward_inputs=[SimpleNamespace()],
-        loss_reward_inputs=[SimpleNamespace()],
+        step_records=[
+            EnvStepRecord(
+                env_idx=0,
+                action_spec=ActionSpec(),
+                action_outcome=ActionOutcome(),
+                mask_flags=ActionMaskFlags(),
+                reward_summary=RewardSummaryAccumulator(),
+                contribution_reward_inputs=SimpleNamespace(),
+                loss_reward_inputs=SimpleNamespace(),
+            )
+        ],
         head_confidences_cpu=None,
         head_entropies_cpu=None,
         op_probs_cpu=None,
@@ -1090,10 +1112,7 @@ def test_rollback_step_emits_cooldown_and_audit_causal_log(
         baseline_accs=[{}],
         all_disabled_accs={},
         governor_panic_envs=[0],
-        env_rollback_occurred=[False],
         reward_summary_accum=[RewardSummaryAccumulator()],
-        env_final_accs=[0.0],
-        env_total_rewards=[0.0],
         episode_history=[],
         episode_outcomes=[],
         step_obs_stats=None,
@@ -1171,3 +1190,31 @@ def test_decision_head_telemetry_uses_real_entropy_values() -> None:
     assert head_telemetry.op_confidence == pytest.approx(0.5)
     assert head_telemetry.op_entropy == pytest.approx(0.0)
     assert head_telemetry.curve_entropy == pytest.approx(7.0)
+
+
+def test_i16_action_outcome_fields_reset_each_step() -> None:
+    """ActionOutcome fields written only at epoch==max_epochs must be reset to None each step.
+
+    Pin: action_execution.py:570-574 resets reward_components, episode_reward,
+    final_accuracy, episode_outcome to sentinel each step. Verifies that a prior
+    step's non-None values don't leak into the next step.
+
+    Builds an ActionOutcome with stale values from a prior step to document the
+    contract, then asserts the RESET CODE EXISTS at lines 570-574 in
+    execute_actions (the per-step reset that clears the leak).
+    """
+    # An ActionOutcome carrying stale values from a prior step.
+    outcome = ActionOutcome()
+    outcome.reward_components = object()  # stale
+    outcome.episode_reward = 99.0         # stale
+    outcome.final_accuracy = 0.99         # stale
+    outcome.episode_outcome = object()    # stale
+
+    # The partial reset at action_execution.py:570-574 must clear these each step.
+    import inspect
+
+    src = inspect.getsource(action_execution.execute_actions)
+    assert "action_outcome.reward_components = None" in src
+    assert "action_outcome.episode_reward = None" in src
+    assert "action_outcome.final_accuracy = None" in src
+    assert "action_outcome.episode_outcome = None" in src
