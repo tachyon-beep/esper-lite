@@ -59,6 +59,7 @@ from .batch_ops import batch_signals_to_features, process_train_batch
 from .helpers import policy_amp_context
 from .normalizer_checkpoint import obs_normalizer_metadata
 from .counterfactual_eval import process_fused_val_batch
+from .parallel_env_state import ParallelEnvState
 from .env_factory import (
     EnvFactoryContext,
     configure_slot_telemetry,
@@ -819,6 +820,211 @@ class VectorizedPPOTrainer:
             for i in range(envs_this_batch)
         ]
 
+    def _run_train_pass(
+        self,
+        *,
+        env_states: list[ParallelEnvState],
+        step_records: list[EnvStepRecord],
+        ordered_slots: list[str],
+        epoch: int,
+        criterion: nn.CrossEntropyLoss,
+        last_train_corrects: list[int],
+        last_train_totals: list[int],
+        train_totals: list[int],
+        train_batch_counts: list[int],
+    ) -> tuple[list[dict[str, dict[Any, Any]] | None], float]:
+        """Run one training epoch across all envs via CUDA streams.
+
+        I8: wait_stream(default) before per-env loop; record_stream on augmented
+        tensors inside stream context; synchronize() ONCE after all env launches.
+        Returns (env_grad_stats, dataloader_wait_ms): the per-epoch gradient
+        statistics (consumed later by the action-input phase) and the wall time
+        spent waiting on the training data iterator (folded into the epoch's
+        dataloader-wait throughput counter by the caller).
+        Updates last_train_corrects, last_train_totals (slice assignment) and
+        train_totals, train_batch_counts (in place) for the caller.
+
+        RESUME SEAM (HEALTH_REPORT open item): shared_train_iter is consumed here;
+        iterator cursor state is not serialized for mid-run exact resume.
+        """
+        dataloader_wait_ms = 0.0
+        # Track gradient stats per env for telemetry sync
+        env_grad_stats: list[dict[str, dict[Any, Any]] | None] = [None] * len(
+            env_states
+        )
+
+        for env_state in env_states:
+            env_state.zero_accumulators()
+
+        # Ensure models are in training mode before training phase.
+        # CRITICAL: process_val_batch/process_fused_val_batch call model.eval(), and without
+        # this explicit model.train() call, all epochs after the first validation would run
+        # with eval-mode semantics (frozen BatchNorm stats, disabled Dropout).
+        for env_state in env_states:
+            env_state.model.train()
+
+        # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
+        # SharedBatchIterator: single DataLoader, batches pre-split and moved to devices
+        # SharedGPUBatchIterator: GPU-resident data, one DataLoader per device
+
+        # Issue one wait_stream per env BEFORE the loop starts (not per-batch).
+        # This syncs the accumulator zeroing on default stream before we write.
+        # record_stream marks tensors as used by this stream, preventing deallocation.
+        for i, env_state in enumerate(env_states):
+            if env_state.stream:
+                # Accumulators guaranteed non-None after init_accumulators()
+                assert env_state.train_loss_accum is not None
+                assert env_state.train_correct_accum is not None
+                env_state.train_loss_accum.record_stream(env_state.stream)
+                env_state.train_correct_accum.record_stream(env_state.stream)
+                env_state.stream.wait_stream(
+                    torch.cuda.default_stream(
+                        torch.device(env_state.env_device)
+                    )
+                )
+
+        # Iterate training batches using shared iterator (SharedBatchIterator or SharedGPUBatchIterator)
+        # Both provide list of (inputs, targets) per environment, already on correct devices
+        train_iter = iter(self.shared_train_iter)
+        for batch_step in range(self.num_train_batches):
+            try:
+                fetch_start = time.perf_counter()
+                env_batches = next(
+                    train_iter
+                )  # List of (inputs, targets), already on devices
+                dataloader_wait_ms += (
+                    time.perf_counter() - fetch_start
+                ) * 1000.0
+            except StopIteration:
+                break
+
+            # Launch all environments in their respective CUDA streams (async)
+            # Data already moved to correct device by the shared iterator
+            for i, env_state in enumerate(env_states):
+                if i >= len(env_batches):
+                    continue
+                # CRITICAL: DataLoader .to(device, non_blocking=True) runs on the DEFAULT stream.
+                # We must sync env_state.stream with default stream before using the data,
+                # otherwise we may access partially-transferred data (race condition).
+                # BUG FIX: Use default_stream(), NOT current_stream() - the transfer happens
+                # on the default stream regardless of what stream is "current" in this context.
+                if env_state.stream:
+                    # Wait for default stream where async .to() transfers are scheduled
+                    loader_stream = torch.cuda.default_stream(
+                        torch.device(env_state.env_device)
+                    )
+                    env_state.stream.wait_stream(loader_stream)
+                inputs, targets = env_batches[i]
+                if self.gpu_preload_augment:
+                    assert env_state.augment_generator is not None
+                    if env_state.stream:
+                        with torch.cuda.stream(env_state.stream):
+                            inputs = augment_cifar10_batch(
+                                inputs,
+                                generator=env_state.augment_generator,
+                                buffers=env_state.augment_buffers,
+                            )
+                            # CRITICAL: record_stream() MUST be inside the stream context.
+                            # This marks the tensor as used by this stream, preventing the
+                            # allocator from reusing memory while augmentation is in flight.
+                            # The epoch-end sync (line ~500) ensures kernels complete before
+                            # CPU reads results.
+                            inputs.record_stream(env_state.stream)
+                    else:
+                        inputs = augment_cifar10_batch(
+                            inputs,
+                            generator=env_state.augment_generator,
+                            buffers=env_state.augment_buffers,
+                        )
+
+                # BUG-031: Defensive validation for NLL loss assertion failures
+                # If targets contain values outside [0, n_classes), the NLL loss kernel
+                # will fail with "Assertion t>=0 && t < n_classes failed".
+                # Enable with ESPER_DEBUG_TARGETS=1 to catch the issue with diagnostics.
+                if "ESPER_DEBUG_TARGETS" in os.environ:
+                    if targets.is_cuda:
+                        torch.cuda.synchronize(targets.device)
+                    target_min = targets.min().item()
+                    target_max = targets.max().item()
+                    if (
+                        target_min < 0
+                        or target_max >= self.task_spec.num_classes
+                    ):
+                        raise RuntimeError(
+                            f"BUG-031: Invalid target values detected before loss computation. "
+                            f"targets.min()={target_min}, targets.max()={target_max}, "
+                            f"targets.device={targets.device}, env_idx={i}, batch_step={batch_step}, "
+                            f"inputs.device={inputs.device}, inputs.shape={inputs.shape}, "
+                            f"gpu_preload={self.gpu_preload_augment}"
+                        )
+
+                collect_gradients = self.use_telemetry and (
+                    batch_step % self.gradient_telemetry_stride == 0
+                )
+                loss_tensor, correct_tensor, total, grad_stats = (
+                    process_train_batch(
+                        env_state,
+                        inputs,
+                        targets,
+                        criterion,
+                        use_telemetry=collect_gradients,
+                        slots=self.slots,
+                        max_grad_norm=self.max_grad_norm,
+                        task_spec=self.task_spec,
+                        resolved_amp_dtype=self.resolved_amp_dtype,
+                        loss_and_correct_fn=self.compiled_loss_and_correct,
+                    )
+                )
+                if grad_stats is not None:
+                    env_grad_stats[i] = (
+                        grad_stats  # Keep last batch's grad stats
+                    )
+                stream_ctx = (
+                    torch.cuda.stream(env_state.stream)
+                    if env_state.stream
+                    else nullcontext()
+                )
+                with stream_ctx:
+                    env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
+                    env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
+                train_totals[i] += total
+                train_batch_counts[i] += 1
+
+        # Sync all streams ONCE at epoch end
+        for env_state in env_states:
+            if env_state.stream:
+                env_state.stream.synchronize()
+
+        # NOW safe to call .item() - all GPU work done
+        # Accumulators guaranteed non-None after init_accumulators()
+        train_losses = [
+            env_state.train_loss_accum.item()
+            if env_state.train_loss_accum is not None
+            else 0.0
+            for env_state in env_states
+        ]
+        train_corrects = [
+            env_state.train_correct_accum.item()
+            if env_state.train_correct_accum is not None
+            else 0.0
+            for env_state in env_states
+        ]
+        last_train_corrects[:] = [int(value) for value in train_corrects]
+        last_train_totals[:] = [total for total in train_totals]
+
+        # Sync train metrics to env_state for telemetry (Sanctum TUI display)
+        # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
+        # Accuracy is sum of correct samples, so divide by sample count.
+        for i, env_state in enumerate(env_states):
+            env_state.train_loss = train_losses[i] / max(
+                1, train_batch_counts[i]
+            )
+            env_state.train_acc = (
+                100.0 * train_corrects[i] / max(1, train_totals[i])
+            )
+
+        return env_grad_stats, dataloader_wait_ms
+
     def run(self) -> list[dict[str, Any]]:
         agent = self.agent
         task_spec = self.task_spec
@@ -1009,185 +1215,24 @@ class VectorizedPPOTrainer:
                             inner_epoch=epoch,
                             global_epoch=batch_epoch_id,
                         )
-                    # Track gradient stats per env for telemetry sync
-                    env_grad_stats: list[dict[str, dict[Any, Any]] | None] = [
-                        None
-                    ] * envs_this_batch
-
-                    # Reset per-epoch metrics by zeroing pre-allocated accumulators (faster than reallocating)
+                    # Reset per-epoch training accumulators (fresh per epoch;
+                    # mutated in place by _run_train_pass).
                     train_totals = [0] * envs_this_batch
-                    train_batch_counts = [
-                        0
-                    ] * envs_this_batch  # Track batch count for correct loss averaging
-                    for env_state in env_states:
-                        env_state.zero_accumulators()
+                    train_batch_counts = [0] * envs_this_batch
 
-                    # Ensure models are in training mode before training phase.
-                    # CRITICAL: process_val_batch/process_fused_val_batch call model.eval(), and without
-                    # this explicit model.train() call, all epochs after the first validation would run
-                    # with eval-mode semantics (frozen BatchNorm stats, disabled Dropout).
-                    for env_state in env_states:
-                        env_state.model.train()
-
-                    # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
-                    # SharedBatchIterator: single DataLoader, batches pre-split and moved to devices
-                    # SharedGPUBatchIterator: GPU-resident data, one DataLoader per device
-
-                    # Issue one wait_stream per env BEFORE the loop starts (not per-batch).
-                    # This syncs the accumulator zeroing on default stream before we write.
-                    # record_stream marks tensors as used by this stream, preventing deallocation.
-                    for i, env_state in enumerate(env_states):
-                        if env_state.stream:
-                            # Accumulators guaranteed non-None after init_accumulators()
-                            assert env_state.train_loss_accum is not None
-                            assert env_state.train_correct_accum is not None
-                            env_state.train_loss_accum.record_stream(env_state.stream)
-                            env_state.train_correct_accum.record_stream(env_state.stream)
-                            env_state.stream.wait_stream(
-                                torch.cuda.default_stream(
-                                    torch.device(env_state.env_device)
-                                )
-                            )
-
-                    # Iterate training batches using shared iterator (SharedBatchIterator or SharedGPUBatchIterator)
-                    # Both provide list of (inputs, targets) per environment, already on correct devices
-                    train_iter = iter(shared_train_iter)
-                    for batch_step in range(num_train_batches):
-                        try:
-                            fetch_start = time.perf_counter()
-                            env_batches = next(
-                                train_iter
-                            )  # List of (inputs, targets), already on devices
-                            dataloader_wait_ms_epoch += (
-                                time.perf_counter() - fetch_start
-                            ) * 1000.0
-                        except StopIteration:
-                            break
-
-                        # Launch all environments in their respective CUDA streams (async)
-                        # Data already moved to correct device by the shared iterator
-                        for i, env_state in enumerate(env_states):
-                            if i >= len(env_batches):
-                                continue
-                            # CRITICAL: DataLoader .to(device, non_blocking=True) runs on the DEFAULT stream.
-                            # We must sync env_state.stream with default stream before using the data,
-                            # otherwise we may access partially-transferred data (race condition).
-                            # BUG FIX: Use default_stream(), NOT current_stream() - the transfer happens
-                            # on the default stream regardless of what stream is "current" in this context.
-                            if env_state.stream:
-                                # Wait for default stream where async .to() transfers are scheduled
-                                loader_stream = torch.cuda.default_stream(
-                                    torch.device(env_state.env_device)
-                                )
-                                env_state.stream.wait_stream(loader_stream)
-                            inputs, targets = env_batches[i]
-                            if gpu_preload_augment:
-                                assert env_state.augment_generator is not None
-                                if env_state.stream:
-                                    with torch.cuda.stream(env_state.stream):
-                                        inputs = augment_cifar10_batch(
-                                            inputs,
-                                            generator=env_state.augment_generator,
-                                            buffers=env_state.augment_buffers,
-                                        )
-                                        # CRITICAL: record_stream() MUST be inside the stream context.
-                                        # This marks the tensor as used by this stream, preventing the
-                                        # allocator from reusing memory while augmentation is in flight.
-                                        # The epoch-end sync (line ~500) ensures kernels complete before
-                                        # CPU reads results.
-                                        inputs.record_stream(env_state.stream)
-                                else:
-                                    inputs = augment_cifar10_batch(
-                                        inputs,
-                                        generator=env_state.augment_generator,
-                                        buffers=env_state.augment_buffers,
-                                    )
-
-                            # BUG-031: Defensive validation for NLL loss assertion failures
-                            # If targets contain values outside [0, n_classes), the NLL loss kernel
-                            # will fail with "Assertion t>=0 && t < n_classes failed".
-                            # Enable with ESPER_DEBUG_TARGETS=1 to catch the issue with diagnostics.
-                            if "ESPER_DEBUG_TARGETS" in os.environ:
-                                if targets.is_cuda:
-                                    torch.cuda.synchronize(targets.device)
-                                target_min = targets.min().item()
-                                target_max = targets.max().item()
-                                if (
-                                    target_min < 0
-                                    or target_max >= task_spec.num_classes
-                                ):
-                                    raise RuntimeError(
-                                        f"BUG-031: Invalid target values detected before loss computation. "
-                                        f"targets.min()={target_min}, targets.max()={target_max}, "
-                                        f"targets.device={targets.device}, env_idx={i}, batch_step={batch_step}, "
-                                        f"inputs.device={inputs.device}, inputs.shape={inputs.shape}, "
-                                        f"gpu_preload={gpu_preload_augment}"
-                                    )
-
-                            collect_gradients = use_telemetry and (
-                                batch_step % gradient_telemetry_stride == 0
-                            )
-                            loss_tensor, correct_tensor, total, grad_stats = (
-                                process_train_batch(
-                                    env_state,
-                                    inputs,
-                                    targets,
-                                    criterion,
-                                    use_telemetry=collect_gradients,
-                                    slots=slots,
-                                    max_grad_norm=max_grad_norm,
-                                    task_spec=task_spec,
-                                    resolved_amp_dtype=resolved_amp_dtype,
-                                    loss_and_correct_fn=compiled_loss_and_correct,
-                                )
-                            )
-                            if grad_stats is not None:
-                                env_grad_stats[i] = (
-                                    grad_stats  # Keep last batch's grad stats
-                                )
-                            stream_ctx = (
-                                torch.cuda.stream(env_state.stream)
-                                if env_state.stream
-                                else nullcontext()
-                            )
-                            with stream_ctx:
-                                env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
-                                env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
-                            train_totals[i] += total
-                            train_batch_counts[i] += 1
-
-                    # Sync all streams ONCE at epoch end
-                    for env_state in env_states:
-                        if env_state.stream:
-                            env_state.stream.synchronize()
-
-                    # NOW safe to call .item() - all GPU work done
-                    # Accumulators guaranteed non-None after init_accumulators()
-                    train_losses = [
-                        env_state.train_loss_accum.item()
-                        if env_state.train_loss_accum is not None
-                        else 0.0
-                        for env_state in env_states
-                    ]
-                    train_corrects = [
-                        env_state.train_correct_accum.item()
-                        if env_state.train_correct_accum is not None
-                        else 0.0
-                        for env_state in env_states
-                    ]
-                    last_train_corrects = [int(value) for value in train_corrects]
-                    last_train_totals = [total for total in train_totals]
-
-                    # Sync train metrics to env_state for telemetry (Sanctum TUI display)
-                    # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
-                    # Accuracy is sum of correct samples, so divide by sample count.
-                    for i, env_state in enumerate(env_states):
-                        env_state.train_loss = train_losses[i] / max(
-                            1, train_batch_counts[i]
-                        )
-                        env_state.train_acc = (
-                            100.0 * train_corrects[i] / max(1, train_totals[i])
-                        )
+                    # ===== TRAINING PASS (I8: CUDA stream fences) =====
+                    env_grad_stats, train_dataloader_wait_ms = self._run_train_pass(
+                        env_states=env_states,
+                        step_records=step_records,
+                        ordered_slots=ordered_slots,
+                        epoch=epoch,
+                        criterion=criterion,
+                        last_train_corrects=last_train_corrects,
+                        last_train_totals=last_train_totals,
+                        train_totals=train_totals,
+                        train_batch_counts=train_batch_counts,
+                    )
+                    dataloader_wait_ms_epoch += train_dataloader_wait_ms
 
                     # ===== Validation + Counterfactual (FUSED): Single pass over test data =====
                     # Instead of iterating test data multiple times or performing sequential

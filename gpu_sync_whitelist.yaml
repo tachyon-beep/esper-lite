@@ -228,22 +228,10 @@ allow_hits:
 - key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:4
   owner: John
   reason: Per-epoch sync - extract validation accuracy after accumulation; validation phase
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cuda_synchronize
-  owner: John
-  reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:item
   owner: John
   reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:item:2
-  owner: John
-  reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:synchronize
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:item:3
-  owner: John
-  reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:item:4
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:synchronize:2
@@ -252,7 +240,22 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu
   owner: John
   reason: vectorized trainer sync point
-- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:item:5
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_train_pass:cuda_synchronize
+  owner: John
+  reason: vectorized trainer sync point
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_train_pass:item
+  owner: John
+  reason: vectorized trainer sync point
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_train_pass:item:2
+  owner: John
+  reason: vectorized trainer sync point
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_train_pass:item:3
+  owner: John
+  reason: vectorized trainer sync point
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_train_pass:item:4
+  owner: John
+  reason: vectorized trainer sync point
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._run_train_pass:synchronize
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:tolist
@@ -289,6 +292,9 @@ allow_hits:
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy:4
+  owner: John
+  reason: vectorized trainer sync point
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:numpy:5
   owner: John
   reason: vectorized trainer sync point
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cpu:6
