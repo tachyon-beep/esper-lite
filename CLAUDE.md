@@ -278,6 +278,7 @@ Think of it as: **"The organism's stem cells undergo a botanical development pro
 - Claude Code MUST NOT use plant terms for system architecture (no "Tamiyo is the gardener")
 - When in doubt, refer to the tables above
 - If you are being asked to deliver a telemetry component, do not defer or put it off; if you are working on a half finished telemetry component, do not remove it as 'incomplete' or 'deferred functionality'. This pattern of behaviour is why we are several months in and have no telemetry.
+- The per-step LSTM hidden buffer in `rollout_buffer.py` (`pre_step_hiddens` / `hidden_h` / `hidden_c`) is TELEMETRY-ONLY: it conditions the Q(s, op) diagnostic forward in `ppo_agent.py` and is NOT read by the PPO TBPTT loss path (which always unrolls from the timestep-0 hidden state). Do not delete it.
 
 ## PROHIBITION ON "DEFENSIVE PROGRAMMING" PATTERNS
 

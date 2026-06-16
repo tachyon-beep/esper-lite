@@ -20,7 +20,7 @@ from esper.tamiyo.policy import create_policy
 from esper.tamiyo.policy.features import get_feature_size
 
 
-def _build_agent() -> tuple[PPOAgent, SlotConfig]:
+def _build_agent(recurrent_n_epochs: int = 1) -> tuple[PPOAgent, SlotConfig]:
     torch.manual_seed(123)
     slot_config = SlotConfig.default()
     policy = create_policy(
@@ -37,7 +37,7 @@ def _build_agent() -> tuple[PPOAgent, SlotConfig]:
         chunk_length=4,
         device="cpu",
         target_kl=None,
-        recurrent_n_epochs=1,
+        recurrent_n_epochs=recurrent_n_epochs,
     )
     return agent, slot_config
 
@@ -131,23 +131,61 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig) -> None:
     agent.buffer.end_episode(0)
 
 
-def test_ppo_update_golden_metrics() -> None:
-    agent, slot_config = _build_agent()
+# Golden PPO-update metrics keyed by recurrent_n_epochs (K).
+#
+# epoch-0 ratio==1.0 by construction (anchored reference pass); K=4 goldens capture
+# intended multi-epoch drift; baseline change vs pre-anchor is deliberate (see
+# 2026-06-17 design). K=1 stays regression-locked to the pre-existing pin so a single
+# anchored epoch remains a no-op refactor of the prior single-path update. At K=4 the
+# epoch-0 reference pass still yields ratio==1.0, but epochs 1-3 measure real
+# pi_theta_k/pi_theta_0 drift, so the aggregated metrics (mean over epochs) diverge from
+# K=1: approx_kl, clip_fraction, and the ratio_* spread all become non-degenerate.
+_GOLDENS: dict[int, dict[str, float]] = {
+    1: {
+        "policy_loss": -2.340991497039795,
+        "value_loss": 0.03467179462313652,
+        "entropy": 9.399517059326172,
+        "approx_kl": 0.0,
+        "clip_fraction": 0.0,
+        "ratio_mean": 0.9999998807907104,
+        "ratio_max": 1.0,
+        "ratio_min": 0.9999997615814209,
+        "ratio_std": 9.733398087519163e-08,
+    },
+    4: {
+        "policy_loss": -2.77156400680542,
+        "value_loss": 0.030169446021318436,
+        "entropy": 9.359184265136719,
+        "approx_kl": 0.010402385145425797,
+        "clip_fraction": 0.5,
+        "ratio_mean": 1.2103526592254639,
+        "ratio_max": 3.1339035034179688,
+        "ratio_min": 0.44246989488601685,
+        "ratio_std": 0.5426110029220581,
+    },
+}
+
+
+@pytest.mark.parametrize("recurrent_n_epochs", [1, 4])
+def test_ppo_update_golden_metrics(recurrent_n_epochs: int) -> None:
+    agent, slot_config = _build_agent(recurrent_n_epochs=recurrent_n_epochs)
     _fill_buffer(agent, slot_config)
     metrics = agent.update(clear_buffer=True)
 
     assert metrics["ppo_update_performed"] is True
     assert metrics["finiteness_gate_skip_count"] == 0
 
-    # epoch-0 ratio==1.0 by construction (anchored reference pass) -- this is the
-    # correct non-trivial assertion, not a tautology; the ratio path's liveness at
-    # epoch>0 is proven by the K=4 goldens in PR2.
-    assert metrics["policy_loss"] == pytest.approx(-2.340991497039795, abs=1e-6)
-    assert metrics["value_loss"] == pytest.approx(0.03467179462313652, abs=1e-6)
-    assert metrics["entropy"] == pytest.approx(9.399517059326172, abs=1e-6)
-    assert metrics["approx_kl"] == pytest.approx(0.0, abs=1e-6)
-    assert metrics["clip_fraction"] == pytest.approx(0.0, abs=1e-6)
-    assert metrics["ratio_mean"] == pytest.approx(0.9999998807907104, abs=1e-6)
-    assert metrics["ratio_max"] == pytest.approx(1.0, abs=1e-6)
-    assert metrics["ratio_min"] == pytest.approx(0.9999997615814209, abs=1e-6)
-    assert metrics["ratio_std"] == pytest.approx(9.733398087519163e-08, abs=1e-6)
+    golden = _GOLDENS[recurrent_n_epochs]
+    keys = (
+        "policy_loss",
+        "value_loss",
+        "entropy",
+        "approx_kl",
+        "clip_fraction",
+        "ratio_mean",
+        "ratio_max",
+        "ratio_min",
+        "ratio_std",
+    )
+    for key in keys:
+        assert metrics[key] == pytest.approx(golden[key], abs=1e-6), key

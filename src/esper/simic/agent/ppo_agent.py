@@ -185,19 +185,38 @@ class PPOAgent:
         self.max_steps_per_env = max_steps_per_env
         self.chunk_length = chunk_length
         self.gamma = gamma
-        # C4: RECURRENT POLICY VALUE STALENESS WARNING
-        # Recurrent PPO with multiple epochs can cause hidden state staleness (policy drift).
-        # Default to 1 epoch for LSTM safety; increase with caution.
-        #
-        # With recurrent_n_epochs > 1 AND clip_value=True:
-        # - Rollout values are computed with specific LSTM hidden state trajectories
-        # - After epoch 0 update, network weights change
-        # - Epoch 1+ forward passes produce different hidden state trajectories
-        # - Value clipping compares new values against stale rollout values
-        # - This creates incorrect gradient signals, slowing value learning
-        #
-        # Recommended: Keep recurrent_n_epochs=1 for recurrent policies.
+        # RECURRENT MULTI-EPOCH INVARIANT (anchored reference pass, full-recompute TBPTT):
+        # recurrent_n_epochs is the number of INTERNAL PPO epochs per update() call. Multi-
+        # epoch recurrent PPO is mathematically EXACT under this design — there is no hidden-
+        # state staleness, because:
+        #   - Every scored forward in the epoch loop is a FULL-RECOMPUTE TBPTT unroll of each
+        #     buffer row as one contiguous LSTM sequence (chunk_length) from the rollout's
+        #     timestep-0 hidden state. Hidden trajectories are recomputed every epoch from the
+        #     CURRENT weights — nothing is reused across epochs, so nothing goes stale.
+        #   - Advantages/returns are computed ONCE by the rollout buffer's GAE (at episode-end)
+        #     and read here as fixed data; the value normalizer's update()/normalize() runs ONCE
+        #     in the pre-loop. Both outputs (advantages, normalized return targets) are fixed for
+        #     the whole update — never recomputed per epoch.
+        #   - The ONLY live per-epoch baseline is old_log_probs for the PPO importance ratio,
+        #     and it is ANCHORED at theta0 via the no_grad reference pass (PR1): ref_log_probs
+        #     are computed once from the pre-update weights, so ratio = exp(scored - ref) is
+        #     identically 1.0 at epoch 0 and drifts only with the genuine policy update.
+        #   - clip_value STAYS False under K>1 (ENFORCED by a ValueError in __init__ below).
+        #     Value clipping would compare against rollout values that are NOT anchored at theta0;
+        #     re-enabling it under multi-epoch needs an anchored ref_values pass (a separate task).
+        #   - early_stop_epoch (metrics, set to epoch_i) counts epochs that RAN, not wall
+        #     epochs: the finiteness guard in the epoch loop can `continue` past a bad epoch,
+        #     desyncing the loop index from the count of executed updates.
+        # The per-step hidden buffer (rollout_buffer.py pre_step_hiddens, hidden_h/hidden_c)
+        # is TELEMETRY-ONLY — it conditions the Q(s, op) diagnostic forward (see below) and
+        # is NOT used by the TBPTT loss path (which always unrolls from timestep-0). Do not
+        # delete it.
         self.recurrent_n_epochs = recurrent_n_epochs if recurrent_n_epochs is not None else 1
+        if self.recurrent_n_epochs < 1:
+            raise ValueError(
+                f"recurrent_n_epochs must be >= 1, got {self.recurrent_n_epochs}. "
+                "K=1 is single-epoch PPO; K>1 is the internal multi-epoch path."
+            )
         self.gae_lambda = gae_lambda
         self.clip_ratio = clip_ratio
         self.entropy_coef = entropy_coef
@@ -231,6 +250,14 @@ class PPOAgent:
         self.value_coef_start = value_coef_start if value_coef_start is not None else 0.1 * value_coef
         self.value_warmup_steps = value_warmup_steps
         self.clip_value = clip_value
+        if self.recurrent_n_epochs > 1 and clip_value:
+            raise ValueError(
+                "clip_value=True is incompatible with recurrent_n_epochs > 1: value clipping "
+                "anchors on rollout old_values that are NOT recomputed at theta0, so under "
+                "multi-epoch recurrent PPO it would clip against a stale reference. Re-enabling "
+                "value clipping under K>1 requires an anchored ref_values pass (a separate task). "
+                "Keep clip_value=False for recurrent multi-epoch."
+            )
         self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
         self.lstm_hidden_dim = policy.hidden_dim
@@ -248,28 +275,6 @@ class PPOAgent:
         self.enable_contribution_aux = enable_contribution_aux
         self._aux_training_step = 0  # Track training steps for warmup
 
-        # C4/H5: Runtime warning for risky recurrent configuration
-        if self.recurrent_n_epochs > 1:
-            import warnings
-            if self.clip_value:
-                warnings.warn(
-                    f"recurrent_n_epochs={self.recurrent_n_epochs} with clip_value=True: "
-                    "Value clipping uses rollout values which have different LSTM hidden state "
-                    "trajectories than training forward passes after epoch 0. This causes stale "
-                    "value comparisons that may slow learning. Consider recurrent_n_epochs=1 or "
-                    "clip_value=False.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            else:
-                warnings.warn(
-                    f"recurrent_n_epochs={self.recurrent_n_epochs} > 1: Hidden states stored from "
-                    "rollout collection may diverge from current policy's hidden state evolution "
-                    "after epoch 0 weight updates. This can cause gradient estimation errors. "
-                    "Consider recurrent_n_epochs=1 for recurrent policies.",
-                    UserWarning,
-                    stacklevel=2,
-                )
         # BPTT INVARIANT (recurrent-PPO correctness):
         # The PPO update unrolls each buffer row as ONE contiguous LSTM sequence
         # of length chunk_length, starting from the rollout's timestep-0 hidden

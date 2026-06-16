@@ -302,6 +302,62 @@ class TestPPOCheckpointVersion:
         assert checkpoint['architecture']['num_slots'] == 5
 
 
+class TestPPOCheckpointRecurrentNEpochs:
+    """recurrent_n_epochs persistence and old-checkpoint safety net."""
+
+    def test_recurrent_n_epochs_survives_save_load(self, tmp_path: Path):
+        """recurrent_n_epochs=4 survives a save/load round-trip."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        original = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+            recurrent_n_epochs=4,
+        )
+        assert original.recurrent_n_epochs == 4
+
+        original.save(tmp_path / "agent.pt")
+        loaded = PPOAgent.load(tmp_path / "agent.pt", device="cpu")
+
+        assert loaded.recurrent_n_epochs == 4
+
+    def test_old_checkpoint_without_recurrent_n_epochs_loads_as_k1(self, tmp_path: Path):
+        """Pre-PR2 checkpoint (no recurrent_n_epochs key) loads as K=1 via ctor default."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+            recurrent_n_epochs=4,
+        )
+        agent.save(tmp_path / "agent.pt")
+
+        # Simulate a pre-PR2 checkpoint: strip recurrent_n_epochs from the
+        # persisted config dict. load() spreads config via **agent_config, so a
+        # missing key falls through to the ctor's None -> 1 default safety net.
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        del checkpoint["config"]["recurrent_n_epochs"]
+        torch.save(checkpoint, tmp_path / "pre_pr2.pt")
+
+        loaded = PPOAgent.load(tmp_path / "pre_pr2.pt", device="cpu")
+
+        assert loaded.recurrent_n_epochs == 1
+
+
 class TestPPOCheckpointCompileMode:
     """Compile mode persistence in checkpoints."""
 

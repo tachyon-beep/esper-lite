@@ -1054,8 +1054,15 @@ def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
     assert metrics["approx_kl"] == pytest.approx((0.005 + 0.02) / 2.0)
 
 
-def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
-    """External PPO update loops are incompatible with LSTM policies (staleness guard)."""
+def test_lstm_requires_ppo_updates_per_batch_one():
+    """Recurrent policies MUST run with ppo_updates_per_batch=1.
+
+    LSTM multi-epoch optimization is owned by the agent's internal recurrent_n_epochs
+    path (within a single update() call). The external _run_ppo_updates loop is
+    disallowed for LSTM because each extra iteration would re-run GAE and mutate the
+    EMA value normalizer K times per rollout. This guards the _run_ppo_updates callsite,
+    not a direct PPOAgent.update() call.
+    """
     from esper.simic.training.vectorized import _run_ppo_updates
 
     class _StubBuffer:
@@ -1072,7 +1079,7 @@ def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
         def update(self, tensor: torch.Tensor) -> None:
             raise AssertionError("normalizer.update should not be reached in staleness guard path")
 
-    with pytest.raises(ValueError, match="incompatible with recurrent"):
+    with pytest.raises(ValueError, match="recurrent_n_epochs"):
         _run_ppo_updates(
             agent=_StubAgent(),
             ppo_updates_per_batch=2,
@@ -1081,6 +1088,52 @@ def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
             use_amp=False,
             amp_dtype=None,  # Explicit: no AMP
         )
+
+
+def test_recurrent_n_epochs_reaches_agent(monkeypatch):
+    """PRODUCTION GATE: train_ppo_vectorized must pass recurrent_n_epochs to PPOAgent.
+
+    This is the real entrypoint -> ctor binding. We install a ctor spy in place of
+    PPOAgent that records the recurrent_n_epochs kwarg and aborts training immediately
+    (raising a sentinel), so the test pays only for pre-ctor CPU setup, not a full
+    rollout. CPU smoke: lstm_hidden_dim>0, ppo_updates_per_batch=1, n_episodes=1.
+    """
+    import esper.simic.training.vectorized as vec
+
+    captured: dict[str, int] = {}
+
+    class _SpyDone(Exception):
+        pass
+
+    real_ppo_agent = vec.PPOAgent
+
+    def _spy(*args, **kwargs):
+        captured["recurrent_n_epochs"] = kwargs["recurrent_n_epochs"]
+        captured["total_train_steps"] = kwargs["total_train_steps"]
+        raise _SpyDone
+
+    # Preserve classmethods/attributes the entrypoint may touch before the ctor.
+    _spy.load_from_checkpoint_dict = real_ppo_agent.load_from_checkpoint_dict
+    monkeypatch.setattr(vec, "PPOAgent", _spy)
+
+    with pytest.raises(_SpyDone):
+        vec.train_ppo_vectorized(
+            n_episodes=1,
+            n_envs=1,
+            max_epochs=2,
+            device="cpu",
+            devices=["cpu"],
+            use_telemetry=False,
+            lstm_hidden_dim=16,
+            chunk_length=2,
+            ppo_updates_per_batch=1,
+            recurrent_n_epochs=4,
+            total_train_steps=7,
+            slots=["r0c0"],
+        )
+
+    assert captured["recurrent_n_epochs"] == 4
+    assert captured["total_train_steps"] == 7
 
 
 def test_run_ppo_updates_uses_policy_amp_context_when_enabled(monkeypatch):

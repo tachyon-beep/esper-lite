@@ -1,5 +1,6 @@
 """Tests for PPO module."""
 import math
+import warnings
 import pytest
 import torch
 
@@ -313,6 +314,74 @@ def test_value_clipping_disabled_option():
         device="cpu",
     )
     assert agent.clip_value is False, "clip_value should be configurable to False"
+
+
+def test_no_recurrent_staleness_warning_at_k4():
+    """Under the anchored full-recompute-TBPTT design, multi-epoch recurrent PPO is
+    mathematically exact, so the old hidden-state staleness UserWarning must be gone."""
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm",
+        slot_config=slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            recurrent_n_epochs=4,
+            clip_value=False,
+            device="cpu",
+        )
+    staleness = [
+        w for w in caught
+        if issubclass(w.category, UserWarning)
+        and (
+            "Hidden states stored from" in str(w.message)
+            or "stale value comparisons" in str(w.message)
+            or "may slow learning" in str(w.message)
+        )
+    ]
+    assert not staleness, (
+        f"No recurrent staleness UserWarning expected at K=4, got: "
+        f"{[str(w.message) for w in staleness]}"
+    )
+
+
+def test_recurrent_n_epochs_below_one_raises() -> None:
+    """recurrent_n_epochs < 1 must fail fast (PR2 exposes this at config level).
+
+    Without the guard, recurrent_n_epochs=0 makes the epoch loop run zero times -> no
+    optimizer step, ppo_update_performed=False -> silent no-op training. Fail loudly instead.
+    """
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm", slot_config=slot_config, device="cpu", compile_mode="off"
+    )
+    with pytest.raises(ValueError, match="recurrent_n_epochs must be >= 1"):
+        PPOAgent(
+            policy=policy, slot_config=slot_config, recurrent_n_epochs=0, device="cpu"
+        )
+
+
+def test_clip_value_with_multiepoch_raises() -> None:
+    """clip_value=True is disallowed under recurrent_n_epochs > 1 (design constraint).
+
+    Value clipping anchors on rollout old_values not recomputed at theta0; under multi-epoch
+    it would clip against a stale reference. Replaces the deleted staleness UserWarning with a
+    hard fail-fast guard (re-enabling needs an anchored ref_values pass, a separate task).
+    """
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm", slot_config=slot_config, device="cpu", compile_mode="off"
+    )
+    with pytest.raises(ValueError, match="clip_value=True is incompatible with recurrent_n_epochs"):
+        PPOAgent(
+            policy=policy, slot_config=slot_config,
+            recurrent_n_epochs=4, clip_value=True, device="cpu",
+        )
 
 
 def test_weight_decay_optimizer_covers_all_network_params() -> None:

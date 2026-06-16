@@ -406,21 +406,28 @@ def _run_ppo_updates(
     amp_dtype: torch.dtype | None,  # Required: explicit dtype or None for no AMP
 ) -> dict[str, Any]:
     """Run one or more PPO updates on the current buffer and aggregate metrics."""
-    # P1 FIX: RECURRENT POLICY STALENESS GUARD
-    # Multiple external PPO updates with LSTM policies cause hidden state staleness:
-    # Update 1 changes policy weights, but Update 2+ uses the SAME hidden states
-    # from rollout collection (computed with old weights). This creates the exact
-    # mismatch that recurrent_n_epochs=1 is designed to prevent.
+    # RECURRENT MULTI-EPOCH INVARIANT (ppo_updates_per_batch == 1 for LSTM)
     #
-    # The agent's internal recurrent_n_epochs=1 safety is bypassed by this external loop.
-    # Standard R2D2/Recurrent PPO would require burn-in (recomputing hidden states
-    # for each update), which is not implemented here.
+    # Multi-epoch optimization for recurrent policies is owned by the agent's INTERNAL
+    # recurrent_n_epochs path: K epochs run WITHIN a single agent.update() call against
+    # an anchored reference forward pass. That internal loop is GAE-safe and normalizer-safe.
+    #
+    # The EXTERNAL ppo_updates_per_batch loop here is a different mechanism: each extra
+    # iteration re-runs GAE on the buffer and mutates the EMA value normalizer K times per
+    # rollout, on top of the stale hidden states stored at collection time. For LSTM that
+    # corrupts advantages and the value scale, so the external loop is disallowed — express
+    # K via recurrent_n_epochs instead and keep ppo_updates_per_batch pinned to 1.
+    #
+    # This guards the _run_ppo_updates callsite, not a direct PPOAgent.update() call.
     if ppo_updates_per_batch > 1 and agent.lstm_hidden_dim > 0:
         raise ValueError(
-            f"ppo_updates_per_batch={ppo_updates_per_batch} is incompatible with recurrent (LSTM) "
-            f"policies. After the first update, policy weights change but hidden states remain "
-            f"from the original rollout, causing gradient corruption. Use ppo_updates_per_batch=1 "
-            f"for LSTM policies, or implement hidden state burn-in. See PPOAgent C4 comment."
+            f"ppo_updates_per_batch={ppo_updates_per_batch} is invalid for recurrent (LSTM) "
+            f"policies: ppo_updates_per_batch must be 1. Recurrent multi-epoch optimization is "
+            f"owned by the agent's internal recurrent_n_epochs path (K epochs within a single "
+            f"update() against an anchored reference pass). The external ppo_updates_per_batch "
+            f"loop would re-run GAE and mutate the EMA value normalizer K times per rollout. "
+            f"Set recurrent_n_epochs=K and keep ppo_updates_per_batch=1. (Guards the "
+            f"_run_ppo_updates callsite, not a direct PPOAgent.update() call.)"
         )
 
     # C5 FIX: Update observation normalizer BEFORE PPO update.
@@ -650,6 +657,8 @@ def train_ppo_vectorized(
     gamma: float = DEFAULT_GAMMA,
     gae_lambda: float = DEFAULT_GAE_LAMBDA,  # From leyline
     ppo_updates_per_batch: int = 1,
+    recurrent_n_epochs: int = 1,
+    total_train_steps: int | None = None,
     save_path: str | None = None,
     resume_path: str | None = None,
     seed: int = 42,
@@ -738,7 +747,13 @@ def train_ppo_vectorized(
         ppo_updates_per_batch: Number of PPO updates per batch of episodes.
             Higher values improve sample efficiency but risk policy divergence.
             With KL early stopping enabled, values of 2-4 are often safe.
-            Default: 1 (standard PPO behavior)
+            Default: 1 (standard PPO behavior). Pinned to 1 for LSTM policies.
+        recurrent_n_epochs: Internal multi-epoch count for recurrent (LSTM) policies.
+            K epochs of optimization run WITHIN a single agent.update() against an
+            anchored reference pass, avoiding GAE re-runs and value-normalizer drift.
+            Default: 1.
+        total_train_steps: Total optimizer steps over the run, used by the agent's
+            late-training decay schedule. None lets the agent fall back to its default.
         save_path: Optional path to save model
         resume_path: Optional path to resume from checkpoint
         seed: Random seed for reproducibility
@@ -1107,6 +1122,8 @@ def train_ppo_vectorized(
             chunk_length=chunk_length,
             num_envs=n_envs,
             max_steps_per_env=max_epochs,
+            recurrent_n_epochs=recurrent_n_epochs,
+            total_train_steps=total_train_steps,
             compile_mode=effective_compile_mode,  # Persisted for checkpoint resume
         )
 
