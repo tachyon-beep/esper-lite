@@ -484,6 +484,15 @@ def build_parser() -> argparse.ArgumentParser:
              "but risks overfitting. (Maps to ppo_updates_per_batch. Default: 1)",
     )
     ppo_parser.add_argument(
+        "--value-warmup-batches",
+        type=int,
+        default=None,
+        metavar="W",
+        help="Batches over which the value-loss coefficient ramps from value_coef_start to "
+             "value_coef. 0 disables warmup (fixed value_coef from step 0). "
+             "(Maps to value_warmup_batches. Default: 10)",
+    )
+    ppo_parser.add_argument(
         "--memory-size",
         type=_positive_int,
         default=DEFAULT_LSTM_HIDDEN_DIM,
@@ -828,6 +837,8 @@ def main() -> None:
                     config.chunk_length = args.episode_length
                 if args.ppo_epochs is not None:
                     config.ppo_updates_per_batch = args.ppo_epochs
+                if args.value_warmup_batches is not None:
+                    config.value_warmup_batches = args.value_warmup_batches
                 if memory_size_override:
                     config.lstm_hidden_dim = args.memory_size
                 if args.entropy_anneal_episodes is not None:
