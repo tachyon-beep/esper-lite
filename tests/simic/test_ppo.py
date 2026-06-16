@@ -145,14 +145,23 @@ def test_kl_early_stopping_triggers():
         "Either early stopping triggered or KL was computed"
 
 
-def test_kl_early_stopping_with_single_epoch():
-    """BUG-003 regression: target_kl must work with recurrent_n_epochs=1.
+def test_kl_early_stopping_aborts_on_multiepoch_drift():
+    """target_kl must abort a later epoch once the policy drifts off the θ0 anchor.
 
-    Previously, KL early stopping only checked at the START of the next epoch.
-    With n_epochs=1, there was no "next epoch" so target_kl was a no-op.
+    Under the anchored-reference-pass design, the PPO importance ratio is measured
+    against ref_log_probs captured by a frozen-θ0 no_grad anchor pass at the START of
+    update() — NOT against the rollout-collection log_probs in the buffer. This makes
+    the epoch-0 ratio identically 1.0 (scored θ == anchor θ0), so approx_kl ≈ 0 and
+    epoch 0 can never early-stop. The KL trust region is therefore exercised across
+    MULTIPLE epochs: epoch 0 takes a real optimizer step, the weights drift away from
+    the frozen anchor, and at a later epoch approx_kl crosses 1.5 * target_kl and the
+    update is aborted BEFORE that epoch's optimizer.step().
 
-    The fix moves the KL check BEFORE optimizer.step(), so even with n_epochs=1,
-    an update can be skipped if KL is already too high (e.g., from drift since rollout).
+    (The previous version of this test injected fake rollout log_probs of -10.0 to
+    force an epoch-0 abort. That premise — a rollout-vs-network log_prob mismatch —
+    is exactly what the anchor deliberately eliminates: the rollout log_probs no longer
+    feed the ratio baseline at all, so the injection can no longer move approx_kl. The
+    drift must now come from genuine weight updates across epochs.)
     """
     slot_config = SlotConfig.default()
     policy = create_policy(
@@ -166,72 +175,103 @@ def test_kl_early_stopping_with_single_epoch():
         slot_config=slot_config,
         num_envs=2,
         max_steps_per_env=5,
-        target_kl=0.0001,  # Extremely low to ensure triggering
-        recurrent_n_epochs=1,  # The critical case from BUG-003
+        # Extremely low so the first real optimizer step's drift already crosses it.
+        target_kl=1e-8,
+        recurrent_n_epochs=4,  # Need >1 epoch so post-step drift can be measured.
         device="cpu",
     )
 
-    # Fill buffer with FAKE log_probs that differ from network's actual output
-    # This simulates policy drift since rollout collection
+    # Fill the buffer by scoring with the live network so the stored rollout log_probs
+    # are genuine. Their values are irrelevant to the ratio under the anchor design,
+    # but using real ones keeps the rollout self-consistent.
     state_dim = get_feature_size(slot_config)
+    hidden = agent.policy.network.get_initial_hidden(1, torch.device(agent.device))
     for env_id in range(2):
         agent.buffer.start_episode(env_id)
         for step in range(5):
+            state = torch.randn(1, state_dim, device=agent.device)
+            masks = {
+                "slot": torch.ones(1, 3, dtype=torch.bool, device=agent.device),
+                "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool, device=agent.device),
+                "style": torch.ones(1, NUM_STYLES, dtype=torch.bool, device=agent.device),
+                "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool, device=agent.device),
+                "alpha_target": torch.ones(1, NUM_ALPHA_TARGETS, dtype=torch.bool, device=agent.device),
+                "alpha_speed": torch.ones(1, NUM_ALPHA_SPEEDS, dtype=torch.bool, device=agent.device),
+                "alpha_curve": torch.ones(1, NUM_ALPHA_CURVES, dtype=torch.bool, device=agent.device),
+                "op": torch.ones(1, NUM_OPS, dtype=torch.bool, device=agent.device),
+            }
+            pre_hidden = hidden
+            bp_indices = torch.zeros(1, slot_config.num_slots, dtype=torch.long, device=agent.device)
+            result = agent.policy.network.get_action(
+                state, bp_indices, hidden,
+                slot_mask=masks["slot"],
+                blueprint_mask=masks["blueprint"],
+                style_mask=masks["style"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                op_mask=masks["op"],
+            )
+            hidden = result.hidden
             agent.buffer.add(
                 env_id=env_id,
-                state=torch.randn(state_dim),
-                slot_action=0,
-                blueprint_action=0,
-                style_action=0,
-                tempo_action=0,
-                alpha_target_action=0,
-                alpha_speed_action=0,
-                alpha_curve_action=0,
-                op_action=0,
-                effective_op_action=0,
-                # Fake log_probs that are very different from network's actual output
-                slot_log_prob=-10.0,  # Network won't produce this
-                blueprint_log_prob=-10.0,
-                style_log_prob=-10.0,
-                tempo_log_prob=-10.0,
-                alpha_target_log_prob=-10.0,
-                alpha_speed_log_prob=-10.0,
-                alpha_curve_log_prob=-10.0,
-                op_log_prob=-10.0,
-                value=1.0,
+                state=state.squeeze(0),
+                slot_action=result.actions["slot"].item(),
+                blueprint_action=result.actions["blueprint"].item(),
+                style_action=result.actions["style"].item(),
+                tempo_action=result.actions["tempo"].item(),
+                alpha_target_action=result.actions["alpha_target"].item(),
+                alpha_speed_action=result.actions["alpha_speed"].item(),
+                alpha_curve_action=result.actions["alpha_curve"].item(),
+                op_action=result.actions["op"].item(),
+                effective_op_action=result.actions["op"].item(),
+                slot_log_prob=result.log_probs["slot"].item(),
+                blueprint_log_prob=result.log_probs["blueprint"].item(),
+                style_log_prob=result.log_probs["style"].item(),
+                tempo_log_prob=result.log_probs["tempo"].item(),
+                alpha_target_log_prob=result.log_probs["alpha_target"].item(),
+                alpha_speed_log_prob=result.log_probs["alpha_speed"].item(),
+                alpha_curve_log_prob=result.log_probs["alpha_curve"].item(),
+                op_log_prob=result.log_probs["op"].item(),
+                value=result.values.item(),
                 reward=1.0,
                 done=step == 4,
                 truncated=False,
-                slot_mask=torch.ones(3, dtype=torch.bool),
-                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
-                style_mask=torch.ones(NUM_STYLES, dtype=torch.bool),
-                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
-                alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
-                alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
-                alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
-                op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-                hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
-                hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
+                slot_mask=masks["slot"].squeeze(0),
+                blueprint_mask=masks["blueprint"].squeeze(0),
+                style_mask=masks["style"].squeeze(0),
+                tempo_mask=masks["tempo"].squeeze(0),
+                alpha_target_mask=masks["alpha_target"].squeeze(0),
+                alpha_speed_mask=masks["alpha_speed"].squeeze(0),
+                alpha_curve_mask=masks["alpha_curve"].squeeze(0),
+                op_mask=masks["op"].squeeze(0),
+                hidden_h=pre_hidden[0],
+                hidden_c=pre_hidden[1],
                 bootstrap_value=0.0,
-                blueprint_indices=torch.zeros(slot_config.num_slots, dtype=torch.long),
+                blueprint_indices=bp_indices.squeeze(0),
             )
         agent.buffer.end_episode(env_id)
 
     metrics = agent.update(clear_buffer=True)
 
-    # With BUG-003 fix: KL check happens BEFORE optimizer.step()
-    # So with n_epochs=1 and extreme policy drift, we should early stop
+    # Early stop must fire, and it must be at a LATER epoch (>=1): epoch 0 is anchored
+    # to θ0 so its ratio is 1.0 and approx_kl ≈ 0 — it can never trip the trust region.
     assert "early_stop_epoch" in metrics, \
-        "BUG-003 regression: early stopping should work with n_epochs=1"
-    assert metrics["early_stop_epoch"] == 0, \
-        "Should have early stopped at epoch 0 (the only epoch)"
+        "Anchor design: post-θ0 drift must trip the KL trust region within recurrent_n_epochs"
+    assert metrics["early_stop_epoch"] >= 1, \
+        "Epoch 0 is anchored to θ0 (ratio==1.0, approx_kl≈0); abort must occur at a later epoch"
 
-    # Key assertion: NO optimizer step should have happened.
-    # The no-step contract returns explicit NaNs rather than pretending a valid loss exists.
-    assert math.isnan(metrics["policy_loss"]), \
-        "No-step KL abort should surface policy loss as NaN"
-    assert metrics["ppo_update_performed"] is False, \
-        "Epoch-0 KL abort should report that no optimizer step was performed"
+    # The aborting epoch (>=1) short-circuits BEFORE its own optimizer.step(). But epoch 0
+    # DID complete a real step (that step is what produced the drift), so the update as a
+    # whole performed work: ppo_update_performed is True and policy_loss reflects the
+    # completed epoch(s), not a NaN. (The all-NaN / ppo_update_performed=False no-step
+    # contract only applies when ZERO epochs complete a step — impossible here because the
+    # θ0 anchor guarantees epoch 0's ratio==1.0, so epoch 0 never self-aborts.)
+    assert metrics["ppo_update_performed"] is True, \
+        "Epoch 0 completed a real optimizer step before the later-epoch KL abort"
+    assert math.isfinite(metrics["policy_loss"]), \
+        "policy_loss should reflect the completed pre-abort epoch(s), not NaN"
 
 
 def test_value_clipping_uses_appropriate_range():

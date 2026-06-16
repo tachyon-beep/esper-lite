@@ -42,7 +42,18 @@ def _build_agent() -> tuple[PPOAgent, SlotConfig]:
     return agent, slot_config
 
 
-def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig, log_prob_offset: float) -> None:
+def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig) -> None:
+    """Fill the rollout buffer with a fixed, deterministic 4-step episode.
+
+    Load-bearing for the anchored-reference-pass goldens: this fill emits NO fresh
+    counterfactual-contribution measurements, so the aux contribution-predictor loss is
+    multiplied to zero (and contributes zero gradient). That is why the goldens are stable
+    under the production default (enable_contribution_aux=True) despite the aux Dropout
+    drawing RNG in the no_grad anchor — the draw is annihilated by the zero aux mask and so
+    cannot make these goldens RNG-order-dependent. A future change that emits fresh-
+    contribution timesteps here would make the aux gradient (and thus the goldens) depend on
+    the anchor-vs-epoch dropout ordering; regenerate and re-pin if that happens.
+    """
     state_dim = get_feature_size(slot_config)
     device = torch.device(agent.device)
     base_state = torch.linspace(-1.0, 1.0, steps=state_dim, device=device)
@@ -92,14 +103,14 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig, log_prob_offset: floa
             alpha_curve_action=result.actions["alpha_curve"].item(),
             op_action=result.actions["op"].item(),
             effective_op_action=result.actions["op"].item(),
-            slot_log_prob=result.log_probs["slot"].item() + log_prob_offset,
-            blueprint_log_prob=result.log_probs["blueprint"].item() + log_prob_offset,
-            style_log_prob=result.log_probs["style"].item() + log_prob_offset,
-            tempo_log_prob=result.log_probs["tempo"].item() + log_prob_offset,
-            alpha_target_log_prob=result.log_probs["alpha_target"].item() + log_prob_offset,
-            alpha_speed_log_prob=result.log_probs["alpha_speed"].item() + log_prob_offset,
-            alpha_curve_log_prob=result.log_probs["alpha_curve"].item() + log_prob_offset,
-            op_log_prob=result.log_probs["op"].item() + log_prob_offset,
+            slot_log_prob=result.log_probs["slot"].item(),
+            blueprint_log_prob=result.log_probs["blueprint"].item(),
+            style_log_prob=result.log_probs["style"].item(),
+            tempo_log_prob=result.log_probs["tempo"].item(),
+            alpha_target_log_prob=result.log_probs["alpha_target"].item(),
+            alpha_speed_log_prob=result.log_probs["alpha_speed"].item(),
+            alpha_curve_log_prob=result.log_probs["alpha_curve"].item(),
+            op_log_prob=result.log_probs["op"].item(),
             value=result.values.item(),
             reward=reward,
             done=step == len(rewards) - 1,
@@ -122,19 +133,21 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig, log_prob_offset: floa
 
 def test_ppo_update_golden_metrics() -> None:
     agent, slot_config = _build_agent()
-    _fill_buffer(agent, slot_config, log_prob_offset=0.1)
+    _fill_buffer(agent, slot_config)
     metrics = agent.update(clear_buffer=True)
 
     assert metrics["ppo_update_performed"] is True
     assert metrics["finiteness_gate_skip_count"] == 0
 
-    # Phase 4: ResidualLSTM hidden state shape fix (hidden=None now creates correct [batch, hidden])
-    assert metrics["policy_loss"] == pytest.approx(-2.1166460514068604, abs=1e-6)
+    # epoch-0 ratio==1.0 by construction (anchored reference pass) -- this is the
+    # correct non-trivial assertion, not a tautology; the ratio path's liveness at
+    # epoch>0 is proven by the K=4 goldens in PR2.
+    assert metrics["policy_loss"] == pytest.approx(-2.340991497039795, abs=1e-6)
     assert metrics["value_loss"] == pytest.approx(0.03467179462313652, abs=1e-6)
     assert metrics["entropy"] == pytest.approx(9.399517059326172, abs=1e-6)
-    assert metrics["approx_kl"] == pytest.approx(0.004860731307417154, abs=1e-6)
-    assert metrics["clip_fraction"] == pytest.approx(1.0, abs=1e-6)
-    assert metrics["ratio_mean"] == pytest.approx(0.4489768147468567, abs=1e-6)
-    assert metrics["ratio_max"] == pytest.approx(0.4493289887905121, abs=1e-6)
-    assert metrics["ratio_min"] == pytest.approx(0.4479205310344696, abs=1e-6)
-    assert metrics["ratio_std"] == pytest.approx(0.0007041990756988525, abs=1e-6)
+    assert metrics["approx_kl"] == pytest.approx(0.0, abs=1e-6)
+    assert metrics["clip_fraction"] == pytest.approx(0.0, abs=1e-6)
+    assert metrics["ratio_mean"] == pytest.approx(0.9999998807907104, abs=1e-6)
+    assert metrics["ratio_max"] == pytest.approx(1.0, abs=1e-6)
+    assert metrics["ratio_min"] == pytest.approx(0.9999997615814209, abs=1e-6)
+    assert metrics["ratio_std"] == pytest.approx(9.733398087519163e-08, abs=1e-6)

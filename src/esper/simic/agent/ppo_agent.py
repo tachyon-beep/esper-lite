@@ -860,6 +860,66 @@ class PPOAgent:
         head_nan_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
         head_inf_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
 
+        # Anchored reference pass: frozen-theta0 baseline for the PPO importance ratio.
+        #
+        # PRECISION: the anchor runs under plain no_grad and INHERITS the caller's autocast
+        # exactly as the epoch-0 scored forward does (BF16 under policy_amp_context at
+        # vectorized.py:447; FP32 on the CPU/no-AMP path). Sharing the precision decision is
+        # what makes the epoch-0 ratio = exp(scored - ref) identically 1.0 -- anchor and
+        # epoch-0 are the SAME forward at theta_0, same dtype, differing only by no_grad+detach.
+        #
+        # AMP-SAFETY (CRITICAL -- see the discovery gate
+        # test_epoch0_per_head_grad_norms_nonzero_under_amp): this no_grad anchor is the FIRST
+        # forward through every head Linear under the caller's autocast. Under autocast, the
+        # first touch of a Linear's weight populates autocast's per-parameter cast-weight CACHE;
+        # because that first touch is inside no_grad, the cached BF16 weight carries NO autograd
+        # linkage. If the cache were left intact, the grad-enabled epoch-0 forward would REUSE
+        # those graph-less casts, severing the path from the head logits back to the head
+        # nn.Parameters -- the head .grad comes back None and the policy silently stops learning
+        # (the gate test sees every action head's grad_state == "missing"; only the value head,
+        # which the surrogate loss does not route through these heads, survives). The fix is to
+        # EVICT the poisoned casts immediately after the anchor: torch.clear_autocast_cache()
+        # drops the no_grad entries so the epoch-0 forward re-casts each weight fresh UNDER GRAD,
+        # restoring full autograd linkage. The cache holds nothing else at this point (the
+        # telemetry forward at ~:777 ran with autocast disabled, writing nothing), so the clear
+        # is local in effect. This keeps the anchor at the caller's exact precision -- so the
+        # ratio stays 1.0 to the bit under AMP -- while leaving the cast cache un-poisoned.
+        anchor_actions = {
+            "slot": data["slot_actions"],
+            "blueprint": data["blueprint_actions"],
+            "style": data["style_actions"],
+            "tempo": data["tempo_actions"],
+            "alpha_target": data["alpha_target_actions"],
+            "alpha_speed": data["alpha_speed_actions"],
+            "alpha_curve": data["alpha_curve_actions"],
+            "op": data["op_actions"],
+        }
+        anchor_masks = {
+            "slot": data["slot_masks"],
+            "blueprint": data["blueprint_masks"],
+            "style": data["style_masks"],
+            "tempo": data["tempo_masks"],
+            "alpha_target": data["alpha_target_masks"],
+            "alpha_speed": data["alpha_speed_masks"],
+            "alpha_curve": data["alpha_curve_masks"],
+            "op": data["op_masks"],
+        }
+        with torch.no_grad():
+            anchor_result = self.policy.evaluate_actions(
+                data["states"],
+                data["blueprint_indices"],
+                anchor_actions,
+                anchor_masks,
+                hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
+                probability_floor=self.probability_floor,
+                aux_stop_gradient=self.aux_stop_gradient,
+            )
+        # Evict the no_grad anchor's graph-less cast-weight cache entries so the epoch-0
+        # grad forward re-casts each head/value weight fresh under autograd (see AMP-SAFETY
+        # note above). No-op when the caller is not under autocast (FP32/CPU path).
+        torch.clear_autocast_cache()
+        ref_log_probs = {head: anchor_result.log_prob[head].detach() for head in HEAD_NAMES}
+
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
                 break
@@ -945,7 +1005,7 @@ class PPOAgent:
             # head_nan_detected / head_inf_detected / nonfinite_sources are byte-identical.
             new_lp_stack = torch.stack([log_probs[k].float() for k in HEAD_NAMES])
             old_lp_stack = torch.stack(
-                [data[f"{k}_log_probs"][valid_mask].float() for k in HEAD_NAMES]
+                [ref_log_probs[k][valid_mask].float() for k in HEAD_NAMES]
             )
             all_finite = (
                 torch.isfinite(new_lp_stack).all()
@@ -966,13 +1026,12 @@ class PPOAgent:
                             nonfinite_sources.append(f"log_probs[{key}]: Inf detected")
                         nonfinite_found = True
 
-                # Check old log_probs (stored as "{key}_log_probs" in data dict)
+                # Check anchored reference log_probs (frozen-theta0 baseline)
                 for key in HEAD_NAMES:
-                    old_key = f"{key}_log_probs"
-                    old_lp = data[old_key][valid_mask]
+                    old_lp = ref_log_probs[key][valid_mask]
                     if not torch.isfinite(old_lp).all():
                         nonfinite_count = (~torch.isfinite(old_lp)).sum()
-                        nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
+                        nonfinite_sources.append(f"ref_log_probs[{key}]: {nonfinite_count} non-finite")
                         nonfinite_found = True
 
                 # Check values
@@ -1055,15 +1114,17 @@ class PPOAgent:
                 )
 
             # Compute per-head ratios
+            # data['hidden_h'][:,1:] is never indexed here; the loss path uses only
+            # data['initial_hidden_h'] (telemetry/Q(s,op) uses the per-step hidden buffer at ~:728-758).
             old_log_probs = {
-                "slot": data["slot_log_probs"][valid_mask],
-                "blueprint": data["blueprint_log_probs"][valid_mask],
-                "style": data["style_log_probs"][valid_mask],
-                "tempo": data["tempo_log_probs"][valid_mask],
-                "alpha_target": data["alpha_target_log_probs"][valid_mask],
-                "alpha_speed": data["alpha_speed_log_probs"][valid_mask],
-                "alpha_curve": data["alpha_curve_log_probs"][valid_mask],
-                "op": data["op_log_probs"][valid_mask],
+                "slot": ref_log_probs["slot"][valid_mask],
+                "blueprint": ref_log_probs["blueprint"][valid_mask],
+                "style": ref_log_probs["style"][valid_mask],
+                "tempo": ref_log_probs["tempo"][valid_mask],
+                "alpha_target": ref_log_probs["alpha_target"][valid_mask],
+                "alpha_speed": ref_log_probs["alpha_speed"][valid_mask],
+                "alpha_curve": ref_log_probs["alpha_curve"][valid_mask],
+                "op": ref_log_probs["op"][valid_mask],
             }
             batch_timesteps = valid_mask.sum().float().clamp(min=1)
             ratio_metrics = compute_ratio_metrics(

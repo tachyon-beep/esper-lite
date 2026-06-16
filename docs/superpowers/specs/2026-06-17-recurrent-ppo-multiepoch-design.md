@@ -57,8 +57,13 @@ the double-counting blocker that sank the alternative designs.
 
 1. **Anchor forward.** After the GAE/normalizer block and before the epoch loop, run one
    `torch.no_grad()` forward at frozen θ₀ — the *same* `evaluate_actions` call as the epoch
-   loop, wrapped — to produce `ref_log_probs` (detached, per head). Consumes no RNG (scores
-   stored actions; `ResidualLSTM` dropout=0.0; contribution Dropout is aux-only/detached).
+   loop, wrapped — to produce `ref_log_probs` (detached, per head). The MAIN policy/value
+   path consumes no RNG (scores stored actions; `ResidualLSTM` dropout=0.0), so `ref_log_probs`
+   and the ratio are unaffected by the anchor. NOTE (PR1, corrected): the network is in
+   `training` mode throughout `update()`, so the aux contribution-predictor's `Dropout(0.1)`
+   DOES draw one mask in the no_grad anchor — the update is deterministic-given-seed, not
+   strictly RNG-free; that draw is multiplied to zero in the aux loss on non-fresh-measurement
+   timesteps and never touches the policy/value heads (drl+pytorch review, 2026-06-17).
 2. **Baseline swap (only loss-affecting change).** Source `old_log_probs` from
    `ref_log_probs` instead of the rollout (`ppo_agent.py:1058-1067`); update the
    finiteness-gate `old_lp_stack` (`ppo_agent.py:946-949`) to match. **Do not touch**
@@ -97,12 +102,27 @@ identical full-unroll at θ₀); at epoch k>0 the ratio measures the true policy
 - **Pin `ppo_updates_per_batch = 1` for LSTM** (single multi-epoch path).
 
 ## Risks
-- **AMP cast-cache poisoning (highest, silent):** a `no_grad` anchor forward touching head
-  Linears under autocast can populate a graph-less cast-weight cache, zeroing the first grad
-  forward's head gradients (`ppo_agent.py:763-778`). Run the anchor inside the **same BF16
-  `policy_amp_context`** (honoring the FP32 masked-logits seam so `ref_log_probs` are
-  FP32-symmetric with scored log_probs); **gate with an epoch-0 nonzero-per-head-grad test**.
-  Do NOT use `autocast(enabled=False)` for the anchor (breaks seam symmetry → ratio≠1).
+- **AMP cast-cache poisoning (highest, silent) — CONFIRMED & RESOLVED 2026-06-17 (PR1):** a
+  `no_grad` anchor forward touching head Linears under autocast populates a graph-less
+  cast-weight cache; the subsequent epoch-0 *grad* forward reuses those graph-less casts, so
+  the backward to every action-head `nn.Parameter` is severed → all 8 head grads come back
+  `None` (emitted as a NaN sentinel). The value head survives (its loss routes to it
+  independently). The epoch-0 nonzero-per-head-grad gate (`test_epoch0_per_head_grad_norms_nonzero_under_amp`,
+  CUDA/BF16) caught this on first run.
+  **The original mitigation in this design was INVERTED and is wrong:** running the anchor
+  "inside the same BF16 autocast" is what *causes* the poisoning, and `autocast(enabled=False)`
+  does NOT break ratio symmetry (the FP32 masked-logits seam holds the ratio; an FP32 anchor
+  drifts only ~4.4e-5 under BF16, and the committed acceptance #1 test runs on CPU/FP32 where
+  it is exact). **Resolved fix (Option C, pytorch-expert-vetted):** keep the anchor under plain
+  `torch.no_grad()` (so it *inherits* the caller's precision and the ratio stays exactly 1.0
+  under AMP), then call `torch.clear_autocast_cache()` immediately after the anchor block to
+  evict the graph-less casts so the epoch-0 forward re-casts each weight fresh under autograd.
+  Empirically: Option C → grads healthy AND ratio exact; Option A (`autocast(enabled=False)`)
+  → grads healthy, ratio 4.4e-5 BF16-only drift (acceptable fallback); Option B
+  (`cache_enabled=False` BF16) → disqualified (forces BF16 on the CPU/FP32 path, fails the CPU
+  ratio test). Note production `amp_dtype="auto"` resolves to **bfloat16** on Ampere+, so this
+  was a real latent production bug, not a test artifact. **Keep gating with the epoch-0
+  nonzero-per-head-grad test.**
 - **Trust-region drift at K>1:** with θ actually changing across epochs, KL can grow faster;
   mitigated by KL early-stop + clip_ratio, but K needs a sweep.
 - **Golden-test invalidation (deliberate):** `test_ppo_update_golden.py` injects
@@ -119,7 +139,9 @@ identical full-unroll at θ₀); at epoch k>0 the ratio measures the true policy
    bitwise — two BF16 forwards with an FP32 seam; use `no_grad`, never `inference_mode`.)
 2. **AMP nonzero-grad gate:** epoch-0 per-head grad-norms strictly > 0 after the anchor runs.
 3. **Determinism/replay:** two identical-seed `update()` runs produce <1e-6 identical
-   losses/metrics at K=4 (anchor consumes no RNG).
+   losses/metrics at K=4 (deterministic given seed; the anchor's only RNG draw — the aux
+   contribution-predictor's `Dropout` — is identical across two identically-seeded runs, so
+   it cannot desync them; see the corrected Anchor-forward note above).
 4. **No stale-baseline consumption:** loss path reads `old_log_probs` only from
    `ref_log_probs`; `data['hidden_h'][:,1:]` never indexed in the loss path.
 5. **EV lifts off 0:** on a real K=4 run, pre-update `explained_variance`
