@@ -353,13 +353,6 @@ class ContributionRewardConfig:
 _DEFAULT_CONTRIBUTION_CONFIG = ContributionRewardConfig()
 
 
-def _require_total_improvement(seed_info: SeedInfo, *, context: str) -> float:
-    total_improvement = seed_info.total_improvement
-    if total_improvement is None:
-        raise ValueError(f"{context} requires seed_info.total_improvement")
-    return total_improvement
-
-
 # =============================================================================
 # Contribution-Primary Reward (uses counterfactual validation)
 # =============================================================================
@@ -459,14 +452,13 @@ def compute_contribution_reward(
                 "the anti-gaming/fossilization gates require the clean counterfactual signal"
             )
         counterfactual_imp = seed_info.counterfactual_total_improvement
-        total_imp = _require_total_improvement(
-            seed_info,
-            context="counterfactual attribution discount",
-        )
 
         if not escrow_mode:
-            if total_imp < 0:
-                exp_arg = min(-config.attribution_sigmoid_steepness * total_imp, 700.0)
+            # Discount on the seed's CLEAN causal regression, NOT host drift. A
+            # plateaued/declining host must not discount a genuinely helpful
+            # seed; counterfactual_imp is guaranteed non-None here (raised above).
+            if counterfactual_imp < 0:
+                exp_arg = min(-config.attribution_sigmoid_steepness * counterfactual_imp, 700.0)
                 attribution_discount = 1.0 / (1.0 + math.exp(exp_arg))
 
         if seed_contribution > 1.0 and attribution_discount >= 0.5 and not config.disable_anti_gaming:
@@ -620,11 +612,12 @@ def compute_contribution_reward(
                 bounded_attribution = config.proxy_contribution_weight * stage_improvement
 
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
-        total_improvement = _require_total_improvement(
-            seed_info,
-            context="FOSSILIZE reward shaping",
-        )
-        if total_improvement < 0:
+        # Suppress attribution only when the seed's CLEAN counterfactual is
+        # negative (it genuinely harmed), not when the host merely drifted down.
+        # None => no causal proof of harm => do not suppress (mirrors the
+        # blending-warning gate below and the proxy-path reasoning above).
+        counterfactual_imp = seed_info.counterfactual_total_improvement
+        if counterfactual_imp is not None and counterfactual_imp < 0:
             bounded_attribution = 0.0
 
     if action == LifecycleOp.PRUNE and not escrow_mode:
@@ -1265,18 +1258,23 @@ def _contribution_fossilize_shaping(
     if seed_info.stage != STAGE_HOLDING:
         return config.invalid_fossilize_penalty
 
-    total_delta = _require_total_improvement(
-        seed_info,
-        context="FOSSILIZE action shaping",
-    )
-    if total_delta < 0:
+    # Gate on the CLEAN leave-one-out counterfactual, NOT host-drift
+    # total_improvement. A plateaued or declining host must not brand a
+    # genuinely valuable seed as "damaging" for regression it did not cause
+    # (the immediate-bonus gate at the FOSSILIZE call site already keys on
+    # this signal; the penalty branch must agree). None => no causal proof of
+    # non-harm => treat conservatively as an invalid fossilize.
+    counterfactual_delta = seed_info.counterfactual_total_improvement
+    if counterfactual_delta is None:
+        return config.invalid_fossilize_penalty
+    if counterfactual_delta < 0:
         base_penalty = -0.5
-        damage_scale = min(abs(total_delta) * 0.2, 1.0)
+        damage_scale = min(abs(counterfactual_delta) * 0.2, 1.0)
 
         ransomware_signature = (
             seed_contribution is not None
             and seed_contribution > 0.1
-            and total_delta < -0.2
+            and counterfactual_delta < -0.2
         )
         ransomware_penalty = -0.3 if ransomware_signature else 0.0
 
