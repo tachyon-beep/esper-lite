@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-15 (baseline green; recovery bug drain closed; op/value mismatch verified resolved; proof confounder drain implemented; correctness proof strategy drafted; proof packet defaults CLI and API callers to reward-efficiency profile; oracle sandbox and proof-baseline-control artifacts created; baseline outcome, fixed-schedule provenance/hash-pin, fixed-schedule realized-trace, source/replay topology-manifest, static-final freeze, and lockstep pair gates added; static-final source/replay manifest emission, runner handoff, live baseline rehearsal, and reward-efficiency-default blocked packet verified)
+**Last Updated:** 2026-06-17 (fossilize reward-economics host-drift confound fixed — all reward gates now key on the clean counterfactual, dead `_require_total_improvement` removed, committed `575482d7`; FOSSILIZE reward validated −0.81→+2.00; dead-critic root-caused to 1-PPO-step-per-rollout (value warmup ruled out); multi-epoch recurrent PPO via anchored-reference-pass design (`docs/superpowers/specs/2026-06-17-recurrent-ppo-multiepoch-design.md`) + executable two-PR plan (`docs/plans/ready/2026-06-17-recurrent-ppo-multiepoch-plan.md`) added — directly addresses the value-collapse blocker behind Focus Areas #7/#11) — prior: 2026-06-15 baseline green; recovery bug drain closed; op/value mismatch verified resolved; proof confounder drain implemented; correctness proof strategy drafted; proof packet defaults CLI and API callers to reward-efficiency profile; oracle sandbox and proof-baseline-control artifacts created; static-final source/replay manifest emission, runner handoff, live baseline rehearsal, and reward-efficiency-default blocked packet verified)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -1348,6 +1348,7 @@ Quick reference for all tracked plans:
 | `h-tamiyo-updates.md` | heuristic-tamiyo |
 | `phase1-final-exam.md` | reward-efficiency |
 | `phase3-tinystories-strategy.md` | phase3-tinystories |
+| `2026-06-17-recurrent-ppo-multiepoch-plan.md` | recurrent-ppo-multiepoch |
 
 ### planning/ (Active Design)
 | Folder | ID |
