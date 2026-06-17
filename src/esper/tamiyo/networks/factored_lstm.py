@@ -501,14 +501,16 @@ class FactoredRecurrentActorCritic(nn.Module):
             last_layer = head[-1]
             if isinstance(last_layer, nn.Linear):
                 nn.init.orthogonal_(last_layer.weight.data, gain=0.01)
-        # Value head output layer: use gain=0.01 (same as policy heads)
-        # This was previously gain=1.0 which caused value predictions to start
-        # far from zero, contributing to high initial value_loss and slow convergence.
-        # With gain=0.01, initial value predictions cluster near zero, allowing
-        # the critic to learn from actual returns rather than fighting large initial errors.
+        # Value head output layer: use gain=0.1 (matches the contribution predictor below).
+        # gain=1.0 (the original) put initial value predictions far from zero -> high
+        # initial value_loss and slow convergence. gain=0.01 fixed that but pinned the
+        # head so close to zero that explained_variance struggled to develop any output
+        # range. gain=0.1 keeps predictions centered near zero while giving the critic
+        # enough initial range to track returns -- the same trade-off the contribution
+        # predictor (a regression head over similar target scales) already makes.
         last_value_layer = self.value_head[-1]
         if isinstance(last_value_layer, nn.Linear):
-            nn.init.orthogonal_(last_value_layer.weight.data, gain=0.01)
+            nn.init.orthogonal_(last_value_layer.weight.data, gain=0.1)
 
         # Contribution predictor output: gain=0.1 for regression targets
         # PyTorch Expert review: gain=0.01 is too small for targets in [-10, +10];
