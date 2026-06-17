@@ -30,6 +30,8 @@ if _t.cuda.is_initialized():  # type: ignore[no-untyped-call]
 import argparse
 import logging
 import sys
+import threading
+from collections.abc import Callable
 from textwrap import dedent
 
 import torch
@@ -40,6 +42,30 @@ from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_LSTM_HIDDEN_DIM
 from esper.simic.training import TrainingConfig
 
 _logger = logging.getLogger(__name__)
+
+
+def _run_training_capturing_errors(
+    run_training: Callable[[], None],
+    training_error: list[str | None],
+    shutdown_event: threading.Event,
+) -> None:
+    """Run training, capturing any unhandled exception.
+
+    On crash, records the traceback into ``training_error`` and sets
+    ``shutdown_event`` so the TUI and any waiters know the process must exit
+    non-zero. Without signalling shutdown, the main thread could exit 0 even
+    though training crashed. Extracted to module scope so the crash-handling
+    contract is directly testable.
+    """
+    import traceback
+
+    try:
+        run_training()
+    except Exception:
+        training_error[0] = traceback.format_exc()
+        shutdown_event.set()
+        # Log to stderr (visible in the Textual console).
+        print(f"\n[TRAINING ERROR]\n{training_error[0]}", file=sys.stderr)
 
 
 def _load_config_with_friendly_errors(config_path: str) -> "TrainingConfig":
@@ -1062,29 +1088,20 @@ def main() -> None:
                         **train_kwargs,
                     )
         except Exception:
-            import traceback
-            traceback.print_exc()
+            _logger.exception("Training run failed with unhandled exception")
             raise
 
     try:
         if use_sanctum:
             # Sanctum mode: run training in background thread, Sanctum controls terminal
-            import threading
-            import traceback
             from esper.karn.sanctum import SanctumApp
 
             # Track training errors for debugging
             training_error: list[str | None] = [None]  # Use list to allow mutation from thread
 
             def training_wrapper() -> None:
-                """Wrap training to capture exceptions."""
-                try:
-                    run_training()
-                except Exception:
-                    training_error[0] = traceback.format_exc()
-                    # Log to stderr (visible in Textual console)
-                    import sys
-                    print(f"\n[TRAINING ERROR]\n{training_error[0]}", file=sys.stderr)
+                """Wrap training to capture exceptions (see _run_training_capturing_errors)."""
+                _run_training_capturing_errors(run_training, training_error, shutdown_event)
 
             # daemon=False so we can wait for graceful shutdown
             training_thread = threading.Thread(target=training_wrapper, daemon=False)

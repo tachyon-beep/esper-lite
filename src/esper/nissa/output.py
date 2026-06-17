@@ -218,11 +218,14 @@ class BackendWorker:
                     f"Backend {self._name} queue drain timed out after {timeout}s, "
                     f"forcing shutdown (some events may be lost)"
                 )
-        except Exception:
+        except RuntimeError as e:
+            # RuntimeError from _join_with_timeout signals queue internal-state
+            # corruption. Safe to swallow during teardown: we continue shutdown
+            # regardless, and the worker thread will exit via its own break path.
             _logger.warning(
-                "Queue join failed during %s shutdown (worker may have died)",
+                "Queue join failed during %s shutdown (worker may have died): %s",
                 self._name,
-                exc_info=True,
+                e,
             )
 
         # Send shutdown signal - no race possible since _stopped=True prevents new enqueues
@@ -261,8 +264,12 @@ class BackendWorker:
                 try:
                     self._backend.emit(event)
                     self._processed_events += 1
-                except Exception:
-                    _logger.exception("Error in backend %s", self._name)
+                except Exception as e:
+                    # Count emit failures as dropped: the event was dequeued but
+                    # never delivered, so callers expecting delivery see the gap
+                    # reflected in stats / health snapshots.
+                    self._dropped_events += 1
+                    _logger.exception("Error in backend %s: %s", self._name, e)
                 finally:
                     elapsed = time.time() - start_time
                     self._total_processing_time += elapsed
@@ -270,8 +277,16 @@ class BackendWorker:
                 self._queue.task_done()
             except queue.Empty:
                 continue
-            except Exception:
-                _logger.exception("Unexpected error in backend worker %s", self._name)
+            except RuntimeError as e:
+                # RuntimeError signals queue corruption (broken internal state).
+                # Continuing would spin forever; break so the thread exits cleanly
+                # and the stopped flag allows teardown to proceed.
+                _logger.exception(
+                    "Queue corruption in backend worker %s, exiting loop: %s",
+                    self._name,
+                    e,
+                )
+                break
 
 
 # OutputBackend Protocol now lives in leyline (re-exported above)
@@ -659,8 +674,13 @@ class NissaHub:
                 self._queue.task_done()
             except queue.Empty:
                 continue
-            except Exception:
-                _logger.exception("Unexpected error in NissaHub worker loop")
+            except RuntimeError as e:
+                # RuntimeError signals queue internal-state corruption.
+                # Continuing would spin forever; break so close() can join cleanly.
+                _logger.exception(
+                    "Queue corruption in NissaHub worker loop, exiting: %s", e
+                )
+                break
 
     def add_backend(self, backend: OutputBackend) -> None:
         """Add an output backend to the hub.
@@ -733,8 +753,12 @@ class NissaHub:
         # Close the backend
         try:
             backend.close()
-        except Exception:
-            _logger.exception("Error closing backend %s", backend.__class__.__name__)
+        except Exception as e:
+            # Teardown: close() failure is logged and swallowed so remove_backend()
+            # still completes the removal even if the backend misbehaves.
+            _logger.exception(
+                "Error closing backend %s: %s", backend.__class__.__name__, e
+            )
 
     def emit(self, event: TelemetryEvent) -> None:
         """Emit a telemetry event to all backends (asynchronously).
@@ -807,12 +831,16 @@ class NissaHub:
                 if not _join_with_timeout(worker._queue, remaining):
                     _logger.warning(f"Backend {worker._name} flush timed out")
                     return False
-            except Exception:
+            except RuntimeError as e:
+                # RuntimeError from _join_with_timeout means the worker queue is
+                # in a broken state. The flush cannot complete, so return False —
+                # not True — so callers that assert flush() know delivery failed.
                 _logger.warning(
-                    "Queue join failed for %s during flush (worker may have died)",
+                    "Queue join failed for %s during flush (worker may have died): %s",
                     worker._name,
-                    exc_info=True,
+                    e,
                 )
+                return False
 
         return True
 
@@ -920,15 +948,23 @@ class NissaHub:
             per_worker = remaining / max(1, n_workers - i)
             try:
                 worker.stop(timeout=per_worker)
-            except Exception:
-                _logger.exception("Error stopping backend worker %s", worker._name)
+            except Exception as e:
+                # Teardown: stop() on one worker must not prevent others from being
+                # stopped. Any exception type from a misbehaving thread is logged and
+                # skipped — we continue teardown regardless.
+                _logger.exception("Error stopping backend worker %s: %s", worker._name, e)
 
         # Close all backends
         for backend in self._backends:
             try:
                 backend.close()
-            except Exception:
-                _logger.exception("Error closing backend %s", backend.__class__.__name__)
+            except Exception as e:
+                # Teardown: close() on one backend must not prevent others from being
+                # closed. Any exception from a misbehaving backend is logged and
+                # skipped — we continue teardown regardless.
+                _logger.exception(
+                    "Error closing backend %s: %s", backend.__class__.__name__, e
+                )
 
     def __del__(self) -> None:
         """Ensure all backends are closed on deletion."""
