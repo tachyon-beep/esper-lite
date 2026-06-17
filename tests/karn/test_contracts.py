@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from esper.karn.contracts import KarnSlotConfig
+
+
+def test_slot_config_protocol_not_importable() -> None:
+    assert "SlotConfigProtocol" not in dir(importlib.import_module("esper.karn.contracts"))
 
 
 def test_default_slot_config_matches_canonical_three_slots() -> None:

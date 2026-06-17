@@ -147,31 +147,6 @@ class TelemetryEvent:
             self.event_type = TelemetryEventType[event_type_raw]
 
 
-# TODO: [DEAD CODE] - PerformanceBudgets and DEFAULT_BUDGETS are defined but never used
-# anywhere in production. Either integrate into training pipeline or delete.
-# See: architectural risk assessment 2024-12-24.
-@dataclass(frozen=True)
-class PerformanceBudgets:
-    """Performance budget constants."""
-
-    # Timing budgets (milliseconds)
-    epoch_budget_ms: float = 18.0
-    blending_budget_ms: float = 5.0
-    gate_check_budget_ms: float = 2.0
-
-    # Memory budgets (GB)
-    seed_memory_budget_gb: float = 2.0
-    total_memory_budget_gb: float = 12.0
-
-    # Serialization budgets
-    max_message_size_bytes: int = 280
-    serialization_budget_us: float = 80.0
-
-
-# Default budgets
-DEFAULT_BUDGETS = PerformanceBudgets()
-
-
 # =============================================================================
 # Seed Telemetry Snapshot
 # =============================================================================

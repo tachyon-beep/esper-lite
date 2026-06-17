@@ -741,8 +741,6 @@ from esper.leyline.telemetry import (
     TelemetryEventType,
     TelemetryEvent,
     TelemetryCallback,
-    PerformanceBudgets,
-    DEFAULT_BUDGETS,
     SeedTelemetry,
     # Typed payloads (see docs/plans/2025-12-25-typed-telemetry-payloads-design.md)
     TelemetryPayload,
@@ -1084,8 +1082,6 @@ __all__ = [
     "TelemetryEventType",
     "TelemetryEvent",
     "TelemetryCallback",
-    "PerformanceBudgets",
-    "DEFAULT_BUDGETS",
     "SeedTelemetry",
     # Typed payloads
     "TelemetryPayload",
