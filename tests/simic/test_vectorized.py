@@ -222,9 +222,10 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "op_valid_mask": tuple(True for _ in range(NUM_OPS)),
         "q_variance": 0.0,
         "q_spread": 0.0,
+        "q_aux_loss": 0.05,
         # Per-head stats (optional but expected by emitter loop)
         "head_entropies": {},
-        "head_grad_norms": {"value": [0.4]},
+        "head_grad_norms": {"value": [0.4], "q": [0.3]},
         "head_learnable_fractions": {head: [1.0] for head in HEAD_NAMES},
         "head_gradient_states": {
             **{head: ["finite"] for head in HEAD_NAMES},

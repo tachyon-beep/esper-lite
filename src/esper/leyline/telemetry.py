@@ -796,6 +796,7 @@ class PPOUpdatePayload:
     head_alpha_curve_grad_norm: float | None = None
     head_op_grad_norm: float | None = None
     head_value_grad_norm: float | None = None
+    head_q_grad_norm: float | None = None  # P0-1: grad norm of the op-conditioned aux q_head
     head_style_entropy: float | None = None
     head_tempo_entropy: float | None = None
     head_alpha_target_entropy: float | None = None
@@ -881,6 +882,10 @@ class PPOUpdatePayload:
     # Q-value analysis metrics
     q_variance: float = 0.0  # Variance across ops (low = critic ignoring op conditioning)
     q_spread: float = 0.0    # max(Q) - min(Q) across ops
+    # P0-1: detached aux regression loss training the telemetry-only q_head toward
+    # normalized returns. Should trend toward value_loss as Q(s,op) collapses toward V(s);
+    # divergence means the aux head is not converging.
+    q_aux_loss: float | None = None
 
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
@@ -1018,6 +1023,7 @@ class PPOUpdatePayload:
             head_alpha_curve_grad_norm=data.get("head_alpha_curve_grad_norm"),
             head_op_grad_norm=data.get("head_op_grad_norm"),
             head_value_grad_norm=data.get("head_value_grad_norm"),
+            head_q_grad_norm=data.get("head_q_grad_norm"),
             head_style_entropy=data.get("head_style_entropy"),
             head_tempo_entropy=data.get("head_tempo_entropy"),
             head_alpha_target_entropy=data.get("head_alpha_target_entropy"),
@@ -1077,6 +1083,7 @@ class PPOUpdatePayload:
             op_valid_mask=_ensure_tuple(data["op_valid_mask"]),
             q_variance=data["q_variance"],
             q_spread=data["q_spread"],
+            q_aux_loss=data.get("q_aux_loss"),
             # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],

@@ -184,6 +184,7 @@ def _calculate_value_warmup_steps(
 _PPO_MEAN_REDUCED_METRICS = frozenset({
     "policy_loss",
     "value_loss",
+    "q_aux_loss",  # P0-1: detached aux q_head regression loss (mean across updates, like value_loss)
     "entropy_floor_penalty",
     "approx_kl",
     "clip_fraction",

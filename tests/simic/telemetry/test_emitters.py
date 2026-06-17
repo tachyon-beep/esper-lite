@@ -106,6 +106,7 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "op_valid_mask": tuple(True for _ in range(NUM_OPS)),
         "q_variance": 0.0,
         "q_spread": 0.0,
+        "q_aux_loss": 0.05,
         # Pre-normalization advantage statistics (mandatory)
         "pre_norm_advantage_mean": 0.5,
         "pre_norm_advantage_std": 1.2,
@@ -122,6 +123,7 @@ def _make_mandatory_metrics(**overrides) -> dict:
         },
         "head_grad_norms": {
             "value": [0.4],
+            "q": [0.3],
         },
         "head_gradient_states": {
             **{head: ["finite"] for head in HEAD_NAMES},
@@ -282,6 +284,27 @@ def test_emit_ppo_update_event_includes_value_head_gradient_state(
     else:
         assert math.isnan(payload.head_value_grad_norm)
     assert payload.head_value_gradient_state == gradient_state
+
+
+def test_emit_ppo_update_event_surfaces_q_head_telemetry() -> None:
+    """P0-1: the op-conditioned aux q_head's grad norm and aux loss must reach the
+    payload (they were computed into metrics but previously dropped at the emitter)."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.q_aux_loss == pytest.approx(0.05)
+    assert payload.head_q_grad_norm == pytest.approx(0.3)
 
 
 def test_emit_ppo_update_event_sets_dataloader_wait_ratio() -> None:
