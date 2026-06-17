@@ -68,6 +68,19 @@ def _run_training_capturing_errors(
         print(f"\n[TRAINING ERROR]\n{training_error[0]}", file=sys.stderr)
 
 
+def _exit_nonzero_if_training_failed(training_error: list[str | None]) -> None:
+    """Exit the process non-zero if the (background) training thread recorded a crash.
+
+    In sanctum/TUI mode training runs in a background thread, so its exception cannot
+    propagate to the main thread — ``shutdown_event`` only requests a graceful TUI stop,
+    it does NOT set the exit code. Without this, a crashed run exits 0 and reports
+    success to the shell/CI. Normal (non-sanctum) mode re-raises and exits non-zero on
+    its own, so this is a no-op there (training_error stays [None]).
+    """
+    if training_error[0] is not None:
+        sys.exit(1)
+
+
 def _load_config_with_friendly_errors(config_path: str) -> "TrainingConfig":
     """Load TrainingConfig from JSON with user-friendly error messages.
 
@@ -1091,13 +1104,13 @@ def main() -> None:
             _logger.exception("Training run failed with unhandled exception")
             raise
 
+    # Track training errors from the background sanctum thread; consulted after the
+    # try/finally to drive a non-zero exit on crash (see _exit_nonzero_if_training_failed).
+    training_error: list[str | None] = [None]  # list allows mutation from the training thread
     try:
         if use_sanctum:
             # Sanctum mode: run training in background thread, Sanctum controls terminal
             from esper.karn.sanctum import SanctumApp
-
-            # Track training errors for debugging
-            training_error: list[str | None] = [None]  # Use list to allow mutation from thread
 
             def training_wrapper() -> None:
                 """Wrap training to capture exceptions (see _run_training_capturing_errors)."""
@@ -1160,6 +1173,11 @@ def main() -> None:
 
         # Close all hub backends (includes Sanctum if used)
         hub.close()
+
+    # A crash inside the sanctum background thread is captured, not raised — surface it
+    # as a non-zero process exit so the shell/CI sees the failure (normal mode already
+    # propagates its exception above).
+    _exit_nonzero_if_training_failed(training_error)
 
 if __name__ == "__main__":
     # CRITICAL: Set spawn method before main() to avoid fork issues with

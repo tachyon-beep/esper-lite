@@ -364,5 +364,4 @@ class ObservationStatsTelemetry:
 __all__ = [
     "RewardComponentsTelemetry",
     "ObservationStatsTelemetry",
-    "_parse_bool_field",
 ]

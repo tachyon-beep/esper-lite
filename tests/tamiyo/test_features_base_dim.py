@@ -18,7 +18,7 @@ import torch
 from esper.leyline import OBS_V3_BASE_FEATURE_SIZE
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.training.parallel_env_state import ParallelEnvState
-from esper.tamiyo.policy.features import batch_obs_to_features
+from esper.tamiyo.policy.features import batch_obs_to_features, get_feature_size
 from esper.tamiyo.tracker import SignalTracker
 
 MAX_EPOCHS = 100
@@ -84,10 +84,9 @@ def test_base_feature_vector_is_23_dims():
 
     base = obs[0, :OBS_V3_BASE_FEATURE_SIZE]
     assert base.shape == (OBS_V3_BASE_FEATURE_SIZE,)
-    # Total width = base + per-slot * num_slots; base must not have shifted the layout.
-    assert obs.shape[1] == OBS_V3_BASE_FEATURE_SIZE + (
-        slot_config.num_slots * (obs.shape[1] - OBS_V3_BASE_FEATURE_SIZE) // slot_config.num_slots
-    )
+    # Total width must equal the contract's independently-computed feature size — this
+    # pins the base width and per-slot stride for real (not a tautology over obs.shape).
+    assert obs.shape[1] == get_feature_size(slot_config)
 
 
 def test_base_feature_content_unchanged():

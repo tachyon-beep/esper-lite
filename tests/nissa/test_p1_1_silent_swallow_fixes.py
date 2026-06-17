@@ -9,6 +9,8 @@ import threading
 import time
 from unittest.mock import patch
 
+import pytest
+
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.nissa.output import BackendWorker, NissaHub, OutputBackend
 
@@ -273,10 +275,18 @@ class TestTrainingWrapperSetsShutdownEventOnException:
 
 
 class TestSanctumTrainingCrashExitsNonzero:
-    """A crash must populate training_error (the non-zero exit signal)."""
+    """A captured sanctum-thread crash must drive an actual non-zero process exit.
 
-    def test_sanctum_training_crash_exits_nonzero(self):
-        from esper.scripts.train import _run_training_capturing_errors
+    This exercises the REAL exit decision (esper.scripts.train._exit_nonzero_if_training_failed),
+    which main() calls after the TUI/finally. A background-thread crash cannot propagate to the
+    main thread, so without this the process would exit 0 and report success to the shell/CI.
+    """
+
+    def test_captured_crash_drives_nonzero_exit(self):
+        from esper.scripts.train import (
+            _exit_nonzero_if_training_failed,
+            _run_training_capturing_errors,
+        )
 
         training_error: list[str | None] = [None]
         shutdown_event = threading.Event()
@@ -284,8 +294,17 @@ class TestSanctumTrainingCrashExitsNonzero:
         def _crashing_run_training() -> None:
             raise RuntimeError("training exploded")
 
+        # The full chain: the background wrapper captures the crash...
         _run_training_capturing_errors(_crashing_run_training, training_error, shutdown_event)
+        assert training_error[0] is not None and "RuntimeError" in training_error[0]
 
-        assert training_error[0] is not None, "training_error must be populated on crash"
-        assert shutdown_event.is_set(), "shutdown_event must be set to signal non-zero exit"
-        assert "RuntimeError" in training_error[0]
+        # ...and the post-TUI exit decision turns it into a non-zero exit (SystemExit(1)).
+        with pytest.raises(SystemExit) as exc_info:
+            _exit_nonzero_if_training_failed(training_error)
+        assert exc_info.value.code == 1
+
+    def test_clean_run_does_not_exit(self):
+        from esper.scripts.train import _exit_nonzero_if_training_failed
+
+        # No recorded error -> no SystemExit (clean runs exit 0).
+        assert _exit_nonzero_if_training_failed([None]) is None

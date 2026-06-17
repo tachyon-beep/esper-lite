@@ -120,6 +120,36 @@ def test_run_update_treats_epoch0_kl_abort_as_skipped_update():
     assert ppo_update_time_ms is not None
 
 
+def test_run_update_snapshots_rollback_counters_before_buffer_reset():
+    """P0-3 regression: rollback_count / rollback_steps_zeroed must be read BEFORE the
+    PPO update resets the rollout buffer. The real run_ppo_updates_fn calls buffer.reset()
+    (zeroing these per-rollout counters); reading them afterward surfaces 0 — dead telemetry.
+    """
+
+    def _run_ppo_updates_fn(*, agent, **_kwargs):
+        # Simulate the real update resetting the rollout buffer mid-call.
+        agent.buffer.rollback_count.zero_()
+        agent.buffer.rollback_steps_zeroed.zero_()
+        return {"ppo_update_performed": True, "pre_clip_grad_norm": 1.0}
+
+    coordinator = _make_coordinator(run_ppo_updates_fn=_run_ppo_updates_fn)
+    # Preset nonzero per-rollout counters (3 rollbacks, 12 steps forfeited this batch).
+    coordinator.agent.buffer.rollback_count[:] = torch.tensor([2, 1], dtype=torch.long)
+    coordinator.agent.buffer.rollback_steps_zeroed[:] = torch.tensor([7, 5], dtype=torch.long)
+
+    metrics, _skipped, _t = coordinator.run_update(
+        raw_states_for_normalizer_update=[torch.ones(1, 3)],
+        obs_normalizer=SimpleNamespace(update=lambda _tensor: None),
+        envs_this_batch=2,
+        throughput_step_time_ms_sum=10.0,
+        throughput_dataloader_wait_ms_sum=1.0,
+    )
+
+    # The pre-reset totals must survive into telemetry, NOT the zeroed post-reset values.
+    assert metrics["rollback_count"] == 3
+    assert metrics["rollback_steps_zeroed"] == 12
+
+
 def _make_outcome(env_id: int, episode_idx: int, reward: float) -> EpisodeOutcome:
     return EpisodeOutcome(
         env_id=env_id,

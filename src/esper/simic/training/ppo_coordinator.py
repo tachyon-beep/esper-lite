@@ -289,6 +289,13 @@ class PPOCoordinator:
             return {}, True, None
 
         rollout_total_steps = len(self.agent.buffer)
+        # P0-3: snapshot the rollback observability counters BEFORE run_ppo_updates_fn,
+        # which resets the rollout buffer (zeroing these per-rollout counters via
+        # buffer.reset()). Reading them after the update would surface 0 on every batch
+        # where a real PPO update ran — dead telemetry that defeats the observability goal.
+        buffer = self.agent.buffer
+        rollback_count = int(buffer.rollback_count.sum().item())
+        rollback_steps_zeroed = int(buffer.rollback_steps_zeroed.sum().item())
         update_start = time.perf_counter()
         metrics = self.run_ppo_updates_fn(
             agent=self.agent,
@@ -311,13 +318,13 @@ class PPOCoordinator:
             metrics["entropy_coef"] = self.agent.entropy_coef
             metrics["throughput_step_time_ms_sum"] = throughput_step_time_ms_sum
             metrics["throughput_dataloader_wait_ms_sum"] = throughput_dataloader_wait_ms_sum
-            # P0-3: surface rollback credit-assignment observability. rollback_count is
-            # the per-rollout (this-batch) total of governor rollbacks; steps_zeroed is
-            # the total intermediate prefix forfeited to ROLLBACK_FORFEIT_REWARD. A high
-            # ratio here means rollbacks are eating a large share of the learning signal.
-            buffer = self.agent.buffer
-            metrics["rollback_count"] = int(buffer.rollback_count.sum().item())
-            metrics["rollback_steps_zeroed"] = int(buffer.rollback_steps_zeroed.sum().item())
+            # P0-3: surface rollback credit-assignment observability (snapshotted above,
+            # before the buffer reset inside run_ppo_updates_fn). rollback_count is the
+            # per-rollout (this-batch) total of governor rollbacks; steps_zeroed is the
+            # total intermediate prefix forfeited to ROLLBACK_FORFEIT_REWARD. A high ratio
+            # here means rollbacks are eating a large share of the learning signal.
+            metrics["rollback_count"] = rollback_count
+            metrics["rollback_steps_zeroed"] = rollback_steps_zeroed
             if not update_skipped:
                 metrics["ppo_grad_norm"] = metrics["pre_clip_grad_norm"]
 
