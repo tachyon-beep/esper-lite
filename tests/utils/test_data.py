@@ -1,5 +1,6 @@
 """Tests for esper.utils package."""
 
+import pytest
 import torch
 from torch.utils.data import TensorDataset
 
@@ -16,6 +17,7 @@ from esper.utils.data import (
     _split_batch_span,
     augment_cifar10_batch,
     clear_gpu_dataset_cache,
+    get_cifar10_datasets,
     load_cifar10,
     load_cifar10_gpu,
     precompute_cifar10_augment,
@@ -262,7 +264,7 @@ def test_stable_device_index_parses_known_devices() -> None:
             raise AssertionError(f"Expected invalid device failure for {device}")
 
 
-def test_load_cifar10_falls_back_to_mock_data(monkeypatch) -> None:
+def test_load_cifar10_raises_on_load_failure(monkeypatch) -> None:
     import torchvision
 
     class BrokenCIFAR10:
@@ -271,14 +273,21 @@ def test_load_cifar10_falls_back_to_mock_data(monkeypatch) -> None:
 
     monkeypatch.setattr(torchvision.datasets, "CIFAR10", BrokenCIFAR10)
 
-    trainloader, testloader = load_cifar10(batch_size=4, num_workers=0)
-    train_x, train_y = next(iter(trainloader))
-    test_x, test_y = next(iter(testloader))
+    with pytest.raises(RuntimeError, match="offline"):
+        load_cifar10(batch_size=4, num_workers=0)
 
-    assert train_x.shape == (4, 3, 32, 32)
-    assert train_y.shape == (4,)
-    assert test_x.shape == (4, 3, 32, 32)
-    assert test_y.shape == (4,)
+
+def test_get_cifar10_datasets_raises_on_load_failure(monkeypatch) -> None:
+    import torchvision
+
+    class BrokenCIFAR10:
+        def __init__(self, root, train, download, transform) -> None:
+            raise RuntimeError("offline")
+
+    monkeypatch.setattr(torchvision.datasets, "CIFAR10", BrokenCIFAR10)
+
+    with pytest.raises(RuntimeError, match="offline"):
+        get_cifar10_datasets()
 
 
 def _cached_cpu_cifar(data_root: str = "./data", *, seed: int | None = None) -> None:

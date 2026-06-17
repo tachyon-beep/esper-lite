@@ -10,7 +10,6 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, cast
-import warnings
 
 import torch
 from torch.utils.data import DataLoader, Dataset, TensorDataset
@@ -922,17 +921,13 @@ def get_cifar10_datasets(
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
     ])
 
-    try:
-        trainset = torchvision.datasets.CIFAR10(
-            root=data_root, train=True, download=True, transform=train_transform
-        )
-        testset = torchvision.datasets.CIFAR10(
-            root=data_root, train=False, download=True, transform=test_transform
-        )
-        return trainset, testset
-    except Exception as exc:
-        warnings.warn(f"Falling back to synthetic CIFAR-10 data: {exc}")
-        return get_cifar10_datasets(data_root=data_root, mock=True)
+    trainset = torchvision.datasets.CIFAR10(
+        root=data_root, train=True, download=True, transform=train_transform
+    )
+    testset = torchvision.datasets.CIFAR10(
+        root=data_root, train=False, download=True, transform=test_transform
+    )
+    return trainset, testset
 
 
 def load_cifar10(
@@ -987,22 +982,12 @@ def load_cifar10(
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
     ])
 
-    try:
-        trainset = torchvision.datasets.CIFAR10(
-            root=data_root, train=True, download=True, transform=train_transform
-        )
-        testset = torchvision.datasets.CIFAR10(
-            root=data_root, train=False, download=True, transform=test_transform
-        )
-    except Exception as exc:
-        warnings.warn(f"Falling back to synthetic CIFAR-10 data: {exc}")
-        return load_cifar10(
-            batch_size=batch_size,
-            generator=generator,
-            data_root=data_root,
-            num_workers=0,
-            mock=True,
-        )
+    trainset = torchvision.datasets.CIFAR10(
+        root=data_root, train=True, download=True, transform=train_transform
+    )
+    testset = torchvision.datasets.CIFAR10(
+        root=data_root, train=False, download=True, transform=test_transform
+    )
 
     loader_kwargs: dict[str, Any] = {
         "batch_size": batch_size,
