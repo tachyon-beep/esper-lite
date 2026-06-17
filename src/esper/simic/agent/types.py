@@ -60,6 +60,7 @@ class PPOUpdateMetrics(TypedDict, total=False):
     # Scalar metrics (aggregated across epochs)
     policy_loss: float
     value_loss: float
+    q_aux_loss: float  # P0-1: detached Q(s, op) telemetry head regression loss
     entropy_floor_penalty: float  # Per-head entropy floor penalty (for calibration debugging)
     approx_kl: float
     clip_fraction: float

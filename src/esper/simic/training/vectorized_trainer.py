@@ -2265,7 +2265,8 @@ class VectorizedPPOTrainer:
             ).to(device)
 
             # P1-BF16: bootstrap value under the same BF16 autocast as the
-            # update, so Q(s,op) used in GAE is precision-consistent.
+            # update, so the V(s) used in GAE is precision-consistent. get_action()
+            # returns the op-INDEPENDENT V(s) baseline (P0-1), not a Q(s, op).
             with rollout_autocast(), torch.inference_mode():
                 bootstrap_result = agent.policy.get_action(
                     post_action_features_normalized,

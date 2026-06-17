@@ -166,7 +166,7 @@ def test_v2_cross_path_log_prob_symmetry_fp32():
     # Feed the rollout actions back through the update leg on the SAME weights/hidden.
     # .clone() lifts them out of inference_mode (the real rollout buffer stores copies).
     actions_seq = {k: v.clone().unsqueeze(1) for k, v in res.actions.items()}  # [batch, 1]
-    log_probs_eval, _, _, _, _ = policy.evaluate_actions(
+    log_probs_eval, _, _, _, _, _ = policy.evaluate_actions(
         state.unsqueeze(1),
         blueprint_indices.unsqueeze(1),
         actions_seq,
@@ -198,7 +198,7 @@ def test_v2_cross_path_log_prob_symmetry_stochastic_op():
         state, blueprint_indices, deterministic=False, probability_floor=floor
     )
     actions_seq = {k: v.clone().unsqueeze(1) for k, v in res.actions.items()}
-    log_probs_eval, _, _, _, _ = policy.evaluate_actions(
+    log_probs_eval, _, _, _, _, _ = policy.evaluate_actions(
         state.unsqueeze(1),
         blueprint_indices.unsqueeze(1),
         actions_seq,
@@ -315,7 +315,7 @@ def test_v0_bf16_epoch0_joint_ratio_approx_one():
 
     # Update leg under the SAME BF16 autocast, unchanged weights.
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        new_lp, _, _, _, _ = policy.evaluate_actions(
+        new_lp, _, _, _, _, _ = policy.evaluate_actions(
             state.unsqueeze(1),
             blueprint_indices.unsqueeze(1),
             actions_seq,

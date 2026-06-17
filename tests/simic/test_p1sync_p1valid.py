@@ -67,7 +67,7 @@ def test_valid_masks_do_not_raise_when_validate_false():
         MaskedCategorical.validate = False
         policy, states, bp, actions, _ = _build_policy_and_inputs()
         # No explicit masks -> all-valid -> must not raise and must return finite log_probs.
-        log_probs, _, _, _, _ = policy.evaluate_actions(states, bp, actions)
+        log_probs, _, _, _, _, _ = policy.evaluate_actions(states, bp, actions)
         for k in HEAD_NAMES:
             assert torch.isfinite(log_probs[k]).all()
     finally:

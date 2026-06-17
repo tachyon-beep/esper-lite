@@ -152,7 +152,7 @@ def test_phase6_op_conditioning_sanity():
                 dtype=torch.long,
                 device=state.device,
             )
-            q_values.append(policy.network._compute_value(lstm_out, op_tensor).squeeze(1))
+            q_values.append(policy.network._compute_q(lstm_out, op_tensor).squeeze(1))
 
     q_values_tensor = torch.stack(q_values, dim=1)  # [batch, NUM_OPS]
     q_spread = q_values_tensor.max(dim=1).values - q_values_tensor.min(dim=1).values

@@ -110,6 +110,20 @@ MAX_EPOCHS_IN_STAGE = DEFAULT_EPISODE_LENGTH
 # Used by: config.py, vectorized.py, ppo_agent.py, rollout_buffer.py, network.py
 DEFAULT_LSTM_HIDDEN_DIM = 512
 
+# Value-head topology version — single source of truth for the actor-critic's
+# value-head structure. The PPO baseline is an op-INDEPENDENT V(s) head
+# (state_value_head) consuming only lstm_out, alongside a retained op-conditioned
+# q_head used solely for op_q_values/q_variance/q_spread telemetry.
+#
+# Version 2 broke the prior topology (a single op-conditioned value_head whose
+# Q(s, op) was the PPO baseline). Checkpoints embed this version; load asserts
+# equality and raises a clear error on mismatch. There is NO remap/shim:
+# pre-v2 checkpoints (with value_head.* but no state_value_head.* / q_head.*)
+# fail strict load BY DESIGN (No-Legacy policy).
+#
+# Used by: simic/agent/ppo_agent.py (checkpoint save/load).
+VALUE_HEAD_SCHEMA_VERSION = 2
+
 # Number of LSTM layers in the host model.
 # Used by: Karn TUI widgets (gradient health display), telemetry dashboards.
 # NOTE: Reduced from 12 to 4 to fix vanishing gradient problem.
@@ -860,6 +874,7 @@ __all__ = [
     "DEFAULT_EPISODE_LENGTH",
     "MAX_EPOCHS_IN_STAGE",
     "DEFAULT_LSTM_HIDDEN_DIM",
+    "VALUE_HEAD_SCHEMA_VERSION",
     "DEFAULT_HOST_LSTM_LAYERS",
     "DEFAULT_N_ENVS",
 

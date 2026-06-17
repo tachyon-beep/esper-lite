@@ -56,7 +56,7 @@ def test_p1qloop_batched_compute_value_matches_loop():
     slot_config = SlotConfig.default()
     policy = FactoredRecurrentActorCritic(state_dim=64, slot_config=slot_config)
     policy.eval()
-    net = policy  # FactoredRecurrentActorCritic owns _compute_value directly
+    net = policy  # FactoredRecurrentActorCritic owns _compute_q directly
 
     hidden_dim = policy.lstm_hidden_dim
     lstm_out = torch.randn(1, 1, hidden_dim)
@@ -66,12 +66,12 @@ def test_p1qloop_batched_compute_value_matches_loop():
         looped = torch.empty(NUM_OPS)
         for op_idx in range(NUM_OPS):
             op_tensor = torch.tensor([[op_idx]], dtype=torch.long)
-            looped[op_idx] = net._compute_value(lstm_out, op_tensor).squeeze()
+            looped[op_idx] = net._compute_q(lstm_out, op_tensor).squeeze()
 
         # New: one batched call.
         op_indices = torch.arange(NUM_OPS, dtype=torch.long).reshape(NUM_OPS, 1)
         lstm_out_rep = lstm_out.expand(NUM_OPS, 1, -1).contiguous()
-        batched = net._compute_value(lstm_out_rep, op_indices).reshape(NUM_OPS)
+        batched = net._compute_q(lstm_out_rep, op_indices).reshape(NUM_OPS)
 
     assert batched.shape == (NUM_OPS,)
     torch.testing.assert_close(batched, looped, rtol=1e-5, atol=1e-6)

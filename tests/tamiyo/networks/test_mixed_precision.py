@@ -1,12 +1,12 @@
 """Mixed-precision regression tests for FactoredRecurrentActorCritic.
 
-Critical tests for dtype handling in _compute_value() to prevent regressions
+Critical tests for dtype handling in _compute_q()/_compute_state_value() to prevent regressions
 where bfloat16/float16 networks crash due to dtype mismatch in torch.cat.
 
 Bug background:
   The original code used `.float()` to convert one-hot encodings, which
   caused a dtype mismatch when the network was converted to bfloat16/float16.
-  The value_head (with bf16 weights) received float32 input, causing:
+  The q_head (with bf16 weights) received float32 input, causing:
     "mat1 and mat2 must have the same dtype, but got Float and BFloat16"
 
 Fix:
@@ -25,10 +25,10 @@ class TestMixedPrecision:
     """Verify network operations work correctly in reduced precision."""
 
     def test_compute_value_bfloat16(self):
-        """_compute_value must work with bfloat16 inputs.
+        """_compute_q must work with bfloat16 inputs.
 
         Regression test for dtype mismatch bug where op_one_hot was forced
-        to float32 via .float(), causing crash when value_head is bfloat16.
+        to float32 via .float(), causing crash when q_head is bfloat16.
         """
         net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
         net = net.bfloat16()
@@ -39,7 +39,7 @@ class TestMixedPrecision:
         op = torch.randint(0, net.num_ops, (batch, seq))
 
         # This should work (previously crashed with dtype mismatch)
-        value = net._compute_value(lstm_out, op)
+        value = net._compute_q(lstm_out, op)
 
         assert value.dtype == torch.bfloat16, f"Expected bfloat16, got {value.dtype}"
         assert value.shape == (batch, seq), f"Expected ({batch}, {seq}), got {value.shape}"
@@ -47,7 +47,7 @@ class TestMixedPrecision:
         assert not torch.isinf(value).any(), "Value contains Inf"
 
     def test_compute_value_float16(self):
-        """_compute_value must work with float16 inputs."""
+        """_compute_q must work with float16 inputs."""
         net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
         net = net.half()
 
@@ -55,21 +55,21 @@ class TestMixedPrecision:
         lstm_out = torch.randn(batch, seq, net.lstm_hidden_dim, dtype=torch.float16)
         op = torch.randint(0, net.num_ops, (batch, seq))
 
-        value = net._compute_value(lstm_out, op)
+        value = net._compute_q(lstm_out, op)
 
         assert value.dtype == torch.float16, f"Expected float16, got {value.dtype}"
         assert value.shape == (batch, seq)
         assert not torch.isnan(value).any()
 
     def test_compute_value_float32(self):
-        """_compute_value must still work with float32 (no regression)."""
+        """_compute_q must still work with float32 (no regression)."""
         net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
 
         batch, seq = 2, 3
         lstm_out = torch.randn(batch, seq, net.lstm_hidden_dim, dtype=torch.float32)
         op = torch.randint(0, net.num_ops, (batch, seq))
 
-        value = net._compute_value(lstm_out, op)
+        value = net._compute_q(lstm_out, op)
 
         assert value.dtype == torch.float32, f"Expected float32, got {value.dtype}"
         assert value.shape == (batch, seq)
@@ -78,12 +78,12 @@ class TestMixedPrecision:
         """Full forward() pass must work in bfloat16.
 
         Note: LSTM on CPU with bfloat16 may not be supported by oneDNN.
-        This test uses float32 LSTM output but verifies _compute_value path.
+        This test uses float32 LSTM output but verifies _compute_q path.
         """
         net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
 
         # Keep network in float32 for LSTM compatibility on CPU
-        # Verify that _compute_value would work if LSTM output was bfloat16
+        # Verify that _compute_q would work if LSTM output was bfloat16
         batch, seq = 2, 1
         state = torch.randn(batch, seq, OBS_V3_NON_BLUEPRINT_DIM)
         bp_idx = torch.randint(0, NUM_BLUEPRINTS, (batch, seq, 3))
@@ -91,14 +91,14 @@ class TestMixedPrecision:
         # Forward should work in float32
         output = net(state, bp_idx)
 
-        assert output["value"].shape == (batch, seq)
+        assert output["state_value"].shape == (batch, seq)
         assert output["sampled_op"].shape == (batch, seq)
-        assert not torch.isnan(output["value"]).any()
+        assert not torch.isnan(output["state_value"]).any()
 
     def test_evaluate_actions_bfloat16(self):
         """evaluate_actions must use correct dtype for _compute_value.
 
-        The evaluate_actions path also calls _compute_value with the
+        The evaluate_actions path also calls _compute_q with the
         stored op from the buffer, so it must handle dtype correctly.
         """
         net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
@@ -108,8 +108,8 @@ class TestMixedPrecision:
         lstm_out = torch.randn(batch, seq, net.lstm_hidden_dim, dtype=torch.bfloat16)
         op = torch.randint(0, net.num_ops, (batch, seq))
 
-        # Direct _compute_value call (simulates what evaluate_actions does)
-        value = net._compute_value(lstm_out, op)
+        # Direct _compute_q call (simulates what evaluate_actions does)
+        value = net._compute_q(lstm_out, op)
 
         assert value.dtype == torch.bfloat16
 
@@ -134,17 +134,17 @@ class TestDtypeConsistency:
             assert op_one_hot.device == lstm_out.device
 
     def test_value_input_dim_matches_num_ops(self):
-        """value_head input dimension must match lstm_hidden_dim + num_ops.
+        """q_head input dimension must match lstm_hidden_dim + num_ops.
 
         Regression test for hardcoded NUM_OPS constant bug.
         """
         net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
 
         expected_dim = net.lstm_hidden_dim + net.num_ops
-        actual_dim = net.value_head[0].in_features
+        actual_dim = net.q_head[0].in_features
 
         assert actual_dim == expected_dim, (
-            f"value_head input dim {actual_dim} != expected {expected_dim} "
+            f"q_head input dim {actual_dim} != expected {expected_dim} "
             f"(lstm_hidden_dim={net.lstm_hidden_dim} + num_ops={net.num_ops})"
         )
 
@@ -172,7 +172,7 @@ class TestAutocast:
     """Verify network works under torch.autocast."""
 
     def test_compute_value_under_autocast(self):
-        """_compute_value must work under CUDA autocast."""
+        """_compute_q must work under CUDA autocast."""
         net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM).cuda()
 
         batch, seq = 2, 3
@@ -184,7 +184,7 @@ class TestAutocast:
                 device="cuda"
             )  # Will be bf16 under autocast
 
-            value = net._compute_value(lstm_out, op)
+            value = net._compute_q(lstm_out, op)
 
             # Value should be computed without error
             assert not torch.isnan(value).any()
@@ -201,5 +201,5 @@ class TestAutocast:
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             output = net(state, bp_idx)
 
-            assert not torch.isnan(output["value"]).any()
+            assert not torch.isnan(output["state_value"]).any()
             assert output["sampled_op"].shape == (batch, seq)

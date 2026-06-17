@@ -195,5 +195,5 @@ def test_blueprint_embedding_in_model_context():
     output = model(state, bp_idx)
 
     # Model should complete forward pass without error
-    assert output["value"].shape == (2, 1)
-    assert not torch.isnan(output["value"]).any()
+    assert output["state_value"].shape == (2, 1)
+    assert not torch.isnan(output["state_value"]).any()

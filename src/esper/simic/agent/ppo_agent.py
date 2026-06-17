@@ -48,6 +48,7 @@ from esper.leyline import (
     HEAD_NAMES,
     NUM_OPS,
     PROBABILITY_FLOOR_PER_HEAD,
+    VALUE_HEAD_SCHEMA_VERSION,
 )
 from esper.leyline.slot_config import SlotConfig
 import logging
@@ -370,7 +371,14 @@ class PPOAgent:
                 list(base_net.alpha_curve_head.parameters()) +
                 list(base_net.op_head.parameters())
             )
-            critic_params = list(base_net.value_head.parameters())
+            # P0-1: BOTH value heads are critics. state_value_head is the op-INDEPENDENT
+            # PPO baseline V(s); q_head is the op-conditioned telemetry/aux head. Both
+            # regress on returns, so weight_decay applies to both (and both MUST be in
+            # the optimizer or a head silently never trains).
+            critic_params = (
+                list(base_net.state_value_head.parameters()) +
+                list(base_net.q_head.parameters())
+            )
             shared_params = (
                 list(base_net.feature_net.parameters()) +
                 list(base_net.lstm.parameters()) +
@@ -768,7 +776,8 @@ class PPOAgent:
                 # AMP-SAFETY (CRITICAL): update() may run under an outer autocast context
                 # (policy_amp_context -> autocast(bf16) for BF16 PPO; the AMP test legs use
                 # autocast(fp16) directly). This no_grad telemetry forward touches EVERY head
-                # Linear (slot/blueprint/.../op/value) BEFORE the gradient-carrying
+                # Linear (slot/blueprint/.../op AND state_value_head AND q_head -- forward()
+                # computes both V(s) and Q(s, op)) BEFORE the gradient-carrying
                 # evaluate_actions forward below. Under autocast, the FIRST forward through a
                 # Linear populates autocast's per-parameter cast-weight CACHE; when that first
                 # touch happens inside no_grad, the cached low-precision weight carries NO
@@ -789,16 +798,17 @@ class PPOAgent:
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 
                     # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
-                    # P1-QLOOP: one batched _compute_value call over all ops instead of NUM_OPS
+                    # P1-QLOOP: one batched _compute_q call over all ops instead of NUM_OPS
                     # serial launches. lstm_out is [1, 1, hidden]; broadcast over the op axis.
-                    # Kept inside the autocast(enabled=False) region so the value_head Linear
-                    # is also cached graph-free (the value head is part of the same forward()
-                    # above and trains via the loss below).
+                    # Kept inside the autocast(enabled=False) region so the q_head Linear
+                    # is also cached graph-free (the q_head is part of the same forward()
+                    # above and trains via the detached Q-aux loss below). Note _compute_q
+                    # detaches lstm_out internally; harmless here under no_grad.
                     op_indices = torch.arange(
                         NUM_OPS, device=self.device, dtype=torch.long
                     ).reshape(NUM_OPS, 1)
                     lstm_out_rep = lstm_out.expand(NUM_OPS, 1, -1).contiguous()  # [NUM_OPS, 1, hidden]
-                    op_q_values = self.policy.network._compute_value(
+                    op_q_values = self.policy.network._compute_q(
                         lstm_out_rep, op_indices
                     ).reshape(NUM_OPS)
 
@@ -831,13 +841,16 @@ class PPOAgent:
         # This is the true exploration signal for sparse heads like blueprint/tempo
         conditional_head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
         head_learnable_fraction_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
-        head_gradient_state_history: dict[str, list[str]] = {head: [] for head in HEAD_NAMES + ("value",)}
+        # P0-1: "value" tracks the op-INDEPENDENT V(s) baseline (state_value_head);
+        # "q" tracks the op-conditioned telemetry/aux q_head. Both are surfaced so
+        # neither value-like head's grad is dropped from telemetry.
+        head_gradient_state_history: dict[str, list[str]] = {head: [] for head in HEAD_NAMES + ("value", "q")}
 
         # LSTM health tracking (TELE-340)
         lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
         # Initialize per-head gradient norm tracking (P4-6)
         head_grad_norm_history: dict[str, list[torch.Tensor]] = {
-            head: [] for head in HEAD_NAMES + ("value",)
+            head: [] for head in HEAD_NAMES + ("value", "q")
         }
         # Initialize log prob extremes tracking (NaN predictor)
         # Very negative log probs (<-50 warning, <-100 critical) predict numerical underflow
@@ -970,7 +983,12 @@ class PPOAgent:
                 aux_stop_gradient=self.aux_stop_gradient,
             )
             log_probs = result.log_prob
-            values = result.value
+            values = result.value  # V(s): op-INDEPENDENT PPO baseline (current epoch)
+            # P0-1: Q-aux uses the CURRENT epoch's q_value (NOT the anchor's). Like the
+            # value loss, the Q-aux regression target (normalized_returns) is fixed for
+            # the whole update while the predictor moves each epoch -- there is no
+            # anchoring requirement on value/q targets (only ref_log_probs is anchored).
+            q_values = result.q_value  # Q(s, stored_op): detached telemetry/aux
             entropy = result.entropy
 
             # Track LSTM hidden state health (TELE-340)
@@ -992,6 +1010,7 @@ class PPOAgent:
             for key in log_probs:
                 log_probs[key] = log_probs[key][valid_mask]
             values = values[valid_mask]
+            q_values = q_values[valid_mask]  # P0-1: filter Q-aux like the value path
             for key in entropy:
                 entropy[key] = entropy[key][valid_mask]
 
@@ -1200,6 +1219,8 @@ class PPOAgent:
                 clip_value=self.clip_value,
                 value_clip=self.value_clip,
                 value_coef=self.get_value_coef(),  # Use warmup-aware getter
+                q_values=q_values,  # P0-1: current-epoch Q(s, op) for detached aux
+                q_aux_coef=0.5 * self.get_value_coef(),  # P0-1: 0.5 * value_coef
                 head_names=HEAD_NAMES,
                 entropy_floor=self.entropy_floor,
                 entropy_floor_penalty_coef=scheduled_coef,  # Scheduled coefficients
@@ -1322,12 +1343,16 @@ class PPOAgent:
                 network = self.policy.network
                 base_network = getattr(network, '_orig_mod', network)
 
+                # P0-1: "value" -> state_value_head (op-INDEPENDENT V(s) baseline);
+                # "q" -> q_head (op-conditioned telemetry/aux). Both emitted so the
+                # detached q_head's grad (it trains only its own params) stays visible.
                 head_names = ["slot", "blueprint", "style", "tempo", "alpha_target",
-                              "alpha_speed", "alpha_curve", "op", "value"]
+                              "alpha_speed", "alpha_curve", "op", "value", "q"]
                 head_modules = [
                     base_network.slot_head, base_network.blueprint_head, base_network.style_head,
                     base_network.tempo_head, base_network.alpha_target_head, base_network.alpha_speed_head,
-                    base_network.alpha_curve_head, base_network.op_head, base_network.value_head,
+                    base_network.alpha_curve_head, base_network.op_head,
+                    base_network.state_value_head, base_network.q_head,
                 ]
 
                 # Collect all head norms as tensors (no .item() yet)
@@ -1410,6 +1435,7 @@ class PPOAgent:
                 values.min(),
                 values.max(),
                 losses.entropy_floor_penalty,  # DRL Expert: Track for calibration debugging
+                losses.q_aux_loss,  # P0-1: detached Q telemetry regression loss
             ])
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
@@ -1423,6 +1449,7 @@ class PPOAgent:
             metrics["value_min"].append(logging_tensors[9])
             metrics["value_max"].append(logging_tensors[10])
             metrics["entropy_floor_penalty"].append(logging_tensors[11])
+            metrics["q_aux_loss"].append(logging_tensors[12])
             # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]
@@ -1506,6 +1533,11 @@ class PPOAgent:
         save_dict = {
             # Version for forward compatibility
             'checkpoint_version': CHECKPOINT_VERSION,
+            # P0-1: value-head topology version (leyline single source of truth). Bumped
+            # to 2 when the op-conditioned value_head was split into an op-INDEPENDENT
+            # state_value_head (PPO baseline V(s)) + a renamed q_head (telemetry/aux).
+            # Load asserts equality; pre-v2 checkpoints fail strict load BY DESIGN.
+            'value_head_schema_version': VALUE_HEAD_SCHEMA_VERSION,
             'network_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'value_normalizer_state_dict': self.value_normalizer.state_dict(),
@@ -1621,6 +1653,7 @@ class PPOAgent:
         # Required checkpoint fields - fail fast if missing (no backwards compat)
         try:
             version = checkpoint['checkpoint_version']
+            value_head_schema_version = checkpoint['value_head_schema_version']
             state_dict = checkpoint['network_state_dict']
             optimizer_state_dict = checkpoint['optimizer_state_dict']
             architecture = checkpoint['architecture']
@@ -1633,6 +1666,21 @@ class PPOAgent:
                 f"This checkpoint was saved with an older version that is no longer supported. "
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
+
+        # P0-1 CHECKPOINT BREAK (intended, No-Legacy): the value-head topology changed.
+        # The PPO baseline is now an op-INDEPENDENT state_value_head (V(s)); the old
+        # op-conditioned value_head was renamed q_head (telemetry/aux). There is NO
+        # remap/shim -- a pre-v2 checkpoint has value_head.* (no state_value_head.* /
+        # q_head.*) and would fail strict load anyway; this assert names the break first.
+        if value_head_schema_version != VALUE_HEAD_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Value-head schema mismatch: checkpoint has "
+                f"value_head_schema_version={value_head_schema_version}, but this build "
+                f"expects {VALUE_HEAD_SCHEMA_VERSION}. The value head was split into an "
+                f"op-INDEPENDENT state_value_head (PPO baseline V(s)) plus an op-conditioned "
+                f"q_head (telemetry/aux). Old checkpoints (single op-conditioned value_head) "
+                f"are incompatible by design -- there is no remap. Please retrain."
+            )
 
         # Extract value_normalizer state (required since CHECKPOINT_VERSION 2)
         try:

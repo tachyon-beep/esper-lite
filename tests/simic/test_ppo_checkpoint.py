@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from esper.leyline import get_action_head_sizes
+from esper.leyline import get_action_head_sizes, VALUE_HEAD_SCHEMA_VERSION
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent, CHECKPOINT_VERSION
 from esper.tamiyo.policy.factory import create_policy
@@ -151,6 +151,7 @@ class TestPPOCheckpointValidation:
 
         checkpoint = {
             "checkpoint_version": CHECKPOINT_VERSION,
+            "value_head_schema_version": VALUE_HEAD_SCHEMA_VERSION,
             "network_state_dict": {},
             "optimizer_state_dict": {},
             "value_normalizer_state_dict": {},

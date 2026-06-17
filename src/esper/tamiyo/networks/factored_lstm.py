@@ -8,7 +8,8 @@ Architecture:
     shared_repr -> tempo_head -> tempo_logits
     shared_repr -> alpha_target/speed/curve heads -> alpha logits
     shared_repr -> op_head -> op_logits
-    shared_repr -> value_head -> value
+    shared_repr -> state_value_head -> V(s)         (op-INDEPENDENT PPO baseline)
+    shared_repr -> q_head -> Q(s, op)               (op-conditioned, telemetry/aux only)
 
 Design rationale (DRL expert):
     - Feature extraction reduces state_dim before LSTM
@@ -63,9 +64,12 @@ class GetActionResult:
     Attributes:
         actions: Dict of action indices per head [batch]
         log_probs: Dict of log probs per head [batch] (NON-DIFFERENTIABLE)
-        values: Value estimates [batch] - Q(s, sampled_op)
+        values: Value estimates [batch] - the op-INDEPENDENT PPO baseline V(s).
+            (Identical for deterministic and stochastic legs: V does not depend on
+            the selected op.)
         hidden: Updated hidden state (h, c)
-        sampled_op: The op action sampled/selected [batch] - used for value conditioning
+        sampled_op: The op action sampled/selected [batch] - drives the action and the
+            Q(s, op) telemetry head (NOT the V(s) baseline).
         op_logits: Raw masked logits for op head [batch, num_ops].
             Only populated if return_op_logits=True, otherwise None.
             Use F.softmax(op_logits, dim=-1) to get action probabilities.
@@ -84,7 +88,9 @@ class GetActionResult:
 class _ForwardOutput(TypedDict):
     """Typed dict for forward() return value - enables mypy to track per-key types.
 
-    Note: value is Q(s, sampled_op) - conditioned on the sampled op action.
+    Note: state_value is the op-INDEPENDENT PPO baseline V(s). q_value is the
+    op-conditioned Q(s, sampled_op) telemetry/aux head. There is NO 'value' key
+    (the old op-conditioned baseline was removed in P0-1).
     """
 
     slot_logits: torch.Tensor
@@ -95,9 +101,10 @@ class _ForwardOutput(TypedDict):
     alpha_speed_logits: torch.Tensor
     alpha_curve_logits: torch.Tensor
     op_logits: torch.Tensor
-    value: torch.Tensor
-    lstm_out: torch.Tensor  # NEW: [batch, seq, hidden_dim] for value recomputation
-    sampled_op: torch.Tensor  # NEW: Op used for value conditioning
+    state_value: torch.Tensor  # V(s): op-INDEPENDENT PPO baseline
+    q_value: torch.Tensor  # Q(s, sampled_op): op-conditioned telemetry/aux
+    lstm_out: torch.Tensor  # [batch, seq, hidden_dim] for value recomputation
+    sampled_op: torch.Tensor  # Op driving the action + Q telemetry
     hidden: tuple[torch.Tensor, torch.Tensor]
 
 
@@ -428,22 +435,51 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.Linear(head_hidden, self.num_blueprints),  # 256 -> 13
         )
 
-        # Op-conditioned value head (Phase 5 redesign): Q(s, op) instead of V(s)
+        # PPO baseline value head (P0-1): op-INDEPENDENT V(s).
+        # Input: lstm_out (lstm_hidden_dim) ONLY -- NOT conditioned on any op.
+        #
+        # The PPO baseline must be a function of state only (independent of the action
+        # whose advantage it scores) or advantages are biased. V(s) is the scalar used
+        # EVERYWHERE the PPO baseline matters: the rollout-stored value, the GAE
+        # bootstrap (V(s') estimates E_a[Q(s',a)] directly instead of one sampled op),
+        # the value-loss target (V(s) trained on normalized MC returns), and
+        # explained_variance.
+        #
+        # Architecture mirrors the q_head depth/LayerNorm (the capacity fix that lifted
+        # explained_variance off its 0.12 ceiling), minus the op-one-hot input width:
+        # input -> 256 -> 128 -> 64 -> 1. Output init gain=0.1 (see _init_weights).
+        self.state_value_head = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, head_hidden),  # 512 -> 256
+            nn.LayerNorm(head_hidden),
+            nn.ReLU(),
+            nn.Linear(head_hidden, head_hidden // 2),  # 256 -> 128
+            nn.LayerNorm(head_hidden // 2),
+            nn.ReLU(),
+            nn.Linear(head_hidden // 2, head_hidden // 4),  # 128 -> 64
+            nn.ReLU(),
+            nn.Linear(head_hidden // 4, 1),  # 64 -> 1
+        )
+
+        # Op-conditioned Q head (P0-1): RETAINED for telemetry only.
         # Input: lstm_out (lstm_hidden_dim) + op_one_hot (self.num_ops)
         #
-        # Architecture redesign to fix value collapse (explained_variance never > 0.12):
-        # 1. Deeper network (4 layers) - shallow 2-layer couldn't learn return predictions
-        # 2. Dedicated value feature layer - don't rely solely on shared LSTM features
-        # 3. LayerNorm for activation stability (matches policy path)
-        # 4. Gradual compression: input -> 256 -> 128 -> 64 -> 1
-        # 5. Initialization: gain=0.01 for output (matches policy heads)
+        # This is the former value_head, renamed. It is NO LONGER the PPO baseline.
+        # It is trained as a SMALL auxiliary regression toward the same normalized-returns
+        # target as V(s) so the op_q_values/q_variance/q_spread telemetry stays meaningful
+        # (a never-trained Q head would emit init noise -- a dead telemetry component).
+        # In the aux path lstm_out is DETACHED inside _compute_q so the aux objective
+        # cannot reshape the shared LSTM features (same pattern as contribution_predictor).
         #
-        # The op-conditioning is preserved: each op can learn distinct value functions
-        # via the one-hot input, but now with enough capacity for feature extraction.
-        value_input_dim = lstm_hidden_dim + self.num_ops
-        self.value_head = nn.Sequential(
+        # NOTE: trained on the STATE-return target (same as V), so in the limit Q(s, op)
+        # collapses toward V and q_spread measures residual cross-op fitting variance,
+        # not differential action value -- acceptable for a telemetry-only head.
+        # TODO: [FUTURE FUNCTIONALITY] If op-discriminative Q telemetry is ever needed,
+        # supervise q_head with per-op empirical returns (requires per-op return
+        # bucketing + coverage handling for rarely-sampled ops).
+        q_input_dim = lstm_hidden_dim + self.num_ops
+        self.q_head = nn.Sequential(
             # Layer 1: Feature extraction from joint (state, op) representation
-            nn.Linear(value_input_dim, head_hidden),  # 518 -> 256
+            nn.Linear(q_input_dim, head_hidden),  # 518 -> 256
             nn.LayerNorm(head_hidden),
             nn.ReLU(),
             # Layer 2: Deeper representation learning
@@ -501,16 +537,19 @@ class FactoredRecurrentActorCritic(nn.Module):
             last_layer = head[-1]
             if isinstance(last_layer, nn.Linear):
                 nn.init.orthogonal_(last_layer.weight.data, gain=0.01)
-        # Value head output layer: use gain=0.1 (matches the contribution predictor below).
+        # Value/Q head output layers: use gain=0.1 (matches the contribution predictor below).
         # gain=1.0 (the original) put initial value predictions far from zero -> high
         # initial value_loss and slow convergence. gain=0.01 fixed that but pinned the
         # head so close to zero that explained_variance struggled to develop any output
         # range. gain=0.1 keeps predictions centered near zero while giving the critic
-        # enough initial range to track returns -- the same trade-off the contribution
-        # predictor (a regression head over similar target scales) already makes.
-        last_value_layer = self.value_head[-1]
-        if isinstance(last_value_layer, nn.Linear):
-            nn.init.orthogonal_(last_value_layer.weight.data, gain=0.1)
+        # enough initial range to track normalized (std~1) returns -- the same trade-off
+        # the contribution predictor (a regression head over similar target scales) makes.
+        # This applies identically to the op-INDEPENDENT V(s) baseline (state_value_head)
+        # and the retained op-conditioned q_head (telemetry/aux).
+        for value_like_head in (self.state_value_head, self.q_head):
+            last_value_layer = value_like_head[-1]
+            if isinstance(last_value_layer, nn.Linear):
+                nn.init.orthogonal_(last_value_layer.weight.data, gain=0.1)
 
         # Contribution predictor output: gain=0.1 for regression targets
         # PyTorch Expert review: gain=0.01 is too small for targets in [-10, +10];
@@ -556,26 +595,52 @@ class FactoredRecurrentActorCritic(nn.Module):
         c = torch.zeros(self.lstm_layers, batch_size, self.lstm_hidden_dim, device=device)
         return h, c
 
-    def _compute_value(self, lstm_out: torch.Tensor, op: torch.Tensor) -> torch.Tensor:
-        """Compute Q(s, op) value conditioned on operation.
+    def _compute_state_value(self, lstm_out: torch.Tensor) -> torch.Tensor:
+        """Compute the op-INDEPENDENT PPO baseline V(s).
 
-        Shared helper used by both forward() (with sampled op) and
-        evaluate_actions() (with stored op from buffer).
+        This is the scalar used everywhere the PPO baseline matters: rollout-stored
+        value, GAE bootstrap, value-loss target, and explained_variance. It is a
+        function of state only (no op conditioning) so advantages are unbiased and
+        the bootstrap V(s') estimates E_a[Q(s',a)] directly.
+
+        V(s) keeps FULL gradient flow into the LSTM (it is the genuine critic).
+
+        Args:
+            lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim], any dtype
+
+        Returns:
+            Value estimates [batch, seq_len], same dtype as lstm_out
+        """
+        value = cast(torch.Tensor, self.state_value_head(lstm_out))
+        return value.squeeze(-1)
+
+    def _compute_q(self, lstm_out: torch.Tensor, op: torch.Tensor) -> torch.Tensor:
+        """Compute the op-conditioned Q(s, op) -- TELEMETRY ONLY.
+
+        Used by forward() (with sampled op) and evaluate_actions() (with stored op)
+        to surface op_q_values/q_variance/q_spread. Q is NOT the PPO baseline; it is
+        trained as a small detached auxiliary regression toward the same returns target
+        as V(s). DETACHING lstm_out here is what keeps the aux objective from reshaping
+        the shared LSTM features (mirrors contribution_predictor's stop_gradient).
 
         Args:
             lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim], any dtype
             op: Operation indices [batch, seq_len], int64
 
         Returns:
-            Value estimates [batch, seq_len], same dtype as lstm_out
+            Q estimates [batch, seq_len], same dtype as lstm_out
         """
+        # DETACH: the aux objective trains only the q_head's own parameters, never the
+        # shared LSTM. (Telemetry forwards in get_action/forward also detach; that is
+        # harmless under inference_mode/no_grad where no graph exists anyway.)
+        lstm_out = lstm_out.detach()
         # One-hot encode and match dtype/device to lstm_out.
         # Using .to(lstm_out) ensures correct dtype under AMP/mixed-precision
         # (e.g., bfloat16) without hardcoding .float().
         op_one_hot = F.one_hot(op, num_classes=self.num_ops).to(lstm_out)
-        value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
-        value = cast(torch.Tensor, self.value_head(value_input))
-        return value.squeeze(-1)
+        q_input = torch.cat([lstm_out, op_one_hot], dim=-1)
+        q_value = cast(torch.Tensor, self.q_head(q_input))
+        return q_value.squeeze(-1)
 
     def predict_contributions(
         self,
@@ -658,7 +723,8 @@ class FactoredRecurrentActorCritic(nn.Module):
                 conditioning.
 
         Returns:
-            _ForwardOutput with logits, Q(s, sampled_op) value, sampled_op, and hidden
+            _ForwardOutput with logits, V(s) state_value (op-INDEPENDENT PPO baseline),
+            Q(s, sampled_op) q_value (telemetry/aux), sampled_op, lstm_out, and hidden
         """
         batch_size = state.size(0)
         seq_len = state.size(1)
@@ -755,8 +821,11 @@ class FactoredRecurrentActorCritic(nn.Module):
         sampled_op_flat = torch.multinomial(op_probs_flat, num_samples=1).squeeze(-1)
         sampled_op = sampled_op_flat.reshape(batch_size, seq_len)
 
-        # Op-conditioned value: Q(s, sampled_op)
-        value = self._compute_value(lstm_out, sampled_op)
+        # Op-INDEPENDENT PPO baseline: V(s). This is the value stored in the rollout
+        # buffer and used for the GAE bootstrap -- it does NOT depend on sampled_op.
+        state_value = self._compute_state_value(lstm_out)
+        # Op-conditioned Q(s, sampled_op): telemetry/aux only (NOT the baseline).
+        q_value = self._compute_q(lstm_out, sampled_op)
 
         return {
             "slot_logits": slot_logits,
@@ -767,8 +836,9 @@ class FactoredRecurrentActorCritic(nn.Module):
             "alpha_speed_logits": alpha_speed_logits,
             "alpha_curve_logits": alpha_curve_logits,
             "op_logits": op_logits,
-            "value": value,
-            "lstm_out": lstm_out,  # NEW: Expose for value recomputation in get_action()
+            "state_value": state_value,
+            "q_value": q_value,
+            "lstm_out": lstm_out,  # Expose for value recomputation in get_action()
             "sampled_op": sampled_op,
             "hidden": new_hidden,
         }
@@ -960,11 +1030,11 @@ class FactoredRecurrentActorCritic(nn.Module):
                 actions[key] = action
                 log_probs[key] = _masked_log_prob(masked_logits, action)
 
-            # === OP HEAD: CRITICAL FIX - Must use same op for value and action ===
-            # Bug: Previously _sample_head("op") sampled independently from forward(),
-            # causing value/action mismatch. This created biased advantages and
-            # bootstrap corruption. Fix: Reuse sampled_op from forward() (stochastic)
-            # or recompute value with argmax_op (deterministic).
+            # === OP HEAD ===
+            # The op drives the ACTION and the Q(s, op) telemetry head, but NOT the
+            # value: V(s) is op-INDEPENDENT (the PPO baseline must be a function of
+            # state only). We select the op for the action below; the value is read
+            # straight from forward()'s state_value for BOTH legs (no per-op recompute).
             #
             # PERFORMANCE OPTIMIZATION: Avoid creating MaskedCategorical for op here.
             # MaskedCategorical uses Categorical internally, which triggers 2 CPU-GPU
@@ -997,20 +1067,15 @@ class FactoredRecurrentActorCritic(nn.Module):
             )
 
             if deterministic:
-                # Deterministic mode (bootstrap/eval): use argmax
+                # Deterministic mode (bootstrap/eval): use argmax op for the ACTION.
                 selected_op = op_masked_logits.argmax(dim=-1)
-                # CRITICAL: Recompute value with argmax op for consistency
-                # Value from forward() used sampled op - we need Q(s, argmax_op)
-                lstm_out = output["lstm_out"][:, 0, :]  # [batch, hidden_dim]
-                value = self._compute_value(
-                    lstm_out.unsqueeze(1),  # [batch, 1, hidden_dim]
-                    selected_op.unsqueeze(1)  # [batch, 1]
-                ).squeeze(1)  # [batch]
             else:
-                # Stochastic mode (rollout): reuse sampled op from forward()
-                # This ensures value = Q(s, op) where op is the action we'll take
+                # Stochastic mode (rollout): reuse sampled op from forward() for the ACTION.
                 selected_op = output["sampled_op"][:, 0]
-                value = output["value"][:, 0]  # Already Q(s, sampled_op)
+            # V(s) is op-INDEPENDENT, so the baseline is identical for both legs and
+            # needs no per-op recompute. This is the value stored in the rollout buffer
+            # and the truncation bootstrap (get_action(deterministic=True)).
+            value = output["state_value"][:, 0]
 
             actions["op"] = selected_op
             # FP32 log_prob via the shared seam (no Categorical -> no GPU syncs).
@@ -1165,11 +1230,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         dict[str, torch.Tensor],
         tuple[torch.Tensor, torch.Tensor],
         torch.Tensor,
+        torch.Tensor,
     ]:
         """Evaluate actions for PPO update.
 
-        Uses stored op from actions dict for value conditioning (Q(s, stored_op)),
-        ensuring consistency with what was stored during rollout collection.
+        Computes the op-INDEPENDENT PPO baseline V(s) (full gradient into the LSTM) and,
+        separately, the op-conditioned Q(s, stored_op) for the detached telemetry/aux
+        loss. The stored op from the buffer conditions Q only -- V never sees it.
 
         Args:
             states: Input states [batch, seq_len, state_dim]
@@ -1188,10 +1255,11 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         Returns:
             log_probs: Dict of per-head log probs [batch, seq_len]
-            values: Value estimates Q(s, stored_op) [batch, seq_len]
+            value: V(s) -- the op-INDEPENDENT PPO baseline [batch, seq_len] (full grad)
             entropy: Dict of per-head entropies [batch, seq_len]
             hidden: Final hidden state
             pred_contributions: Predicted per-slot contributions [batch, seq_len, num_slots]
+            q_value: Q(s, stored_op) [batch, seq_len] -- detached-from-LSTM telemetry/aux
         """
         batch_size = states.size(0)
         device = states.device
@@ -1241,9 +1309,12 @@ class FactoredRecurrentActorCritic(nn.Module):
         # to MASKED_LOGIT_VALUE, breaking the "single-valid-action => log_prob==0"
         # invariant and corrupting PPO ratios/joint KL diagnostics.
 
-        # Use STORED op for value conditioning (not freshly sampled)
+        # PPO baseline: op-INDEPENDENT V(s), FULL gradient into the LSTM.
+        value = self._compute_state_value(lstm_out)
+        # Telemetry/aux: op-conditioned Q(s, stored_op), DETACHED from the LSTM inside
+        # _compute_q. Uses the STORED op (consistent with rollout collection).
         stored_op = actions["op"]
-        value = self._compute_value(lstm_out, stored_op)
+        q_value = self._compute_q(lstm_out, stored_op)
 
         log_probs: dict[str, torch.Tensor] = {}
         entropy: dict[str, torch.Tensor] = {}
@@ -1390,7 +1461,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "Likely a Kasmina state-machine bug producing an all-masked head."
             )
 
-        return log_probs, value, entropy, new_hidden, pred_contributions
+        return log_probs, value, entropy, new_hidden, pred_contributions, q_value
 
 
 __all__ = ["BlueprintEmbedding", "FactoredRecurrentActorCritic", "GetActionResult"]

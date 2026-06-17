@@ -57,12 +57,19 @@ class EvalResult:
 
     Attributes:
         log_prob: Dict mapping head names to log probabilities
-        value: State value estimate
+        value: The op-INDEPENDENT PPO baseline V(s). (P0-1: this is V(s), NOT the old
+            op-conditioned Q(s, op). V keeps full gradient flow into the LSTM and is the
+            scalar regressed onto returns by the value loss.)
         entropy: Dict mapping head names to entropy values
         hidden: New hidden state or None
         pred_contributions: Predicted per-slot counterfactual contributions
             [batch, seq_len, num_slots]. Used for auxiliary supervision during
             training. Caller can ignore if not using counterfactual auxiliary loss.
+        q_value: Op-conditioned Q(s, stored_op) [batch, seq_len], DETACHED from the LSTM.
+            Telemetry/aux ONLY (op_q_values/q_variance/q_spread + a small aux regression
+            toward the same returns target). NOT the PPO baseline. Defaults to None for
+            policies that do not expose a Q head. PIN: positioned last, with a default, so
+            the frozen-dataclass constructor stays valid for non-Q policies.
     """
 
     log_prob: dict[str, torch.Tensor]
@@ -70,6 +77,7 @@ class EvalResult:
     entropy: dict[str, torch.Tensor]
     hidden: tuple[torch.Tensor, torch.Tensor] | None
     pred_contributions: torch.Tensor | None = None
+    q_value: torch.Tensor | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +89,9 @@ class ForwardResult:
 
     Attributes:
         logits: Dict mapping head names to raw logits
-        value: State value estimate
+        value: State value estimate. (P0-1 semantics shift: this is now the
+            op-INDEPENDENT V(s) baseline, NOT the old op-conditioned Q(s, sampled_op).
+            For the LSTM bundle it is forward()["state_value"].)
         hidden: New hidden state or None
     """
 

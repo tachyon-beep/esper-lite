@@ -193,6 +193,8 @@ class TestEntropyFloorIntegration:
             clip_value=True,
             value_clip=0.2,
             value_coef=0.5,
+            q_values=values,  # P0-1: Q-aux input (q_aux_coef=0 isolates entropy-floor tests)
+            q_aux_coef=0.0,
             head_names=head_names,
             entropy_floor=None,  # Disabled
         )
@@ -214,6 +216,8 @@ class TestEntropyFloorIntegration:
             clip_value=True,
             value_clip=0.2,
             value_coef=0.5,
+            q_values=values,  # P0-1: Q-aux input (q_aux_coef=0 isolates entropy-floor tests)
+            q_aux_coef=0.0,
             head_names=head_names,
             entropy_floor=entropy_floor,
             entropy_floor_penalty_coef=entropy_floor_penalty_coef,
@@ -262,6 +266,8 @@ class TestEntropyFloorIntegration:
             clip_value=False,
             value_clip=0.2,
             value_coef=0.5,
+            q_values=values,  # P0-1: Q-aux input (q_aux_coef=0 isolates entropy-floor tests)
+            q_aux_coef=0.0,
             head_names=head_names,
             entropy_floor=entropy_floor,
             entropy_floor_penalty_coef={"op": 0.1, "blueprint": 0.1},
@@ -282,6 +288,8 @@ class TestEntropyFloorIntegration:
             clip_value=False,
             value_clip=0.2,
             value_coef=0.5,
+            q_values=values,  # P0-1: Q-aux input (q_aux_coef=0 isolates entropy-floor tests)
+            q_aux_coef=0.0,
             head_names=head_names,
             entropy_floor=entropy_floor,
             entropy_floor_penalty_coef={"op": 0.1, "blueprint": 0.5},  # Higher blueprint
@@ -326,6 +334,8 @@ class TestEntropyFloorIntegration:
             clip_value=False,
             value_clip=0.2,
             value_coef=0.5,
+            q_values=values,  # P0-1: Q-aux input (q_aux_coef=0 isolates entropy-floor tests)
+            q_aux_coef=0.0,
             head_names=head_names,
             entropy_floor={"op": 0.4, "blueprint": 0.4},
             entropy_floor_penalty_coef={"op": 0.1, "blueprint": 0.1},
