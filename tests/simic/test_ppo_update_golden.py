@@ -134,16 +134,18 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig) -> None:
 # Golden PPO-update metrics keyed by recurrent_n_epochs (K).
 #
 # epoch-0 ratio==1.0 by construction (anchored reference pass); K=4 goldens capture
-# intended multi-epoch drift; baseline change vs pre-anchor is deliberate (see
-# 2026-06-17 design). K=1 stays regression-locked to the pre-existing pin so a single
-# anchored epoch remains a no-op refactor of the prior single-path update. At K=4 the
-# epoch-0 reference pass still yields ratio==1.0, but epochs 1-3 measure real
-# pi_theta_k/pi_theta_0 drift, so the aggregated metrics (mean over epochs) diverge from
-# K=1: approx_kl, clip_fraction, and the ratio_* spread all become non-degenerate.
+# intended multi-epoch drift. Re-baselined 2026-06-18 for the value-head init gain
+# 0.01->0.1 change (b1935d39): the larger init shifts V(s) -> advantages, moving the
+# advantage-dependent metrics (policy_loss/value_loss, and the post-update entropy/kl).
+# At K=1 the anchored epoch-0 ratio is still exactly 1.0 (kl/clip/ratio_* unchanged);
+# only policy_loss/value_loss move. At K=4 the epoch-0 reference pass still yields
+# ratio==1.0, but epochs 1-3 measure real pi_theta_k/pi_theta_0 drift, so the aggregated
+# metrics (mean over epochs) diverge from K=1: approx_kl, clip_fraction, and the ratio_*
+# spread all become non-degenerate.
 _GOLDENS: dict[int, dict[str, float]] = {
     1: {
-        "policy_loss": -2.340991497039795,
-        "value_loss": 0.03467179462313652,
+        "policy_loss": -2.378634214401245,
+        "value_loss": 0.03463732823729515,
         "entropy": 9.399517059326172,
         "approx_kl": 0.0,
         "clip_fraction": 0.0,
@@ -153,15 +155,15 @@ _GOLDENS: dict[int, dict[str, float]] = {
         "ratio_std": 9.733398087519163e-08,
     },
     4: {
-        "policy_loss": -2.77156400680542,
-        "value_loss": 0.030169446021318436,
-        "entropy": 9.359184265136719,
-        "approx_kl": 0.010402385145425797,
+        "policy_loss": -2.8116531372070312,
+        "value_loss": 0.01667206548154354,
+        "entropy": 9.360645294189453,
+        "approx_kl": 0.010239769704639912,
         "clip_fraction": 0.5,
-        "ratio_mean": 1.2103526592254639,
-        "ratio_max": 3.1339035034179688,
-        "ratio_min": 0.44246989488601685,
-        "ratio_std": 0.5426110029220581,
+        "ratio_mean": 1.2072563171386719,
+        "ratio_max": 3.147684097290039,
+        "ratio_min": 0.4454832971096039,
+        "ratio_std": 0.538439929485321,
     },
 }
 
