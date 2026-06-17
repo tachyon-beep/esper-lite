@@ -48,10 +48,6 @@ class TrainingMetrics:
     best_val_accuracy: float = 0.0
     best_val_loss: float = float('inf')
 
-    # Gradient health
-    grad_norm_host: float = 0.0
-    grad_norm_seed: float = 0.0
-
 
 @dataclass
 class TrainingSignals:

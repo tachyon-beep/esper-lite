@@ -265,8 +265,6 @@ def training_metrics(draw):
         plateau_epochs=draw(st.integers(min_value=0, max_value=50)),
         best_val_accuracy=draw(bounded_floats(val_accuracy, 100.0)),  # best >= current
         best_val_loss=draw(bounded_floats(0.0, val_loss)),  # best_val_loss <= current (lower is better)
-        grad_norm_host=draw(bounded_floats(0.0, 100.0)),
-        grad_norm_seed=draw(bounded_floats(0.0, 100.0)),
     )
 
 
