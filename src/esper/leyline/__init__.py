@@ -446,6 +446,21 @@ DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD = 12.0
 # Penalty applied when governor triggers a rollback (negative reward).
 DEFAULT_GOVERNOR_DEATH_PENALTY = 10.0
 
+# Reward written over an episode's intermediate transitions when a governor
+# rollback forfeits that episode (P1-ROLLBACK-TAIL credit assignment).
+#
+# A governor rollback means the episode ended in catastrophic structural collapse
+# and the host weights were RESTORED to the last-good snapshot - the "mostly-good"
+# intermediate rewards were earned on a trajectory the environment then DISCARDED.
+# Crediting them teaches "germinate aggressively then panic" as net-positive
+# (reward-hacking the safety net); with gamma < 1 a long positive prefix can
+# outweigh one terminal penalty. So the entire prefix is forfeited to this value
+# and only the terminal step carries the catastrophe penalty.
+#
+# Named so the forfeit fill is a single source of truth, not a magic literal.
+# Used by: rollout_buffer.mark_terminal_with_penalty, ppo_coordinator.handle_rollbacks.
+ROLLBACK_FORFEIT_REWARD: float = 0.0
+
 # Rolling window size for loss history statistics.
 DEFAULT_GOVERNOR_HISTORY_WINDOW = 20
 
@@ -969,6 +984,7 @@ __all__ = [
     "DEFAULT_GOVERNOR_SENSITIVITY",
     "DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD",
     "DEFAULT_GOVERNOR_DEATH_PENALTY",
+    "ROLLBACK_FORFEIT_REWARD",
     "DEFAULT_GOVERNOR_HISTORY_WINDOW",
     "MIN_GOVERNOR_HISTORY_SAMPLES",
     "DEFAULT_MIN_PANICS_BEFORE_ROLLBACK",

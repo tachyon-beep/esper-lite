@@ -401,7 +401,8 @@ class TestMarkTerminalWithPenalty:
         )
 
         result = buffer.mark_terminal_with_penalty(0, penalty=-10.0)
-        assert result is False
+        assert result.applied is False
+        assert result.steps_zeroed == 0
 
     def test_invalid_env_id_raises(self) -> None:
         """Invalid env_id raises ValueError."""

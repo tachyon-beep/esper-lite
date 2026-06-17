@@ -37,6 +37,7 @@ from esper.leyline import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    ROLLBACK_FORFEIT_REWARD,
     TempoAction,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -44,6 +45,24 @@ from esper.leyline.slot_config import SlotConfig
 
 ROLLBACK_TRANSITION_NONE: int = 0
 ROLLBACK_TRANSITION_GOVERNOR: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class RollbackPenaltyResult:
+    """Outcome of marking an env's last transition terminal on a governor rollback.
+
+    SIMIC-LOCAL: consumed only by ppo_coordinator.handle_rollbacks. Not a leyline
+    contract.
+
+    Attributes:
+        applied: True if a transition was modified, False if the env had no
+            transitions (first-step panic with nothing to attribute the penalty to).
+        steps_zeroed: Number of intermediate prefix steps forfeited to
+            ROLLBACK_FORFEIT_REWARD (0 when the episode was a single step).
+    """
+
+    applied: bool
+    steps_zeroed: int
 
 
 class TamiyoRolloutStep(NamedTuple):
@@ -185,6 +204,15 @@ class TamiyoRolloutBuffer:
     rollback_watch_window_evidence: torch.Tensor = field(init=False)
     action_ids: list[list[str]] = field(init=False)
 
+    # Per-env cumulative rollback observability counters (TELEMETRY).
+    # rollback_count: number of governor rollbacks this rollout window.
+    # rollback_steps_zeroed: total intermediate prefix steps forfeited to
+    # ROLLBACK_FORFEIT_REWARD. Together these make "frequent rollbacks starving
+    # PPO of learning signal" observable instead of silent. Reset per-rollout in
+    # reset() (clear_env alone is insufficient - these span the rollout window).
+    rollback_count: torch.Tensor = field(init=False)
+    rollback_steps_zeroed: torch.Tensor = field(init=False)
+
     # Phase 2.1: Auxiliary supervision targets for contribution prediction
     # Ground truth from counterfactual measurements (stored at measurement timesteps only)
     # DRL Expert: Only valid at timesteps where has_fresh_contribution=True
@@ -304,6 +332,10 @@ class TamiyoRolloutBuffer:
         self.rollback_triggering_action_ids = [[""] * m for _ in range(n)]
         self.rollback_watch_window_evidence = torch.zeros(n, m, device=device)
         self.action_ids = [[""] * m for _ in range(n)]
+
+        # Per-env cumulative rollback observability counters (long dtype: counts)
+        self.rollback_count = torch.zeros(n, dtype=torch.long, device=device)
+        self.rollback_steps_zeroed = torch.zeros(n, dtype=torch.long, device=device)
 
         # Phase 2.1: Auxiliary supervision targets for contribution prediction
         # Ground truth from counterfactual - only valid at measurement timesteps
@@ -690,6 +722,9 @@ class TamiyoRolloutBuffer:
                 tuple(row) for row in self.rollback_triggering_action_ids
             ),
             "rollback_watch_window_evidence": self.rollback_watch_window_evidence.to(device, non_blocking=nb),
+            # Per-env cumulative rollback observability counters (TELEMETRY)
+            "rollback_count": self.rollback_count.to(device, non_blocking=nb),
+            "rollback_steps_zeroed": self.rollback_steps_zeroed.to(device, non_blocking=nb),
             "action_ids": tuple(tuple(row) for row in self.action_ids),
             # Phase 2.1: Auxiliary supervision for contribution prediction
             # contribution_targets: [num_envs, max_steps, num_slots] ground truth per slot
@@ -710,7 +745,12 @@ class TamiyoRolloutBuffer:
             [""] * self.max_steps_per_env for _ in range(self.num_envs)
         ]
         self.action_ids = [[""] * self.max_steps_per_env for _ in range(self.num_envs)]
-        # Tensors don't need zeroing - step_counts controls valid range
+        # Cumulative rollback counters span the per-rollout window, so they MUST be
+        # explicitly zeroed here (step_counts does not gate them; clear_env only
+        # touches single envs and not on the no-rollback path).
+        self.rollback_count.zero_()
+        self.rollback_steps_zeroed.zero_()
+        # Other tensors don't need zeroing - step_counts controls valid range
 
     def clear_env(self, env_id: int) -> None:
         """Clear transitions for a single environment.
@@ -762,7 +802,7 @@ class TamiyoRolloutBuffer:
         severity: float | None = None,
         triggering_action_id: str | None = None,
         watch_window_evidence: float | None = None,
-    ) -> bool:
+    ) -> RollbackPenaltyResult:
         """Mark the last transition as terminal with penalty reward.
 
         Used when governor rollback occurs - the last action led to catastrophic
@@ -785,19 +825,31 @@ class TamiyoRolloutBuffer:
                 window. Defaults to abs(penalty) when omitted.
 
         Returns:
-            True if a transition was modified, False if env had no transitions
+            RollbackPenaltyResult(applied, steps_zeroed). applied is False (and
+            steps_zeroed 0) only when the env had no transitions; in that case the
+            rollback is NOT counted because there is no executed transition to
+            attribute it to. A first-step panic (one transition) IS counted with
+            steps_zeroed == 0.
+
+        P1-ROLLBACK-TAIL: the entire episode prefix is forfeited to
+        ROLLBACK_FORFEIT_REWARD; only the terminal step carries the penalty. See
+        the constant's docstring for the credit-assignment rationale.
         """
         if env_id < 0 or env_id >= self.num_envs:
             raise ValueError(f"env_id {env_id} out of range [0, {self.num_envs})")
 
         step_count = self.step_counts[env_id]
         if step_count == 0:
-            return False  # No transitions to modify
+            # No executed transition: cannot attribute the catastrophe. Do not
+            # count it here - the coordinator surfaces the dropped penalty.
+            return RollbackPenaltyResult(applied=False, steps_zeroed=0)
 
         last_idx = step_count - 1
         episode_start = self._terminal_penalty_episode_start(env_id, step_count)
+        steps_zeroed = 0
         if episode_start < last_idx:
-            self.rewards[env_id, episode_start:last_idx] = 0.0
+            self.rewards[env_id, episode_start:last_idx] = ROLLBACK_FORFEIT_REWARD
+            steps_zeroed = last_idx - episode_start
         self.rewards[env_id, last_idx] = penalty
         self.dones[env_id, last_idx] = True
         self.truncated[env_id, last_idx] = False  # True terminal, not truncation
@@ -811,7 +863,10 @@ class TamiyoRolloutBuffer:
         self.rollback_watch_window_evidence[env_id, last_idx] = (
             abs(penalty) if watch_window_evidence is None else watch_window_evidence
         )
-        return True
+        # Observability: count the rollback and the forfeited prefix length.
+        self.rollback_count[env_id] += 1
+        self.rollback_steps_zeroed[env_id] += steps_zeroed
+        return RollbackPenaltyResult(applied=True, steps_zeroed=steps_zeroed)
 
     def _terminal_penalty_episode_start(self, env_id: int, step_count: int) -> int:
         """Return the start index for the episode receiving a rollback penalty."""
@@ -844,4 +899,4 @@ class TamiyoRolloutBuffer:
         return sum(self.step_counts)
 
 
-__all__ = ["TamiyoRolloutStep", "TamiyoRolloutBuffer"]
+__all__ = ["TamiyoRolloutStep", "TamiyoRolloutBuffer", "RollbackPenaltyResult"]

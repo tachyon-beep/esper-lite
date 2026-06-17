@@ -22,6 +22,7 @@ import torch
 from esper.leyline import (
     AnomalyDetectedPayload,
     EpisodeOutcomePayload,
+    ROLLBACK_FORFEIT_REWARD,
     TelemetryEvent,
     TelemetryEventType,
 )
@@ -145,13 +146,13 @@ class PPOCoordinator:
             # mark_terminal_with_penalty resolves it internally to the prior
             # executed transition's id AFTER its own step_count==0 guard, so the
             # death penalty attaches to the action that actually caused the panic.
-            penalty_applied = self.agent.buffer.mark_terminal_with_penalty(
+            penalty_result = self.agent.buffer.mark_terminal_with_penalty(
                 env_idx,
                 normalized_penalty,
                 severity=abs(penalty),
                 watch_window_evidence=abs(penalty),
             )
-            if not penalty_applied:
+            if not penalty_result.applied:
                 # No executed transition to attribute the catastrophe to (first-step
                 # panic). The penalty is correctly dropped, but surface it rather
                 # than swallowing it silently so a high rate is observable.
@@ -160,12 +161,22 @@ class PPOCoordinator:
                     "transition to attribute (first-step panic).",
                     env_idx,
                 )
+            # Observability (P0-3): the buffer accumulates the per-env cumulative
+            # rollback_count and rollback_steps_zeroed (mark_terminal_with_penalty
+            # just forfeited penalty_result.steps_zeroed steps to
+            # ROLLBACK_FORFEIT_REWARD). run_update surfaces the per-rollout aggregate
+            # into the PPO metrics dict so a high rollback frequency / large
+            # forfeited-signal volume is visible before it silently starves PPO of
+            # learning signal.
             # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).
             # Buffer gets normalized_penalty (for PPO training stability).
             # Telemetry gets raw penalty (for cross-run comparability).
+            # The intermediate prefix is forfeited to ROLLBACK_FORFEIT_REWARD to match
+            # the buffer's PPO-return forfeiture (P1-ROLLBACK-TAIL): episode_rewards
+            # feeds telemetry totals/stability, so it must reflect the same forfeit.
             if env_states[env_idx].episode_rewards:
                 for reward_idx in range(len(env_states[env_idx].episode_rewards) - 1):
-                    env_states[env_idx].episode_rewards[reward_idx] = 0.0
+                    env_states[env_idx].episode_rewards[reward_idx] = ROLLBACK_FORFEIT_REWARD
                 env_states[env_idx].episode_rewards[-1] = penalty
 
         # B11-CR-02 fix: Recompute metrics after penalty injection
@@ -300,6 +311,13 @@ class PPOCoordinator:
             metrics["entropy_coef"] = self.agent.entropy_coef
             metrics["throughput_step_time_ms_sum"] = throughput_step_time_ms_sum
             metrics["throughput_dataloader_wait_ms_sum"] = throughput_dataloader_wait_ms_sum
+            # P0-3: surface rollback credit-assignment observability. rollback_count is
+            # the per-rollout (this-batch) total of governor rollbacks; steps_zeroed is
+            # the total intermediate prefix forfeited to ROLLBACK_FORFEIT_REWARD. A high
+            # ratio here means rollbacks are eating a large share of the learning signal.
+            buffer = self.agent.buffer
+            metrics["rollback_count"] = int(buffer.rollback_count.sum().item())
+            metrics["rollback_steps_zeroed"] = int(buffer.rollback_steps_zeroed.sum().item())
             if not update_skipped:
                 metrics["ppo_grad_norm"] = metrics["pre_clip_grad_norm"]
 

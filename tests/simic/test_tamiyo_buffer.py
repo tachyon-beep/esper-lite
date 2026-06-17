@@ -545,9 +545,9 @@ class TestTamiyoRolloutBuffer:
 
         # Simulate governor rollback with death penalty
         death_penalty = -10.0
-        modified = buffer.mark_terminal_with_penalty(env_id=0, penalty=death_penalty)
+        result = buffer.mark_terminal_with_penalty(env_id=0, penalty=death_penalty)
 
-        assert modified is True
+        assert result.applied is True
         # Last transition should now have death penalty
         assert buffer.rewards[0, 2].item() == death_penalty
         # Last transition should be marked as terminal
@@ -558,7 +558,7 @@ class TestTamiyoRolloutBuffer:
         assert buffer.step_counts[0] == 3
 
     def test_mark_terminal_with_penalty_empty_env(self):
-        """mark_terminal_with_penalty on empty env returns False."""
+        """mark_terminal_with_penalty on empty env returns applied=False."""
         buffer = TamiyoRolloutBuffer(
             num_envs=2,
             max_steps_per_env=5,
@@ -566,9 +566,10 @@ class TestTamiyoRolloutBuffer:
             lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
         )
 
-        # No transitions added - should return False
-        modified = buffer.mark_terminal_with_penalty(env_id=0, penalty=-10.0)
-        assert modified is False
+        # No transitions added - should report applied=False
+        result = buffer.mark_terminal_with_penalty(env_id=0, penalty=-10.0)
+        assert result.applied is False
+        assert result.steps_zeroed == 0
 
     def test_mark_terminal_with_penalty_invalid_env(self):
         """mark_terminal_with_penalty with invalid env_id raises ValueError."""

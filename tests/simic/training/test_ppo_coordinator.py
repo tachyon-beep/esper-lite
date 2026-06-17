@@ -8,8 +8,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from esper.leyline import EpisodeOutcome, TelemetryEventType
-from esper.simic.agent.rollout_buffer import TamiyoRolloutBuffer
+from esper.leyline import EpisodeOutcome, ROLLBACK_FORFEIT_REWARD, TelemetryEventType
+from esper.simic.agent.rollout_buffer import (
+    RollbackPenaltyResult,
+    TamiyoRolloutBuffer,
+)
 from esper.simic.telemetry import AnomalyDetector
 from esper.simic.training.ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 
@@ -22,6 +25,10 @@ class _StubBuffer:
             ("morph-b0-e1-env0-r0c0-op3",),
             ("morph-b0-e1-env1-r0c0-op4",),
         )
+        # Per-env rollback observability counters, mirroring the real buffer.
+        # run_update reads these to surface rollback credit-assignment telemetry.
+        self.rollback_count = torch.zeros(2, dtype=torch.long)
+        self.rollback_steps_zeroed = torch.zeros(2, dtype=torch.long)
 
     def __len__(self) -> int:
         return self.length
@@ -37,7 +44,7 @@ class _StubBuffer:
         severity: float,
         triggering_action_id: str | None = None,
         watch_window_evidence: float,
-    ) -> bool:
+    ) -> RollbackPenaltyResult:
         # Mirror the real buffer: when the caller does not supply a triggering
         # action id, resolve it from the most recent (prior, executed)
         # transition. The coordinator passes None so attribution lands on the
@@ -45,7 +52,7 @@ class _StubBuffer:
         if triggering_action_id is None:
             triggering_action_id = self.last_action_id(env_id)
         self.penalty_calls.append((env_id, penalty, severity, triggering_action_id))
-        return True
+        return RollbackPenaltyResult(applied=True, steps_zeroed=self.length - 1)
 
 
 class _StubAgent:
@@ -207,7 +214,7 @@ def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     assert coordinator.agent.buffer.penalty_calls == [
         (0, -10.0, 10.0, "morph-b0-e1-env0-r0c0-op3")
     ]
-    assert env_states[0].episode_rewards == [0.0, -10.0]
+    assert env_states[0].episode_rewards == [ROLLBACK_FORFEIT_REWARD, -10.0]
     assert env_total_rewards == [-10.0]
     assert episode_history[0].episode_reward == 100.0
     assert episode_history[1].episode_reward == -10.0
@@ -239,7 +246,13 @@ def test_handle_rollbacks_forfeits_high_return_prefix():
         episode_outcomes=episode_outcomes,
     )
 
-    assert env_states[0].episode_rewards == [0.0, 0.0, 0.0, 0.0, -10.0]
+    assert env_states[0].episode_rewards == [
+        ROLLBACK_FORFEIT_REWARD,
+        ROLLBACK_FORFEIT_REWARD,
+        ROLLBACK_FORFEIT_REWARD,
+        ROLLBACK_FORFEIT_REWARD,
+        -10.0,
+    ]
     assert episode_history[0].episode_reward == -10.0
     assert episode_outcomes[0].episode_reward == -10.0
     outcome_events = [
@@ -350,11 +363,11 @@ def test_handle_rollbacks_drops_penalty_when_no_executed_transition(caplog):
             severity: float,
             triggering_action_id: str | None = None,
             watch_window_evidence: float,
-        ) -> bool:
+        ) -> RollbackPenaltyResult:
             # The coordinator must NOT have eagerly resolved an action id from
             # an empty buffer (that would have raised before reaching here).
             assert triggering_action_id is None
-            return False
+            return RollbackPenaltyResult(applied=False, steps_zeroed=0)
 
     coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
     coordinator.agent.buffer = _EmptyBuffer()
