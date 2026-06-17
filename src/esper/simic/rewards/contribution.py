@@ -17,7 +17,7 @@ from esper.leyline import (
     SeedStage,
 )
 from esper.nissa import get_hub
-from .reward_telemetry import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from .shaping import STAGE_POTENTIALS
 from .types import (
     SeedInfo,

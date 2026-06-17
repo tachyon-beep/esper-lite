@@ -16,7 +16,7 @@ from esper.leyline import (
     AnalyticsSnapshotPayload,
     EpisodeOutcomePayload,
 )
-from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 from esper.karn.sanctum.schema import RewardComponents
 from esper.leyline import EpisodeOutcome

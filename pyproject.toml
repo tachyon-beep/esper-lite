@@ -148,6 +148,10 @@ warn_return_any = false
 check_untyped_defs = false
 
 [[tool.mypy.overrides]]
+module = "esper.leyline.telemetry_contracts"
+strict = true  # Wire-format contracts must be fully strict
+
+[[tool.mypy.overrides]]
 module = "esper.leyline.telemetry"
 strict = true  # Typed payloads must be fully strict
 

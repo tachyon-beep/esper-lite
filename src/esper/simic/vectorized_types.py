@@ -8,7 +8,7 @@ from esper.leyline import AlphaAlgorithm, LifecycleOp
 if TYPE_CHECKING:
     from esper.leyline.episode_outcome import EpisodeOutcome
     from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
 
 @dataclass(slots=True)

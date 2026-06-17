@@ -4,7 +4,7 @@
 def test_analytics_snapshot_payload_accepts_reward_components_dataclass():
     """AnalyticsSnapshotPayload should accept RewardComponentsTelemetry."""
     from esper.leyline.telemetry import AnalyticsSnapshotPayload
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     rc = RewardComponentsTelemetry(
         bounded_attribution=0.5,
@@ -39,7 +39,7 @@ def test_telemetry_event_serializes_nested_reward_components():
         TelemetryEvent,
         TelemetryEventType,
     )
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     rc = RewardComponentsTelemetry(
         bounded_attribution=0.5,

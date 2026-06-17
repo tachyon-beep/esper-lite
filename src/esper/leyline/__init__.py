@@ -736,7 +736,13 @@ from esper.leyline.reports import (
     PhaseProfileReport,
 )
 
-# Telemetry contracts
+# Telemetry wire-format contracts (domain-free: no simic/karn/etc. imports)
+from esper.leyline.telemetry_contracts import (
+    RewardComponentsTelemetry,
+    ObservationStatsTelemetry,
+)
+
+# Telemetry event contracts
 from esper.leyline.telemetry import (
     TelemetryEventType,
     TelemetryEvent,
@@ -1077,6 +1083,10 @@ __all__ = [
     "FieldReport",
     "PhaseTiming",
     "PhaseProfileReport",
+
+    # Telemetry wire-format contracts (domain-free)
+    "RewardComponentsTelemetry",
+    "ObservationStatsTelemetry",
 
     # Telemetry
     "TelemetryEventType",

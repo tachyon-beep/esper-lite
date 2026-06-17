@@ -631,7 +631,7 @@ class TestVectorizedEmitterRewardComponents:
 
     def test_on_last_action_accepts_reward_components_dataclass(self, mock_hub):
         """on_last_action should accept RewardComponentsTelemetry directly."""
-        from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+        from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
         emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=mock_hub)
 

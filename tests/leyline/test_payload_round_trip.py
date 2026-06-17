@@ -85,7 +85,7 @@ def _make_head_telemetry() -> "T.HeadTelemetry":
 
 
 def _make_reward_components() -> Any:
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     # Distinctive, non-default values across a representative spread of fields.
     return RewardComponentsTelemetry(
@@ -101,7 +101,7 @@ def _make_reward_components() -> Any:
 
 
 def _make_observation_stats() -> Any:
-    from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+    from esper.leyline.telemetry_contracts import ObservationStatsTelemetry
 
     return ObservationStatsTelemetry(
         slot_features_mean=1.1,

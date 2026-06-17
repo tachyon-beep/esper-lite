@@ -1191,7 +1191,7 @@ class TestTGV001JsonlPayloadFields:
     def test_epoch_completed_observation_stats_survive_jsonl(self, tmp_path: Path):
         """EpochCompletedPayload carries nested ObservationStatsTelemetry through JSONL."""
         from esper.leyline.telemetry import EpochCompletedPayload
-        from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+        from esper.leyline.telemetry_contracts import ObservationStatsTelemetry
 
         obs = ObservationStatsTelemetry(
             slot_features_mean=1.0,

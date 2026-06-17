@@ -19,7 +19,7 @@ from esper.leyline.telemetry import (
     AnalyticsSnapshotPayload,
     CounterfactualMatrixPayload,
 )
-from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
 
 class TestActionNormalization:

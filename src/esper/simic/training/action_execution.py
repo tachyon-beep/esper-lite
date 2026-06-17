@@ -75,7 +75,8 @@ from esper.simic.vectorized_types import (
 
 if TYPE_CHECKING:
     from esper.leyline.reports import SeedStateReport
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
+    from esper.simic.rewards.contribution import FossilizedSeedDripState
     from esper.simic.telemetry.emitters import VectorizedEmitter
     from esper.simic.control import RewardNormalizer
     from esper.simic.agent import PPOAgent
@@ -944,11 +945,13 @@ def execute_actions(
                 reward_inputs.fossilized_contributions = None
 
             reward_result = compute_reward(reward_inputs)
+            # new_drip_state is only present when reward_mode == BASIC_PLUS; None otherwise.
+            new_drip_state: "FossilizedSeedDripState | None" = None
             if return_components:
-                reward, reward_components = cast(
-                    tuple[float, Any],
-                    reward_result,
-                )
+                reward_tuple = cast(tuple[float, Any, ...], reward_result)
+                reward, reward_components = reward_tuple[0], reward_tuple[1]
+                if len(reward_tuple) == 3:
+                    new_drip_state = reward_tuple[2]
                 if target_slot in baseline_accs[env_idx]:
                     reward_components.host_baseline_acc = baseline_accs[env_idx][
                         target_slot
@@ -1139,15 +1142,11 @@ def execute_actions(
                                     * handler_result.telemetry["scaffold_count"]
                                 )
                             # Collect drip state for BASIC_PLUS mode post-fossilization
-                            # accountability. new_drip_state is created in compute_basic_reward
-                            # when action=FOSSILIZE; add it only after fossilization succeeds.
-                            if (
-                                reward_components is not None
-                                and reward_components.new_drip_state is not None
-                            ):
-                                env_state.fossilized_drip_states.append(
-                                    reward_components.new_drip_state
-                                )
+                            # accountability. new_drip_state is returned as the third element
+                            # of the compute_reward() tuple when action=FOSSILIZE; collect it
+                            # only after fossilization succeeds.
+                            if new_drip_state is not None:
+                                env_state.fossilized_drip_states.append(new_drip_state)
                     elif op_action == OP_PRUNE:
                         handler_result = handler(
                             handler_ctx,

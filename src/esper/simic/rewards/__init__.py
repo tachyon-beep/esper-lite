@@ -5,10 +5,11 @@ This subpackage contains:
 - contribution.py: Contribution-primary reward computation
 - loss_primary.py: Loss-primary reward computation
 - shaping.py: PBRS utilities and stage potentials
-- reward_telemetry.py: Per-component reward breakdown for debugging
+
+RewardComponentsTelemetry lives in esper.leyline.telemetry_contracts (no domain imports).
 """
 
-from .reward_telemetry import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from .types import ContributionRewardInputs, LossRewardInputs
 
 from .rewards import (

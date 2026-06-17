@@ -5,7 +5,7 @@ Tests gradient health aggregation, reward shaping ratio, and entropy collapse de
 
 
 from esper.simic.telemetry import LayerGradientStats
-from esper.simic.rewards import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from esper.simic.telemetry.emitters import aggregate_layer_gradient_health
 
 

@@ -11,7 +11,7 @@ import duckdb
 from datetime import datetime, timezone
 from typing import cast
 
-from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from esper.leyline import SeedStage
 from esper.leyline.telemetry import (
     TelemetryEvent,

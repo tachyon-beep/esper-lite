@@ -63,7 +63,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "compute_value_function_metrics": ("esper.leyline.value_metrics", "compute_value_function_metrics"),
     "ValueFunctionMetricsDict": ("esper.leyline.value_metrics", "ValueFunctionMetricsDict"),
     # Observation statistics (TELE-OBS)
-    "ObservationStatsTelemetry": ("esper.simic.telemetry.observation_stats", "ObservationStatsTelemetry"),
+    # ObservationStatsTelemetry lives in leyline; observation_stats provides compute_observation_stats.
+    "ObservationStatsTelemetry": ("esper.leyline.telemetry_contracts", "ObservationStatsTelemetry"),
     "compute_observation_stats": ("esper.simic.telemetry.observation_stats", "compute_observation_stats"),
 }
 
@@ -170,10 +171,8 @@ if TYPE_CHECKING:
         LSTMHealthMetrics as LSTMHealthMetrics,
         compute_lstm_health as compute_lstm_health,
     )
-    from esper.simic.telemetry.observation_stats import (
-        ObservationStatsTelemetry as ObservationStatsTelemetry,
-        compute_observation_stats as compute_observation_stats,
-    )
+    from esper.leyline.telemetry_contracts import ObservationStatsTelemetry as ObservationStatsTelemetry
+    from esper.simic.telemetry.observation_stats import compute_observation_stats as compute_observation_stats
     from esper.simic.telemetry.profiler import training_profiler as training_profiler
     from esper.simic.telemetry.phase_profiler import (
         NullProfiler as NullProfiler,

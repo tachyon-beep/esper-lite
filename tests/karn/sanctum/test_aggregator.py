@@ -450,7 +450,7 @@ def test_aggregator_reads_reward_components_dataclass():
     from datetime import datetime, timezone
     from esper.karn.sanctum.aggregator import SanctumAggregator
     from esper.leyline.telemetry import AnalyticsSnapshotPayload, TelemetryEvent, TelemetryEventType
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     agg = SanctumAggregator(num_envs=1)
     agg._connected = True
@@ -507,7 +507,7 @@ def test_aggregator_wires_all_reward_component_fields():
     from datetime import datetime, timezone
     from esper.karn.sanctum.aggregator import SanctumAggregator
     from esper.leyline.telemetry import AnalyticsSnapshotPayload, TelemetryEvent, TelemetryEventType
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     agg = SanctumAggregator(num_envs=1)
     agg._connected = True

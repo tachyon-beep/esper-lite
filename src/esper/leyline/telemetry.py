@@ -16,11 +16,9 @@ import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Literal, cast
+from typing import Any, Callable, Literal, cast
 
-if TYPE_CHECKING:
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
-    from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+from esper.leyline.telemetry_contracts import ObservationStatsTelemetry, RewardComponentsTelemetry
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -582,7 +580,6 @@ class EpochCompletedPayload:
         if observation_stats_data is None:
             observation_stats = None
         else:
-            from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
             observation_stats = ObservationStatsTelemetry.from_dict(observation_stats_data)
 
         return cls(
@@ -1912,15 +1909,10 @@ class AnalyticsSnapshotPayload:
     @staticmethod
     def _parse_reward_components(
         data: dict[str, Any] | None,
-    ) -> "RewardComponentsTelemetry | None":
-        """Parse reward_components from dict if present.
-
-        Uses late import to avoid circular dependency at module load time.
-        """
+    ) -> RewardComponentsTelemetry | None:
+        """Parse reward_components from dict if present."""
         if data is None:
             return None
-        from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
-
         return RewardComponentsTelemetry.from_dict(data)
 
     @staticmethod
@@ -1933,15 +1925,10 @@ class AnalyticsSnapshotPayload:
     @staticmethod
     def _parse_observation_stats(
         data: dict[str, Any] | None,
-    ) -> "ObservationStatsTelemetry | None":
-        """Parse observation_stats from dict if present.
-
-        Uses late import to avoid circular dependency at module load time.
-        """
+    ) -> ObservationStatsTelemetry | None:
+        """Parse observation_stats from dict if present."""
         if data is None:
             return None
-        from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
-
         return ObservationStatsTelemetry.from_dict(data)
 
 

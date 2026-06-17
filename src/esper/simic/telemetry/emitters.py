@@ -43,9 +43,9 @@ from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
 from esper.simic.vectorized_types import ActionMaskFlags, ActionOutcome, ActionSpec
 
 if TYPE_CHECKING:
+    from esper.leyline.telemetry_contracts import ObservationStatsTelemetry
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
-    from .observation_stats import ObservationStatsTelemetry
     from .telemetry_config import TelemetryConfig
 
 _logger = logging.getLogger(__name__)

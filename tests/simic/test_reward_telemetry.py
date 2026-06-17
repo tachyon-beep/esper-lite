@@ -4,7 +4,7 @@ import pytest
 
 
 from esper.leyline import LifecycleOp, SeedStage
-from esper.simic.rewards import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from esper.simic.rewards import (
     compute_contribution_reward,
     SeedInfo,

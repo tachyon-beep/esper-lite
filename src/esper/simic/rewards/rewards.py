@@ -10,6 +10,7 @@ from enum import Enum
 from typing import cast
 
 from esper.leyline import DEFAULT_GAMMA
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from .contribution import (
     ContributionRewardConfig,
     FossilizedSeedDripState,
@@ -29,7 +30,6 @@ from .contribution import (
     _contribution_prune_shaping,
 )
 from .loss_primary import compute_loss_reward, compute_pbrs_stage_bonus
-from .reward_telemetry import RewardComponentsTelemetry
 from .shaping import (
     STAGE_POTENTIALS,
     compute_pbrs_bonus,
@@ -57,7 +57,7 @@ class RewardFamily(Enum):
 
 def compute_reward(
     inputs: ContributionRewardInputs,
-) -> float | tuple[float, RewardComponentsTelemetry]:
+) -> float | tuple[float, RewardComponentsTelemetry] | tuple[float, RewardComponentsTelemetry, FossilizedSeedDripState | None]:
     """Unified reward computation dispatcher."""
     config = inputs.config
     if config is None:
@@ -154,9 +154,9 @@ def compute_reward(
             components.fossilize_terminal_bonus = fossilize_bonus
             # Drip telemetry (expanded in BASIC_PLUS mode)
             components.drip_this_epoch = drip_this_epoch
-            # Pass new_drip_state to caller for collection (created on FOSSILIZE)
-            components.new_drip_state = new_drip_state
-            return reward, components
+            # new_drip_state is returned as the third element of the tuple so that
+            # the drip state (a simic type) never contaminates the leyline contract.
+            return reward, components, new_drip_state
 
     elif config.reward_mode == RewardMode.SIMPLIFIED:
         reward = compute_simplified_reward(

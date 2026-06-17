@@ -697,9 +697,12 @@ def test_basic_plus_action_execution_requests_components_for_drip_transport() ->
         slot_id="r0c1",
     )
 
-    reward, components = compute_reward(inputs)
+    reward, components, new_drip_state = compute_reward(inputs)  # type: ignore[misc]
 
     assert reward > 0
-    assert components.new_drip_state is not None
-    assert components.new_drip_state.seed_id == "test-seed"
-    assert components.new_drip_state.slot_id == "r0c1"
+    # new_drip_state is now returned as the third element of the tuple
+    # (not on the components object, since RewardComponentsTelemetry is a leyline contract
+    # with no domain imports).
+    assert new_drip_state is not None
+    assert new_drip_state.seed_id == "test-seed"
+    assert new_drip_state.slot_id == "r0c1"
