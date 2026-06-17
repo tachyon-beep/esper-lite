@@ -217,6 +217,29 @@ def _reset_hidden_for_terminal_envs(
     return h_reset, c_reset
 
 
+def _select_hidden_for_envs(
+    batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None,
+    *,
+    env_indices: list[int],
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Slice the full-batch recurrent state down to a subset of envs, in order.
+
+    The GAE bootstrap forward only covers the TRUNCATED envs (a strict subset of
+    env_states whenever envs desync their episode lengths), but ``batched_lstm_hidden``
+    carries every env. The hidden state handed to the LSTM must match the feature
+    batch in both size and env order, or the recurrent forward raises a
+    hidden/input batch-size mismatch. ``env_indices`` is the bootstrap batch's env
+    order (from ``truncated_bootstrap_targets``); duplicates are permitted and
+    preserved (an env may truncate more than once in a multi-step segment).
+    """
+    if batched_lstm_hidden is None:
+        return None
+
+    h_batch, c_batch = batched_lstm_hidden
+    sel = torch.tensor(env_indices, device=h_batch.device, dtype=torch.long)
+    return h_batch.index_select(1, sel), c_batch.index_select(1, sel)
+
+
 def apply_proof_baseline_action_controls(
     *,
     masks_batch: dict[str, torch.Tensor],
@@ -2264,6 +2287,21 @@ class VectorizedPPOTrainer:
                 [m["slot_by_op"] for m in all_post_action_masks]
             ).to(device)
 
+            # Bootstrap features cover only the TRUNCATED envs (all_post_action_signals
+            # is appended under `if truncated` in execute_actions), so they are a strict
+            # subset of env_states whenever envs desync their episode lengths and only
+            # some truncate on this epoch. batched_lstm_hidden carries the FULL env batch,
+            # so it must be sliced to the same subset (and in the same order) or the LSTM
+            # forward fails with a hidden/input batch mismatch. truncated_bootstrap_targets
+            # is appended in lockstep with all_post_action_signals, so its env order is the
+            # canonical bootstrap-batch order.
+            bootstrap_env_indices = [
+                env_id for env_id, _step_idx in truncated_bootstrap_targets
+            ]
+            bootstrap_hidden = _select_hidden_for_envs(
+                batched_lstm_hidden, env_indices=bootstrap_env_indices
+            )
+
             # P1-BF16: bootstrap value under the same BF16 autocast as the
             # update, so the V(s) used in GAE is precision-consistent. get_action()
             # returns the op-INDEPENDENT V(s) baseline (P0-1), not a Q(s, op).
@@ -2272,7 +2310,7 @@ class VectorizedPPOTrainer:
                     post_action_features_normalized,
                     blueprint_indices=post_action_bp_indices,
                     masks=post_masks_batch,
-                    hidden=batched_lstm_hidden,
+                    hidden=bootstrap_hidden,
                     deterministic=True,
                     probability_floor=agent.probability_floor,
                 )
