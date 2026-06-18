@@ -1,25 +1,30 @@
-"""P0-1: the op-conditioned q_head is TRAINED (not dead telemetry).
+"""Q-value finiteness gate (P1-b) and PPO q_value contract (P2-a).
 
-After one PPO update, BOTH the op-INDEPENDENT state_value_head AND the op-conditioned
-q_head must receive nonzero gradient — the q_head via the small detached Q-aux
-regression toward the same normalized-returns target as V(s). A never-trained Q head
-would emit init noise (a forbidden dead telemetry component).
+P1-b: a non-finite q_value must trip the SAME skip-epoch finiteness gate as a
+non-finite value, so the optimizer never steps on a corrupted Q-aux loss. Before
+the fix the fused gate reduced over new/old log_probs and ``values`` but NOT
+``q_values``, so a non-finite q reached backward()/optimizer.step().
+
+P2-a: PPO genuinely requires EvalResult.q_value (P0-1 always builds a q_head).
+If a policy returns q_value=None, PPO must fail loud at the boundary with a clear
+AssertionError rather than crashing opaquely at ``q_values[valid_mask]``.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+import dataclasses
 
+import pytest
 import torch
 
 from esper.leyline import (
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
-    NUM_ALPHA_CURVES,
-    NUM_ALPHA_SPEEDS,
-    NUM_ALPHA_TARGETS,
 )
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent
@@ -118,64 +123,76 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig) -> None:
     agent.buffer.end_episode(0)
 
 
-def test_q_head_trained_aux() -> None:
-    """After one update, q_head AND state_value_head params received nonzero grad."""
+def _snapshot_params(agent: PPOAgent) -> list[torch.Tensor]:
+    return [p.detach().clone() for p in agent.policy.network.parameters()]
+
+
+def _params_unchanged(agent: PPOAgent, snapshot: list[torch.Tensor]) -> bool:
+    return all(
+        torch.equal(p.detach(), s)
+        for p, s in zip(agent.policy.network.parameters(), snapshot, strict=True)
+    )
+
+
+def test_nonfinite_q_value_skips_optimizer_step() -> None:
+    """P1-b: a non-finite q_value trips the finiteness gate; the optimizer never steps.
+
+    Before the gate fix, q_values were excluded from the fused finiteness reduction,
+    so a NaN q fed q_aux_loss -> total_loss -> backward()/optimizer.step(), corrupting
+    every parameter. The gate must skip the epoch (ppo_update_performed=False, params
+    unchanged) on the SAME path as a non-finite value.
+    """
     agent, slot_config = _build_agent()
     _fill_buffer(agent, slot_config)
 
+    real_eval = agent.policy.evaluate_actions
+
+    def poisoned_eval(*args, **kwargs):
+        result = real_eval(*args, **kwargs)
+        bad_q = result.q_value.clone()
+        bad_q[..., 0] = float("nan")  # inject NaN into the op-conditioned Q-aux head
+        return dataclasses.replace(result, q_value=bad_q)
+
+    agent.policy.evaluate_actions = poisoned_eval  # type: ignore[method-assign]
+
+    snapshot = _snapshot_params(agent)
     metrics = agent.update(clear_buffer=True)
+
+    assert metrics["ppo_update_performed"] is False, (
+        "Non-finite q_value must trip the finiteness gate and skip the optimizer step."
+    )
+    assert metrics["finiteness_gate_skip_count"] >= 1
+    assert _params_unchanged(agent, snapshot), (
+        "Optimizer stepped on a NaN q_value: parameters were mutated."
+    )
+
+
+def test_finite_q_value_steps_optimizer() -> None:
+    """Control: with a finite q_value the gate passes and the optimizer steps."""
+    agent, slot_config = _build_agent()
+    _fill_buffer(agent, slot_config)
+
+    snapshot = _snapshot_params(agent)
+    metrics = agent.update(clear_buffer=True)
+
     assert metrics["ppo_update_performed"] is True
-
-    # Per-head gradient-state telemetry captures the BACKWARD grad state before the
-    # optimizer step. Both value-like heads must report a real (finite) gradient,
-    # never "missing"/"not_learnable" -- "value" is V(s) (state_value_head), "q" is the
-    # op-conditioned q_head trained by the detached Q-aux regression.
-    grad_states = metrics["head_gradient_states"]
-    assert grad_states["value"][0] in ("finite", "nonfinite"), grad_states["value"]
-    assert grad_states["q"][0] in ("finite", "nonfinite"), grad_states["q"]
-
-    # And the recorded grad norms must be finite and > 0 for both value-like heads.
-    grad_norms = metrics["head_grad_norms"]
-    v_norm = grad_norms["value"][0]
-    q_norm = grad_norms["q"][0]
-    assert v_norm > 0.0 and torch.isfinite(torch.tensor(v_norm)), f"V grad norm = {v_norm}"
-    assert q_norm > 0.0 and torch.isfinite(torch.tensor(q_norm)), f"Q grad norm = {q_norm}"
-
-    # The Q-aux loss telemetry must be present and finite (the head is being trained).
-    assert "q_aux_loss" in metrics
-    assert torch.isfinite(torch.as_tensor(metrics["q_aux_loss"])).all()
+    assert not _params_unchanged(agent, snapshot), (
+        "A healthy update must mutate parameters (optimizer stepped)."
+    )
 
 
-def test_nonfinite_q_value_trips_finiteness_gate_without_optimizer_step(monkeypatch) -> None:
-    """A poisoned q_head output must skip backward before it can contaminate gradients."""
+def test_none_q_value_raises_clear_assertion() -> None:
+    """P2-a: PPO requires q_value; a None must fail loud at the boundary."""
     agent, slot_config = _build_agent()
     _fill_buffer(agent, slot_config)
 
-    before_params = {
-        name: param.detach().clone()
-        for name, param in agent.policy.network.named_parameters()
-    }
-    original_evaluate_actions = agent.policy.evaluate_actions
+    real_eval = agent.policy.evaluate_actions
 
-    def _evaluate_actions_with_nonfinite_q(*args, **kwargs):
-        result = original_evaluate_actions(*args, **kwargs)
-        poisoned_q = result.q_value * torch.tensor(float("nan"), device=result.q_value.device)
-        return replace(result, q_value=poisoned_q)
+    def none_q_eval(*args, **kwargs):
+        result = real_eval(*args, **kwargs)
+        return dataclasses.replace(result, q_value=None)
 
-    monkeypatch.setattr(agent.policy, "evaluate_actions", _evaluate_actions_with_nonfinite_q)
+    agent.policy.evaluate_actions = none_q_eval  # type: ignore[method-assign]
 
-    metrics = agent.update(clear_buffer=True)
-
-    assert metrics["ppo_update_performed"] is False
-    assert metrics["finiteness_gate_skip_count"] == 1
-    assert any(
-        "q_values" in source
-        for failure in metrics["finiteness_gate_failures"]
-        for source in failure["sources"]
-    ), metrics["finiteness_gate_failures"]
-
-    after_params = dict(agent.policy.network.named_parameters())
-    for name, before in before_params.items():
-        assert torch.equal(after_params[name].detach(), before), (
-            f"parameter {name} changed even though q_values tripped the finiteness gate"
-        )
+    with pytest.raises(AssertionError, match="PPO requires a q_value"):
+        agent.update(clear_buffer=True)

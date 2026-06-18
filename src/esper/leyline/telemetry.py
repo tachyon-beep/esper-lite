@@ -825,6 +825,7 @@ class PPOUpdatePayload:
     head_alpha_curve_gradient_state: str | None = None
     head_op_gradient_state: str | None = None
     head_value_gradient_state: str | None = None
+    head_q_gradient_state: str | None = None
 
     # Per-head PPO ratio max (Policy V2 - multi-head ratio explosion detection)
     # Individual head ratios can look healthy while joint ratio exceeds clip range
@@ -1048,6 +1049,7 @@ class PPOUpdatePayload:
             head_alpha_curve_gradient_state=data.get("head_alpha_curve_gradient_state"),
             head_op_gradient_state=data.get("head_op_gradient_state"),
             head_value_gradient_state=data.get("head_value_gradient_state"),
+            head_q_gradient_state=data.get("head_q_gradient_state"),
             # OPTIONAL: Per-head ratio max (only for factored policies, defaults to 1.0).
             head_slot_ratio_max=data.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=data.get("head_blueprint_ratio_max", 1.0),
@@ -1164,6 +1166,9 @@ class PPOUpdatePayload:
             op_valid_mask=tuple(False for _ in range(NUM_OPS)),
             q_variance=nan,
             q_spread=nan,
+            q_aux_loss=nan,
+            head_q_grad_norm=nan,
+            head_q_gradient_state="skipped",
             skipped=True,
         )
 

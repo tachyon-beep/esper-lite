@@ -988,6 +988,14 @@ class PPOAgent:
             # value loss, the Q-aux regression target (normalized_returns) is fixed for
             # the whole update while the predictor moves each epoch -- there is no
             # anchoring requirement on value/q targets (only ref_log_probs is anchored).
+            # P2-a: PPO-trained policies MUST populate q_value (P0-1 always builds a
+            # q_head). The Q-aux regression and op_q telemetry depend on it; fail loud
+            # at the boundary rather than crashing opaquely downstream (e.g. on the
+            # q_values[valid_mask] index below).
+            assert result.q_value is not None, (
+                "PPO requires a q_value; the policy must populate EvalResult.q_value "
+                "(P0-1: PPO-trained policies always expose an op-conditioned q_head)."
+            )
             q_values = result.q_value  # Q(s, stored_op): detached telemetry/aux
             entropy = result.entropy
 
@@ -1035,6 +1043,7 @@ class PPOAgent:
                 torch.isfinite(new_lp_stack).all()
                 & torch.isfinite(old_lp_stack).all()
                 & torch.isfinite(values).all()
+                & torch.isfinite(q_values).all()
             )
             if not bool(all_finite):  # single sync; per-head drill-down only on failure
                 # Check new log_probs - separate NaN from Inf per head
@@ -1062,6 +1071,14 @@ class PPOAgent:
                 if not torch.isfinite(values).all():
                     nonfinite_count = (~torch.isfinite(values)).sum()
                     nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
+                    nonfinite_found = True
+
+                # Check q_values (op-conditioned Q-aux): a non-finite q feeds q_aux_loss
+                # into total_loss and would corrupt the optimizer step. Gate it on the
+                # same skip-epoch path as values.
+                if not torch.isfinite(q_values).all():
+                    nonfinite_count = (~torch.isfinite(q_values)).sum()
+                    nonfinite_sources.append(f"q_values: {nonfinite_count} non-finite")
                     nonfinite_found = True
 
             if nonfinite_found:

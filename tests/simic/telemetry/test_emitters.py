@@ -128,6 +128,7 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "head_gradient_states": {
             **{head: ["finite"] for head in HEAD_NAMES},
             "value": ["finite"],
+            "q": ["finite"],
         },
     }
     base.update(overrides)
@@ -264,10 +265,13 @@ def test_emit_ppo_update_event_includes_value_head_gradient_state(
     emit_ppo_update_event(
         hub=hub,
         metrics=_make_mandatory_metrics(
-            head_grad_norms={"value": [grad_norm]},
+            # Under P0-1 the q_head is always trained via the aux loss, so its
+            # grad norm is always present alongside the value head's.
+            head_grad_norms={"value": [grad_norm], "q": [0.3]},
             head_gradient_states={
                 **{head: ["finite"] for head in HEAD_NAMES},
                 "value": [gradient_state],
+                "q": ["finite"],
             },
         ),
         episodes_completed=10,
@@ -305,6 +309,26 @@ def test_emit_ppo_update_event_surfaces_q_head_telemetry() -> None:
     payload = hub.emit.call_args[0][0].data
     assert payload.q_aux_loss == pytest.approx(0.05)
     assert payload.head_q_grad_norm == pytest.approx(0.3)
+    assert payload.head_q_gradient_state == "finite"
+
+
+def test_emit_ppo_update_event_requires_q_head_gradient_norm() -> None:
+    """Live q-head telemetry must fail loudly if the q grad norm is missing."""
+    hub = MagicMock()
+
+    with pytest.raises(KeyError):
+        emit_ppo_update_event(
+            hub=hub,
+            metrics=_make_mandatory_metrics(
+                head_grad_norms={"value": [0.4]},
+            ),
+            episodes_completed=10,
+            batch_idx=5,
+            epoch=100,
+            optimizer=None,
+            grad_norm=1.0,
+            update_time_ms=50.0,
+        )
 
 
 def test_emit_ppo_update_event_sets_dataloader_wait_ratio() -> None:

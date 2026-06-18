@@ -179,6 +179,37 @@ class TestFlushReturnsFalseOnBrokenQueue:
             f"for a backend worker queue; got {result!r}"
         )
 
+    def test_flush_returns_false_when_main_queue_broken(self):
+        """flush() returns False if _join_with_timeout raises on the MAIN queue (first call).
+
+        Regression for P2-c: the main-queue join at output.py:819 was unguarded, so a
+        RuntimeError there propagated out of flush() instead of being surfaced as a
+        False return value (delivery failed). Raising on the FIRST call exercises the
+        main-queue path specifically (the backend-worker path is the second+ call).
+        """
+        hub = NissaHub()
+        hub.add_backend(_NoopBackend())
+
+        # Emit something so there's a worker active and a non-empty main queue path.
+        hub.emit(_make_event())
+        # Wait for main queue to drain normally
+        hub.flush(timeout=1.0)
+
+        # Mock _join_with_timeout to raise on the FIRST call (the main queue drain).
+        def _fake_join(q, timeout):  # noqa: ANN001
+            raise RuntimeError("simulated broken main queue")
+
+        import esper.nissa.output as output_module
+        with patch.object(output_module, "_join_with_timeout", side_effect=_fake_join):
+            result = hub.flush(timeout=2.0)
+
+        hub.close()
+
+        assert result is False, (
+            "flush() must return False (not raise) when _join_with_timeout raises "
+            f"RuntimeError for the MAIN queue; got {result!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # BUG-3: Worker loop must break (not spin) when queue.get raises RuntimeError
@@ -308,3 +339,72 @@ class TestSanctumTrainingCrashExitsNonzero:
 
         # No recorded error -> no SystemExit (clean runs exit 0).
         assert _exit_nonzero_if_training_failed([None]) is None
+
+
+# ---------------------------------------------------------------------------
+# BUG-5 (train.py, P1-c): a degraded REQUESTED telemetry backend must fail loud
+# ---------------------------------------------------------------------------
+
+class TestRequestedTelemetryBackendHealthGate:
+    """The REAL train.py shutdown gate must fail when a REQUESTED backend degraded.
+
+    Exercises esper.scripts.train._degraded_requested_backends directly (the body
+    of the shutdown health check), so it fails if the gate is reverted. The health
+    snapshot is the same shape NissaHub.get_health_snapshot() returns.
+    """
+
+    def _snapshot_with(self, backend_drops: dict[str, int]) -> dict:
+        """Build a health snapshot whose backend_stats carry the given drop counts."""
+        hub = NissaHub()
+        for name in backend_drops:
+            hub.add_backend(_NoopBackend())
+            # Rename the just-added worker so backend_stats keys are deterministic.
+            hub._backend_workers[-1]._name = name
+        snapshot = hub.get_health_snapshot()
+        for name, drops in backend_drops.items():
+            snapshot["backend_stats"][name]["dropped_events"] = drops
+        snapshot["backend_dropped_events"] = sum(backend_drops.values())
+        snapshot["dropped_events"] = snapshot["hub_dropped_events"] + sum(backend_drops.values())
+        snapshot["status"] = "degraded" if snapshot["dropped_events"] > 0 else "healthy"
+        hub.close()
+        return snapshot
+
+    def test_requested_backend_dropped_events_is_flagged(self):
+        from esper.scripts.train import _degraded_requested_backends
+
+        snapshot = self._snapshot_with({"FileOutput": 3})
+        degraded = _degraded_requested_backends(snapshot, requested_backend_names={"FileOutput"})
+        assert degraded == {"FileOutput"}, (
+            f"a requested backend that dropped events must be flagged; got {degraded!r}"
+        )
+
+    def test_non_requested_backend_drops_are_not_flagged(self):
+        from esper.scripts.train import _degraded_requested_backends
+
+        # The always-on research collector dropped events, but it was not a
+        # requested streaming sink -> must NOT trip the gate.
+        snapshot = self._snapshot_with({"KarnCollector": 5})
+        degraded = _degraded_requested_backends(snapshot, requested_backend_names=set())
+        assert degraded == set(), (
+            f"non-requested backend drops must not fail the run; got {degraded!r}"
+        )
+
+    def test_clean_requested_backend_is_not_flagged(self):
+        from esper.scripts.train import _degraded_requested_backends
+
+        snapshot = self._snapshot_with({"FileOutput": 0})
+        degraded = _degraded_requested_backends(snapshot, requested_backend_names={"FileOutput"})
+        assert degraded == set(), (
+            f"a healthy requested backend must not be flagged; got {degraded!r}"
+        )
+
+    def test_missing_requested_backend_is_loud_not_silent(self):
+        from esper.scripts.train import _degraded_requested_backends
+
+        # A requested backend that is absent from backend_stats is a real bug
+        # (CLAUDE.md no-bug-hiding) -> must raise, NOT be silently treated as healthy.
+        snapshot = self._snapshot_with({"FileOutput": 0})
+        with pytest.raises(KeyError):
+            _degraded_requested_backends(
+                snapshot, requested_backend_names={"FileOutput", "WandbBackend"}
+            )

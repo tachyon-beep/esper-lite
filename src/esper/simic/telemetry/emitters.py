@@ -1038,7 +1038,7 @@ def emit_ppo_update_event(
             head_alpha_curve_grad_norm=head_grad_norms_avg.get("head_alpha_curve_grad_norm"),
             head_op_grad_norm=head_grad_norms_avg.get("head_op_grad_norm"),
             head_value_grad_norm=head_grad_norms_avg["head_value_grad_norm"],
-            head_q_grad_norm=head_grad_norms_avg.get("head_q_grad_norm"),
+            head_q_grad_norm=head_grad_norms_avg["head_q_grad_norm"],
             head_style_entropy=head_entropies_avg.get("head_style_entropy"),
             head_tempo_entropy=head_entropies_avg.get("head_tempo_entropy"),
             head_alpha_target_entropy=head_entropies_avg.get("head_alpha_target_entropy"),
@@ -1062,6 +1062,7 @@ def emit_ppo_update_event(
             head_alpha_curve_gradient_state=head_gradient_states["head_alpha_curve_gradient_state"],
             head_op_gradient_state=head_gradient_states["head_op_gradient_state"],
             head_value_gradient_state=head_gradient_states["head_value_gradient_state"],
+            head_q_gradient_state=head_gradient_states["head_q_gradient_state"],
             # Per-head ratio max (Policy V2 - multi-head ratio explosion detection)
             head_slot_ratio_max=metrics.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=metrics.get("head_blueprint_ratio_max", 1.0),

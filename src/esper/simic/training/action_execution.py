@@ -706,6 +706,13 @@ def execute_actions(
             continue
 
         action_outcome.rollback_occurred = False
+        # P1-a: clear the DOWNSTREAM-read flag on the pooled EnvStepRecord too.
+        # step_records are pre-allocated once per batch and reused across epochs;
+        # the per-epoch LSTM reset and the death-penalty / truncated-bootstrap
+        # handling read record.rollback_occurred, NOT action_outcome's copy. A
+        # stale True from a prior epoch's panic must not leak into this healthy
+        # transition.
+        record.rollback_occurred = False
 
         scoreboard = analytics._get_scoreboard(env_idx)
         host_params = scoreboard.host_params

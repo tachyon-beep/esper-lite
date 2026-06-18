@@ -1162,6 +1162,186 @@ def test_rollback_emits_morphology_causal_log_with_watch_evidence() -> None:
     assert events[0].observation_hash == "obs-rollback"
 
 
+def test_pooled_record_rollback_flag_cleared_after_healthy_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale rollback flag must NOT survive into a later healthy epoch (P1-a).
+
+    The EnvStepRecord list is pre-allocated ONCE per batch and reused across all
+    epochs (vectorized_trainer._make_batch_context). Downstream consumers read
+    record.rollback_occurred from that pooled object:
+      - per-epoch LSTM reset (vectorized_trainer.py:2254-2259)
+      - rollback/death-penalty handling (vectorized_trainer.py:2701-2703)
+
+    The panic path sets record.rollback_occurred = True. The healthy path must
+    reset THAT SAME field; if it only clears action_outcome.rollback_occurred
+    (a different object), a True from epoch N corrupts a healthy epoch N+1.
+    """
+    monkeypatch.setattr(
+        action_execution,
+        "compute_rent_and_shock_inputs",
+        lambda **_: (0, 0.0),
+    )
+    reward_components = SimpleNamespace(
+        bounded_attribution=None,
+        compute_rent=0.0,
+        alpha_shock=0.0,
+        new_drip_state=None,
+        total_reward=0.0,
+    )
+    monkeypatch.setattr(
+        action_execution,
+        "compute_reward",
+        lambda inputs: (0.0, reward_components),
+    )
+
+    model = _FakeModel()
+    governor = _FakeGovernor()
+    env_state = SimpleNamespace(
+        model=model,
+        stream=None,
+        governor=governor,
+        host_optimizer=SimpleNamespace(state={"momentum": object()}),
+        seed_optimizers={},
+        action_counts=defaultdict(int),
+        successful_action_counts=defaultdict(int),
+        val_acc=50.0,
+        val_loss=1.0,
+        train_loss=1.0,
+        train_acc=50.0,
+        committed_val_acc=50.0,
+        prev_slot_alphas={},
+        prev_slot_params={},
+        acc_at_germination={},
+        escrow_credit=defaultdict(float),
+        seeds_created=0,
+        germinate_count=0,
+        seeds_fossilized=0,
+        fossilize_count=0,
+        contributing_fossilized=0,
+        scaffold_boost_ledger={},
+        fossilized_drip_states=[],
+        pending_auto_prune_penalty=0.0,
+        pending_hindsight_credit=0.0,
+        episode_rewards=[],
+        last_action_success=True,
+        last_action_op=OP_WAIT,
+        gradient_ratio_ema={},
+        gradient_health_prev={},
+        epochs_since_counterfactual={},
+        telemetry_cb=None,
+        init_obs_v3_slot_tracking=lambda slot_id: None,
+        clear_obs_v3_slot_tracking=lambda slot_id: None,
+    )
+
+    buffer = _FakeBuffer()
+    slot_config = SlotConfig.default()
+    reward_config = SimpleNamespace(
+        reward_mode=RewardMode.SHAPED,
+        rent_host_params_floor=1,
+        base_slot_rent_ratio=0.0,
+    )
+    context = ActionExecutionContext(
+        slots=["r0c0"],
+        ordered_slots=["r0c0"],
+        slot_config=slot_config,
+        task_spec=SimpleNamespace(topology=None),
+        env_reward_configs=[reward_config],
+        reward_family_enum=RewardFamily.CONTRIBUTION,
+        reward_config=SimpleNamespace(auto_prune_penalty=-1.0),
+        loss_reward_config=SimpleNamespace(),
+        reward_normalizer=SimpleNamespace(clip=10.0, update_and_normalize=lambda reward: reward),
+        telemetry_config=None,
+        ops_telemetry_enabled=False,
+        disable_advance=False,
+        effective_max_seeds=1,
+        max_epochs=5,
+        num_train_batches=1,
+        device="cpu",
+        analytics=SimpleNamespace(_get_scoreboard=lambda env_idx: SimpleNamespace(host_params=100)),
+        emitters=[SimpleNamespace(emit=lambda event: None)],
+        agent=SimpleNamespace(buffer=buffer),
+        fossilize_active_seed=lambda model, slot_id: False,
+        resolve_target_slot=_resolve_target_slot,
+        host_params_baseline=100,
+    )
+
+    head_log_probs = {head: torch.zeros(1) for head in HEAD_NAMES}
+    masks_batch = {head: torch.ones((1, 1), dtype=torch.bool) for head in HEAD_NAMES}
+    masks_batch["op"] = torch.ones((1, len(action_execution.OP_NAMES)), dtype=torch.bool)
+    masks_batch["slot_by_op"] = torch.ones(
+        (1, len(action_execution.OP_NAMES), slot_config.num_slots),
+        dtype=torch.bool,
+    )
+
+    # ONE pooled record reused across both epochs (mirrors _make_batch_context).
+    pooled_record = EnvStepRecord(
+        env_idx=0,
+        action_spec=ActionSpec(),
+        action_outcome=ActionOutcome(),
+        mask_flags=ActionMaskFlags(),
+        reward_summary=RewardSummaryAccumulator(),
+        contribution_reward_inputs=SimpleNamespace(),
+        loss_reward_inputs=SimpleNamespace(),
+    )
+
+    def _run_epoch(*, op: int, epoch: int, panic_envs: list[int]) -> None:
+        actions_np = np.zeros((len(HEAD_NAMES), 1), dtype=np.int64)
+        actions_np[HEAD_NAMES.index("op"), 0] = op
+        execute_actions(
+            context=context,
+            env_states=[env_state],
+            actions_np=actions_np,
+            values=[0.0],
+            all_signals=[
+                SimpleNamespace(
+                    metrics=SimpleNamespace(accuracy_delta=0.0),
+                    accuracy_history=[50.0],
+                )
+            ],
+            all_slot_reports=[{}],
+            states_batch_normalized=torch.zeros((1, 4)),
+            blueprint_indices_batch=torch.zeros((1, slot_config.num_slots), dtype=torch.long),
+            pre_step_hiddens=[(torch.zeros(1, 1, 2), torch.zeros(1, 1, 2))],
+            head_log_probs=head_log_probs,
+            masks_batch=masks_batch,
+            step_records=[pooled_record],
+            head_confidences_cpu=None,
+            head_entropies_cpu=None,
+            op_probs_cpu=None,
+            masked_np=None,
+            baseline_accs=[{}],
+            all_disabled_accs={},
+            governor_panic_envs=panic_envs,
+            reward_summary_accum=[RewardSummaryAccumulator()],
+            episode_history=[],
+            episode_outcomes=[],
+            step_obs_stats=None,
+            epoch=epoch,
+            episodes_completed=0,
+            batch_idx=0,
+        )
+
+    # Epoch 1: env 0 panics -> rollback. The pooled record's flag is set True.
+    _run_epoch(op=OP_GERMINATE, epoch=1, panic_envs=[0])
+    assert pooled_record.rollback_occurred is True
+    assert len(governor.rollback_calls) == 1
+
+    # Epoch 2: same env runs healthy (no panic). The pooled record's flag MUST
+    # be reset to False — otherwise the per-epoch LSTM reset and the death
+    # penalty / truncated-bootstrap handling read a stale True and corrupt a
+    # healthy transition.
+    _run_epoch(op=OP_WAIT, epoch=2, panic_envs=[])
+
+    # No new rollback occurred in epoch 2.
+    assert len(governor.rollback_calls) == 1
+    # The downstream-read flag on the POOLED record must be clear.
+    assert pooled_record.rollback_occurred is False, (
+        "stale rollback flag survived into a healthy epoch on the pooled "
+        "EnvStepRecord (downstream-read field)"
+    )
+
+
 def test_decision_head_telemetry_is_unavailable_without_entropy() -> None:
     """Decision telemetry must not encode missing entropy as zero entropy."""
     confidences = np.ones((8, 1), dtype=np.float32)

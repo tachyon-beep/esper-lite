@@ -1,5 +1,7 @@
 """Tests for telemetry payload dataclasses."""
 
+import pytest
+
 
 def test_analytics_snapshot_payload_accepts_reward_components_dataclass():
     """AnalyticsSnapshotPayload should accept RewardComponentsTelemetry."""
@@ -756,6 +758,9 @@ def test_ppo_update_payload_from_dict_with_q_values():
         "op_valid_mask": [True, True, True, True, True, True],
         "q_variance": 2.3,
         "q_spread": 6.7,
+        "q_aux_loss": 0.05,
+        "head_q_grad_norm": 0.3,
+        "head_q_gradient_state": "finite",
         # Pre-normalization advantage stats (always emitted)
         "pre_norm_advantage_mean": 0.6,
         "pre_norm_advantage_std": 2.0,
@@ -772,6 +777,9 @@ def test_ppo_update_payload_from_dict_with_q_values():
     assert payload.ppo_updates_count == 2
     assert payload.op_q_values == (0.5, 5.2, 4.0, -1.5, 2.8, 3.1)
     assert payload.q_variance == 2.3
+    assert payload.q_aux_loss == 0.05
+    assert payload.head_q_grad_norm == 0.3
+    assert payload.head_q_gradient_state == "finite"
 
 
 # =============================================================================

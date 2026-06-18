@@ -9,6 +9,8 @@ TrainingMetrics fields.
 
 from __future__ import annotations
 
+import pytest
+
 from esper.leyline.signals import TrainingMetrics
 
 
@@ -16,13 +18,17 @@ def test_training_metrics_has_no_dead_grad_fields():
     """grad_norm_host / grad_norm_seed must be fully absent (no silently-zeroed remnant)."""
     metrics = TrainingMetrics()
 
-    assert not hasattr(metrics, "grad_norm_host")
-    assert not hasattr(metrics, "grad_norm_seed")
-
-    # TrainingMetrics uses __slots__; a deleted field must leave no slot behind.
+    # TrainingMetrics is a slots dataclass: __slots__ is the authoritative field
+    # contract. A deleted field must leave no slot behind, so the access must fail
+    # loudly rather than return a silently-zeroed remnant.
     slots = TrainingMetrics.__slots__
     assert "grad_norm_host" not in slots
     assert "grad_norm_seed" not in slots
+
+    with pytest.raises(AttributeError):
+        metrics.grad_norm_host
+    with pytest.raises(AttributeError):
+        metrics.grad_norm_seed
 
 
 def test_training_metrics_constructs_with_defaults():

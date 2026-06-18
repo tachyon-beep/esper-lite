@@ -46,9 +46,6 @@ allow_hits:
     owner: "john"
     reason: "Typed inputs for loss-primary reward computation, simic-internal"
 
-  - key: "src/esper/simic/rewards/reward_telemetry.py:dataclass:RewardComponentsTelemetry"
-    owner: "john"
-    reason: "Reward debugging telemetry, simic-internal"
 
   - key: "src/esper/simic/rewards/contribution.py:dataclass:FossilizedSeedDripState"
     owner: "john"
@@ -106,10 +103,9 @@ allow_hits:
     owner: "john"
     reason: "LSTM health monitoring, simic-internal"
 
-  - key: "src/esper/simic/telemetry/observation_stats.py:dataclass:ObservationStatsTelemetry"
+  - key: "src/esper/simic/agent/rollout_buffer.py:dataclass:RollbackPenaltyResult"
     owner: "john"
-    reason: "TODO: Telemetry payload used outside simic, consider moving to leyline"
-    expires: "2026-12-31"
+    reason: "Rollback penalty computation result, simic-internal rollout-buffer type"
 
   # ============================================================================
   # SIMIC: Training Infrastructure

@@ -67,9 +67,16 @@ class EvalResult:
             training. Caller can ignore if not using counterfactual auxiliary loss.
         q_value: Op-conditioned Q(s, stored_op) [batch, seq_len], DETACHED from the LSTM.
             Telemetry/aux ONLY (op_q_values/q_variance/q_spread + a small aux regression
-            toward the same returns target). NOT the PPO baseline. Defaults to None for
-            policies that do not expose a Q head. PIN: positioned last, with a default, so
-            the frozen-dataclass constructor stays valid for non-Q policies.
+            toward the same returns target). NOT the PPO baseline.
+
+            CONTRACT (P2-a): PPO-trained policies MUST populate q_value. Under P0-1 the
+            policy always builds a q_head, and the PPO update path requires q_value
+            unconditionally (Q-aux loss + op_q telemetry); it asserts non-None at the
+            boundary and would otherwise crash opaquely. The field is typed Optional and
+            defaults to None ONLY so the frozen-dataclass constructor stays valid for
+            non-PPO consumers (e.g. off-policy forward paths) that never feed PPO. Do NOT
+            return None from a policy that PPO will train. PIN: positioned last, with a
+            default, so the constructor stays valid for non-Q consumers.
     """
 
     log_prob: dict[str, torch.Tensor]

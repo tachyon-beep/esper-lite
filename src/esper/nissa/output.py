@@ -816,8 +816,18 @@ class NissaHub:
         # Stage 1: Wait for main queue to drain (fan-out complete)
         # join() blocks until all items in the queue have been processed
         # (i.e., task_done() has been called for each get())
-        if not _join_with_timeout(self._queue, timeout):
-            _logger.warning(f"NissaHub main queue flush timed out after {timeout}s")
+        try:
+            if not _join_with_timeout(self._queue, timeout):
+                _logger.warning(f"NissaHub main queue flush timed out after {timeout}s")
+                return False
+        except RuntimeError as e:
+            # RuntimeError from _join_with_timeout means the main queue is in a
+            # broken state. The flush cannot complete, so return False — not raise —
+            # so callers that assert flush() know delivery failed (mirrors the
+            # backend-worker join handling below).
+            _logger.warning(
+                "Main queue join failed during flush (worker may have died): %s", e
+            )
             return False
 
         # Stage 2: Wait for all backend worker queues to drain (processing complete)

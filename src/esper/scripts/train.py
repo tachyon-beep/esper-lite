@@ -81,6 +81,46 @@ def _exit_nonzero_if_training_failed(training_error: list[str | None]) -> None:
         sys.exit(1)
 
 
+def _degraded_requested_backends(
+    health_snapshot: "dict[str, object]",
+    requested_backend_names: "set[str]",
+) -> "set[str]":
+    """Return the subset of REQUESTED telemetry backends that degraded (dropped events).
+
+    A telemetry backend the user explicitly asked for (``--telemetry-file``,
+    ``--telemetry-dir``, ``--wandb``, ``--sanctum``, ``--overwatch``) failing
+    asynchronously must not let the CLI exit 0. This consults the hub health
+    snapshot and reports which requested backends dropped events so the shutdown
+    path can fail loud.
+
+    The always-on research collector is intentionally excluded by the caller: it
+    is never placed in ``requested_backend_names`` because it is not a requested
+    streaming sink.
+
+    A requested backend that is absent from ``backend_stats`` is a real bug (the
+    hub failed to register a sink the user asked for), so we index directly and
+    let the resulting KeyError surface — per the no-bug-hiding policy, we do NOT
+    silently treat a missing backend as healthy.
+
+    Args:
+        health_snapshot: The dict returned by ``NissaHub.get_health_snapshot()``.
+        requested_backend_names: Worker names of backends the user requested.
+
+    Returns:
+        The set of requested backend names that dropped one or more events.
+
+    Raises:
+        KeyError: If a requested backend name is missing from ``backend_stats``.
+    """
+    backend_stats = health_snapshot["backend_stats"]
+    degraded: set[str] = set()
+    for name in requested_backend_names:
+        # Direct index (not .get): a missing requested backend is a bug, fail loud.
+        if int(backend_stats[name]["dropped_events"]) > 0:
+            degraded.add(name)
+    return degraded
+
+
 def _load_config_with_friendly_errors(config_path: str) -> "TrainingConfig":
     """Load TrainingConfig from JSON with user-friendly error messages.
 
@@ -784,6 +824,23 @@ def main() -> None:
     karn_collector = get_collector()
     hub.add_backend(karn_collector)
 
+    # Names of the REQUESTED streaming sinks (worker name == backend class name).
+    # The always-on research collector and ConsoleOutput are deliberately excluded:
+    # they are not requested streaming sinks, so their drops must not fail the run.
+    # The shutdown path consults the hub health snapshot for these names and exits
+    # non-zero if any of them degraded (dropped events) asynchronously.
+    requested_telemetry_backends: set[str] = {
+        backend.__class__.__name__
+        for backend in (
+            file_backend,
+            dir_backend,
+            wandb_backend,
+            sanctum_backend,
+            overwatch_backend,
+        )
+        if backend is not None
+    }
+
     # Events for TUI synchronization
     # - dataloader_ready_event: Signals when DataLoader workers are spawned
     # - shutdown_event: Signals training to stop gracefully at epoch end
@@ -1171,13 +1228,31 @@ def main() -> None:
             count = karn_collector.store.export_jsonl(export_path)
             print(f"Exported {count} Karn records to {export_path}")
 
-        # Close all hub backends (includes Sanctum if used)
+        # Close all hub backends (includes Sanctum if used). close() flushes
+        # pending events before stopping workers, so the health snapshot taken
+        # afterwards reflects final delivery state. close() does NOT clear the
+        # worker list, so the snapshot remains valid here.
         hub.close()
+        telemetry_health = hub.get_health_snapshot()
 
     # A crash inside the sanctum background thread is captured, not raised — surface it
     # as a non-zero process exit so the shell/CI sees the failure (normal mode already
     # propagates its exception above).
     _exit_nonzero_if_training_failed(training_error)
+
+    # A REQUESTED telemetry backend can fail asynchronously (its worker catches
+    # backend.emit() failures and only records dropped events). Without this gate the
+    # CLI would exit 0 while a sink the user explicitly asked for silently lost data.
+    # Only requested streaming sinks gate the exit; the always-on research collector
+    # and ConsoleOutput are excluded by construction of requested_telemetry_backends.
+    degraded = _degraded_requested_backends(telemetry_health, requested_telemetry_backends)
+    if degraded:
+        print(
+            "ERROR: requested telemetry backend(s) degraded (dropped events): "
+            f"{', '.join(sorted(degraded))}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 if __name__ == "__main__":
     # CRITICAL: Set spawn method before main() to avoid fork issues with
