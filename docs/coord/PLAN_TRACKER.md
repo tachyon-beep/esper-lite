@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-17 (fossilize reward-economics host-drift confound fixed — all reward gates now key on the clean counterfactual, dead `_require_total_improvement` removed, committed `575482d7`; FOSSILIZE reward validated −0.81→+2.00; dead-critic root-caused to 1-PPO-step-per-rollout (value warmup ruled out); multi-epoch recurrent PPO via anchored-reference-pass design (`docs/superpowers/specs/2026-06-17-recurrent-ppo-multiepoch-design.md`) + executable two-PR plan (`docs/plans/ready/2026-06-17-recurrent-ppo-multiepoch-plan.md`) added — directly addresses the value-collapse blocker behind Focus Areas #7/#11) — prior: 2026-06-15 baseline green; recovery bug drain closed; op/value mismatch verified resolved; proof confounder drain implemented; correctness proof strategy drafted; proof packet defaults CLI and API callers to reward-efficiency profile; oracle sandbox and proof-baseline-control artifacts created; static-final source/replay manifest emission, runner handoff, live baseline rehearsal, and reward-efficiency-default blocked packet verified)
+**Last Updated:** 2026-06-18 (P0-1 op-independent V(s) critic LANDED on 0.1.1 and pushed to origin — checkpoint-breaking VALUE_HEAD_SCHEMA_VERSION=2; subset-truncation GAE-bootstrap crash fixed (`esper-lite-6682b3faea`); post-P0-1 hardening sprint authored — umbrella `docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md` with spec+plan pairs for EV-telemetry robustness and the 0.1.1→main merge, reviewed by a 10-SME panel + synthesizer. Prior 2026-06-17: fossilize reward-economics host-drift confound fixed — all reward gates now key on the clean counterfactual, dead `_require_total_improvement` removed, committed `575482d7`; FOSSILIZE reward validated −0.81→+2.00; dead-critic root-caused to 1-PPO-step-per-rollout (value warmup ruled out); multi-epoch recurrent PPO via anchored-reference-pass design (`docs/superpowers/specs/2026-06-17-recurrent-ppo-multiepoch-design.md`) + executable two-PR plan (`docs/plans/ready/2026-06-17-recurrent-ppo-multiepoch-plan.md`) added — directly addresses the value-collapse blocker behind Focus Areas #7/#11) — prior: 2026-06-15 baseline green; recovery bug drain closed; op/value mismatch verified resolved; proof confounder drain implemented; correctness proof strategy drafted; proof packet defaults CLI and API callers to reward-efficiency profile; oracle sandbox and proof-baseline-control artifacts created; static-final source/replay manifest emission, runner handoff, live baseline rehearsal, and reward-efficiency-default blocked packet verified)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -75,12 +75,12 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 |--------|-------|-------|
 | 🔴 Critical | 0 | New governor-integrity issues are high-priority proof blockers, not active Tier 0 mainline breakage |
 | Completed | 16 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) |
-| Ready | 11 | Implementation-ready plans |
+| Ready | 14 | Implementation-ready plans (incl. post-P0-1 sprint umbrella + EV-telemetry-robustness + 0.1.1→main-merge, authored 2026-06-18) |
 | In Progress | 1 | phase3-tinystories (85%) |
 | Planning | 11 | Active design workspaces, including correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
 | Concept | 4 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals, gil-throughput-profiler |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
-| **Total Active** | **31** |
+| **Total Active** | **34** |
 
 ---
 
@@ -111,6 +111,9 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
 | blueprint-compiler | Blueprint Compiler (Phase 3 only) | ready | high | XL | medium | 0% - Correctly deferred until entropy stable |
 | training-perf-master | Training Pipeline Performance (Simic+Tolaria) | completed | high | L | medium | EXECUTED 2026-06-14 (→ completed/). Phase 0 (allocator/TF32/fragprobe), Phase 1 all 6 incl. CRITICAL-1 BLOCKER (FP32 masked-logit seam + BF16 symmetry, V0 joint_ratio<1e-3 GPU-validated) + sync folds, Phase 2 (FRAGMETRIC telemetry + stream pool + fenced del; CUDA_LAUNCH_BLOCKING clean, bit-identical val_acc), Phase 3 (DYN + pinned SNAP; GATE compile-works-without-sanctum validated). Deliberate calls: P2-RESET NO-GO (retries=0/ooms=0, frag cured), P3-HOST off (gated on RESET), P3-CLONE deferred (esper-lite-472b6477d2). Also deferred: op-sampler (esper-lite-05b4113bc1), carry-clamp (esper-lite-9827eb6bfe). Pending: real-run A/B wall-clock + TUI compile narrowing |
+| post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | sprint-umbrella | high | M | medium | Authored 2026-06-18 (`docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md`); umbrella for items 1-3 (EV-telemetry robustness, 0.1.1→main merge, dependency-vuln triage); 10-SME panel + synthesizer reviewed (verdict CHANGES_REQUESTED → must_do applied; child blockers fixed & codebase-verified) |
+| ev-telemetry-robustness | EV-Telemetry Robustness (low-return-variance artifact) | ready | high | M | medium | Authored 2026-06-18 (spec+plan); make `explained_variance` honest under P0-1's op-marginal V(s) (variance floor + `value_nrmse`/`ev_return_variance`, NOT bug-hiding) + audit EV consumers/gates; Step 0 empirical floor calibration is a HARD precondition |
+| main-merge-integration | 0.1.1 → main Merge & Integration | ready | high | L | high | Authored 2026-06-18 (spec+plan); ~42-commit FF merge carrying the VALUE_HEAD_SCHEMA_VERSION=2 checkpoint break; EV gate-fix (item 1) is a hard structural co-land precondition; dependency-vuln bump pass rides the window |
 
 ### Tier 2: Medium Priority (Next 2 Weeks)
 
