@@ -877,6 +877,8 @@ def test_aggregator_wires_q_values():
             op_valid_mask=(True, True, True, True, True, True),
             q_variance=2.3,
             q_spread=6.7,
+            q_aux_loss=0.31,
+            head_q_gradient_state="finite",
         ),
     )
 
@@ -888,6 +890,65 @@ def test_aggregator_wires_q_values():
     assert snapshot.tamiyo.op_valid_mask == (True, True, True, True, True, True)
     assert snapshot.tamiyo.q_variance == 2.3
     assert snapshot.tamiyo.q_spread == 6.7
+    # P0-1 AUX q-head diagnostics
+    assert abs(snapshot.tamiyo.q_aux_loss - 0.31) < 1e-9
+    assert snapshot.tamiyo.head_q_gradient_state == "finite"
+
+
+def test_aggregator_coerces_none_q_head_diagnostics():
+    """q_aux_loss=None coerces to 0.0 and head_q_gradient_state=None to 'missing'.
+
+    Mirrors the explained_variance/value_nrmse coercion convention: a degenerate
+    or older event leaves these optional payload fields as None, which the scalar
+    gauge / vocabulary field must surface as the established no-signal defaults.
+    """
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.1,
+            nan_grad_count=0,
+            q_aux_loss=None,
+            head_q_gradient_state=None,
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.q_aux_loss == 0.0
+    assert snapshot.tamiyo.head_q_gradient_state == "missing"
+
+
+def test_aggregator_wires_rollback_counts():
+    """PPO_UPDATE_COMPLETED rollback counts reach TamiyoState (non-optional ints)."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.1,
+            nan_grad_count=0,
+            rollback_attempt_count=7,
+            rollback_unattributed_count=3,
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.rollback_attempt_count == 7
+    assert snapshot.tamiyo.rollback_unattributed_count == 3
+
 
 def test_aggregator_tracks_previous_gradient_norms():
     """Aggregator should track previous gradient norms for trend detection."""
@@ -912,6 +973,7 @@ def test_aggregator_tracks_previous_gradient_norms():
             head_alpha_target_grad_norm=0.16,
             head_alpha_speed_grad_norm=0.13,
             head_alpha_curve_grad_norm=0.11,
+            head_q_grad_norm=0.19,
         ),
     )
     agg.process_event(event1)
@@ -922,6 +984,8 @@ def test_aggregator_tracks_previous_gradient_norms():
     assert snapshot1.tamiyo.head_op_grad_norm_prev == 0.0
     assert snapshot1.tamiyo.head_slot_grad_norm == 0.15
     assert snapshot1.tamiyo.head_slot_grad_norm_prev == 0.0
+    assert snapshot1.tamiyo.head_q_grad_norm == 0.19
+    assert snapshot1.tamiyo.head_q_grad_norm_prev == 0.0
 
     # Second PPO update - should move current to prev
     event2 = TelemetryEvent(
@@ -942,6 +1006,7 @@ def test_aggregator_tracks_previous_gradient_norms():
             head_alpha_target_grad_norm=0.26,
             head_alpha_speed_grad_norm=0.24,
             head_alpha_curve_grad_norm=0.21,
+            head_q_grad_norm=0.33,
         ),
     )
     agg.process_event(event2)
@@ -952,6 +1017,8 @@ def test_aggregator_tracks_previous_gradient_norms():
     assert snapshot2.tamiyo.head_op_grad_norm_prev == 0.12  # Previous value saved
     assert snapshot2.tamiyo.head_slot_grad_norm == 0.30
     assert snapshot2.tamiyo.head_slot_grad_norm_prev == 0.15
+    assert snapshot2.tamiyo.head_q_grad_norm == 0.33
+    assert snapshot2.tamiyo.head_q_grad_norm_prev == 0.19  # Previous value saved
     assert snapshot2.tamiyo.head_blueprint_grad_norm == 0.35
     assert snapshot2.tamiyo.head_blueprint_grad_norm_prev == 0.20
     assert snapshot2.tamiyo.head_style_grad_norm == 0.28

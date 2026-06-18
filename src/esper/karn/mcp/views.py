@@ -164,12 +164,18 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.op_valid_mask') as op_valid_mask,
             json_extract(data, '$.q_variance')::DOUBLE as q_variance,
             json_extract(data, '$.q_spread')::DOUBLE as q_spread,
+            json_extract(data, '$.q_aux_loss')::DOUBLE as q_aux_loss,
             -- D5 slot-saturation / actor-agency diagnostics
             json_extract(data, '$.forced_step_ratio')::DOUBLE as forced_step_ratio,
             json_extract(data, '$.usable_actor_timesteps')::INTEGER as usable_actor_timesteps,
             json_extract(data, '$.decision_density')::DOUBLE as decision_density,
             json_extract(data, '$.advantage_std_floored')::BOOLEAN as advantage_std_floored,
             json_extract(data, '$.d5_pre_norm_advantage_std')::DOUBLE as d5_pre_norm_advantage_std,
+            -- Rollback observability (per-rollout aggregates; pure telemetry)
+            json_extract(data, '$.rollback_count')::INTEGER as rollback_count,
+            json_extract(data, '$.rollback_steps_zeroed')::INTEGER as rollback_steps_zeroed,
+            json_extract(data, '$.rollback_attempt_count')::INTEGER as rollback_attempt_count,
+            json_extract(data, '$.rollback_unattributed_count')::INTEGER as rollback_unattributed_count,
             -- Per-head entropy
             json_extract(data, '$.head_slot_entropy')::DOUBLE as head_slot_entropy,
             json_extract(data, '$.head_blueprint_entropy')::DOUBLE as head_blueprint_entropy,
@@ -189,6 +195,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.head_alpha_curve_grad_norm')::DOUBLE as head_alpha_curve_grad_norm,
             json_extract(data, '$.head_op_grad_norm')::DOUBLE as head_op_grad_norm,
             json_extract(data, '$.head_value_grad_norm')::DOUBLE as head_value_grad_norm,
+            json_extract(data, '$.head_q_grad_norm')::DOUBLE as head_q_grad_norm,
             -- Per-head learnability diagnostics
             json_extract(data, '$.head_slot_learnable_fraction')::DOUBLE as head_slot_learnable_fraction,
             json_extract(data, '$.head_blueprint_learnable_fraction')::DOUBLE as head_blueprint_learnable_fraction,
@@ -206,7 +213,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.head_alpha_speed_gradient_state') as head_alpha_speed_gradient_state,
             json_extract_string(data, '$.head_alpha_curve_gradient_state') as head_alpha_curve_gradient_state,
             json_extract_string(data, '$.head_op_gradient_state') as head_op_gradient_state,
-            json_extract_string(data, '$.head_value_gradient_state') as head_value_gradient_state
+            json_extract_string(data, '$.head_value_gradient_state') as head_value_gradient_state,
+            json_extract_string(data, '$.head_q_gradient_state') as head_q_gradient_state
         FROM raw_events
         WHERE event_type = 'PPO_UPDATE_COMPLETED'
     """,
@@ -532,7 +540,9 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.explained_variance')::DOUBLE as explained_variance,
             json_extract(data, '$.seeds_created')::INTEGER as seeds_created,
             json_extract(data, '$.seeds_fossilized')::INTEGER as seeds_fossilized,
-            json_extract(data, '$.skipped_update')::BOOLEAN as skipped_update
+            json_extract(data, '$.skipped_update')::BOOLEAN as skipped_update,
+            json_extract(data, '$.rollback_attempt_count')::INTEGER as rollback_attempt_count,
+            json_extract(data, '$.rollback_unattributed_count')::INTEGER as rollback_unattributed_count
         FROM raw_events
         WHERE
             event_type = 'ANALYTICS_SNAPSHOT'

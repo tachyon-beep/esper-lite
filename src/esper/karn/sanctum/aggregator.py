@@ -990,6 +990,8 @@ class SanctumAggregator:
         )
         self._tamiyo.ev_low_return_variance = payload.ev_low_return_variance
         self._tamiyo.ev_return_variance = payload.ev_return_variance
+        self._tamiyo.rollback_attempt_count = payload.rollback_attempt_count
+        self._tamiyo.rollback_unattributed_count = payload.rollback_unattributed_count
 
         grad_norm = payload.grad_norm
         self._tamiyo.grad_norm = grad_norm
@@ -1115,6 +1117,9 @@ class SanctumAggregator:
         if payload.head_op_grad_norm is not None:
             self._tamiyo.head_op_grad_norm_prev = self._tamiyo.head_op_grad_norm
             self._tamiyo.head_op_grad_norm = payload.head_op_grad_norm
+        if payload.head_q_grad_norm is not None:
+            self._tamiyo.head_q_grad_norm_prev = self._tamiyo.head_q_grad_norm
+            self._tamiyo.head_q_grad_norm = payload.head_q_grad_norm
 
         # Per-head entropies (for heatmap visualization) - optional with None
         if payload.head_style_entropy is not None:
@@ -1158,6 +1163,19 @@ class SanctumAggregator:
         self._tamiyo.op_valid_mask = payload.op_valid_mask
         self._tamiyo.q_variance = payload.q_variance
         self._tamiyo.q_spread = payload.q_spread
+
+        # P0-1 AUX q-head diagnostics. q_aux_loss is float | None on the payload (None on a
+        # degenerate/older event); coerce to 0.0 for the scalar gauge, matching the
+        # explained_variance/value_nrmse convention above. head_q_gradient_state is str | None;
+        # coerce None -> "missing" (the established no-signal vocabulary value).
+        self._tamiyo.q_aux_loss = (
+            payload.q_aux_loss if payload.q_aux_loss is not None else 0.0
+        )
+        self._tamiyo.head_q_gradient_state = (
+            payload.head_q_gradient_state
+            if payload.head_q_gradient_state is not None
+            else "missing"
+        )
 
         # Set initial spread after warmup for relative thresholds
         WARMUP_BATCHES = 50

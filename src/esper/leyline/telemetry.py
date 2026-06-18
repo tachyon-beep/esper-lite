@@ -960,6 +960,17 @@ class PPOUpdatePayload:
     advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
     d5_pre_norm_advantage_std: float | None = None  # Raw std before normalization
 
+    # === Rollback observability (per-rollout aggregates; pure telemetry) ===
+    # rollback_count: governor rollbacks ATTRIBUTED to an executed transition this rollout.
+    # rollback_steps_zeroed: intermediate prefix steps forfeited to ROLLBACK_FORFEIT_REWARD.
+    # rollback_attempt_count: ALL governor rollback triggers this rollout (>= rollback_count).
+    # rollback_unattributed_count: attempts dropped because there was no executed transition
+    # to attribute the penalty to (first-step panic). attempts == count + unattributed.
+    rollback_count: int = 0
+    rollback_steps_zeroed: int = 0
+    rollback_attempt_count: int = 0
+    rollback_unattributed_count: int = 0
+
     def __post_init__(self) -> None:
         if len(self.op_q_values) != NUM_OPS:
             raise ValueError(
@@ -1165,6 +1176,12 @@ class PPOUpdatePayload:
             decision_density=data.get("decision_density", 1.0),
             advantage_std_floored=data.get("advantage_std_floored", False),
             d5_pre_norm_advantage_std=data.get("d5_pre_norm_advantage_std"),
+            # OPTIONAL: Rollback observability. Persisted-event boundary -> .get(default)
+            # per schema evolution (a missing key means an OLD event predating this field).
+            rollback_count=data.get("rollback_count", 0),
+            rollback_steps_zeroed=data.get("rollback_steps_zeroed", 0),
+            rollback_attempt_count=data.get("rollback_attempt_count", 0),
+            rollback_unattributed_count=data.get("rollback_unattributed_count", 0),
         )
 
     @classmethod
@@ -1768,6 +1785,12 @@ class AnalyticsSnapshotPayload:
     seeds_created: int | None = None
     seeds_fossilized: int | None = None
     skipped_update: bool | None = None
+    # Per-batch rollback observability (kind="batch_stats"). Present even on skipped/
+    # empty-buffer batches because this snapshot fires unconditionally — so an
+    # all-first-step-panic batch (which emits no PPO_UPDATE_COMPLETED) is still observable
+    # here. None = no rollback signal in this batch's metrics dict (old event / no rollbacks).
+    rollback_attempt_count: int | None = None
+    rollback_unattributed_count: int | None = None
 
     # For kind="summary_table", includes formatted tables (console output)
     summary_table: str | None = None
@@ -1884,6 +1907,8 @@ class AnalyticsSnapshotPayload:
             seeds_created=data.get("seeds_created"),
             seeds_fossilized=data.get("seeds_fossilized"),
             skipped_update=data.get("skipped_update"),
+            rollback_attempt_count=data.get("rollback_attempt_count"),
+            rollback_unattributed_count=data.get("rollback_unattributed_count"),
             # kind="summary_table": formatted tables
             summary_table=data.get("summary_table"),
             scoreboard_tables=data.get("scoreboard_tables"),

@@ -111,6 +111,9 @@ allow_hits:
 - key: src/esper/simic/agent/ppo_agent.py:PPOAgent.update:tolist
   owner: John
   reason: P1-SYNC telemetry - single batched sync for per-head learnable-fraction==0 relabel (replaced one .item() per head); once per update, not per step
+- key: src/esper/simic/training/ppo_coordinator.py:PPOCoordinator.run_update:tolist
+  owner: John
+  reason: PPO telemetry - single batched device->host transfer of all per-env rollback counters (count + steps_zeroed) once per rollout, snapshotted before buffer reset; replaces two per-counter .item() syncs and stays O(1) as counters are added
 - key: src/esper/simic/training/action_execution.py:execute_actions:tolist
   owner: John
   reason: Forced action tracking - single GPU-to-CPU sync for forced step flags; batched per-batch not per-step

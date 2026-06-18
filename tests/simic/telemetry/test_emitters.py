@@ -122,6 +122,12 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "ev_low_return_variance": False,
         "ev_return_variance": 0.64,
         "ev_low_return_variance_count": 0,
+        # Rollback observability counters (mandatory live-path fields; the emitter
+        # reads them by direct key, so they must always be populated by run_update).
+        "rollback_count": 0,
+        "rollback_steps_zeroed": 0,
+        "rollback_attempt_count": 0,
+        "rollback_unattributed_count": 0,
         # Throughput metrics (mandatory for dataloader wait ratio)
         "throughput_step_time_ms_sum": 100.0,
         "throughput_dataloader_wait_ms_sum": 20.0,
@@ -450,6 +456,53 @@ def test_emitter_ev_return_variance_defaults_to_none_when_absent() -> None:
     assert payload.ev_return_variance is None
 
 
+def test_emitter_carries_rollback_counters() -> None:
+    """emit_ppo_update_event threads the four rollback counters into PPOUpdatePayload."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            rollback_count=3,
+            rollback_steps_zeroed=12,
+            rollback_attempt_count=5,
+            rollback_unattributed_count=2,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.rollback_count == 3
+    assert payload.rollback_steps_zeroed == 12
+    assert payload.rollback_attempt_count == 5
+    assert payload.rollback_unattributed_count == 2
+
+
+def test_emit_ppo_update_event_requires_rollback_attempt_count() -> None:
+    """The rollback counters are live-path mandatory: a missing key must fail loudly."""
+    hub = MagicMock()
+
+    metrics = _make_mandatory_metrics()
+    del metrics["rollback_attempt_count"]
+
+    with pytest.raises(KeyError):
+        emit_ppo_update_event(
+            hub=hub,
+            metrics=metrics,
+            episodes_completed=10,
+            batch_idx=5,
+            epoch=100,
+            optimizer=None,
+            grad_norm=1.0,
+            update_time_ms=50.0,
+        )
+
+
 def test_batch_tail_event_order_is_stable() -> None:
     hub = _RecordingHub()
     telemetry_config = TelemetryConfig(level=TelemetryLevel.NORMAL)
@@ -512,6 +565,71 @@ def test_batch_tail_event_order_is_stable() -> None:
     ]
     assert hub.events[1].data.kind == "batch_stats"
     assert hub.events[3].data.kind == "action_distribution"
+
+
+def test_on_batch_completed_surfaces_rollback_counts_on_skipped_batch() -> None:
+    """Review MAJOR regression: an all-first-step-panic batch (len(buffer)==0) produces a
+    skipped PPO update, so NO PPO_UPDATE_COMPLETED is emitted. The per-batch batch_stats
+    ANALYTICS_SNAPSHOT (which fires unconditionally) must still carry the rollback
+    attempt/unattributed counts so the pathology this telemetry targets stays observable.
+    Asserts the counts reach an EMITTED event, not just run_update's return dict."""
+    hub = _RecordingHub()
+    telemetry_config = TelemetryConfig(level=TelemetryLevel.NORMAL)
+    emitter = VectorizedEmitter(
+        env_id=0,
+        device="cpu",
+        group_id="test",
+        hub=hub,
+        telemetry_config=telemetry_config,
+    )
+
+    # The sparse skipped-metrics dict PPOCoordinator.run_update returns on the
+    # empty-buffer-with-attempts path: no PPO update ran, but attempts were counted.
+    emitter.on_batch_completed(
+        batch_idx=0,
+        episodes_completed=5,
+        rolling_avg_acc=80.0,
+        avg_acc=80.0,
+        metrics={
+            "ppo_update_performed": False,
+            "rollback_count": 0,
+            "rollback_steps_zeroed": 0,
+            "rollback_attempt_count": 4,
+            "rollback_unattributed_count": 4,
+        },
+        env_states=[_StubEnvState()],
+        update_skipped=True,
+        plateau_threshold=0.5,
+        improvement_threshold=0.5,
+        prev_rolling_avg_acc=None,
+        total_episodes=5,
+        start_episode=0,
+        n_episodes=5,
+        env_final_accs=[80.0],
+        avg_reward=1.0,
+        train_losses=[0.0],
+        train_corrects=[1],
+        train_totals=[1],
+        val_losses=[0.0],
+        val_corrects=[1],
+        val_totals=[1],
+        num_train_batches=1,
+        num_test_batches=1,
+        analytics=None,
+        epoch=5,
+    )
+
+    batch_stats = [
+        e
+        for e in hub.events
+        if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT
+        and e.data.kind == "batch_stats"
+    ]
+    assert len(batch_stats) == 1
+    payload = batch_stats[0].data
+    assert payload.skipped_update is True
+    assert payload.rollback_attempt_count == 4
+    assert payload.rollback_unattributed_count == 4
 
 
 def test_emit_ppo_update_event_includes_lstm_health():

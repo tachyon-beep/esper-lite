@@ -2732,11 +2732,14 @@ class VectorizedPPOTrainer:
             # Clear after the normalizer update in _run_ppo_updates.
             raw_states_for_normalizer_update = []
 
-            ppo_update_time_ms = metrics["ppo_update_time_ms"]
-
             if update_skipped:
                 # Distinguish benign "no optimizer step" cases (for example
                 # epoch-0 KL early-stop) from true finiteness-gate failures.
+                # NOTE: a skipped update may carry only a sparse metrics dict (the
+                # empty-buffer rollback-observability path in run_update has no
+                # ppo_update_time_ms key), so do NOT read ppo_update_time_ms here —
+                # it is only consumed on the not-skipped on_ppo_update path below,
+                # where the run_update tuple value is read directly.
                 consecutive_finiteness_failures, should_continue = (
                     ppo_coordinator.check_finiteness_gate(
                         metrics, consecutive_finiteness_failures
@@ -2758,6 +2761,7 @@ class VectorizedPPOTrainer:
                         False,
                     )
             else:
+                ppo_update_time_ms = metrics["ppo_update_time_ms"]
                 ppo_grad_norm = metrics["ppo_grad_norm"]
 
                 # Check gradient drift

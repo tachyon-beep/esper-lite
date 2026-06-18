@@ -98,6 +98,12 @@ class PPOCoordinator:
         self.handle_telemetry_escalation_fn = handle_telemetry_escalation_fn
         self.emit_anomaly_diagnostics_fn = emit_anomaly_diagnostics_fn
         self.logger = logger
+        # Per-rollout rollback-attempt observability (coordinator-level host ints; NOT
+        # buffer tensors — they must survive the len(buffer)==0 early-return in run_update
+        # and the buffer.reset() inside run_ppo_updates_fn, and cost no GPU sync).
+        # Reset at the start of every handle_rollbacks (once per batch, before run_update).
+        self._rollback_attempt_count = 0
+        self._rollback_unattributed_count = 0
 
     def handle_rollbacks(
         self,
@@ -118,6 +124,12 @@ class PPOCoordinator:
         rollback_env_indices = [
             i for i, occurred in enumerate(env_rollback_occurred) if occurred
         ]
+
+        # Per-rollout attempt counters: every governor rollback trigger is an attempt;
+        # attempts whose penalty is dropped (no executed transition) are unattributed.
+        # Reset here because handle_rollbacks runs exactly once per batch, before run_update.
+        self._rollback_attempt_count = len(rollback_env_indices)
+        self._rollback_unattributed_count = 0
 
         if not rollback_env_indices:
             return rollback_env_indices
@@ -153,9 +165,11 @@ class PPOCoordinator:
                 watch_window_evidence=abs(penalty),
             )
             if not penalty_result.applied:
+                self._rollback_unattributed_count += 1
                 # No executed transition to attribute the catastrophe to (first-step
                 # panic). The penalty is correctly dropped, but surface it rather
-                # than swallowing it silently so a high rate is observable.
+                # than swallowing it silently so a high rate is observable — via a
+                # structured counter (not just a log line).
                 self.logger.warning(
                     "Rollback penalty for env %d not applied: no executed "
                     "transition to attribute (first-step panic).",
@@ -286,7 +300,26 @@ class PPOCoordinator:
             Tuple of (metrics dict, update_skipped flag, ppo_update_time_ms)
         """
         if len(self.agent.buffer) == 0:
-            return {}, True, None
+            # Empty buffer = every rollback this batch was a first-step panic (no
+            # executed transition), so the normal PPO-update emit path never runs.
+            # Carry the attempt/unattributed counts in a minimal skipped-metrics dict;
+            # vectorized_trainer's on_batch_completed reads them from metrics into the
+            # per-batch ANALYTICS_SNAPSHOT (batch_stats), which fires even when
+            # update_skipped=True -> the all-first-step-panic batch stays observable in
+            # karn batch_stats. update_skipped stays True (no PPO step occurred).
+            if self._rollback_attempt_count == 0:
+                return {}, True, None
+            return (
+                {
+                    "ppo_update_performed": False,
+                    "rollback_count": 0,
+                    "rollback_steps_zeroed": 0,
+                    "rollback_attempt_count": self._rollback_attempt_count,
+                    "rollback_unattributed_count": self._rollback_unattributed_count,
+                },
+                True,
+                None,
+            )
 
         rollout_total_steps = len(self.agent.buffer)
         # P0-3: snapshot the rollback observability counters BEFORE run_ppo_updates_fn,
@@ -294,8 +327,16 @@ class PPOCoordinator:
         # buffer.reset()). Reading them after the update would surface 0 on every batch
         # where a real PPO update ran — dead telemetry that defeats the observability goal.
         buffer = self.agent.buffer
-        rollback_count = int(buffer.rollback_count.sum().item())
-        rollback_steps_zeroed = int(buffer.rollback_steps_zeroed.sum().item())
+        # gpu_sync: batch BOTH per-env buffer counters into ONE device->host transfer
+        # instead of two separate .item() syncs. Stack -> sum on-GPU -> single .tolist().
+        # Snapshotted BEFORE run_ppo_updates_fn resets the buffer (P0-3). This is the
+        # ONLY rollback-counter sync; it stays O(1) as new buffer counters are added.
+        rollback_count, rollback_steps_zeroed = (
+            int(v)
+            for v in torch.stack(
+                (buffer.rollback_count.sum(), buffer.rollback_steps_zeroed.sum())
+            ).tolist()
+        )
         update_start = time.perf_counter()
         metrics = self.run_ppo_updates_fn(
             agent=self.agent,
@@ -325,6 +366,8 @@ class PPOCoordinator:
             # here means rollbacks are eating a large share of the learning signal.
             metrics["rollback_count"] = rollback_count
             metrics["rollback_steps_zeroed"] = rollback_steps_zeroed
+            metrics["rollback_attempt_count"] = self._rollback_attempt_count
+            metrics["rollback_unattributed_count"] = self._rollback_unattributed_count
             if not update_skipped:
                 metrics["ppo_grad_norm"] = metrics["pre_clip_grad_norm"]
 

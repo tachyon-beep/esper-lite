@@ -148,6 +148,10 @@ def test_run_update_snapshots_rollback_counters_before_buffer_reset():
     # The pre-reset totals must survive into telemetry, NOT the zeroed post-reset values.
     assert metrics["rollback_count"] == 3
     assert metrics["rollback_steps_zeroed"] == 12
+    # No handle_rollbacks ran in this test, so the coordinator-level attempt counters
+    # stay at their __init__ defaults.
+    assert metrics["rollback_attempt_count"] == 0
+    assert metrics["rollback_unattributed_count"] == 0
 
 
 def _make_outcome(env_id: int, episode_idx: int, reward: float) -> EpisodeOutcome:
@@ -425,6 +429,71 @@ def test_handle_rollbacks_drops_penalty_when_no_executed_transition(caplog):
         "penalt" in record.getMessage().lower()
         for record in caplog.records
     )
+    # The dropped first-step-panic penalty is surfaced via structured counters.
+    assert coordinator._rollback_attempt_count == 1
+    assert coordinator._rollback_unattributed_count == 1
+
+
+def test_attempt_counts_survive_empty_buffer_run_update():
+    """Empty-buffer run_update must still surface the rollback attempt/unattributed
+    counts from handle_rollbacks instead of returning an empty dict that loses them.
+
+    Every rollback this batch was a first-step panic (no executed transition), so the
+    buffer is empty when run_update is reached and the normal PPO emit path never runs.
+    The minimal skipped-update dict must carry the structured counters.
+    """
+
+    class _EmptyBuffer:
+        def __len__(self) -> int:
+            return 0
+
+        def last_action_id(self, env_id: int) -> str:
+            raise ValueError(f"env_id {env_id} has no transitions")
+
+        def mark_terminal_with_penalty(
+            self,
+            env_id: int,
+            penalty: float,
+            *,
+            severity: float,
+            triggering_action_id: str | None = None,
+            watch_window_evidence: float,
+        ) -> RollbackPenaltyResult:
+            assert triggering_action_id is None
+            return RollbackPenaltyResult(applied=False, steps_zeroed=0)
+
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    coordinator.agent.buffer = _EmptyBuffer()
+    env_states = [
+        SimpleNamespace(
+            governor=SimpleNamespace(get_punishment_reward=lambda: -10.0),
+            episode_rewards=[],
+            telemetry_cb=lambda event: None,
+            val_acc=12.5,
+            action_counts={},
+        )
+    ]
+
+    coordinator.handle_rollbacks(
+        env_states=env_states,
+        env_rollback_occurred=[True],
+        env_total_rewards=[0.0],
+        episode_history=[],
+        episode_outcomes=[],
+    )
+
+    metrics, update_skipped, ppo_update_time_ms = coordinator.run_update(
+        raw_states_for_normalizer_update=[torch.ones(1, 3)],
+        obs_normalizer=SimpleNamespace(update=lambda _tensor: None),
+        envs_this_batch=1,
+        throughput_step_time_ms_sum=10.0,
+        throughput_dataloader_wait_ms_sum=1.0,
+    )
+
+    assert update_skipped is True
+    assert metrics["rollback_attempt_count"] == 1
+    assert metrics["rollback_unattributed_count"] == 1
+    assert metrics["rollback_count"] == 0
 
 
 def test_handle_rollbacks_emits_exactly_one_corrected_episode_outcome():

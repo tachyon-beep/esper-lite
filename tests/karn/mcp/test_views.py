@@ -751,6 +751,7 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "head_alpha_curve_grad_norm": 1.7,
             "head_op_grad_norm": 1.8,
             "head_value_grad_norm": 1.9,
+            "head_q_grad_norm": 2.0,
             "head_slot_learnable_fraction": 0.25,
             "head_blueprint_learnable_fraction": 0.0,
             "head_style_learnable_fraction": 0.5,
@@ -768,6 +769,7 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "head_alpha_curve_gradient_state": "finite",
             "head_op_gradient_state": "finite",
             "head_value_gradient_state": "finite",
+            "head_q_gradient_state": "finite",
         },
         "severity": "info",
     }
@@ -787,9 +789,11 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             head_slot_entropy,
             head_op_grad_norm,
             head_value_grad_norm,
+            head_q_grad_norm,
             head_blueprint_learnable_fraction,
             head_blueprint_gradient_state,
             head_value_gradient_state,
+            head_q_gradient_state,
             forced_step_ratio,
             usable_actor_timesteps,
             decision_density,
@@ -808,8 +812,10 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
         0.9,
         1.8,
         1.9,
+        2.0,
         0.0,
         "not_learnable",
+        "finite",
         "finite",
         0.75,
         5,
@@ -861,6 +867,84 @@ def test_ppo_updates_exposes_ev_robustness_columns(tmp_path):
     ).fetchone()
 
     assert row == (-3.5, 0.42, True, 0.7)
+
+
+def test_ppo_updates_exposes_q_aux_loss(tmp_path):
+    """ppo_updates view should expose the q-head auxiliary loss diagnostic."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-q-aux-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 13,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "q_aux_loss": 0.31,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    (q_aux_loss,) = conn.execute(
+        "SELECT q_aux_loss FROM ppo_updates"
+    ).fetchone()
+
+    assert q_aux_loss == 0.31
+
+
+def test_ppo_updates_exposes_rollback_columns(tmp_path):
+    """ppo_updates view should expose the rollback observability aggregates."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-rollback-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 14,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "rollback_count": 3,
+            "rollback_steps_zeroed": 12,
+            "rollback_attempt_count": 5,
+            "rollback_unattributed_count": 1,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            rollback_count,
+            rollback_steps_zeroed,
+            rollback_attempt_count,
+            rollback_unattributed_count
+        FROM ppo_updates
+        """
+    ).fetchone()
+
+    assert row == (3, 12, 5, 1)
 
 
 def test_run_confounders_view_surfaces_numerical_instability(tmp_path):
@@ -1234,6 +1318,8 @@ def test_batch_stats_view_parses_payload(tmp_path):
             "seeds_created": 5,
             "seeds_fossilized": 2,
             "skipped_update": False,
+            "rollback_attempt_count": 6,
+            "rollback_unattributed_count": 2,
         },
         "severity": "info",
     }
@@ -1253,11 +1339,13 @@ def test_batch_stats_view_parses_payload(tmp_path):
             entropy,
             seeds_created,
             seeds_fossilized,
-            skipped_update
+            skipped_update,
+            rollback_attempt_count,
+            rollback_unattributed_count
         FROM batch_stats
         """
     ).fetchone()
-    assert row == (12, 3, 7, 0.55, 0.5, 1.2, 5, 2, False)
+    assert row == (12, 3, 7, 0.55, 0.5, 1.2, 5, 2, False, 6, 2)
 
 
 def test_batch_epochs_and_trends_views_parse_payloads(tmp_path):

@@ -515,6 +515,58 @@ class TestPPODiagnosticsPreservation:
         # bool encoded as int for the metric series
         assert logged["ppo/ev_low_return_variance"] == 1
 
+    def test_wandb_emits_q_head_aux_diagnostics_when_present(self, backend, mock_wandb):
+        """P0-1 aux q-head diagnostics (q_aux_loss / head_q_grad_norm) are logged when present."""
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            epoch=100,
+            data=PPOUpdatePayload(
+                policy_loss=0.5,
+                value_loss=0.3,
+                entropy=0.1,
+                grad_norm=1.0,
+                kl_divergence=0.01,
+                clip_fraction=0.1,
+                nan_grad_count=0,
+                q_aux_loss=0.31,
+                head_q_grad_norm=2.0,
+            ),
+        )
+
+        backend.emit(event)
+
+        logged = mock_wandb.log.call_args[0][0]
+        assert logged["ppo/q_aux_loss"] == 0.31
+        assert logged["ppo/head_q_grad_norm"] == 2.0
+
+    def test_wandb_logs_rollback_observability_counters(self, backend, mock_wandb):
+        """Rollback per-rollout aggregate counters are always logged on a live PPO update."""
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            epoch=100,
+            data=PPOUpdatePayload(
+                policy_loss=0.5,
+                value_loss=0.3,
+                entropy=0.1,
+                grad_norm=1.0,
+                kl_divergence=0.01,
+                clip_fraction=0.1,
+                nan_grad_count=0,
+                rollback_count=2,
+                rollback_steps_zeroed=7,
+                rollback_attempt_count=5,
+                rollback_unattributed_count=3,
+            ),
+        )
+
+        backend.emit(event)
+
+        logged = mock_wandb.log.call_args[0][0]
+        assert logged["ppo/rollback_count"] == 2
+        assert logged["ppo/rollback_steps_zeroed"] == 7
+        assert logged["ppo/rollback_attempt_count"] == 5
+        assert logged["ppo/rollback_unattributed_count"] == 3
+
     def test_ppo_logs_lstm_health_when_present(self, backend, mock_wandb):
         """Update-time and rollout-time LSTM RMS metrics are logged when present."""
         event = TelemetryEvent(
@@ -558,7 +610,8 @@ class TestPPODiagnosticsPreservation:
                 kl_divergence=0.01,
                 clip_fraction=0.1,
                 nan_grad_count=0,
-                # lstm_*_rms, loss_scale, explained_variance, lr default to None
+                # lstm_*_rms, loss_scale, explained_variance, lr,
+                # q_aux_loss, head_q_grad_norm default to None
             ),
         )
 
@@ -570,6 +623,8 @@ class TestPPODiagnosticsPreservation:
         assert "ppo/loss_scale" not in logged
         assert "ppo/explained_variance" not in logged
         assert "ppo/lr" not in logged
+        assert "ppo/q_aux_loss" not in logged
+        assert "ppo/head_q_grad_norm" not in logged
 
 
 class TestTrainingStartedDiagnostics:

@@ -317,6 +317,8 @@ export interface TamiyoState {
   value_nrmse: number;
   ev_low_return_variance: boolean;
   ev_return_variance: number | null;
+  rollback_attempt_count: number;
+  rollback_unattributed_count: number;
   policy_loss: number;
   value_loss: number;
   entropy_loss: number;
@@ -381,6 +383,7 @@ export interface TamiyoState {
   head_alpha_speed_grad_norm: number;
   head_alpha_curve_grad_norm: number;
   head_op_grad_norm: number;
+  head_q_grad_norm: number;
   head_slot_grad_norm_prev: number;
   head_blueprint_grad_norm_prev: number;
   head_style_grad_norm_prev: number;
@@ -389,6 +392,7 @@ export interface TamiyoState {
   head_alpha_speed_grad_norm_prev: number;
   head_alpha_curve_grad_norm_prev: number;
   head_op_grad_norm_prev: number;
+  head_q_grad_norm_prev: number;
   head_slot_ratio_max: number;
   head_blueprint_ratio_max: number;
   head_style_ratio_max: number;
@@ -430,6 +434,8 @@ export interface TamiyoState {
   op_valid_mask: boolean[];
   q_variance: number;
   q_spread: number;
+  q_aux_loss: number;
+  head_q_gradient_state: string;
   last_action_success: boolean;
   last_action_op: string;
   infrastructure: InfrastructureMetrics;

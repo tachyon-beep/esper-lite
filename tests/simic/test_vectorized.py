@@ -228,6 +228,12 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "q_variance": 0.0,
         "q_spread": 0.0,
         "q_aux_loss": 0.05,
+        # Rollback observability (always populated by PPOCoordinator.run_update on
+        # the live emit path -> direct-index mandatory in emitter).
+        "rollback_count": 0,
+        "rollback_steps_zeroed": 0,
+        "rollback_attempt_count": 0,
+        "rollback_unattributed_count": 0,
         # Per-head stats (optional but expected by emitter loop)
         "head_entropies": {},
         "head_grad_norms": {"value": [0.4], "q": [0.3]},

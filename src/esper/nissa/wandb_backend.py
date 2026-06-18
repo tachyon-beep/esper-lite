@@ -383,6 +383,11 @@ class WandbBackend(OutputBackend):
             "ppo/v_return_correlation": p.v_return_correlation,
             "ppo/td_error_mean": p.td_error_mean,
             "ppo/bellman_error": p.bellman_error,
+            # Rollback observability (per-rollout aggregates).
+            "ppo/rollback_count": p.rollback_count,
+            "ppo/rollback_steps_zeroed": p.rollback_steps_zeroed,
+            "ppo/rollback_attempt_count": p.rollback_attempt_count,
+            "ppo/rollback_unattributed_count": p.rollback_unattributed_count,
         }
 
         # Optional metrics (may be None - omit rather than fabricate)
@@ -393,6 +398,12 @@ class WandbBackend(OutputBackend):
         if p.value_nrmse is not None:
             metrics["ppo/value_nrmse"] = p.value_nrmse
         metrics["ppo/ev_low_return_variance"] = int(p.ev_low_return_variance)
+        # P0-1 AUX q-head training diagnostics (telemetry-only; q_head is no longer the PPO
+        # baseline). Both are float | None -> omit when None rather than fabricate a 0.0 series.
+        if p.q_aux_loss is not None:
+            metrics["ppo/q_aux_loss"] = p.q_aux_loss
+        if p.head_q_grad_norm is not None:
+            metrics["ppo/head_q_grad_norm"] = p.head_q_grad_norm
         if p.entropy_coef is not None:
             metrics["ppo/entropy_coef"] = p.entropy_coef
         if p.lr is not None:

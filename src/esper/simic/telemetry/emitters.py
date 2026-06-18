@@ -477,6 +477,13 @@ class VectorizedEmitter:
                 seeds_fossilized=total_seeds_fossilized,
                 episodes_completed=episodes_completed,
                 skipped_update=update_skipped,
+                # Per-batch rollback observability. This snapshot fires unconditionally,
+                # so an all-first-step-panic batch (len(buffer)==0, no PPO_UPDATE_COMPLETED
+                # emitted) still surfaces its attempt/unattributed counts here. metrics may
+                # lack the keys on a no-rollback batch -> .get default 0 (heterogeneous
+                # metrics dict, not the typed PPOUpdatePayload contract).
+                rollback_attempt_count=metrics.get("rollback_attempt_count", 0),
+                rollback_unattributed_count=metrics.get("rollback_unattributed_count", 0),
             ),
         ))
 
@@ -1155,6 +1162,12 @@ def emit_ppo_update_event(
             batch=batch_idx + 1,
             # BUG FIX: Track actual PPO update count (inner_epoch was misleading)
             ppo_updates_count=metrics["ppo_updates_count"],
+            # Rollback observability (per-rollout). Always populated by PPOCoordinator.run_update
+            # on the live emit path -> direct index (fail loud if the coordinator dropped them).
+            rollback_count=metrics["rollback_count"],
+            rollback_steps_zeroed=metrics["rollback_steps_zeroed"],
+            rollback_attempt_count=metrics["rollback_attempt_count"],
+            rollback_unattributed_count=metrics["rollback_unattributed_count"],
         ),
         group_id=group_id,
     ))
