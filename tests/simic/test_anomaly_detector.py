@@ -74,55 +74,73 @@ class TestAnomalyDetector:
         assert "ratio_min=nan" in report.details["ratio_nan_inf"]
 
     def test_detect_value_collapse_late_training(self):
-        """Detects value function collapse in late training phase."""
+        """Detects value function collapse via the scale-anchored robust signal.
+
+        EV-telemetry-robustness (GATE = ROBUST-ANCHORED ONLY): explained_variance is a
+        pure diagnostic and never gates. value_collapse fires solely on the robust signal
+        (value_loss PRIMARY / bellman_error SECONDARY). Here a bad value_loss fires it.
+        """
         detector = AnomalyDetector()
-        # Late training (80% complete) - threshold is 0.1
         report = detector.check_value_function(
-            explained_variance=0.05,  # Below 0.1 threshold
+            explained_variance=0.05,  # diagnostic only — does not gate
             current_episode=80,
             total_episodes=100,
+            value_loss=10.0,  # bad robust signal (> value_loss_threshold 5.0)
+            ev_low_return_variance=False,
         )
         assert report.has_anomaly is True
         assert "value_collapse" in report.anomaly_types
 
-    def test_no_value_collapse_early_training(self):
-        """Low EV during warmup is expected, not anomalous."""
+    def test_value_collapse_does_not_fire_on_ev_alone(self):
+        """GATE = ROBUST-ANCHORED ONLY: low EV with healthy robust signals must NOT fire."""
         detector = AnomalyDetector()
-        # Warmup phase (5% complete) - threshold is -0.5
+        # EV is low but the scale-anchored value fit is genuinely healthy.
         report = detector.check_value_function(
-            explained_variance=-0.3,  # Would fail late threshold (0.1) but passes warmup (-0.5)
+            explained_variance=0.05,
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=0.5,  # healthy
+            value_loss=0.099,   # healthy (median)
+            ev_low_return_variance=False,
+        )
+        assert report.has_anomaly is False
+        assert "value_collapse" not in report.anomaly_types
+
+    def test_no_value_collapse_with_healthy_robust_signal(self):
+        """A healthy robust signal produces no value collapse regardless of EV / phase."""
+        detector = AnomalyDetector()
+        # EV is negative but the robust signals are healthy (and default to quiescent 0.0).
+        report = detector.check_value_function(
+            explained_variance=-0.3,  # diagnostic only
             current_episode=5,
             total_episodes=100,
         )
         assert report.has_anomaly is False
 
-    def test_value_collapse_threshold_progression(self):
-        """Thresholds tighten as training progresses."""
+    def test_get_ev_threshold_remains_a_diagnostic_accessor(self):
+        """get_ev_threshold still tightens by phase but no longer gates value_collapse.
+
+        The phase-dependent EV thresholds are retained for diagnostic display only; the
+        firing decision is robust-anchored and ignores EV entirely.
+        """
         detector = AnomalyDetector()
 
-        # Same EV (-0.3) tested at different phases
-        ev = -0.3
+        warmup = detector.get_ev_threshold(current_episode=5, total_episodes=100)
+        late = detector.get_ev_threshold(current_episode=90, total_episodes=100)
+        # Phase thresholds still tighten over training (warmup -0.5 -> late +0.1).
+        assert late > warmup
 
-        # Warmup (5%): threshold=-0.5, ev=-0.3 > -0.5 → OK
-        warmup = detector.check_value_function(ev, current_episode=5, total_episodes=100)
-        assert warmup.has_anomaly is False
-
-        # Early (15%): threshold=-0.2, ev=-0.3 < -0.2 → FAIL
-        early = detector.check_value_function(ev, current_episode=15, total_episodes=100)
-        assert early.has_anomaly is True
-
-    def test_phase_thresholds_scale_with_total_episodes(self):
-        """Phase boundaries are proportional to total_episodes."""
-        detector = AnomalyDetector()
-        ev = -0.3
-
-        # 10% of 100 episodes = episode 10 (warmup)
-        small_run_warmup = detector.check_value_function(ev, current_episode=10, total_episodes=100)
-        # 10% of 1000 episodes = episode 100 (warmup)
-        large_run_warmup = detector.check_value_function(ev, current_episode=100, total_episodes=1000)
-
-        # Both should be in warmup phase with same result
-        assert small_run_warmup.has_anomaly == large_run_warmup.has_anomaly
+        # But a crater EV below every phase threshold does NOT fire with healthy robust
+        # signals — EV is diagnostic only.
+        report = detector.check_value_function(
+            explained_variance=-5.0,  # below warmup, early, mid, and late thresholds
+            current_episode=90,
+            total_episodes=100,
+            bellman_error=0.5,
+            value_loss=0.099,
+        )
+        assert report.has_anomaly is False
+        assert "value_collapse" not in report.anomaly_types
 
     def test_requires_episode_info_for_value_collapse_thresholds(self):
         """Value collapse thresholds require explicit episode context (no shims).

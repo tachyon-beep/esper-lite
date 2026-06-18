@@ -191,6 +191,8 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     "clip_fraction_positive",
     "clip_fraction_negative",
     "explained_variance",
+    "value_nrmse",  # EV-telemetry-robustness: floor-stabilized companion (mean over ALL updates)
+    "ev_return_variance",  # EV-telemetry-robustness: EV-denominator variance (mean over ALL updates)
     "entropy",
     "ratio_mean",
     "ratio_std",
@@ -239,6 +241,8 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     "effective_aux_coef",
     "aux_pred_variance",
     "aux_explained_variance",
+    # EV-telemetry-robustness (SLICE C): aux value-fit signal, mean-reduced like aux EV.
+    "aux_value_nrmse",
     "aux_pred_target_correlation",
 })
 
@@ -264,6 +268,8 @@ _PPO_SUM_REDUCED_METRICS = frozenset({
     "inf_grad_count",
     "dead_layers",
     "exploding_layers",
+    # EV-telemetry-robustness: sum of per-update int flags = flagged-update count.
+    "ev_low_return_variance_count",
 })
 
 _PPO_ANY_REDUCED_METRICS = frozenset({
@@ -271,6 +277,10 @@ _PPO_ANY_REDUCED_METRICS = frozenset({
     "advantage_std_floored",
     "lstm_has_nan",
     "lstm_has_inf",
+    # EV-telemetry-robustness: True if any update in the batch was floored.
+    "ev_low_return_variance",
+    # EV-telemetry-robustness (SLICE C): True if any update's aux target var < aux floor.
+    "aux_ev_low_return_variance",
 })
 
 _PPO_FIRST_REDUCED_METRICS = frozenset({
@@ -356,6 +366,26 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
 
     aggregated: dict[str, Any] = {}
     keys = {key for metrics in update_metrics for key in metrics}
+
+    # EV-telemetry-robustness flagged-exclusion (special case BEFORE the frozenset dispatch).
+    # The per-key loop below processes one key at a time and cannot read a sibling key, so the
+    # generic mean reducer would average a -8 floored-EV outlier into the run-level EV. Compute
+    # the EV mean over only updates whose ev_low_return_variance is False; if none are unflagged,
+    # set NaN. value_nrmse / ev_return_variance stay on the generic all-updates mean. This
+    # unflagged-only EV mean is exactly what the Step-6 gate keys on.
+    if "explained_variance" in keys:
+        unflagged_ev = [
+            metrics["explained_variance"]
+            for metrics in update_metrics
+            if metrics.get("explained_variance") is not None
+            and not metrics.get("ev_low_return_variance", False)
+        ]
+        if unflagged_ev:
+            aggregated["explained_variance"] = sum(unflagged_ev) / len(unflagged_ev)
+        else:
+            aggregated["explained_variance"] = float("nan")
+        keys.discard("explained_variance")
+
     for key in keys:
         values: list[Any] = []
         for metrics in update_metrics:

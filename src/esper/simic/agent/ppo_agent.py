@@ -7,6 +7,7 @@ For vectorized environments, see simic.vectorized.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,8 @@ from esper.simic.telemetry.lstm_health import compute_lstm_health
 from esper.simic.control import ValueNormalizer
 from esper.leyline.value_metrics import (
     ValueFunctionMetricsDict,
+    compute_floored_aux_explained_variance,
+    compute_floored_explained_variance,
     compute_value_function_metrics,
 )
 from esper.leyline import (
@@ -160,6 +163,23 @@ class PPOAgent:
         # Auxiliary contribution supervision (Expert-reviewed defaults)
         aux_contribution_coef: float = 0.05,  # DRL Expert: reduced from 0.1
         aux_warmup_steps: int = 1000,  # DRL + PyTorch Expert: ramp from 0 → full
+        # EV-telemetry-robustness: floor the EV denominator (valid_returns.var()) on the RAW
+        # return scale. Step-0 calibration: healthy-run return std is 7-13 -> var_returns ~49-169
+        # (the normal operating band). A floor of 1.0 (std 1.0) excludes only batches whose return
+        # spread is <~1/7th of typical -- the pathological low-variance tail that manufactures a
+        # -8 EV outlier -- while leaving every normal batch's EV numerically unchanged (the clamp
+        # is a no-op above the floor). Config-exposed so a relative/EMA floor can be swapped in.
+        ev_return_variance_floor: float = 1.0,
+        # EV-telemetry-robustness (SLICE C): aux (contribution-target) EV floor. The
+        # contribution-target scale is NOT calibratable from persisted telemetry
+        # (contribution_targets are not serialized), so the aux floor is DATA-RELATIVE,
+        # recomputed each update: floor = max(floor_min, floor_fraction * Var0(target)).
+        # The 0.05 fraction mirrors the main EV floor being ~3-5% of the healthy
+        # var_returns median; floor_min is the old bare clamp(min=0.01) value. DISTINCT
+        # from ev_return_variance_floor (different scale). DIAGNOSTIC-ONLY: feeds the
+        # aux_ev_low_return_variance flag + aux value_nrmse denominator; NEVER a gate trigger.
+        aux_ev_return_variance_floor_fraction: float = 0.05,
+        aux_ev_return_variance_floor_min: float = 0.01,
         aux_stop_gradient: bool = True,  # DRL Expert: prevent representation collapse
         contribution_loss_clip: float = 10.0,  # Clip targets to prevent outliers
         enable_contribution_aux: bool = True,  # Can disable for ablation
@@ -275,6 +295,17 @@ class PPOAgent:
         self.contribution_loss_clip = contribution_loss_clip
         self.enable_contribution_aux = enable_contribution_aux
         self._aux_training_step = 0  # Track training steps for warmup
+
+        # EV-telemetry-robustness floor (raw return-variance scale; see ctor docstring above).
+        # ev_var_floor_std is stored for diagnostics/docstring parity only -- the W7 helper
+        # recomputes its own std floor (math.sqrt(floor)) internally and does NOT read this.
+        self.ev_return_variance_floor = ev_return_variance_floor
+        self.ev_var_floor_std = math.sqrt(self.ev_return_variance_floor)
+
+        # EV-telemetry-robustness (SLICE C): aux floor params (contribution-target scale;
+        # see ctor docstring). Data-relative, recomputed each update in the aux EV block.
+        self.aux_ev_return_variance_floor_fraction = aux_ev_return_variance_floor_fraction
+        self.aux_ev_return_variance_floor_min = aux_ev_return_variance_floor_min
 
         # BPTT INVARIANT (recurrent-PPO correctness):
         # The PPO update unrolls each buffer row as ONE contiguous LSTM sequence
@@ -619,16 +650,25 @@ class PPOAgent:
         valid_values = data["values"][valid_mask]
         valid_returns = data["returns"][valid_mask]
         raw_values = self.value_normalizer.denormalize(valid_values)
-        var_returns = valid_returns.var()
-        explained_variance: torch.Tensor
-        if var_returns > 1e-8:
-            ev_tensor = 1.0 - (valid_returns - raw_values).var() / var_returns
-            explained_variance = ev_tensor
-        else:
-            explained_variance = torch.tensor(0.0, device=valid_returns.device)
+        # W7 helper seam: variance-floored EV + floor-stabilized value_nrmse companion + flag.
+        # Single path (no dual 1e-8/0.0 branch). Degenerate (numel<=1) masks are NOT handled
+        # here -- they produce NaN var()/std() and fall through to the non-finite return-stat
+        # raise below (B3 hard bug), never a NaN-by-convention EV.
+        (
+            explained_variance,
+            value_nrmse,
+            ev_low_return_variance,
+            ev_return_variance,
+        ) = compute_floored_explained_variance(
+            raw_values, valid_returns, self.ev_return_variance_floor
+        )
 
         metrics: dict[str, Any] = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
+        metrics["ev_return_variance"] = [ev_return_variance]
+        metrics["value_nrmse"] = [value_nrmse]
+        metrics["ev_low_return_variance"] = [ev_low_return_variance]
+        metrics["ev_low_return_variance_count"] = [1 if ev_low_return_variance else 0]
 
         # Return statistics for diagnosing value loss scale
         return_mean = valid_returns.mean()
@@ -1275,17 +1315,32 @@ class PPOAgent:
                         # valid_mask is [batch, seq_len], fresh_mask is also [batch, seq_len]
                         # We want timesteps where valid_mask AND fresh_mask are True
                         combined_mask = valid_mask & fresh_mask
-                        if combined_mask.any():
+                        # B3 / no-bug-hiding: numel<2 yields NaN var()/std(). The aux-EV
+                        # floor is for the legitimate low (but finite, numel>=2) variance
+                        # regime ONLY -- a degenerate (numel<2) selection SKIPS the aux-EV
+                        # emission rather than NaN-defaulting or flagging-on-degenerate.
+                        if combined_mask.any() and result.pred_contributions[combined_mask].numel() >= 2:
                             pred_flat = result.pred_contributions[combined_mask].flatten()
                             target_flat = data["contribution_targets"][combined_mask].flatten()
 
                             # Variance (should NOT be ~0 - indicates collapse)
                             pred_variance = pred_flat.var()
 
-                            # Explained variance (should increase over training)
-                            target_var = target_flat.var().clamp(min=0.01)
-                            residual_var = (pred_flat - target_flat).var()
-                            explained_var = 1.0 - (residual_var / target_var)
+                            # EV-telemetry-robustness (SLICE C): variance-floored aux EV +
+                            # floor-stabilized aux value_nrmse + low-variance flag, on the
+                            # contribution-target scale. Replaces the bare clamp(min=0.01).
+                            # DIAGNOSTIC-ONLY (flag + value_nrmse denominator; NEVER a gate).
+                            (
+                                explained_var,
+                                aux_value_nrmse,
+                                aux_ev_low_return_variance,
+                                _aux_ev_return_variance,
+                            ) = compute_floored_aux_explained_variance(
+                                pred_flat=pred_flat,
+                                target_flat=target_flat,
+                                floor_fraction=self.aux_ev_return_variance_floor_fraction,
+                                floor_min=self.aux_ev_return_variance_floor_min,
+                            )
 
                             # Correlation (should be > 0.5 eventually)
                             if pred_flat.numel() > 2:
@@ -1300,6 +1355,8 @@ class PPOAgent:
 
                             metrics["aux_pred_variance"].append(pred_variance)
                             metrics["aux_explained_variance"].append(explained_var)
+                            metrics["aux_value_nrmse"].append(aux_value_nrmse)
+                            metrics["aux_ev_low_return_variance"].append(aux_ev_low_return_variance)
                             metrics["aux_pred_target_correlation"].append(corr)
 
                             # Phase 4.2: Collapse detection warnings
@@ -1325,16 +1382,20 @@ class PPOAgent:
                                         corr_val,
                                     )
                         else:
-                            # No valid+fresh timesteps in this epoch
+                            # No valid+fresh (numel>=2) timesteps in this epoch
                             zero_t = torch.tensor(0.0, device=loss.device)
                             metrics["aux_pred_variance"].append(zero_t)
                             metrics["aux_explained_variance"].append(zero_t)
+                            metrics["aux_value_nrmse"].append(zero_t)
+                            metrics["aux_ev_low_return_variance"].append(False)
                             metrics["aux_pred_target_correlation"].append(zero_t)
                     else:
                         # No fresh measurements in this epoch
                         zero_t = torch.tensor(0.0, device=loss.device)
                         metrics["aux_pred_variance"].append(zero_t)
                         metrics["aux_explained_variance"].append(zero_t)
+                        metrics["aux_value_nrmse"].append(zero_t)
+                        metrics["aux_ev_low_return_variance"].append(False)
                         metrics["aux_pred_target_correlation"].append(zero_t)
             else:
                 # No contribution data in batch - skip aux loss and quality metrics
@@ -1343,6 +1404,8 @@ class PPOAgent:
                 zero_t = torch.tensor(0.0, device=loss.device)
                 metrics["aux_pred_variance"].append(zero_t)
                 metrics["aux_explained_variance"].append(zero_t)
+                metrics["aux_value_nrmse"].append(zero_t)
+                metrics["aux_ev_low_return_variance"].append(False)
                 metrics["aux_pred_target_correlation"].append(zero_t)
 
             self.optimizer.zero_grad(set_to_none=True)

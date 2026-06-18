@@ -125,6 +125,10 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.kl_divergence')::DOUBLE as kl_divergence,
             json_extract(data, '$.clip_fraction')::DOUBLE as clip_fraction,
             json_extract(data, '$.explained_variance')::DOUBLE as explained_variance,
+            -- EV-telemetry-robustness diagnostics (additive; pure telemetry, never gate inputs)
+            json_extract(data, '$.value_nrmse')::DOUBLE as value_nrmse,
+            json_extract(data, '$.ev_low_return_variance')::BOOLEAN as ev_low_return_variance,
+            json_extract(data, '$.ev_return_variance')::DOUBLE as ev_return_variance,
             json_extract(data, '$.grad_norm')::DOUBLE as grad_norm,
             json_extract(data, '$.pre_clip_grad_norm')::DOUBLE as pre_clip_grad_norm,
             json_extract(data, '$.lr')::DOUBLE as lr,
@@ -525,7 +529,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.host_accuracy')::DOUBLE as host_accuracy,
             json_extract(data, '$.entropy')::DOUBLE as entropy,
             json_extract(data, '$.kl_divergence')::DOUBLE as kl_divergence,
-            json_extract(data, '$.value_variance')::DOUBLE as value_variance,
+            json_extract(data, '$.explained_variance')::DOUBLE as explained_variance,
             json_extract(data, '$.seeds_created')::INTEGER as seeds_created,
             json_extract(data, '$.seeds_fossilized')::INTEGER as seeds_fossilized,
             json_extract(data, '$.skipped_update')::BOOLEAN as skipped_update

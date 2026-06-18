@@ -819,6 +819,50 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
     )
 
 
+def test_ppo_updates_exposes_ev_robustness_columns(tmp_path):
+    """ppo_updates view should expose value_nrmse / ev_low_return_variance / ev_return_variance."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-ev-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 11,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "explained_variance": -3.5,
+            "value_nrmse": 0.42,
+            "ev_low_return_variance": True,
+            "ev_return_variance": 0.7,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            explained_variance,
+            value_nrmse,
+            ev_low_return_variance,
+            ev_return_variance
+        FROM ppo_updates
+        """
+    ).fetchone()
+
+    assert row == (-3.5, 0.42, True, 0.7)
+
+
 def test_run_confounders_view_surfaces_numerical_instability(tmp_path):
     """run_confounders should expose proof-blocking anomaly payload facts."""
     from datetime import datetime
@@ -1186,7 +1230,7 @@ def test_batch_stats_view_parses_payload(tmp_path):
             "host_accuracy": 0.50,
             "entropy": 1.2,
             "kl_divergence": 0.01,
-            "value_variance": 0.02,
+            "explained_variance": 0.02,
             "seeds_created": 5,
             "seeds_fossilized": 2,
             "skipped_update": False,

@@ -32,6 +32,12 @@ interface ActionShare {
 
 const EPSILON = 0.000001
 
+// EV-telemetry-robustness: the policy gate keys on the robust value_nrmse, NOT the artifact-prone
+// explained_variance. value_nrmse = RMSE(residual) / std(returns); at/above 1.0 the residual RMSE
+// exceeds the return spread (a genuine value-fit failure). A low-return-variance batch
+// (ev_low_return_variance) can crater EV while value_nrmse stays healthy, so EV is never gated on.
+const VALUE_NRMSE_WATCH_THRESHOLD = 1.0
+
 const progressPercent = computed(() => {
   if (props.snapshot.max_batches <= 0) {
     return 0
@@ -126,13 +132,13 @@ const policyGate = computed<GateRow>(() => {
 
   if (
     props.snapshot.tamiyo.collapse_risk_score >= 0.55
-    || props.snapshot.tamiyo.explained_variance < 0.3
+    || props.snapshot.tamiyo.value_nrmse >= VALUE_NRMSE_WATCH_THRESHOLD
     || props.snapshot.tamiyo.decision_density < 0.35
   ) {
     return {
       id: 'policy',
       label: 'Policy',
-      value: `EV ${formatSigned(props.snapshot.tamiyo.explained_variance)}`,
+      value: `NRMSE ${formatCompact(props.snapshot.tamiyo.value_nrmse)}`,
       state: 'watch'
     }
   }
@@ -140,7 +146,7 @@ const policyGate = computed<GateRow>(() => {
   return {
     id: 'policy',
     label: 'Policy',
-    value: `EV ${formatSigned(props.snapshot.tamiyo.explained_variance)}`,
+    value: `NRMSE ${formatCompact(props.snapshot.tamiyo.value_nrmse)}`,
     state: 'pass'
   }
 })

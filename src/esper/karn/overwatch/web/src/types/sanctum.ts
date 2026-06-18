@@ -314,6 +314,9 @@ export interface TamiyoState {
   clip_fraction: number;
   kl_divergence: number;
   explained_variance: number;
+  value_nrmse: number;
+  ev_low_return_variance: boolean;
+  ev_return_variance: number | null;
   policy_loss: number;
   value_loss: number;
   entropy_loss: number;

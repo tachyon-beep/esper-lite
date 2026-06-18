@@ -982,6 +982,15 @@ class SanctumAggregator:
         self._tamiyo.explained_variance = explained_variance
         self._tamiyo.explained_variance_history.append(explained_variance)
 
+        # EV-telemetry-robustness diagnostics (additive; pure telemetry, never gate inputs).
+        # value_nrmse is float | None on the payload (None on a degenerate batch); coerce to 0.0
+        # for the scalar gauge, matching the explained_variance convention above.
+        self._tamiyo.value_nrmse = (
+            payload.value_nrmse if payload.value_nrmse is not None else 0.0
+        )
+        self._tamiyo.ev_low_return_variance = payload.ev_low_return_variance
+        self._tamiyo.ev_return_variance = payload.ev_return_variance
+
         grad_norm = payload.grad_norm
         self._tamiyo.grad_norm = grad_norm
         self._tamiyo.grad_norm_history.append(grad_norm)
@@ -2081,8 +2090,10 @@ class SanctumAggregator:
             )
             gaming_rate = gaming_steps / max(1, len(components))
 
-            # Get latest EV from Tamiyo PPO state
+            # Get latest EV (diagnostic display) and the robust value-fit signal from Tamiyo state.
             ev = self._tamiyo.explained_variance
+            value_nrmse = self._tamiyo.value_nrmse
+            ev_low_return_variance = self._tamiyo.ev_low_return_variance
 
             # Hypervolume from episode outcomes
             hv = self._compute_hypervolume()
@@ -2091,6 +2102,8 @@ class SanctumAggregator:
                 pbrs_fraction=pbrs_fraction,
                 anti_gaming_trigger_rate=gaming_rate,
                 ev_explained=ev,
+                value_nrmse=value_nrmse,
+                ev_low_return_variance=ev_low_return_variance,
                 hypervolume=hv,
             )
 

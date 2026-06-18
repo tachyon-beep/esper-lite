@@ -244,6 +244,65 @@ describe('HealthGauges', () => {
     expect(entropyGauge.classes()).not.toContain('health-critical')
   })
 
+  it('does not mask a genuinely negative explained variance as 0% (no display clamp)', () => {
+    // EV-telemetry-robustness: the old Math.max(0, ...) clamp rendered a blown-out
+    // negative EV as "0%", hiding the collapse. The honest gauge must show the true value.
+    const wrapper = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        tamiyo: createTamiyo({ explained_variance: -8.0 })
+      }
+    })
+
+    const evGauge = wrapper.find('[data-testid="gauge-explained-variance"]')
+    const valueText = evGauge.find('[data-testid="gauge-value"]').text()
+    // Must NOT be masked to 0%.
+    expect(valueText).not.toBe('0%')
+    // True value surfaced (rounded -800%), and the status is honestly critical.
+    expect(valueText).toBe('-800%')
+    expect(evGauge.classes()).toContain('health-critical')
+  })
+
+  it('clamps only the EV progress arc geometry (never negative), keeping SVG valid', () => {
+    const wrapper = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        tamiyo: createTamiyo({ explained_variance: -8.0 })
+      }
+    })
+
+    const evGauge = wrapper.find('[data-testid="gauge-explained-variance"]')
+    const dash = evGauge.find('.gauge-progress').attributes('stroke-dasharray') ?? ''
+    const progress = parseFloat(dash.split(' ')[0])
+    // Arc geometry must be non-negative (negative dash length is invalid SVG).
+    expect(progress).toBeGreaterThanOrEqual(0)
+  })
+
+  it('renders a low-return-variance badge when ev_low_return_variance is set', () => {
+    // EV-telemetry-robustness: when the EV denominator is ill-conditioned, a deeply negative
+    // EV is a denominator artifact, not a collapse. Surface a badge so the gauge is not read
+    // as a real failure.
+    const wrapper = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        tamiyo: createTamiyo({ explained_variance: -8.0, ev_low_return_variance: true })
+      }
+    })
+
+    expect(wrapper.find('[data-testid="ev-low-variance-badge"]').exists()).toBe(true)
+  })
+
+  it('does not render the low-return-variance badge when the flag is clear', () => {
+    const wrapper = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        tamiyo: createTamiyo({ explained_variance: 0.85, ev_low_return_variance: false })
+      }
+    })
+
+    expect(wrapper.find('[data-testid="ev-low-variance-badge"]').exists()).toBe(false)
+  })
+
   it('renders a measured GPU utilization of 0% (not pending) when present', () => {
     const wrapper = mount(HealthGauges, {
       props: {

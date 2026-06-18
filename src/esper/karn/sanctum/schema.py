@@ -967,6 +967,13 @@ class TamiyoState:
     clip_fraction: float = 0.0
     kl_divergence: float = 0.0
     explained_variance: float = 0.0
+    # EV-telemetry-robustness diagnostics (additive; pure telemetry, never gate inputs).
+    # value_nrmse is the floor-stabilized value-fit companion; ev_low_return_variance flags a
+    # floored EV denominator (denominator ill-conditioned); ev_return_variance is the
+    # EV-denominator variance valid_returns.var().
+    value_nrmse: float = 0.0
+    ev_low_return_variance: bool = False
+    ev_return_variance: float | None = None
 
     # Losses (Losses panel)
     policy_loss: float = 0.0

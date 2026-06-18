@@ -61,6 +61,11 @@ class PPOUpdateMetricsBuilder:
             aggregated_result["approx_kl"] = nan
             aggregated_result["clip_fraction"] = nan
             aggregated_result["explained_variance"] = nan
+            # EV-robustness: complete the metrics dict for a skipped update.
+            aggregated_result["value_nrmse"] = nan
+            aggregated_result["ev_return_variance"] = nan
+            aggregated_result["ev_low_return_variance"] = False
+            aggregated_result["ev_low_return_variance_count"] = 0
             aggregated_result["pre_clip_grad_norm"] = nan
             aggregated_result["op_q_values"] = tuple(nan for _ in range(NUM_OPS))
             aggregated_result["op_valid_mask"] = tuple(False for _ in range(NUM_OPS))
@@ -109,6 +114,18 @@ class PPOUpdateMetricsBuilder:
             # D5: Boolean metrics - any() across batches (True if any batch was floored)
             if k == "advantage_std_floored":
                 aggregated_result[k] = any(t.item() for t in v)  # type: ignore[literal-required]
+                continue
+            # EV-robustness: per-update python bool/int (not tensors) - reduce explicitly so
+            # they do not hit the torch.stack generic path below.
+            if k == "ev_low_return_variance":
+                aggregated_result[k] = any(bool(x) for x in v)  # type: ignore[literal-required]
+                continue
+            if k == "ev_low_return_variance_count":
+                aggregated_result[k] = int(sum(v))  # type: ignore[literal-required]
+                continue
+            # EV-robustness (SLICE C): aux flag is a per-epoch python bool list -> OR-reduce.
+            if k == "aux_ev_low_return_variance":
+                aggregated_result[k] = any(bool(x) for x in v)  # type: ignore[literal-required]
                 continue
 
             stacked = torch.stack(v)

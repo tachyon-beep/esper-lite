@@ -521,6 +521,17 @@ class PPOCoordinator:
             # Fully forced proof-control rollouts still report EV, but there was
             # no actor agency to diagnose as PPO value collapse.
             value_collapse_applicable=metrics["usable_actor_timesteps"] > 0,
+            # EV-telemetry-robustness (B1): the value-collapse gate now keys on the
+            # scale-anchored PRIMARY robust signals (bellman_error, value_loss) plus
+            # SECONDARY corroboration (value_nrmse, v_return_correlation) and the
+            # ev_low_return_variance flag. These are mandatory aggregated metric keys
+            # registered in vectorized._aggregate_ppo_metrics, so direct access fails
+            # loudly if the reducer plumbing dropped them (CLAUDE.md no-bug-hiding).
+            bellman_error=metrics["bellman_error"],
+            value_loss=metrics["value_loss"],
+            value_nrmse=metrics["value_nrmse"],
+            v_return_correlation=metrics["v_return_correlation"],
+            ev_low_return_variance=metrics["ev_low_return_variance"],
         )
 
         # B7-DRL-01: Check gradient drift and merge into anomaly report

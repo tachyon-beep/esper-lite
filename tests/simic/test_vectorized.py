@@ -204,6 +204,11 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "return_std": 0.3,
         # Value target scale (std used to normalize returns)
         "value_target_scale": 0.3,
+        # EV-telemetry-robustness aggregated fields (direct-access mandatory in emitter).
+        "value_nrmse": 0.4,
+        "ev_low_return_variance": False,
+        "ev_return_variance": 0.09,
+        "ev_low_return_variance_count": 0,
         # Throughput metrics (mandatory for dataloader wait ratio)
         "throughput_step_time_ms_sum": 100.0,
         "throughput_dataloader_wait_ms_sum": 20.0,
@@ -230,6 +235,7 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "head_gradient_states": {
             **{head: ["finite"] for head in HEAD_NAMES},
             "value": ["finite"],
+            "q": ["finite"],
         },
     }
     base.update(overrides)
@@ -918,6 +924,179 @@ def test_aggregate_ppo_metrics_mean_reduces_per_head_clip_fraction():
     # The joint clip_fraction (in the MEAN frozenset) is also mean-reduced and is
     # NOT double-handled by the suffix branch.
     assert metrics["clip_fraction"] == pytest.approx(0.2)
+
+
+def test_aggregate_ppo_metrics_no_keyerror_on_ev_fields():
+    """EV-robustness keys must have declared reducers (else _aggregate_ppo_metrics KeyErrors)."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {
+            "value_nrmse": 0.1,
+            "ev_low_return_variance": False,
+            "ev_return_variance": 100.0,
+            "ev_low_return_variance_count": 0,
+        },
+        {
+            "value_nrmse": 0.3,
+            "ev_low_return_variance": True,
+            "ev_return_variance": 0.5,
+            "ev_low_return_variance_count": 1,
+        },
+    ])
+
+    assert "value_nrmse" in metrics
+    assert "ev_return_variance" in metrics
+    assert "ev_low_return_variance" in metrics
+    assert "ev_low_return_variance_count" in metrics
+
+
+def test_ev_robustness_metrics_registered():
+    """Reducer-kind registration: mean for floats, any for bool flag, sum for count."""
+    from esper.simic.training.vectorized import (
+        _PPO_MEAN_REDUCED_METRICS,
+        _PPO_ANY_REDUCED_METRICS,
+        _PPO_SUM_REDUCED_METRICS,
+    )
+
+    assert "value_nrmse" in _PPO_MEAN_REDUCED_METRICS
+    assert "ev_return_variance" in _PPO_MEAN_REDUCED_METRICS
+    assert "ev_low_return_variance" in _PPO_ANY_REDUCED_METRICS
+    assert "ev_low_return_variance_count" in _PPO_SUM_REDUCED_METRICS
+
+
+def test_ev_aggregation_excludes_flagged_updates():
+    """explained_variance mean is computed over UNFLAGGED updates only; siblings over ALL."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    updates = [
+        {
+            "explained_variance": 0.8,
+            "ev_low_return_variance": False,
+            "value_nrmse": 0.1,
+            "v_return_correlation": 0.9,
+            "ev_return_variance": 100.0,
+            "ev_low_return_variance_count": 0,
+        },
+        {
+            "explained_variance": 0.6,
+            "ev_low_return_variance": False,
+            "value_nrmse": 0.2,
+            "v_return_correlation": 0.7,
+            "ev_return_variance": 90.0,
+            "ev_low_return_variance_count": 0,
+        },
+        {
+            # Flagged: this -8 outlier MUST NOT pollute the EV mean.
+            "explained_variance": -8.0,
+            "ev_low_return_variance": True,
+            "value_nrmse": 0.3,
+            "v_return_correlation": 0.0,
+            "ev_return_variance": 0.2,
+            "ev_low_return_variance_count": 1,
+        },
+    ]
+
+    metrics = _aggregate_ppo_metrics(updates)
+
+    # EV mean over unflagged only: (0.8 + 0.6) / 2 == 0.7
+    assert metrics["explained_variance"] == pytest.approx(0.7)
+    # Siblings aggregate over ALL updates.
+    assert metrics["value_nrmse"] == pytest.approx((0.1 + 0.2 + 0.3) / 3)
+    assert metrics["v_return_correlation"] == pytest.approx((0.9 + 0.7 + 0.0) / 3)
+    assert metrics["ev_return_variance"] == pytest.approx((100.0 + 90.0 + 0.2) / 3)
+    # Count == number of flagged updates.
+    assert metrics["ev_low_return_variance_count"] == 1
+    assert metrics["ev_low_return_variance"] is True
+
+
+def test_ev_aggregation_all_flagged():
+    """All flagged: aggregated EV is nan, value_nrmse still aggregates, count == N, no raise."""
+    import math
+
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    updates = [
+        {
+            "explained_variance": -8.0,
+            "ev_low_return_variance": True,
+            "value_nrmse": 0.3,
+            "ev_return_variance": 0.2,
+            "ev_low_return_variance_count": 1,
+        },
+        {
+            "explained_variance": -5.0,
+            "ev_low_return_variance": True,
+            "value_nrmse": 0.4,
+            "ev_return_variance": 0.1,
+            "ev_low_return_variance_count": 1,
+        },
+    ]
+
+    metrics = _aggregate_ppo_metrics(updates)
+
+    assert math.isnan(metrics["explained_variance"])
+    assert metrics["value_nrmse"] == pytest.approx(0.35)
+    assert metrics["ev_low_return_variance_count"] == 2
+    assert metrics["ev_low_return_variance"] is True
+
+
+def test_gate_sees_unflagged_only_ev_mean():
+    """Couples the Step-3.4 flagged-exclusion to the diagnostic EV the gate carries.
+
+    The aggregated explained_variance that reaches check_all is the unflagged-only mean
+    (a flagged -8 outlier is excluded). EV is a pure diagnostic under the robust-anchored
+    gate, so it never drives firing; with healthy robust signals the gate does NOT fire,
+    and the EV value it carries in telemetry is the clean unflagged-only mean.
+    """
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+    from esper.simic.telemetry import AnomalyDetector
+
+    updates = [
+        {
+            "explained_variance": 0.8,
+            "ev_low_return_variance": False,
+            "value_nrmse": 0.1,
+            "v_return_correlation": 0.9,
+            "ev_return_variance": 100.0,
+            "ev_low_return_variance_count": 0,
+            "bellman_error": 0.5,
+            "value_loss": 0.099,
+        },
+        {
+            # Flagged -8 outlier: excluded from the EV mean the gate keys on.
+            "explained_variance": -8.0,
+            "ev_low_return_variance": True,
+            "value_nrmse": 0.3,
+            "v_return_correlation": 0.0,
+            "ev_return_variance": 0.2,
+            "ev_low_return_variance_count": 1,
+            "bellman_error": 0.5,
+            "value_loss": 0.099,
+        },
+    ]
+
+    aggregated = _aggregate_ppo_metrics(updates)
+    # The gate keys on the unflagged-only EV mean (0.8), not the all-updates mean (-3.6).
+    assert aggregated["explained_variance"] == pytest.approx(0.8)
+
+    detector = AnomalyDetector()
+    report = detector.check_all(
+        ratio_max=1.1,
+        ratio_min=0.9,
+        explained_variance=aggregated["explained_variance"],
+        current_episode=80,
+        total_episodes=100,
+        value_collapse_applicable=True,
+        bellman_error=aggregated["bellman_error"],
+        value_loss=aggregated["value_loss"],
+        value_nrmse=aggregated["value_nrmse"],
+        v_return_correlation=aggregated["v_return_correlation"],
+        ev_low_return_variance=aggregated["ev_low_return_variance"],
+    )
+
+    # Healthy unflagged EV + healthy primary signals -> no spurious collapse.
+    assert "value_collapse" not in report.anomaly_types
 
 
 def test_aggregate_ppo_metrics_reduces_proof_fields_explicitly():

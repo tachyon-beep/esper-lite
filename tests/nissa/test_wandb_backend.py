@@ -489,6 +489,32 @@ class TestPPODiagnosticsPreservation:
         assert logged["ppo/amp_overflow_detected"] == 1
         assert logged["ppo/lstm_has_nan"] == 0
 
+    def test_wandb_emits_ev_robustness_metrics(self, backend, mock_wandb):
+        """EV-robustness diagnostics (value_nrmse / ev_low_return_variance) are logged when present."""
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            epoch=100,
+            data=PPOUpdatePayload(
+                policy_loss=0.5,
+                value_loss=0.3,
+                entropy=0.1,
+                grad_norm=1.0,
+                kl_divergence=0.01,
+                clip_fraction=0.1,
+                nan_grad_count=0,
+                explained_variance=-3.5,
+                value_nrmse=0.42,
+                ev_low_return_variance=True,
+            ),
+        )
+
+        backend.emit(event)
+
+        logged = mock_wandb.log.call_args[0][0]
+        assert logged["ppo/value_nrmse"] == 0.42
+        # bool encoded as int for the metric series
+        assert logged["ppo/ev_low_return_variance"] == 1
+
     def test_ppo_logs_lstm_health_when_present(self, backend, mock_wandb):
         """Update-time and rollout-time LSTM RMS metrics are logged when present."""
         event = TelemetryEvent(

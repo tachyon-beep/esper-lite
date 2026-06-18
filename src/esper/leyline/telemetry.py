@@ -718,6 +718,16 @@ class PPOUpdatePayload:
     # OPTIONAL - explained_variance can be NaN early training
     explained_variance: float | None = None
 
+    # EV-telemetry-robustness (additive). value_nrmse is the floor-stabilized value-fit
+    # companion; ev_low_return_variance flags a floored EV denominator (per update); the run-level
+    # ev_low_return_variance_count is the flagged-update count (a reward/return-regime diagnostic);
+    # ev_return_variance is the EV-denominator variance valid_returns.var() (Bessel, correction=1),
+    # DISTINCT from the buffer-wide return_variance below (correction=0).
+    value_nrmse: float | None = None
+    ev_low_return_variance: bool = False
+    ev_return_variance: float | None = None
+    ev_low_return_variance_count: int = 0
+
     # OPTIONAL - extended diagnostics
     entropy_loss: float = 0.0
     advantage_mean: float = 0.0
@@ -1140,6 +1150,13 @@ class PPOUpdatePayload:
             return_p90=data.get("return_p90", 0.0),
             return_variance=data.get("return_variance", 0.0),
             return_skewness=data.get("return_skewness", 0.0),
+            # OPTIONAL: EV-telemetry-robustness fields. Persisted-event boundary -> .get(default)
+            # per B4 schema evolution (a missing key means an OLD event predating this plan, NOT a
+            # current-code bug). Matches the TELE-220..228 .get pattern above.
+            value_nrmse=data.get("value_nrmse", None),
+            ev_low_return_variance=data.get("ev_low_return_variance", False),
+            ev_return_variance=data.get("ev_return_variance", None),
+            ev_low_return_variance_count=data.get("ev_low_return_variance_count", 0),
             # OPTIONAL: Value target scale (default 1.0, matching declaration).
             value_target_scale=data.get("value_target_scale", 1.0),
             # OPTIONAL: D5 slot saturation diagnostics (defaults for non-D5 batches).
@@ -1747,7 +1764,7 @@ class AnalyticsSnapshotPayload:
     host_accuracy: float | None = None
     entropy: float | None = None
     kl_divergence: float | None = None
-    value_variance: float | None = None
+    explained_variance: float | None = None
     seeds_created: int | None = None
     seeds_fossilized: int | None = None
     skipped_update: bool | None = None
@@ -1863,7 +1880,7 @@ class AnalyticsSnapshotPayload:
             host_accuracy=data.get("host_accuracy"),
             entropy=data.get("entropy"),
             kl_divergence=data.get("kl_divergence"),
-            value_variance=data.get("value_variance"),
+            explained_variance=data.get("explained_variance"),
             seeds_created=data.get("seeds_created"),
             seeds_fossilized=data.get("seeds_fossilized"),
             skipped_update=data.get("skipped_update"),

@@ -388,6 +388,11 @@ class WandbBackend(OutputBackend):
         # Optional metrics (may be None - omit rather than fabricate)
         if p.explained_variance is not None:
             metrics["ppo/explained_variance"] = p.explained_variance
+        # EV-telemetry-robustness diagnostics. value_nrmse may be None (degenerate batch) -> omit;
+        # ev_low_return_variance is always present, encoded as int for the metric series.
+        if p.value_nrmse is not None:
+            metrics["ppo/value_nrmse"] = p.value_nrmse
+        metrics["ppo/ev_low_return_variance"] = int(p.ev_low_return_variance)
         if p.entropy_coef is not None:
             metrics["ppo/entropy_coef"] = p.entropy_coef
         if p.lr is not None:

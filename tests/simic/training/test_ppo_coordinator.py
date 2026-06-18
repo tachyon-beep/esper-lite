@@ -712,6 +712,12 @@ def test_run_anomaly_detection_threads_ratio_diagnostic_into_emitter():
             "explained_variance": 0.5,
             "usable_actor_timesteps": 4,
             "ratio_diagnostic": ratio_diag,
+            # Mandatory robust gate signals (direct-access at the coordinator).
+            "bellman_error": 0.5,
+            "value_loss": 0.099,
+            "value_nrmse": 0.3,
+            "v_return_correlation": 0.9,
+            "ev_low_return_variance": False,
         },
         drift_metrics=None,
         batched_lstm_hidden=None,
@@ -758,6 +764,13 @@ def test_run_anomaly_detection_skips_value_collapse_for_all_forced_rollout():
             "explained_variance": -1.0,
             "usable_actor_timesteps": 0,
             "forced_step_ratio": 1.0,
+            # Even with a bad primary signal, value_collapse_applicable is False
+            # (no actor agency), so the value-function arm is skipped entirely.
+            "bellman_error": 25.0,
+            "value_loss": 3.0,
+            "value_nrmse": 0.2,
+            "v_return_correlation": 0.0,
+            "ev_low_return_variance": True,
         },
         drift_metrics=None,
         batched_lstm_hidden=None,
@@ -771,7 +784,12 @@ def test_run_anomaly_detection_skips_value_collapse_for_all_forced_rollout():
 
 
 def test_run_anomaly_detection_keeps_value_collapse_for_actor_rollout():
-    """Low EV remains proof-blocking when the rollout contains actor decisions."""
+    """A genuine collapse remains proof-blocking when the rollout contains actor decisions.
+
+    EV-telemetry-robustness (B1): low EV alone no longer fires; a confirming PRIMARY robust
+    signal (bad value_loss / bellman_error) is required. This drives the actor-rollout path
+    with a genuine collapse (bad primary) and asserts value_collapse still fires.
+    """
     captured: dict[str, object] = {}
 
     def _emit_anomaly_diagnostics_fn(_hub, anomaly_report, *_args, **_kwargs):
@@ -806,6 +824,12 @@ def test_run_anomaly_detection_keeps_value_collapse_for_actor_rollout():
             "explained_variance": -1.0,
             "usable_actor_timesteps": 4,
             "forced_step_ratio": 0.0,
+            # Genuine collapse: scale-anchored primary signals are bad.
+            "bellman_error": 25.0,
+            "value_loss": 3.0,
+            "value_nrmse": 1.5,
+            "v_return_correlation": -0.1,
+            "ev_low_return_variance": False,
         },
         drift_metrics=None,
         batched_lstm_hidden=None,
@@ -816,6 +840,131 @@ def test_run_anomaly_detection_keeps_value_collapse_for_actor_rollout():
     report = captured["report"]
     assert report.has_anomaly is True
     assert "value_collapse" in report.anomaly_types
+
+
+def _value_collapse_metrics(**overrides) -> dict:
+    """Aggregated metrics dict carrying the mandatory robust gate signals (Step 5).
+
+    The coordinator reads bellman_error / value_loss / value_nrmse / v_return_correlation /
+    ev_low_return_variance by DIRECT key (fail-loud), so they must always be present in the
+    aggregated metrics dict that reaches run_anomaly_detection.
+    """
+    base = {
+        "ratio_max": 1.0,
+        "ratio_min": 1.0,
+        "explained_variance": 0.5,
+        "usable_actor_timesteps": 4,
+        "forced_step_ratio": 0.0,
+        # Robust gate signals (healthy defaults).
+        "bellman_error": 0.5,
+        "value_loss": 0.099,
+        "value_nrmse": 0.3,
+        "v_return_correlation": 0.9,
+        "ev_low_return_variance": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_coordinator_emits_value_collapse_on_low_var_real_collapse():
+    """B1: a real low-variance collapse fires via the robust arm threaded end-to-end.
+
+    Catches an argument-threading KeyError a check_value_function-in-isolation test misses.
+    """
+    captured: dict[str, object] = {}
+
+    def _emit_anomaly_diagnostics_fn(_hub, anomaly_report, *_args, **_kwargs):
+        captured["report"] = anomaly_report
+
+    coordinator = PPOCoordinator(
+        agent=_StubAgent(),
+        config=PPOCoordinatorConfig(
+            ppo_updates_per_batch=1,
+            max_epochs=4,
+            total_env_episodes=16,
+            amp_enabled=False,
+            resolved_amp_dtype=None,
+        ),
+        reward_normalizer=SimpleNamespace(clip=10.0),
+        anomaly_detector=AnomalyDetector(),
+        env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
+        reward_family_enum=SimpleNamespace(value="dense"),
+        hub=_CaptureHub(),
+        telemetry_config=None,
+        group_id="test-group",
+        run_ppo_updates_fn=lambda **_kw: {},
+        handle_telemetry_escalation_fn=lambda *a, **k: None,
+        emit_anomaly_diagnostics_fn=_emit_anomaly_diagnostics_fn,
+        logger=logging.getLogger(__name__),
+    )
+
+    coordinator.run_anomaly_detection(
+        metrics=_value_collapse_metrics(
+            explained_variance=0.5,   # EV looks fine; robust arm decides
+            bellman_error=25.0,       # bad primary
+            value_loss=3.0,           # bad primary
+            value_nrmse=0.2,          # secondary (must NOT gate)
+            v_return_correlation=0.0,  # 0.0 sentinel (must NOT gate)
+            ev_low_return_variance=True,
+        ),
+        drift_metrics=None,
+        batched_lstm_hidden=None,
+        batch_epoch_id=16,
+        batch_idx=1,
+    )
+
+    report = captured["report"]
+    assert report.has_anomaly is True
+    assert "value_collapse" in report.anomaly_types
+
+
+def test_coordinator_does_not_emit_value_collapse_on_artifact():
+    """B2: artefactual low-EV (flagged, healthy primary) must NOT emit value_collapse.
+
+    Suppression is upstream at the gate, not a view filter.
+    """
+    captured: dict[str, object] = {}
+
+    def _emit_anomaly_diagnostics_fn(_hub, anomaly_report, *_args, **_kwargs):
+        captured["report"] = anomaly_report
+
+    coordinator = PPOCoordinator(
+        agent=_StubAgent(),
+        config=PPOCoordinatorConfig(
+            ppo_updates_per_batch=1,
+            max_epochs=4,
+            total_env_episodes=16,
+            amp_enabled=False,
+            resolved_amp_dtype=None,
+        ),
+        reward_normalizer=SimpleNamespace(clip=10.0),
+        anomaly_detector=AnomalyDetector(),
+        env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
+        reward_family_enum=SimpleNamespace(value="dense"),
+        hub=_CaptureHub(),
+        telemetry_config=None,
+        group_id="test-group",
+        run_ppo_updates_fn=lambda **_kw: {},
+        handle_telemetry_escalation_fn=lambda *a, **k: None,
+        emit_anomaly_diagnostics_fn=_emit_anomaly_diagnostics_fn,
+        logger=logging.getLogger(__name__),
+    )
+
+    coordinator.run_anomaly_detection(
+        metrics=_value_collapse_metrics(
+            explained_variance=-3.0,   # blown-out EV artifact
+            bellman_error=0.5,         # healthy primary
+            value_loss=0.099,          # healthy primary
+            ev_low_return_variance=True,
+        ),
+        drift_metrics=None,
+        batched_lstm_hidden=None,
+        batch_epoch_id=16,
+        batch_idx=1,
+    )
+
+    report = captured["report"]
+    assert "value_collapse" not in report.anomaly_types
 
 
 def test_run_anomaly_detection_preserves_update_lstm_and_adds_rollout_lstm():
@@ -860,6 +1009,12 @@ def test_run_anomaly_detection_preserves_update_lstm_and_adds_rollout_lstm():
         "lstm_h_max": 1.0,
         "explained_variance": 0.5,
         "usable_actor_timesteps": 4,
+        # Mandatory robust gate signals (direct-access at the coordinator).
+        "bellman_error": 0.5,
+        "value_loss": 0.099,
+        "value_nrmse": 0.3,
+        "v_return_correlation": 0.9,
+        "ev_low_return_variance": False,
     }
 
     coordinator.run_anomaly_detection(

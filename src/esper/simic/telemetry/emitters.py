@@ -469,7 +469,10 @@ class VectorizedEmitter:
                 host_accuracy=avg_acc,
                 entropy=metrics.get("entropy", 0.0),
                 kl_divergence=metrics.get("approx_kl", 0.0),
-                value_variance=metrics.get("explained_variance", 0.0),
+                # Pre-update explained variance. Optional: a skipped/empty PPO
+                # update produces a metrics dict with no explained_variance key,
+                # so emit None ("no EV this batch") rather than a fabricated 0.0.
+                explained_variance=metrics.get("explained_variance"),
                 seeds_created=total_seeds_created,
                 seeds_fossilized=total_seeds_fossilized,
                 episodes_completed=episodes_completed,
@@ -984,6 +987,15 @@ def emit_ppo_update_event(
             pre_clip_grad_norm=metrics["pre_clip_grad_norm"],
             # Optional fields (computed once per update, not per-epoch)
             explained_variance=metrics.get("explained_variance"),
+            # EV-telemetry-robustness aggregated fields. The three live-path mandatory
+            # fields use DIRECT key access (fail loudly if the reducer/finalize plumbing
+            # dropped them — CLAUDE.md no-bug-hiding). ev_return_variance may legitimately
+            # be None on the degenerate-handled path, so it uses .get(..., None) like
+            # explained_variance above.
+            value_nrmse=metrics["value_nrmse"],
+            ev_low_return_variance=metrics["ev_low_return_variance"],
+            ev_low_return_variance_count=metrics["ev_low_return_variance_count"],
+            ev_return_variance=metrics.get("ev_return_variance", None),
             entropy_loss=0.0,
             # MANDATORY advantage statistics - computed in PPO update
             advantage_mean=metrics["advantage_mean"],

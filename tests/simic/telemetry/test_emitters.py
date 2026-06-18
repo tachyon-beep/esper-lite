@@ -115,6 +115,13 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "return_std": 0.8,
         # Value target scale (mandatory) - std used to normalize returns
         "value_target_scale": 0.8,
+        # EV-telemetry-robustness aggregated metrics (mandatory live-path fields).
+        # value_nrmse / ev_low_return_variance / ev_low_return_variance_count are accessed
+        # by direct key in the emitter (fail-loud); ev_return_variance may be None.
+        "value_nrmse": 0.4,
+        "ev_low_return_variance": False,
+        "ev_return_variance": 0.64,
+        "ev_low_return_variance_count": 0,
         # Throughput metrics (mandatory for dataloader wait ratio)
         "throughput_step_time_ms_sum": 100.0,
         "throughput_dataloader_wait_ms_sum": 20.0,
@@ -373,6 +380,74 @@ def test_emit_ppo_update_event_zero_step_time_sets_wait_ratio_zero() -> None:
 
     payload = hub.emit.call_args[0][0].data
     assert payload.dataloader_wait_ratio == 0.0
+
+
+def test_emitter_carries_ev_robustness_fields() -> None:
+    """emit_ppo_update_event threads the EV-robustness fields into PPOUpdatePayload (Step 4).
+
+    The three mandatory aggregated fields (value_nrmse, ev_low_return_variance,
+    ev_low_return_variance_count) are accessed by DIRECT key (B4 live-boundary, fail-loud);
+    ev_return_variance is .get(..., None) since the degenerate-handled path may leave it None.
+    The pre-existing gate signals bellman_error / value_loss / v_return_correlation remain present.
+    """
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            value_nrmse=0.37,
+            ev_low_return_variance=True,
+            ev_return_variance=0.81,
+            ev_low_return_variance_count=2,
+            # Gate signals (already emitted today) must survive.
+            bellman_error=3.2,
+            value_loss=0.42,
+            v_return_correlation=0.66,
+            explained_variance=-0.5,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+
+    # New EV-robustness fields threaded through.
+    assert payload.value_nrmse == 0.37
+    assert payload.ev_low_return_variance is True
+    assert payload.ev_return_variance == 0.81
+    assert payload.ev_low_return_variance_count == 2
+
+    # Gate's primary + secondary robust signals remain present.
+    assert payload.bellman_error == 3.2
+    assert payload.value_loss == 0.42
+    assert payload.v_return_correlation == 0.66
+    assert payload.explained_variance == -0.5
+
+
+def test_emitter_ev_return_variance_defaults_to_none_when_absent() -> None:
+    """ev_return_variance is genuinely optional (degenerate-handled path) -> .get default None."""
+    hub = MagicMock()
+
+    metrics = _make_mandatory_metrics()
+    del metrics["ev_return_variance"]
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=metrics,
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.ev_return_variance is None
 
 
 def test_batch_tail_event_order_is_stable() -> None:

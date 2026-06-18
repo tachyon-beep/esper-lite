@@ -159,7 +159,37 @@ Strict TDD, **RED → GREEN**, no-legacy single path. Every behavior-changing st
 - **Lock the floor** at the value that excludes only the (confirmed-healthy) pathological tail (default `1.0` unless the data argues otherwise). Record the chosen value and the percentile rationale inline in the Step 1 ctor docstring.
 - **No RED/GREEN** — this is calibration. Output is the locked constant + a one-line justification carried into the code comment + the tail value-fit evidence.
 
-**Rollback note:** none (no code change).
+### Step 0 LOCKED values (Slice 3 — robust-arm gate thresholds, drl-expert sign-off 2026-06-18)
+
+> The live Karn telemetry store was unavailable for an interactive percentile pull during Slice 3
+> (the `ppo_updates` scan exceeded the 30s query budget). The robust-arm thresholds were therefore
+> derived analytically from the design-doc healthy-band anchors (P0-1 K=4 A/B table) and the actual
+> loss formula, then locked with drl-expert reasoning. They are exposed as `AnomalyDetector` dataclass
+> fields so a future empirical pass can refine them without code surgery.
+
+- **`value_loss_threshold = 0.5`.** `value_loss = 0.5 * mean((value - normalized_return)**2)` on the
+  value-normalizer (unit-variance) target scale (`ppo_update.py:354-360`). Healthy median ≈ **0.099**
+  (lowest of all arms, design-doc table). On the normalized scale the value head explains ZERO variance
+  of its own trained target precisely when `mean((v - r_norm)**2) ≥ Var(r_norm) ≈ 1.0`, i.e.
+  `value_loss ≥ 0.5`. So `0.5` is the principled "value head stopped explaining its target" boundary —
+  ~5× the healthy median, firing on a genuine fit regression while leaving generous margin above
+  healthy noise. This is the PRIMARY, scale-invariant signal.
+- **`bellman_error_threshold = 10.0`.** `bellman_error = mean |TD error|` on the RAW return scale
+  (returns std ~7–13 → var ~49–169). A healthy critic keeps mean |TD| well below the return spread;
+  a genuine collapse drives the absolute residual to rival the signal magnitude. `10.0` sits at the
+  lower edge of the healthy return-std band, so the residual must rival the return spread itself
+  before it fires. Conservative against false-firing on a critic doing any useful work. SECONDARY
+  primary (corroborates `value_loss`).
+- Both are `OR`'d in the robust arm (`primary_robust_bad = bellman_error > 10.0 or value_loss > 0.5`).
+  The EV arm additionally requires `primary_robust_bad AND not ev_low_return_variance` (B1: EV needs
+  primary-robust agreement; it never fires alone). `value_nrmse` / `v_return_correlation` are SECONDARY
+  corroboration in the detail string only.
+- **Follow-up:** when the Karn store is queryable, run the Step-0 percentile pull to confirm the
+  healthy `value_loss` / `bellman_error` distributions sit below these bounds with margin; refine the
+  two dataclass fields if the empirical tail argues otherwise (no code change beyond the two numbers).
+
+**Rollback note:** none (no code change for the calibration itself; the two thresholds are additive
+`AnomalyDetector` dataclass fields landed in Slice 3 Step 5.0).
 
 ---
 

@@ -80,6 +80,39 @@ def test_ppo_update_populates_history():
     assert abs(clip_fractions[2] - 0.14) < 1e-9
 
 
+def test_ev_robustness_fields_round_trip():
+    """EV-robustness diagnostics survive aggregator -> schema -> snapshot_copy intact."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.5,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+            explained_variance=-3.5,
+            value_nrmse=0.42,
+            ev_low_return_variance=True,
+            ev_return_variance=0.7,
+        ),
+    )
+    agg.process_event(event)
+
+    # get_snapshot() routes through snapshot_copy (the production isolated-copy path);
+    # if any new field is dropped in schema or copy, this asserts it.
+    snapshot = agg.get_snapshot()
+    tamiyo = snapshot.tamiyo
+
+    assert abs(tamiyo.value_nrmse - 0.42) < 1e-9
+    assert tamiyo.ev_low_return_variance is True
+    assert tamiyo.ev_return_variance is not None
+    assert abs(tamiyo.ev_return_variance - 0.7) < 1e-9
+
+
 def test_get_snapshot_returns_isolated_copy() -> None:
     """get_snapshot() must never expose live, mutable aggregator state."""
     agg = SanctumAggregator(num_envs=2)
