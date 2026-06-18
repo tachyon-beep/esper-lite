@@ -20,6 +20,7 @@ Priority = **blast radius × silence × correctness-impact**, capped by the proj
 ## P0 — Correctness & trust (do first)
 
 ### P0-1 · Resolve the `Q(s,op)`-as-baseline bias *(Q1+Q2)*
+> **✅ RESOLVED — implemented as commit `6a27b8e3` (2026-06-18).** Option (a) was taken: an op-independent `V(s)` head (`state_value_head`) is now the baseline/GAE/value-target; `Q(s,op)` (`q_head`) is a detached aux/telemetry regression (`q_aux_coef = 0.5·value_coef`). Checkpoint break per No-Legacy: `VALUE_HEAD_SCHEMA_VERSION = 2` (leyline). The `What/Do/Acceptance/Effort` text below is the original (pre-implementation) handover record.
 - **What:** The PPO baseline is action-conditioned; the op-head advantage subtracts a baseline containing the op being scored, and the GAE bootstrap is a single behaviour-sampled `Q(s',op')`.
 - **Do:** Either train an op-independent `V(s)` head for the baseline/GAE (keep `Q(s,op)` as aux/telemetry), **or** use the marginal `V(s)=Σ_op π(op|s)·Q(s,op)` — the batched all-ops path at `ppo_agent.py:792-798` already evaluates every op, so this is cheap.
 - **Acceptance:** explained-variance before/after; an ablation comparing op-head policy-gradient quality with vs without the op-independent baseline; documented decision record either way.

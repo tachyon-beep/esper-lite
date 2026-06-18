@@ -12,7 +12,7 @@ Esper-lite is a **morphogenetic neural-network training platform**: a recurrent 
 
 The verdict: **this is an unusually disciplined research codebase.** The macro-architecture is genuinely strong — zero import cycles across ~28K edges, a clean contracts hub (leyline), protocol-based domain decoupling, a confirmed GPU-first non-blocking control flow, and a typed telemetry contract. The system's stated design principles (the ROADMAP "Nine Commandments") are, for the most part, *real in the code*, not aspirational.
 
-The risks are concentrated and identifiable: (1) **one RL-correctness design choice** — an action-conditioned `Q(s,op)` critic used as the PPO baseline — that can silently bias the op-head policy gradient; (2) **a few silent-failure seams** that violate the project's own hard rules (most seriously, a fallback to synthetic random data that lets a run complete on noise); and (3) **god-file maintainability debt** concentrated in the hottest, highest-coupling, RL-critical modules.
+The risks are concentrated and identifiable: (1) **one RL-correctness design choice** — an action-conditioned `Q(s,op)` critic used as the PPO baseline — that can silently bias the op-head policy gradient **[✅ RESOLVED — P0-1, commit `6a27b8e3`.]**; (2) **a few silent-failure seams** that violate the project's own hard rules (most seriously, a fallback to synthetic random data that lets a run complete on noise); and (3) **god-file maintainability debt** concentrated in the hottest, highest-coupling, RL-critical modules.
 
 `★ Insight ─────────────────────────────────────`
 The headline tension of this codebase: **clean *between* modules, heavy *within* the hot ones.** The layering discipline (0 cycles, leyline apex) is textbook. But the same effort did not extend inside the load-bearing modules — `vectorized_trainer.py` (3,033 LOC) and `PPOAgent.update()` (~900-line method) are exactly where RL bugs are silent and edits are riskiest. The architecture passed the "draw the boxes" test brilliantly and the "open the box" test only partially.
@@ -50,7 +50,7 @@ The ROADMAP states nine falsifiable architectural claims. Measured against the c
 
 ## The five things that matter most
 
-1. **`Q(s,op)`-as-baseline (RL correctness).** The PPO baseline is action-conditioned, violating the action-independent-baseline requirement; the op-head policy gradient can be silently biased, compounded by a single-sample GAE bootstrap. *Highest-impact finding.* Fix: train a true `V(s)` or use the marginal `Σ_op π(op|s)Q(s,op)` (the batched path already computes all ops). Validate with explained-variance + ablation.
+1. **`Q(s,op)`-as-baseline (RL correctness).** The PPO baseline is action-conditioned, violating the action-independent-baseline requirement; the op-head policy gradient can be silently biased, compounded by a single-sample GAE bootstrap. *Highest-impact finding.* Fix: train a true `V(s)` or use the marginal `Σ_op π(op|s)Q(s,op)` (the batched path already computes all ops). Validate with explained-variance + ablation. **✅ RESOLVED — P0-1, commit `6a27b8e3` (2026-06-18): trained an op-independent `V(s)` head as the baseline/GAE/value-target; `Q(s,op)` kept as detached aux/telemetry.**
 
 2. **Silent synthetic-data fallback.** A dataset-load failure auto-substitutes random noise; a run can reach "completion" on garbage. Fix: fail loud or make mock an explicit opt-in.
 

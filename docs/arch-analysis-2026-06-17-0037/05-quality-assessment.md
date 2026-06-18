@@ -23,6 +23,8 @@
 ## Critical findings (fix before scaling / before trusting results)
 
 ### Q1 — Action-conditioned critic Q(s,op) used as the PPO baseline *(drl-expert, HIGH)*
+> **✅ RESOLVED — P0-1 (commit `6a27b8e3`, 2026-06-18).** This finding was actioned: the action-conditioned `Q(s,op)` baseline was replaced by an op-independent `V(s)` head (`state_value_head` in `factored_lstm.py`), which is now the PPO baseline, GAE bootstrap, and value-loss target. `Q(s,op)` (`q_head`) is retained as a small **detached** aux/telemetry regression (`q_aux_coef = 0.5·value_coef`). The finding text below is preserved as the historical record (analysis dated 2026-06-17, branch `0.1.1`); line anchors refer to pre-P0-1 source.
+
 **The single most important correctness finding.** The critic concatenates a one-hot of the sampled `op` into the value-head input (`factored_lstm.py:557-576`), and `evaluate_actions` uses the **stored** op as the baseline that feeds GAE (`rollout_buffer.py:509-557`) and the value loss (`ppo_update.py:341-353`).
 
 Standard PPO requires the baseline `b(s)` to be **independent of the action whose advantage it scores**. Here `A^op = r + γ·V(s') − Q(s, op_taken)` subtracts a baseline that already contains `op_taken`, so for the **op head** the surrogate is no longer an unbiased advantage-weighted policy gradient — part of the op's own value is cancelled out of its advantage. (The other 7 heads are scored against an op-conditioned baseline that *is* independent w.r.t. them, so they're far less affected.)

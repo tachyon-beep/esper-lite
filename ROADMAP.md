@@ -265,13 +265,13 @@ python -m esper.scripts.train ppo --reward-mode minimal
 
 * Obs V3: compact obs + blueprint embeddings (116 dims + 12 blueprint embed = 128 total network input)
 * Policy V2: 512/512 feature+LSTM, 150-step horizon
-* Q(s,op) critic: action-conditioned value baseline
+* V(s) critic: op-independent value baseline (P0-1, commit 6a27b8e3, replaced the original action-conditioned Q(s,op) baseline). Q(s,op) retained as a detached aux/telemetry head.
 * Differential entropy coefficients by head (protect sparse heads from collapse)
 
 **Q-values telemetry (2025-12-31):** ✅ COMPLETE
-- Op-conditioned Q(s,op) values wired end-to-end from PPO → telemetry → UI
+- Op-conditioned Q(s,op) values wired end-to-end from PPO → telemetry → UI (as of P0-1 / commit 6a27b8e3, Q(s,op) is a detached aux/telemetry head — the PPO baseline is the op-independent V(s) head; see Phase 2.5B "Delivered Capabilities")
 - Sanctum HealthStatusPanel displays Q-values with variance diagnostic
-- Detects if critic ignores op conditioning (Q-variance < 0.01 = critical)
+- Detects if the Q-head ignores op conditioning (Q-variance < 0.01 = critical)
 
 **Status:** IMPLEMENTED (Q-values telemetry ✅ 2025-12-31)
 **Operational status:** Waiting on Phase 2.5 gates below before proceeding to Phase 3.
