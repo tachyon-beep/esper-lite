@@ -10,9 +10,9 @@
       "command": "uv"
     },
     "filigree": {
-      "args": [],
+      "type": "stdio",
       "command": "/home/john/.local/bin/filigree-mcp",
-      "type": "stdio"
+      "args": []
     },
     "legis": {
       "args": [
