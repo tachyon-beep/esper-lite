@@ -22,6 +22,7 @@ import torch
 from esper.leyline import (
     AnomalyDetectedPayload,
     EpisodeOutcomePayload,
+    ROLLBACK_FORFEIT_REWARD,
     TelemetryEvent,
     TelemetryEventType,
 )
@@ -97,6 +98,12 @@ class PPOCoordinator:
         self.handle_telemetry_escalation_fn = handle_telemetry_escalation_fn
         self.emit_anomaly_diagnostics_fn = emit_anomaly_diagnostics_fn
         self.logger = logger
+        # Per-rollout rollback-attempt observability (coordinator-level host ints; NOT
+        # buffer tensors — they must survive the len(buffer)==0 early-return in run_update
+        # and the buffer.reset() inside run_ppo_updates_fn, and cost no GPU sync).
+        # Reset at the start of every handle_rollbacks (once per batch, before run_update).
+        self._rollback_attempt_count = 0
+        self._rollback_unattributed_count = 0
 
     def handle_rollbacks(
         self,
@@ -118,6 +125,12 @@ class PPOCoordinator:
             i for i, occurred in enumerate(env_rollback_occurred) if occurred
         ]
 
+        # Per-rollout attempt counters: every governor rollback trigger is an attempt;
+        # attempts whose penalty is dropped (no executed transition) are unattributed.
+        # Reset here because handle_rollbacks runs exactly once per batch, before run_update.
+        self._rollback_attempt_count = len(rollback_env_indices)
+        self._rollback_unattributed_count = 0
+
         if not rollback_env_indices:
             return rollback_env_indices
 
@@ -134,11 +147,10 @@ class PPOCoordinator:
             # silently shrink the penalty toward the ordinary-reward scale. Clamping makes
             # the penalty land at a fixed, dominating magnitude every time, regardless of
             # the running reward statistics.
-            # NOTE: this alone does not guarantee dominance over the highest-return
-            # episodes -- a single -clip terminal step cannot outweigh a long run of
-            # positives that sums beyond clip. Sizing/propagation for that tail-dominance
-            # case is tracked separately (it changes training dynamics and needs a
-            # retraining run to tune).
+            # P1-ROLLBACK-TAIL fix: a catastrophe forfeits the current episode's
+            # positive prefix. The terminal penalty must be the episode payoff; otherwise
+            # long high-return prefixes can dominate the final rollback penalty in both
+            # telemetry totals and PPO return targets.
             penalty = env_states[env_idx].governor.get_punishment_reward()
             normalized_penalty = float(max(-clip, min(clip, penalty)))
             # Do NOT resolve triggering_action_id eagerly: last_action_id() raises
@@ -146,25 +158,39 @@ class PPOCoordinator:
             # mark_terminal_with_penalty resolves it internally to the prior
             # executed transition's id AFTER its own step_count==0 guard, so the
             # death penalty attaches to the action that actually caused the panic.
-            penalty_applied = self.agent.buffer.mark_terminal_with_penalty(
+            penalty_result = self.agent.buffer.mark_terminal_with_penalty(
                 env_idx,
                 normalized_penalty,
                 severity=abs(penalty),
                 watch_window_evidence=abs(penalty),
             )
-            if not penalty_applied:
+            if not penalty_result.applied:
+                self._rollback_unattributed_count += 1
                 # No executed transition to attribute the catastrophe to (first-step
                 # panic). The penalty is correctly dropped, but surface it rather
-                # than swallowing it silently so a high rate is observable.
+                # than swallowing it silently so a high rate is observable — via a
+                # structured counter (not just a log line).
                 self.logger.warning(
                     "Rollback penalty for env %d not applied: no executed "
                     "transition to attribute (first-step panic).",
                     env_idx,
                 )
+            # Observability (P0-3): the buffer accumulates the per-env cumulative
+            # rollback_count and rollback_steps_zeroed (mark_terminal_with_penalty
+            # just forfeited penalty_result.steps_zeroed steps to
+            # ROLLBACK_FORFEIT_REWARD). run_update surfaces the per-rollout aggregate
+            # into the PPO metrics dict so a high rollback frequency / large
+            # forfeited-signal volume is visible before it silently starves PPO of
+            # learning signal.
             # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).
             # Buffer gets normalized_penalty (for PPO training stability).
             # Telemetry gets raw penalty (for cross-run comparability).
+            # The intermediate prefix is forfeited to ROLLBACK_FORFEIT_REWARD to match
+            # the buffer's PPO-return forfeiture (P1-ROLLBACK-TAIL): episode_rewards
+            # feeds telemetry totals/stability, so it must reflect the same forfeit.
             if env_states[env_idx].episode_rewards:
+                for reward_idx in range(len(env_states[env_idx].episode_rewards) - 1):
+                    env_states[env_idx].episode_rewards[reward_idx] = ROLLBACK_FORFEIT_REWARD
                 env_states[env_idx].episode_rewards[-1] = penalty
 
         # B11-CR-02 fix: Recompute metrics after penalty injection
@@ -274,9 +300,43 @@ class PPOCoordinator:
             Tuple of (metrics dict, update_skipped flag, ppo_update_time_ms)
         """
         if len(self.agent.buffer) == 0:
-            return {}, True, None
+            # Empty buffer = every rollback this batch was a first-step panic (no
+            # executed transition), so the normal PPO-update emit path never runs.
+            # Carry the attempt/unattributed counts in a minimal skipped-metrics dict;
+            # vectorized_trainer's on_batch_completed reads them from metrics into the
+            # per-batch ANALYTICS_SNAPSHOT (batch_stats), which fires even when
+            # update_skipped=True -> the all-first-step-panic batch stays observable in
+            # karn batch_stats. update_skipped stays True (no PPO step occurred).
+            if self._rollback_attempt_count == 0:
+                return {}, True, None
+            return (
+                {
+                    "ppo_update_performed": False,
+                    "rollback_count": 0,
+                    "rollback_steps_zeroed": 0,
+                    "rollback_attempt_count": self._rollback_attempt_count,
+                    "rollback_unattributed_count": self._rollback_unattributed_count,
+                },
+                True,
+                None,
+            )
 
         rollout_total_steps = len(self.agent.buffer)
+        # P0-3: snapshot the rollback observability counters BEFORE run_ppo_updates_fn,
+        # which resets the rollout buffer (zeroing these per-rollout counters via
+        # buffer.reset()). Reading them after the update would surface 0 on every batch
+        # where a real PPO update ran — dead telemetry that defeats the observability goal.
+        buffer = self.agent.buffer
+        # gpu_sync: batch BOTH per-env buffer counters into ONE device->host transfer
+        # instead of two separate .item() syncs. Stack -> sum on-GPU -> single .tolist().
+        # Snapshotted BEFORE run_ppo_updates_fn resets the buffer (P0-3). This is the
+        # ONLY rollback-counter sync; it stays O(1) as new buffer counters are added.
+        rollback_count, rollback_steps_zeroed = (
+            int(v)
+            for v in torch.stack(
+                (buffer.rollback_count.sum(), buffer.rollback_steps_zeroed.sum())
+            ).tolist()
+        )
         update_start = time.perf_counter()
         metrics = self.run_ppo_updates_fn(
             agent=self.agent,
@@ -299,6 +359,15 @@ class PPOCoordinator:
             metrics["entropy_coef"] = self.agent.entropy_coef
             metrics["throughput_step_time_ms_sum"] = throughput_step_time_ms_sum
             metrics["throughput_dataloader_wait_ms_sum"] = throughput_dataloader_wait_ms_sum
+            # P0-3: surface rollback credit-assignment observability (snapshotted above,
+            # before the buffer reset inside run_ppo_updates_fn). rollback_count is the
+            # per-rollout (this-batch) total of governor rollbacks; steps_zeroed is the
+            # total intermediate prefix forfeited to ROLLBACK_FORFEIT_REWARD. A high ratio
+            # here means rollbacks are eating a large share of the learning signal.
+            metrics["rollback_count"] = rollback_count
+            metrics["rollback_steps_zeroed"] = rollback_steps_zeroed
+            metrics["rollback_attempt_count"] = self._rollback_attempt_count
+            metrics["rollback_unattributed_count"] = self._rollback_unattributed_count
             if not update_skipped:
                 metrics["ppo_grad_norm"] = metrics["pre_clip_grad_norm"]
 
@@ -487,11 +556,25 @@ class PPOCoordinator:
             # MANDATORY metrics after PPO update - fail loudly if missing
             ratio_max=metrics["ratio_max"],
             ratio_min=metrics["ratio_min"],
-            explained_variance=metrics.get("explained_variance", 0.0),
+            explained_variance=metrics["explained_variance"],
             has_nan=any(math.isnan(v) for v in metric_values),
             has_inf=any(math.isinf(v) for v in metric_values),
             current_episode=batch_epoch_id,
             total_episodes=self.config.total_env_episodes,
+            # Fully forced proof-control rollouts still report EV, but there was
+            # no actor agency to diagnose as PPO value collapse.
+            value_collapse_applicable=metrics["usable_actor_timesteps"] > 0,
+            # EV-telemetry-robustness (B1): the value-collapse gate now keys on the
+            # scale-anchored PRIMARY robust signals (bellman_error, value_loss) plus
+            # SECONDARY corroboration (value_nrmse, v_return_correlation) and the
+            # ev_low_return_variance flag. These are mandatory aggregated metric keys
+            # registered in vectorized._aggregate_ppo_metrics, so direct access fails
+            # loudly if the reducer plumbing dropped them (CLAUDE.md no-bug-hiding).
+            bellman_error=metrics["bellman_error"],
+            value_loss=metrics["value_loss"],
+            value_nrmse=metrics["value_nrmse"],
+            v_return_correlation=metrics["v_return_correlation"],
+            ev_low_return_variance=metrics["ev_low_return_variance"],
         )
 
         # B7-DRL-01: Check gradient drift and merge into anomaly report

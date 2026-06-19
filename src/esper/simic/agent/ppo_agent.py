@@ -7,6 +7,7 @@ For vectorized environments, see simic.vectorized.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,8 @@ from esper.simic.telemetry.lstm_health import compute_lstm_health
 from esper.simic.control import ValueNormalizer
 from esper.leyline.value_metrics import (
     ValueFunctionMetricsDict,
+    compute_floored_aux_explained_variance,
+    compute_floored_explained_variance,
     compute_value_function_metrics,
 )
 from esper.leyline import (
@@ -48,6 +51,7 @@ from esper.leyline import (
     HEAD_NAMES,
     NUM_OPS,
     PROBABILITY_FLOOR_PER_HEAD,
+    VALUE_HEAD_SCHEMA_VERSION,
 )
 from esper.leyline.slot_config import SlotConfig
 import logging
@@ -159,6 +163,23 @@ class PPOAgent:
         # Auxiliary contribution supervision (Expert-reviewed defaults)
         aux_contribution_coef: float = 0.05,  # DRL Expert: reduced from 0.1
         aux_warmup_steps: int = 1000,  # DRL + PyTorch Expert: ramp from 0 → full
+        # EV-telemetry-robustness: floor the EV denominator (valid_returns.var()) on the RAW
+        # return scale. Step-0 calibration: healthy-run return std is 7-13 -> var_returns ~49-169
+        # (the normal operating band). A floor of 1.0 (std 1.0) excludes only batches whose return
+        # spread is <~1/7th of typical -- the pathological low-variance tail that manufactures a
+        # -8 EV outlier -- while leaving every normal batch's EV numerically unchanged (the clamp
+        # is a no-op above the floor). Config-exposed so a relative/EMA floor can be swapped in.
+        ev_return_variance_floor: float = 1.0,
+        # EV-telemetry-robustness (SLICE C): aux (contribution-target) EV floor. The
+        # contribution-target scale is NOT calibratable from persisted telemetry
+        # (contribution_targets are not serialized), so the aux floor is DATA-RELATIVE,
+        # recomputed each update: floor = max(floor_min, floor_fraction * Var0(target)).
+        # The 0.05 fraction mirrors the main EV floor being ~3-5% of the healthy
+        # var_returns median; floor_min is the old bare clamp(min=0.01) value. DISTINCT
+        # from ev_return_variance_floor (different scale). DIAGNOSTIC-ONLY: feeds the
+        # aux_ev_low_return_variance flag + aux value_nrmse denominator; NEVER a gate trigger.
+        aux_ev_return_variance_floor_fraction: float = 0.05,
+        aux_ev_return_variance_floor_min: float = 0.01,
         aux_stop_gradient: bool = True,  # DRL Expert: prevent representation collapse
         contribution_loss_clip: float = 10.0,  # Clip targets to prevent outliers
         enable_contribution_aux: bool = True,  # Can disable for ablation
@@ -185,19 +206,38 @@ class PPOAgent:
         self.max_steps_per_env = max_steps_per_env
         self.chunk_length = chunk_length
         self.gamma = gamma
-        # C4: RECURRENT POLICY VALUE STALENESS WARNING
-        # Recurrent PPO with multiple epochs can cause hidden state staleness (policy drift).
-        # Default to 1 epoch for LSTM safety; increase with caution.
-        #
-        # With recurrent_n_epochs > 1 AND clip_value=True:
-        # - Rollout values are computed with specific LSTM hidden state trajectories
-        # - After epoch 0 update, network weights change
-        # - Epoch 1+ forward passes produce different hidden state trajectories
-        # - Value clipping compares new values against stale rollout values
-        # - This creates incorrect gradient signals, slowing value learning
-        #
-        # Recommended: Keep recurrent_n_epochs=1 for recurrent policies.
+        # RECURRENT MULTI-EPOCH INVARIANT (anchored reference pass, full-recompute TBPTT):
+        # recurrent_n_epochs is the number of INTERNAL PPO epochs per update() call. Multi-
+        # epoch recurrent PPO is mathematically EXACT under this design — there is no hidden-
+        # state staleness, because:
+        #   - Every scored forward in the epoch loop is a FULL-RECOMPUTE TBPTT unroll of each
+        #     buffer row as one contiguous LSTM sequence (chunk_length) from the rollout's
+        #     timestep-0 hidden state. Hidden trajectories are recomputed every epoch from the
+        #     CURRENT weights — nothing is reused across epochs, so nothing goes stale.
+        #   - Advantages/returns are computed ONCE by the rollout buffer's GAE (at episode-end)
+        #     and read here as fixed data; the value normalizer's update()/normalize() runs ONCE
+        #     in the pre-loop. Both outputs (advantages, normalized return targets) are fixed for
+        #     the whole update — never recomputed per epoch.
+        #   - The ONLY live per-epoch baseline is old_log_probs for the PPO importance ratio,
+        #     and it is ANCHORED at theta0 via the no_grad reference pass (PR1): ref_log_probs
+        #     are computed once from the pre-update weights, so ratio = exp(scored - ref) is
+        #     identically 1.0 at epoch 0 and drifts only with the genuine policy update.
+        #   - clip_value STAYS False under K>1 (ENFORCED by a ValueError in __init__ below).
+        #     Value clipping would compare against rollout values that are NOT anchored at theta0;
+        #     re-enabling it under multi-epoch needs an anchored ref_values pass (a separate task).
+        #   - early_stop_epoch (metrics, set to epoch_i) counts epochs that RAN, not wall
+        #     epochs: the finiteness guard in the epoch loop can `continue` past a bad epoch,
+        #     desyncing the loop index from the count of executed updates.
+        # The per-step hidden buffer (rollout_buffer.py pre_step_hiddens, hidden_h/hidden_c)
+        # is TELEMETRY-ONLY — it conditions the Q(s, op) diagnostic forward (see below) and
+        # is NOT used by the TBPTT loss path (which always unrolls from timestep-0). Do not
+        # delete it.
         self.recurrent_n_epochs = recurrent_n_epochs if recurrent_n_epochs is not None else 1
+        if self.recurrent_n_epochs < 1:
+            raise ValueError(
+                f"recurrent_n_epochs must be >= 1, got {self.recurrent_n_epochs}. "
+                "K=1 is single-epoch PPO; K>1 is the internal multi-epoch path."
+            )
         self.gae_lambda = gae_lambda
         self.clip_ratio = clip_ratio
         self.entropy_coef = entropy_coef
@@ -231,6 +271,14 @@ class PPOAgent:
         self.value_coef_start = value_coef_start if value_coef_start is not None else 0.1 * value_coef
         self.value_warmup_steps = value_warmup_steps
         self.clip_value = clip_value
+        if self.recurrent_n_epochs > 1 and clip_value:
+            raise ValueError(
+                "clip_value=True is incompatible with recurrent_n_epochs > 1: value clipping "
+                "anchors on rollout old_values that are NOT recomputed at theta0, so under "
+                "multi-epoch recurrent PPO it would clip against a stale reference. Re-enabling "
+                "value clipping under K>1 requires an anchored ref_values pass (a separate task). "
+                "Keep clip_value=False for recurrent multi-epoch."
+            )
         self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
         self.lstm_hidden_dim = policy.hidden_dim
@@ -248,28 +296,17 @@ class PPOAgent:
         self.enable_contribution_aux = enable_contribution_aux
         self._aux_training_step = 0  # Track training steps for warmup
 
-        # C4/H5: Runtime warning for risky recurrent configuration
-        if self.recurrent_n_epochs > 1:
-            import warnings
-            if self.clip_value:
-                warnings.warn(
-                    f"recurrent_n_epochs={self.recurrent_n_epochs} with clip_value=True: "
-                    "Value clipping uses rollout values which have different LSTM hidden state "
-                    "trajectories than training forward passes after epoch 0. This causes stale "
-                    "value comparisons that may slow learning. Consider recurrent_n_epochs=1 or "
-                    "clip_value=False.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            else:
-                warnings.warn(
-                    f"recurrent_n_epochs={self.recurrent_n_epochs} > 1: Hidden states stored from "
-                    "rollout collection may diverge from current policy's hidden state evolution "
-                    "after epoch 0 weight updates. This can cause gradient estimation errors. "
-                    "Consider recurrent_n_epochs=1 for recurrent policies.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+        # EV-telemetry-robustness floor (raw return-variance scale; see ctor docstring above).
+        # ev_var_floor_std is stored for diagnostics/docstring parity only -- the W7 helper
+        # recomputes its own std floor (math.sqrt(floor)) internally and does NOT read this.
+        self.ev_return_variance_floor = ev_return_variance_floor
+        self.ev_var_floor_std = math.sqrt(self.ev_return_variance_floor)
+
+        # EV-telemetry-robustness (SLICE C): aux floor params (contribution-target scale;
+        # see ctor docstring). Data-relative, recomputed each update in the aux EV block.
+        self.aux_ev_return_variance_floor_fraction = aux_ev_return_variance_floor_fraction
+        self.aux_ev_return_variance_floor_min = aux_ev_return_variance_floor_min
+
         # BPTT INVARIANT (recurrent-PPO correctness):
         # The PPO update unrolls each buffer row as ONE contiguous LSTM sequence
         # of length chunk_length, starting from the rollout's timestep-0 hidden
@@ -365,7 +402,14 @@ class PPOAgent:
                 list(base_net.alpha_curve_head.parameters()) +
                 list(base_net.op_head.parameters())
             )
-            critic_params = list(base_net.value_head.parameters())
+            # P0-1: BOTH value heads are critics. state_value_head is the op-INDEPENDENT
+            # PPO baseline V(s); q_head is the op-conditioned telemetry/aux head. Both
+            # regress on returns, so weight_decay applies to both (and both MUST be in
+            # the optimizer or a head silently never trains).
+            critic_params = (
+                list(base_net.state_value_head.parameters()) +
+                list(base_net.q_head.parameters())
+            )
             shared_params = (
                 list(base_net.feature_net.parameters()) +
                 list(base_net.lstm.parameters()) +
@@ -606,16 +650,25 @@ class PPOAgent:
         valid_values = data["values"][valid_mask]
         valid_returns = data["returns"][valid_mask]
         raw_values = self.value_normalizer.denormalize(valid_values)
-        var_returns = valid_returns.var()
-        explained_variance: torch.Tensor
-        if var_returns > 1e-8:
-            ev_tensor = 1.0 - (valid_returns - raw_values).var() / var_returns
-            explained_variance = ev_tensor
-        else:
-            explained_variance = torch.tensor(0.0, device=valid_returns.device)
+        # W7 helper seam: variance-floored EV + floor-stabilized value_nrmse companion + flag.
+        # Single path (no dual 1e-8/0.0 branch). Degenerate (numel<=1) masks are NOT handled
+        # here -- they produce NaN var()/std() and fall through to the non-finite return-stat
+        # raise below (B3 hard bug), never a NaN-by-convention EV.
+        (
+            explained_variance,
+            value_nrmse,
+            ev_low_return_variance,
+            ev_return_variance,
+        ) = compute_floored_explained_variance(
+            raw_values, valid_returns, self.ev_return_variance_floor
+        )
 
         metrics: dict[str, Any] = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
+        metrics["ev_return_variance"] = [ev_return_variance]
+        metrics["value_nrmse"] = [value_nrmse]
+        metrics["ev_low_return_variance"] = [ev_low_return_variance]
+        metrics["ev_low_return_variance_count"] = [1 if ev_low_return_variance else 0]
 
         # Return statistics for diagnosing value loss scale
         return_mean = valid_returns.mean()
@@ -763,7 +816,8 @@ class PPOAgent:
                 # AMP-SAFETY (CRITICAL): update() may run under an outer autocast context
                 # (policy_amp_context -> autocast(bf16) for BF16 PPO; the AMP test legs use
                 # autocast(fp16) directly). This no_grad telemetry forward touches EVERY head
-                # Linear (slot/blueprint/.../op/value) BEFORE the gradient-carrying
+                # Linear (slot/blueprint/.../op AND state_value_head AND q_head -- forward()
+                # computes both V(s) and Q(s, op)) BEFORE the gradient-carrying
                 # evaluate_actions forward below. Under autocast, the FIRST forward through a
                 # Linear populates autocast's per-parameter cast-weight CACHE; when that first
                 # touch happens inside no_grad, the cached low-precision weight carries NO
@@ -784,16 +838,17 @@ class PPOAgent:
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 
                     # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
-                    # P1-QLOOP: one batched _compute_value call over all ops instead of NUM_OPS
+                    # P1-QLOOP: one batched _compute_q call over all ops instead of NUM_OPS
                     # serial launches. lstm_out is [1, 1, hidden]; broadcast over the op axis.
-                    # Kept inside the autocast(enabled=False) region so the value_head Linear
-                    # is also cached graph-free (the value head is part of the same forward()
-                    # above and trains via the loss below).
+                    # Kept inside the autocast(enabled=False) region so the q_head Linear
+                    # is also cached graph-free (the q_head is part of the same forward()
+                    # above and trains via the detached Q-aux loss below). Note _compute_q
+                    # detaches lstm_out internally; harmless here under no_grad.
                     op_indices = torch.arange(
                         NUM_OPS, device=self.device, dtype=torch.long
                     ).reshape(NUM_OPS, 1)
                     lstm_out_rep = lstm_out.expand(NUM_OPS, 1, -1).contiguous()  # [NUM_OPS, 1, hidden]
-                    op_q_values = self.policy.network._compute_value(
+                    op_q_values = self.policy.network._compute_q(
                         lstm_out_rep, op_indices
                     ).reshape(NUM_OPS)
 
@@ -802,6 +857,9 @@ class PPOAgent:
                 if valid_q_values.numel() >= 2:
                     q_variance = valid_q_values.var()
                     q_spread = valid_q_values.max() - valid_q_values.min()
+                elif valid_q_values.numel() == 1:
+                    q_variance = torch.zeros((), device=self.device, dtype=valid_q_values.dtype)
+                    q_spread = torch.zeros((), device=self.device, dtype=valid_q_values.dtype)
                 else:
                     q_variance = torch.tensor(float("nan"), device=self.device)
                     q_spread = torch.tensor(float("nan"), device=self.device)
@@ -823,13 +881,16 @@ class PPOAgent:
         # This is the true exploration signal for sparse heads like blueprint/tempo
         conditional_head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
         head_learnable_fraction_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
-        head_gradient_state_history: dict[str, list[str]] = {head: [] for head in HEAD_NAMES + ("value",)}
+        # P0-1: "value" tracks the op-INDEPENDENT V(s) baseline (state_value_head);
+        # "q" tracks the op-conditioned telemetry/aux q_head. Both are surfaced so
+        # neither value-like head's grad is dropped from telemetry.
+        head_gradient_state_history: dict[str, list[str]] = {head: [] for head in HEAD_NAMES + ("value", "q")}
 
         # LSTM health tracking (TELE-340)
         lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
         # Initialize per-head gradient norm tracking (P4-6)
         head_grad_norm_history: dict[str, list[torch.Tensor]] = {
-            head: [] for head in HEAD_NAMES + ("value",)
+            head: [] for head in HEAD_NAMES + ("value", "q")
         }
         # Initialize log prob extremes tracking (NaN predictor)
         # Very negative log probs (<-50 warning, <-100 critical) predict numerical underflow
@@ -856,6 +917,66 @@ class PPOAgent:
         # OR across all epochs - once detected, stays detected for this update
         head_nan_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
         head_inf_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
+
+        # Anchored reference pass: frozen-theta0 baseline for the PPO importance ratio.
+        #
+        # PRECISION: the anchor runs under plain no_grad and INHERITS the caller's autocast
+        # exactly as the epoch-0 scored forward does (BF16 under policy_amp_context at
+        # vectorized.py:447; FP32 on the CPU/no-AMP path). Sharing the precision decision is
+        # what makes the epoch-0 ratio = exp(scored - ref) identically 1.0 -- anchor and
+        # epoch-0 are the SAME forward at theta_0, same dtype, differing only by no_grad+detach.
+        #
+        # AMP-SAFETY (CRITICAL -- see the discovery gate
+        # test_epoch0_per_head_grad_norms_nonzero_under_amp): this no_grad anchor is the FIRST
+        # forward through every head Linear under the caller's autocast. Under autocast, the
+        # first touch of a Linear's weight populates autocast's per-parameter cast-weight CACHE;
+        # because that first touch is inside no_grad, the cached BF16 weight carries NO autograd
+        # linkage. If the cache were left intact, the grad-enabled epoch-0 forward would REUSE
+        # those graph-less casts, severing the path from the head logits back to the head
+        # nn.Parameters -- the head .grad comes back None and the policy silently stops learning
+        # (the gate test sees every action head's grad_state == "missing"; only the value head,
+        # which the surrogate loss does not route through these heads, survives). The fix is to
+        # EVICT the poisoned casts immediately after the anchor: torch.clear_autocast_cache()
+        # drops the no_grad entries so the epoch-0 forward re-casts each weight fresh UNDER GRAD,
+        # restoring full autograd linkage. The cache holds nothing else at this point (the
+        # telemetry forward at ~:777 ran with autocast disabled, writing nothing), so the clear
+        # is local in effect. This keeps the anchor at the caller's exact precision -- so the
+        # ratio stays 1.0 to the bit under AMP -- while leaving the cast cache un-poisoned.
+        anchor_actions = {
+            "slot": data["slot_actions"],
+            "blueprint": data["blueprint_actions"],
+            "style": data["style_actions"],
+            "tempo": data["tempo_actions"],
+            "alpha_target": data["alpha_target_actions"],
+            "alpha_speed": data["alpha_speed_actions"],
+            "alpha_curve": data["alpha_curve_actions"],
+            "op": data["op_actions"],
+        }
+        anchor_masks = {
+            "slot": data["slot_masks"],
+            "blueprint": data["blueprint_masks"],
+            "style": data["style_masks"],
+            "tempo": data["tempo_masks"],
+            "alpha_target": data["alpha_target_masks"],
+            "alpha_speed": data["alpha_speed_masks"],
+            "alpha_curve": data["alpha_curve_masks"],
+            "op": data["op_masks"],
+        }
+        with torch.no_grad():
+            anchor_result = self.policy.evaluate_actions(
+                data["states"],
+                data["blueprint_indices"],
+                anchor_actions,
+                anchor_masks,
+                hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
+                probability_floor=self.probability_floor,
+                aux_stop_gradient=self.aux_stop_gradient,
+            )
+        # Evict the no_grad anchor's graph-less cast-weight cache entries so the epoch-0
+        # grad forward re-casts each head/value weight fresh under autograd (see AMP-SAFETY
+        # note above). No-op when the caller is not under autocast (FP32/CPU path).
+        torch.clear_autocast_cache()
+        ref_log_probs = {head: anchor_result.log_prob[head].detach() for head in HEAD_NAMES}
 
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
@@ -902,7 +1023,20 @@ class PPOAgent:
                 aux_stop_gradient=self.aux_stop_gradient,
             )
             log_probs = result.log_prob
-            values = result.value
+            values = result.value  # V(s): op-INDEPENDENT PPO baseline (current epoch)
+            # P0-1: Q-aux uses the CURRENT epoch's q_value (NOT the anchor's). Like the
+            # value loss, the Q-aux regression target (normalized_returns) is fixed for
+            # the whole update while the predictor moves each epoch -- there is no
+            # anchoring requirement on value/q targets (only ref_log_probs is anchored).
+            # P2-a: PPO-trained policies MUST populate q_value (P0-1 always builds a
+            # q_head). The Q-aux regression and op_q telemetry depend on it; fail loud
+            # at the boundary rather than crashing opaquely downstream (e.g. on the
+            # q_values[valid_mask] index below).
+            assert result.q_value is not None, (
+                "PPO requires a q_value; the policy must populate EvalResult.q_value "
+                "(P0-1: PPO-trained policies always expose an op-conditioned q_head)."
+            )
+            q_values = result.q_value  # Q(s, stored_op): detached telemetry/aux
             entropy = result.entropy
 
             # Track LSTM hidden state health (TELE-340)
@@ -924,6 +1058,7 @@ class PPOAgent:
             for key in log_probs:
                 log_probs[key] = log_probs[key][valid_mask]
             values = values[valid_mask]
+            q_values = q_values[valid_mask]  # P0-1: filter Q-aux like the value path
             for key in entropy:
                 entropy[key] = entropy[key][valid_mask]
 
@@ -942,12 +1077,13 @@ class PPOAgent:
             # head_nan_detected / head_inf_detected / nonfinite_sources are byte-identical.
             new_lp_stack = torch.stack([log_probs[k].float() for k in HEAD_NAMES])
             old_lp_stack = torch.stack(
-                [data[f"{k}_log_probs"][valid_mask].float() for k in HEAD_NAMES]
+                [ref_log_probs[k][valid_mask].float() for k in HEAD_NAMES]
             )
             all_finite = (
                 torch.isfinite(new_lp_stack).all()
                 & torch.isfinite(old_lp_stack).all()
                 & torch.isfinite(values).all()
+                & torch.isfinite(q_values).all()
             )
             if not bool(all_finite):  # single sync; per-head drill-down only on failure
                 # Check new log_probs - separate NaN from Inf per head
@@ -963,19 +1099,26 @@ class PPOAgent:
                             nonfinite_sources.append(f"log_probs[{key}]: Inf detected")
                         nonfinite_found = True
 
-                # Check old log_probs (stored as "{key}_log_probs" in data dict)
+                # Check anchored reference log_probs (frozen-theta0 baseline)
                 for key in HEAD_NAMES:
-                    old_key = f"{key}_log_probs"
-                    old_lp = data[old_key][valid_mask]
+                    old_lp = ref_log_probs[key][valid_mask]
                     if not torch.isfinite(old_lp).all():
                         nonfinite_count = (~torch.isfinite(old_lp)).sum()
-                        nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
+                        nonfinite_sources.append(f"ref_log_probs[{key}]: {nonfinite_count} non-finite")
                         nonfinite_found = True
 
                 # Check values
                 if not torch.isfinite(values).all():
                     nonfinite_count = (~torch.isfinite(values)).sum()
                     nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
+                    nonfinite_found = True
+
+                # Check q_values (op-conditioned Q-aux): a non-finite q feeds q_aux_loss
+                # into total_loss and would corrupt the optimizer step. Gate it on the
+                # same skip-epoch path as values.
+                if not torch.isfinite(q_values).all():
+                    nonfinite_count = (~torch.isfinite(q_values)).sum()
+                    nonfinite_sources.append(f"q_values: {nonfinite_count} non-finite")
                     nonfinite_found = True
 
             if nonfinite_found:
@@ -1052,15 +1195,17 @@ class PPOAgent:
                 )
 
             # Compute per-head ratios
+            # data['hidden_h'][:,1:] is never indexed here; the loss path uses only
+            # data['initial_hidden_h'] (telemetry/Q(s,op) uses the per-step hidden buffer at ~:728-758).
             old_log_probs = {
-                "slot": data["slot_log_probs"][valid_mask],
-                "blueprint": data["blueprint_log_probs"][valid_mask],
-                "style": data["style_log_probs"][valid_mask],
-                "tempo": data["tempo_log_probs"][valid_mask],
-                "alpha_target": data["alpha_target_log_probs"][valid_mask],
-                "alpha_speed": data["alpha_speed_log_probs"][valid_mask],
-                "alpha_curve": data["alpha_curve_log_probs"][valid_mask],
-                "op": data["op_log_probs"][valid_mask],
+                "slot": ref_log_probs["slot"][valid_mask],
+                "blueprint": ref_log_probs["blueprint"][valid_mask],
+                "style": ref_log_probs["style"][valid_mask],
+                "tempo": ref_log_probs["tempo"][valid_mask],
+                "alpha_target": ref_log_probs["alpha_target"][valid_mask],
+                "alpha_speed": ref_log_probs["alpha_speed"][valid_mask],
+                "alpha_curve": ref_log_probs["alpha_curve"][valid_mask],
+                "op": ref_log_probs["op"][valid_mask],
             }
             batch_timesteps = valid_mask.sum().float().clamp(min=1)
             ratio_metrics = compute_ratio_metrics(
@@ -1131,6 +1276,8 @@ class PPOAgent:
                 clip_value=self.clip_value,
                 value_clip=self.value_clip,
                 value_coef=self.get_value_coef(),  # Use warmup-aware getter
+                q_values=q_values,  # P0-1: current-epoch Q(s, op) for detached aux
+                q_aux_coef=0.5 * self.get_value_coef(),  # P0-1: 0.5 * value_coef
                 head_names=HEAD_NAMES,
                 entropy_floor=self.entropy_floor,
                 entropy_floor_penalty_coef=scheduled_coef,  # Scheduled coefficients
@@ -1168,17 +1315,32 @@ class PPOAgent:
                         # valid_mask is [batch, seq_len], fresh_mask is also [batch, seq_len]
                         # We want timesteps where valid_mask AND fresh_mask are True
                         combined_mask = valid_mask & fresh_mask
-                        if combined_mask.any():
+                        # B3 / no-bug-hiding: numel<2 yields NaN var()/std(). The aux-EV
+                        # floor is for the legitimate low (but finite, numel>=2) variance
+                        # regime ONLY -- a degenerate (numel<2) selection SKIPS the aux-EV
+                        # emission rather than NaN-defaulting or flagging-on-degenerate.
+                        if combined_mask.any() and result.pred_contributions[combined_mask].numel() >= 2:
                             pred_flat = result.pred_contributions[combined_mask].flatten()
                             target_flat = data["contribution_targets"][combined_mask].flatten()
 
                             # Variance (should NOT be ~0 - indicates collapse)
                             pred_variance = pred_flat.var()
 
-                            # Explained variance (should increase over training)
-                            target_var = target_flat.var().clamp(min=0.01)
-                            residual_var = (pred_flat - target_flat).var()
-                            explained_var = 1.0 - (residual_var / target_var)
+                            # EV-telemetry-robustness (SLICE C): variance-floored aux EV +
+                            # floor-stabilized aux value_nrmse + low-variance flag, on the
+                            # contribution-target scale. Replaces the bare clamp(min=0.01).
+                            # DIAGNOSTIC-ONLY (flag + value_nrmse denominator; NEVER a gate).
+                            (
+                                explained_var,
+                                aux_value_nrmse,
+                                aux_ev_low_return_variance,
+                                _aux_ev_return_variance,
+                            ) = compute_floored_aux_explained_variance(
+                                pred_flat=pred_flat,
+                                target_flat=target_flat,
+                                floor_fraction=self.aux_ev_return_variance_floor_fraction,
+                                floor_min=self.aux_ev_return_variance_floor_min,
+                            )
 
                             # Correlation (should be > 0.5 eventually)
                             if pred_flat.numel() > 2:
@@ -1193,6 +1355,8 @@ class PPOAgent:
 
                             metrics["aux_pred_variance"].append(pred_variance)
                             metrics["aux_explained_variance"].append(explained_var)
+                            metrics["aux_value_nrmse"].append(aux_value_nrmse)
+                            metrics["aux_ev_low_return_variance"].append(aux_ev_low_return_variance)
                             metrics["aux_pred_target_correlation"].append(corr)
 
                             # Phase 4.2: Collapse detection warnings
@@ -1218,16 +1382,20 @@ class PPOAgent:
                                         corr_val,
                                     )
                         else:
-                            # No valid+fresh timesteps in this epoch
+                            # No valid+fresh (numel>=2) timesteps in this epoch
                             zero_t = torch.tensor(0.0, device=loss.device)
                             metrics["aux_pred_variance"].append(zero_t)
                             metrics["aux_explained_variance"].append(zero_t)
+                            metrics["aux_value_nrmse"].append(zero_t)
+                            metrics["aux_ev_low_return_variance"].append(False)
                             metrics["aux_pred_target_correlation"].append(zero_t)
                     else:
                         # No fresh measurements in this epoch
                         zero_t = torch.tensor(0.0, device=loss.device)
                         metrics["aux_pred_variance"].append(zero_t)
                         metrics["aux_explained_variance"].append(zero_t)
+                        metrics["aux_value_nrmse"].append(zero_t)
+                        metrics["aux_ev_low_return_variance"].append(False)
                         metrics["aux_pred_target_correlation"].append(zero_t)
             else:
                 # No contribution data in batch - skip aux loss and quality metrics
@@ -1236,6 +1404,8 @@ class PPOAgent:
                 zero_t = torch.tensor(0.0, device=loss.device)
                 metrics["aux_pred_variance"].append(zero_t)
                 metrics["aux_explained_variance"].append(zero_t)
+                metrics["aux_value_nrmse"].append(zero_t)
+                metrics["aux_ev_low_return_variance"].append(False)
                 metrics["aux_pred_target_correlation"].append(zero_t)
 
             self.optimizer.zero_grad(set_to_none=True)
@@ -1253,12 +1423,16 @@ class PPOAgent:
                 network = self.policy.network
                 base_network = getattr(network, '_orig_mod', network)
 
+                # P0-1: "value" -> state_value_head (op-INDEPENDENT V(s) baseline);
+                # "q" -> q_head (op-conditioned telemetry/aux). Both emitted so the
+                # detached q_head's grad (it trains only its own params) stays visible.
                 head_names = ["slot", "blueprint", "style", "tempo", "alpha_target",
-                              "alpha_speed", "alpha_curve", "op", "value"]
+                              "alpha_speed", "alpha_curve", "op", "value", "q"]
                 head_modules = [
                     base_network.slot_head, base_network.blueprint_head, base_network.style_head,
                     base_network.tempo_head, base_network.alpha_target_head, base_network.alpha_speed_head,
-                    base_network.alpha_curve_head, base_network.op_head, base_network.value_head,
+                    base_network.alpha_curve_head, base_network.op_head,
+                    base_network.state_value_head, base_network.q_head,
                 ]
 
                 # Collect all head norms as tensors (no .item() yet)
@@ -1341,6 +1515,7 @@ class PPOAgent:
                 values.min(),
                 values.max(),
                 losses.entropy_floor_penalty,  # DRL Expert: Track for calibration debugging
+                losses.q_aux_loss,  # P0-1: detached Q telemetry regression loss
             ])
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
@@ -1354,6 +1529,7 @@ class PPOAgent:
             metrics["value_min"].append(logging_tensors[9])
             metrics["value_max"].append(logging_tensors[10])
             metrics["entropy_floor_penalty"].append(logging_tensors[11])
+            metrics["q_aux_loss"].append(logging_tensors[12])
             # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]
@@ -1437,6 +1613,11 @@ class PPOAgent:
         save_dict = {
             # Version for forward compatibility
             'checkpoint_version': CHECKPOINT_VERSION,
+            # P0-1: value-head topology version (leyline single source of truth). Bumped
+            # to 2 when the op-conditioned value_head was split into an op-INDEPENDENT
+            # state_value_head (PPO baseline V(s)) + a renamed q_head (telemetry/aux).
+            # Load asserts equality; pre-v2 checkpoints fail strict load BY DESIGN.
+            'value_head_schema_version': VALUE_HEAD_SCHEMA_VERSION,
             'network_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'value_normalizer_state_dict': self.value_normalizer.state_dict(),
@@ -1552,6 +1733,7 @@ class PPOAgent:
         # Required checkpoint fields - fail fast if missing (no backwards compat)
         try:
             version = checkpoint['checkpoint_version']
+            value_head_schema_version = checkpoint['value_head_schema_version']
             state_dict = checkpoint['network_state_dict']
             optimizer_state_dict = checkpoint['optimizer_state_dict']
             architecture = checkpoint['architecture']
@@ -1564,6 +1746,21 @@ class PPOAgent:
                 f"This checkpoint was saved with an older version that is no longer supported. "
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
+
+        # P0-1 CHECKPOINT BREAK (intended, No-Legacy): the value-head topology changed.
+        # The PPO baseline is now an op-INDEPENDENT state_value_head (V(s)); the old
+        # op-conditioned value_head was renamed q_head (telemetry/aux). There is NO
+        # remap/shim -- a pre-v2 checkpoint has value_head.* (no state_value_head.* /
+        # q_head.*) and would fail strict load anyway; this assert names the break first.
+        if value_head_schema_version != VALUE_HEAD_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Value-head schema mismatch: checkpoint has "
+                f"value_head_schema_version={value_head_schema_version}, but this build "
+                f"expects {VALUE_HEAD_SCHEMA_VERSION}. The value head was split into an "
+                f"op-INDEPENDENT state_value_head (PPO baseline V(s)) plus an op-conditioned "
+                f"q_head (telemetry/aux). Old checkpoints (single op-conditioned value_head) "
+                f"are incompatible by design -- there is no remap. Please retrain."
+            )
 
         # Extract value_normalizer state (required since CHECKPOINT_VERSION 2)
         try:

@@ -1,10 +1,12 @@
 """Tests for telemetry payload dataclasses."""
 
+import pytest
+
 
 def test_analytics_snapshot_payload_accepts_reward_components_dataclass():
     """AnalyticsSnapshotPayload should accept RewardComponentsTelemetry."""
     from esper.leyline.telemetry import AnalyticsSnapshotPayload
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     rc = RewardComponentsTelemetry(
         bounded_attribution=0.5,
@@ -39,7 +41,7 @@ def test_telemetry_event_serializes_nested_reward_components():
         TelemetryEvent,
         TelemetryEventType,
     )
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     rc = RewardComponentsTelemetry(
         bounded_attribution=0.5,
@@ -278,6 +280,73 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
     assert payload.cuda_memory_peak_gb == 7.5
     assert payload.cuda_memory_fragmentation == 0.30
     assert payload.dataloader_wait_ratio == 0.2
+
+
+def test_ppo_update_payload_from_dict_parses_rollback_counters():
+    """from_dict parses the four rollback observability counters."""
+    import dataclasses
+
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    # Build a complete payload and serialize it so all mandatory keys are present,
+    # then set the rollback counters on the round-tripped dict.
+    data = dataclasses.asdict(
+        PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.5,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+        )
+    )
+    data["rollback_count"] = 3
+    data["rollback_steps_zeroed"] = 12
+    data["rollback_attempt_count"] = 5
+    data["rollback_unattributed_count"] = 2
+
+    payload = PPOUpdatePayload.from_dict(data)
+
+    assert payload.rollback_count == 3
+    assert payload.rollback_steps_zeroed == 12
+    assert payload.rollback_attempt_count == 5
+    assert payload.rollback_unattributed_count == 2
+
+
+def test_ppo_update_payload_from_dict_rollback_counters_default_to_zero():
+    """An old persisted event without the rollback keys deserializes with 0 defaults."""
+    import dataclasses
+
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    # Serialize a complete payload, then strip the rollback keys to simulate an
+    # OLD event persisted before these fields existed.
+    data = dataclasses.asdict(
+        PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.5,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+        )
+    )
+    for key in (
+        "rollback_count",
+        "rollback_steps_zeroed",
+        "rollback_attempt_count",
+        "rollback_unattributed_count",
+    ):
+        data.pop(key, None)
+
+    payload = PPOUpdatePayload.from_dict(data)
+
+    assert payload.rollback_count == 0
+    assert payload.rollback_steps_zeroed == 0
+    assert payload.rollback_attempt_count == 0
+    assert payload.rollback_unattributed_count == 0
 
 
 # =============================================================================
@@ -756,6 +825,9 @@ def test_ppo_update_payload_from_dict_with_q_values():
         "op_valid_mask": [True, True, True, True, True, True],
         "q_variance": 2.3,
         "q_spread": 6.7,
+        "q_aux_loss": 0.05,
+        "head_q_grad_norm": 0.3,
+        "head_q_gradient_state": "finite",
         # Pre-normalization advantage stats (always emitted)
         "pre_norm_advantage_mean": 0.6,
         "pre_norm_advantage_std": 2.0,
@@ -772,6 +844,9 @@ def test_ppo_update_payload_from_dict_with_q_values():
     assert payload.ppo_updates_count == 2
     assert payload.op_q_values == (0.5, 5.2, 4.0, -1.5, 2.8, 3.1)
     assert payload.q_variance == 2.3
+    assert payload.q_aux_loss == 0.05
+    assert payload.head_q_grad_norm == 0.3
+    assert payload.head_q_gradient_state == "finite"
 
 
 # =============================================================================

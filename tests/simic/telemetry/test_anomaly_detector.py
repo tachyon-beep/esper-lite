@@ -17,6 +17,156 @@ def test_ev_threshold_non_decreasing_over_training() -> None:
     assert late >= early
 
 
+class TestCheckValueFunctionRobustAnchored:
+    """Robust-anchored value-collapse gate (EV-telemetry-robustness, locked owner decision).
+
+    GATE = ROBUST-ANCHORED ONLY. value_collapse fires SOLELY on the scale-anchored robust
+    signal: value_loss (PRIMARY) OR bellman_error (SECONDARY safety-net) over their
+    calibrated thresholds (both 5.0). explained_variance / value_nrmse /
+    v_return_correlation / ev_low_return_variance are PURE DIAGNOSTICS — carried in
+    telemetry but NEVER a gate trigger. The EV arm has been removed entirely.
+    """
+
+    def test_check_value_function_ignores_artifactual_low_ev(self) -> None:
+        """Artifactual low-EV with healthy robust signals must NOT fire (EV is diagnostic-only)."""
+        detector = AnomalyDetector()
+        report = detector.check_value_function(
+            explained_variance=-3.0,  # crater EV — diagnostic only, must not gate
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=0.5,   # healthy (< bellman_error_threshold 5.0)
+            value_loss=0.099,    # healthy (< value_loss_threshold 5.0)
+            value_nrmse=0.3,     # diagnostic
+            v_return_correlation=0.9,  # diagnostic
+            ev_low_return_variance=True,  # denominator artifact flagged (diagnostic)
+        )
+        assert report.has_anomaly is False
+        assert "value_collapse" not in report.anomaly_types
+
+    def test_check_value_function_fires_on_genuine_collapse(self) -> None:
+        """Genuine collapse fires via the robust signal (bad value_loss and bellman_error)."""
+        detector = AnomalyDetector()
+        report = detector.check_value_function(
+            explained_variance=-1.0,
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=20.0,  # bad (> bellman_error_threshold 5.0)
+            value_loss=10.0,     # bad (> value_loss_threshold 5.0)
+            value_nrmse=1.5,
+            v_return_correlation=-0.1,
+            ev_low_return_variance=False,
+        )
+        assert report.has_anomaly is True
+        assert "value_collapse" in report.anomaly_types
+
+    def test_check_value_function_fires_on_low_var_collapse_via_robust_arm(self) -> None:
+        """Genuine collapse on a low-variance batch STILL fires (EV flag is diagnostic-only)."""
+        detector = AnomalyDetector()
+        report = detector.check_value_function(
+            explained_variance=0.5,  # EV is diagnostic only — irrelevant to firing
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=25.0,  # bad robust signal
+            value_loss=10.0,     # bad robust signal
+            # Diagnostic signals are floor/sentinel-stabilized on a flagged update; set them
+            # to "healthy-looking" to prove they do not gate the firing decision either way.
+            value_nrmse=0.2,
+            v_return_correlation=0.0,  # 0.0 sentinel on low-r_std batch
+            ev_low_return_variance=True,  # diagnostic flag — must NOT suppress the robust fire
+        )
+        assert report.has_anomaly is True
+        assert "value_collapse" in report.anomaly_types
+
+    def test_check_value_function_does_not_fire_on_bad_ev_with_healthy_robust(self) -> None:
+        """Bad EV (unflagged) with healthy robust signals must NOT fire.
+
+        EV is a pure diagnostic: a crater EV never drives value_collapse on its own.
+        Locks against any re-introduction of an EV firing arm.
+        """
+        detector = AnomalyDetector()
+        report = detector.check_value_function(
+            explained_variance=-2.0,  # EV is bad — diagnostic only
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=0.5,   # healthy
+            value_loss=0.1,      # healthy
+            value_nrmse=0.3,
+            v_return_correlation=0.8,
+            ev_low_return_variance=False,
+        )
+        assert report.has_anomaly is False
+        assert "value_collapse" not in report.anomaly_types
+
+    def test_check_value_function_fires_on_value_loss_alone(self) -> None:
+        """value_loss alone (PRIMARY) over threshold trips the robust gate."""
+        detector = AnomalyDetector()
+        report = detector.check_value_function(
+            explained_variance=0.9,
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=0.5,   # OK
+            value_loss=6.0,      # bad (> value_loss_threshold 5.0)
+            value_nrmse=0.3,
+            v_return_correlation=0.9,
+            ev_low_return_variance=False,
+        )
+        assert report.has_anomaly is True
+        assert "value_collapse" in report.anomaly_types
+
+    def test_check_value_function_fires_on_bellman_error_alone(self) -> None:
+        """bellman_error alone (SECONDARY safety-net) over threshold trips the robust gate."""
+        detector = AnomalyDetector()
+        report = detector.check_value_function(
+            explained_variance=0.9,
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=6.0,   # bad (> bellman_error_threshold 5.0)
+            value_loss=0.099,    # OK
+            value_nrmse=0.3,
+            v_return_correlation=0.9,
+            ev_low_return_variance=False,
+        )
+        assert report.has_anomaly is True
+        assert "value_collapse" in report.anomaly_types
+
+    def test_check_all_threads_robust_signals_artifact_suppressed(self) -> None:
+        """check_all must forward the robust signals; artifact stays suppressed end-to-end."""
+        detector = AnomalyDetector()
+        report = detector.check_all(
+            ratio_max=1.1,
+            ratio_min=0.9,
+            explained_variance=-3.0,
+            current_episode=80,
+            total_episodes=100,
+            value_collapse_applicable=True,
+            bellman_error=0.5,
+            value_loss=0.099,
+            value_nrmse=0.3,
+            v_return_correlation=0.9,
+            ev_low_return_variance=True,
+        )
+        assert "value_collapse" not in report.anomaly_types
+
+    def test_check_all_threads_robust_signals_collapse_fires(self) -> None:
+        """check_all forwards robust signals; genuine low-var collapse fires via robust signal."""
+        detector = AnomalyDetector()
+        report = detector.check_all(
+            ratio_max=1.1,
+            ratio_min=0.9,
+            explained_variance=0.5,
+            current_episode=80,
+            total_episodes=100,
+            value_collapse_applicable=True,
+            bellman_error=25.0,
+            value_loss=10.0,
+            value_nrmse=0.2,
+            v_return_correlation=0.0,
+            ev_low_return_variance=True,
+        )
+        assert report.has_anomaly is True
+        assert "value_collapse" in report.anomaly_types
+
+
 class TestCheckLstmHealth:
     """Tests for LSTM hidden state health checking (B7-DRL-04)."""
 

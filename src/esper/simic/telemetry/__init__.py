@@ -42,6 +42,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "GradientEMATracker": ("esper.simic.telemetry.gradient_ema", "GradientEMATracker"),
     # torch.profiler integration (P4-5)
     "training_profiler": ("esper.simic.telemetry.profiler", "training_profiler"),
+    # Tier-0 phase profiler (GIL throughput instrument)
+    "phase_profiler": ("esper.simic.telemetry.phase_profiler", "phase_profiler"),
+    "PhaseProfiler": ("esper.simic.telemetry.phase_profiler", "PhaseProfiler"),
+    "NullProfiler": ("esper.simic.telemetry.phase_profiler", "NullProfiler"),
     # Telemetry emitters
     "emit_with_env_context": ("esper.simic.telemetry.emitters", "emit_with_env_context"),
     "emit_batch_completed": ("esper.simic.telemetry.emitters", "emit_batch_completed"),
@@ -59,7 +63,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "compute_value_function_metrics": ("esper.leyline.value_metrics", "compute_value_function_metrics"),
     "ValueFunctionMetricsDict": ("esper.leyline.value_metrics", "ValueFunctionMetricsDict"),
     # Observation statistics (TELE-OBS)
-    "ObservationStatsTelemetry": ("esper.simic.telemetry.observation_stats", "ObservationStatsTelemetry"),
+    # ObservationStatsTelemetry lives in leyline; observation_stats provides compute_observation_stats.
+    "ObservationStatsTelemetry": ("esper.leyline.telemetry_contracts", "ObservationStatsTelemetry"),
     "compute_observation_stats": ("esper.simic.telemetry.observation_stats", "compute_observation_stats"),
 }
 
@@ -94,6 +99,10 @@ __all__ = [
     "GradientEMATracker",
     # torch.profiler integration (P4-5)
     "training_profiler",
+    # Tier-0 phase profiler (GIL throughput instrument)
+    "phase_profiler",
+    "PhaseProfiler",
+    "NullProfiler",
     # Emitters
     "emit_with_env_context",
     "emit_batch_completed",
@@ -162,11 +171,14 @@ if TYPE_CHECKING:
         LSTMHealthMetrics as LSTMHealthMetrics,
         compute_lstm_health as compute_lstm_health,
     )
-    from esper.simic.telemetry.observation_stats import (
-        ObservationStatsTelemetry as ObservationStatsTelemetry,
-        compute_observation_stats as compute_observation_stats,
-    )
+    from esper.leyline.telemetry_contracts import ObservationStatsTelemetry as ObservationStatsTelemetry
+    from esper.simic.telemetry.observation_stats import compute_observation_stats as compute_observation_stats
     from esper.simic.telemetry.profiler import training_profiler as training_profiler
+    from esper.simic.telemetry.phase_profiler import (
+        NullProfiler as NullProfiler,
+        PhaseProfiler as PhaseProfiler,
+        phase_profiler as phase_profiler,
+    )
     from esper.simic.telemetry.telemetry_config import (
         TelemetryConfig as TelemetryConfig,
         TelemetryLevel as TelemetryLevel,

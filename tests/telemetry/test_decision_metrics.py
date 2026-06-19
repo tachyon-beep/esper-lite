@@ -20,7 +20,7 @@ from esper.leyline import (
     TelemetryEventType,
 )
 from esper.leyline.telemetry import HeadTelemetry
-from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from esper.simic.telemetry.emitters import VectorizedEmitter
 from esper.simic.vectorized_types import (
     ActionMaskFlags,

@@ -278,6 +278,7 @@ Think of it as: **"The organism's stem cells undergo a botanical development pro
 - Claude Code MUST NOT use plant terms for system architecture (no "Tamiyo is the gardener")
 - When in doubt, refer to the tables above
 - If you are being asked to deliver a telemetry component, do not defer or put it off; if you are working on a half finished telemetry component, do not remove it as 'incomplete' or 'deferred functionality'. This pattern of behaviour is why we are several months in and have no telemetry.
+- The per-step LSTM hidden buffer in `rollout_buffer.py` (`pre_step_hiddens` / `hidden_h` / `hidden_c`) is TELEMETRY-ONLY: it conditions the Q(s, op) diagnostic forward in `ppo_agent.py` and is NOT read by the PPO TBPTT loss path (which always unrolls from the timestep-0 hidden state). Do not delete it.
 
 ## PROHIBITION ON "DEFENSIVE PROGRAMMING" PATTERNS
 
@@ -297,7 +298,7 @@ This prohibition does not extend to genuine uses of type checking or error handl
 
 For absence of doubt, when using these ask yourself "is this defensive programming to hide a bug that should not be possible in a well designed system, or is this legitimate type handling?' If the former, remove it and fix the underlying issue.
 
-<!-- filigree:instructions:v3.0.0rc12:65e6fb25 -->
+<!-- filigree:instructions:v3.0.0:65e6fb25 -->
 <!-- filigree:last-writer:filigree install -->
 ## Filigree Issue Tracker
 
@@ -418,7 +419,8 @@ Two failure modes deserve a specific response:
   the actual intent.
 <!-- /filigree:instructions -->
 
-<!-- loomweave:instructions:v1.1.0-rc4:0f47ea4d -->
+<!-- loomweave:instructions:v1.1.0-rc10:ca999d34 -->
+<!-- loomweave:last-writer:loomweave install -->
 ## Loomweave (code archaeology)
 
 This repo is indexed by Loomweave: it has pre-extracted the tree into a
@@ -452,6 +454,7 @@ Full workflow: the `loomweave-workflow` skill.
 <!-- /loomweave:instructions -->
 
 <!-- wardline:instructions:v1:bcd19330 -->
+<!-- wardline:last-writer:wardline install -->
 This project uses **wardline** as its trust-boundary gate. Before handing back code that touches external input, run `wardline scan . --fail-on ERROR` (exit 0 = clean, 1 = gate tripped, 2 = wardline error) and fix findings at the boundary, not the sink. The full scan -> explain -> fix -> rescan loop and the baseline-vs-waiver discipline live in the `wardline-gate` skill and in `docs/agents.md`.
 <!-- /wardline:instructions -->
 
@@ -473,3 +476,25 @@ CLI subcommands:
 
 Full command + MCP-tool reference: see the `legis-workflow` skill.
 <!-- /legis:instructions -->
+
+<!-- warpline:instructions:v1.0.0 -->
+## Warpline (temporal change-impact)
+
+`warpline` is the Weft federation's temporal / change-impact authority — "if I
+touch X, what breaks, and what must I re-verify?". Prefer the MCP tools
+(`mcp__warpline__*`); fall back to the `warpline` CLI. Endorsed names and short
+shims return identical schema+data.
+
+- `warpline_change_list` / `changed` — changed entities for a rev range; call first.
+- `warpline_impact_radius_get` / `blast_radius` — downstream affected set.
+- `warpline_reverify_worklist_get` / `reverify` — worklist to recheck before done.
+- `warpline_entity_timeline_get` / `timeline`, `warpline_entity_churn_count_get` /
+  `churn`, `warpline_edge_snapshot_capture` / `capture_snapshot` (only mutating
+  tool; writes `.weft/warpline/` only).
+
+Enrich-only and local-only: every response is `meta.local_only: true`,
+`peer_side_effects: []`. `enrichment` is a CLOSED vocab
+(`present|absent|unavailable`); sibling absence is explicit, never an implied
+clean/allowed state. warpline facts are advisory and never gate. See the
+`warpline-workflow` skill for the full loop.
+<!-- /warpline:instructions -->

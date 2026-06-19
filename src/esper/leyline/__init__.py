@@ -110,6 +110,20 @@ MAX_EPOCHS_IN_STAGE = DEFAULT_EPISODE_LENGTH
 # Used by: config.py, vectorized.py, ppo_agent.py, rollout_buffer.py, network.py
 DEFAULT_LSTM_HIDDEN_DIM = 512
 
+# Value-head topology version — single source of truth for the actor-critic's
+# value-head structure. The PPO baseline is an op-INDEPENDENT V(s) head
+# (state_value_head) consuming only lstm_out, alongside a retained op-conditioned
+# q_head used solely for op_q_values/q_variance/q_spread telemetry.
+#
+# Version 2 broke the prior topology (a single op-conditioned value_head whose
+# Q(s, op) was the PPO baseline). Checkpoints embed this version; load asserts
+# equality and raises a clear error on mismatch. There is NO remap/shim:
+# pre-v2 checkpoints (with value_head.* but no state_value_head.* / q_head.*)
+# fail strict load BY DESIGN (No-Legacy policy).
+#
+# Used by: simic/agent/ppo_agent.py (checkpoint save/load).
+VALUE_HEAD_SCHEMA_VERSION = 2
+
 # Number of LSTM layers in the host model.
 # Used by: Karn TUI widgets (gradient health display), telemetry dashboards.
 # NOTE: Reduced from 12 to 4 to fix vanishing gradient problem.
@@ -325,9 +339,27 @@ from esper.leyline.lifecycle_mutation import (
 )
 from esper.leyline.proof_baselines import (
     REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES,
+    STATIC_FINAL_SOURCE_BLEND_RAMP_EPOCHS,
+    STATIC_FINAL_SOURCE_COHORT_ID,
+    STATIC_FINAL_SOURCE_FOSSILIZE_EPOCH,
+    STATIC_FINAL_SOURCE_GERMINATE_EPOCH,
+    STATIC_FINAL_SOURCE_LIFECYCLE_POLICY,
+    STATIC_FINAL_SOURCE_MODE,
+    STATIC_FINAL_SOURCE_TO_BLENDING_EPOCH,
+    STATIC_FINAL_SOURCE_TO_HOLDING_EPOCH,
+    STATIC_FINAL_SOURCE_TO_TRAINING_EPOCH,
+    STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT,
+    STATIC_FINAL_SOURCE_TOPOLOGY_HASH,
+    STATIC_FINAL_SOURCE_TOPOLOGY_MIN_EPOCHS,
+    STATIC_FINAL_SOURCE_TOPOLOGY_STEPS,
+    STATIC_FINAL_SOURCE_TOPOLOGY_V1,
+    STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
+    STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS,
     ProofBaselineCohort,
     ProofBaselineMode,
     ProofBaselinePlan,
+    StaticFinalSourceManifestRef,
+    static_final_source_action_for_epoch,
 )
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
@@ -427,6 +459,21 @@ DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD = 12.0
 
 # Penalty applied when governor triggers a rollback (negative reward).
 DEFAULT_GOVERNOR_DEATH_PENALTY = 10.0
+
+# Reward written over an episode's intermediate transitions when a governor
+# rollback forfeits that episode (P1-ROLLBACK-TAIL credit assignment).
+#
+# A governor rollback means the episode ended in catastrophic structural collapse
+# and the host weights were RESTORED to the last-good snapshot - the "mostly-good"
+# intermediate rewards were earned on a trajectory the environment then DISCARDED.
+# Crediting them teaches "germinate aggressively then panic" as net-positive
+# (reward-hacking the safety net); with gamma < 1 a long positive prefix can
+# outweigh one terminal penalty. So the entire prefix is forfeited to this value
+# and only the terminal step carries the catastrophe penalty.
+#
+# Named so the forfeit fill is a single source of truth, not a magic literal.
+# Used by: rollout_buffer.mark_terminal_with_penalty, ppo_coordinator.handle_rollbacks.
+ROLLBACK_FORFEIT_REWARD: float = 0.0
 
 # Rolling window size for loss history statistics.
 DEFAULT_GOVERNOR_HISTORY_WINDOW = 20
@@ -585,9 +632,11 @@ DEFAULT_BLUEPRINT_EMBED_DIM = 4
 # For DEFAULT_NUM_SLOTS=3: 23 + (31 × 3) = 116 dims.
 # The full Obs V3 input to the network is:
 #   OBS_V3_NON_BLUEPRINT_DIM + (DEFAULT_NUM_SLOTS × DEFAULT_BLUEPRINT_EMBED_DIM) = 128 dims.
+OBS_V3_FEATURE_SCHEMA_VERSION = 1
 OBS_V3_BASE_FEATURE_SIZE = 23
 OBS_V3_SLOT_FEATURE_SIZE = 31
 OBS_V3_NON_BLUEPRINT_DIM = OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * DEFAULT_NUM_SLOTS)
+OBS_V3_UNKNOWN_SENTINEL = -1.0
 
 # Number of independent action heads in Tamiyo's factored action space.
 # Heads: op, slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve.
@@ -712,15 +761,21 @@ from esper.leyline.reports import (
     SeedMetrics,
     SeedStateReport,
     FieldReport,
+    PhaseTiming,
+    PhaseProfileReport,
 )
 
-# Telemetry contracts
+# Telemetry wire-format contracts (domain-free: no simic/karn/etc. imports)
+from esper.leyline.telemetry_contracts import (
+    RewardComponentsTelemetry,
+    ObservationStatsTelemetry,
+)
+
+# Telemetry event contracts
 from esper.leyline.telemetry import (
     TelemetryEventType,
     TelemetryEvent,
     TelemetryCallback,
-    PerformanceBudgets,
-    DEFAULT_BUDGETS,
     SeedTelemetry,
     # Typed payloads (see docs/plans/2025-12-25-typed-telemetry-payloads-design.md)
     TelemetryPayload,
@@ -748,6 +803,8 @@ from esper.leyline.telemetry import (
     GovernorRollbackPayload,
     MorphologyCausalLogPhase,
     MorphologyCausalLogPayload,
+    TopologyManifestRole,
+    TopologyManifestPayload,
     GovernorPanicReason,
 )
 
@@ -817,6 +874,7 @@ __all__ = [
     "DEFAULT_EPISODE_LENGTH",
     "MAX_EPOCHS_IN_STAGE",
     "DEFAULT_LSTM_HIDDEN_DIM",
+    "VALUE_HEAD_SCHEMA_VERSION",
     "DEFAULT_HOST_LSTM_LAYERS",
     "DEFAULT_N_ENVS",
 
@@ -875,6 +933,24 @@ __all__ = [
     "ProofBaselineMode",
     "ProofBaselinePlan",
     "REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES",
+    "STATIC_FINAL_SOURCE_BLEND_RAMP_EPOCHS",
+    "STATIC_FINAL_SOURCE_COHORT_ID",
+    "STATIC_FINAL_SOURCE_FOSSILIZE_EPOCH",
+    "STATIC_FINAL_SOURCE_GERMINATE_EPOCH",
+    "STATIC_FINAL_SOURCE_LIFECYCLE_POLICY",
+    "STATIC_FINAL_SOURCE_MODE",
+    "STATIC_FINAL_SOURCE_TO_BLENDING_EPOCH",
+    "STATIC_FINAL_SOURCE_TO_HOLDING_EPOCH",
+    "STATIC_FINAL_SOURCE_TO_TRAINING_EPOCH",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_HASH",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_MIN_EPOCHS",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_STEPS",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_V1",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_VERSION",
+    "STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS",
+    "StaticFinalSourceManifestRef",
+    "static_final_source_action_for_epoch",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
     "NUM_ALPHA_SPEEDS",
@@ -923,6 +999,7 @@ __all__ = [
     "DEFAULT_GOVERNOR_SENSITIVITY",
     "DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD",
     "DEFAULT_GOVERNOR_DEATH_PENALTY",
+    "ROLLBACK_FORFEIT_REWARD",
     "DEFAULT_GOVERNOR_HISTORY_WINDOW",
     "MIN_GOVERNOR_HISTORY_SAMPLES",
     "DEFAULT_MIN_PANICS_BEFORE_ROLLBACK",
@@ -960,9 +1037,11 @@ __all__ = [
     "NUM_BLUEPRINTS",
     "BLUEPRINT_NULL_INDEX",
     "DEFAULT_BLUEPRINT_EMBED_DIM",
+    "OBS_V3_FEATURE_SCHEMA_VERSION",
     "OBS_V3_BASE_FEATURE_SIZE",
     "OBS_V3_SLOT_FEATURE_SIZE",
     "OBS_V3_NON_BLUEPRINT_DIM",
+    "OBS_V3_UNKNOWN_SENTINEL",
     "NUM_ACTION_HEADS",
     "LOG_PROB_MIN",
 
@@ -1033,13 +1112,17 @@ __all__ = [
     "SeedMetrics",
     "SeedStateReport",
     "FieldReport",
+    "PhaseTiming",
+    "PhaseProfileReport",
+
+    # Telemetry wire-format contracts (domain-free)
+    "RewardComponentsTelemetry",
+    "ObservationStatsTelemetry",
 
     # Telemetry
     "TelemetryEventType",
     "TelemetryEvent",
     "TelemetryCallback",
-    "PerformanceBudgets",
-    "DEFAULT_BUDGETS",
     "SeedTelemetry",
     # Typed payloads
     "TelemetryPayload",
@@ -1067,6 +1150,8 @@ __all__ = [
     "GovernorRollbackPayload",
     "MorphologyCausalLogPhase",
     "MorphologyCausalLogPayload",
+    "TopologyManifestRole",
+    "TopologyManifestPayload",
     "GovernorPanicReason",
 
     # Alpha controller

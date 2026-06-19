@@ -1,20 +1,29 @@
-"""Reward Telemetry Dataclasses.
+"""Leyline Telemetry Contracts — wire-format dataclasses for reward and observation telemetry.
 
-Captures per-component breakdown of reward computation
-for diagnosing reward hacking and tuning reward weights.
+These are CONTRACTS only: no domain imports (no esper.simic / kasmina / tamiyo /
+tolaria / karn / nissa), no torch, no heavy stdlib.  They may be imported by any
+domain without triggering circular-import cycles.
+
+Two contracts live here:
+
+* RewardComponentsTelemetry — per-component reward breakdown (to_dict / from_dict).
+* ObservationStatsTelemetry — observation-space health metrics (to_dict / from_dict).
+
+The helper _parse_bool_field is shared by both from_dict methods.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from esper.simic.rewards.contribution import FossilizedSeedDripState
 
 
 def _parse_bool_field(value: float | int | str | bool | None, field_name: str) -> bool | None:
-    """Parse serialized boolean telemetry without truthiness coercion."""
+    """Parse serialized boolean telemetry without truthiness coercion.
+
+    JSON round-trips can produce strings ("True"/"False") or native bools.
+    This helper rejects ambiguous numeric values so bugs surface rather than
+    silently resolving to True/False.
+    """
     if value is None:
         return None
     if type(value) is bool:
@@ -34,6 +43,11 @@ class RewardComponentsTelemetry:
 
     Each field represents one component of the total reward.
     All components should sum to total_reward.
+
+    Note: new_drip_state was removed from this dataclass.  It was a simic-typed
+    in-memory side channel that was never serialised (absent from to_dict/from_dict).
+    The real consumer (action_execution.py) now receives the drip state via a
+    tuple return from compute_reward() when return_components=True.
     """
 
     # Base signal (legacy shaped reward)
@@ -84,7 +98,6 @@ class RewardComponentsTelemetry:
     drip_immediate_bonus: float = 0.0  # 30% portion paid on FOSSILIZE
     drip_deferred_total: float = 0.0  # 70% pool created this epoch (on FOSSILIZE)
     num_drip_sources: int = 0  # Number of fossilized seeds contributing drip
-    new_drip_state: "FossilizedSeedDripState | None" = None  # Created when FOSSILIZE occurs (caller collects)
 
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
@@ -263,4 +276,92 @@ class RewardComponentsTelemetry:
         )
 
 
-__all__ = ["RewardComponentsTelemetry"]
+@dataclass(slots=True)
+class ObservationStatsTelemetry:
+    """Observation space health metrics for debugging.
+
+    Tracks feature statistics to catch input distribution issues
+    before they propagate to NaN gradients.
+    """
+
+    # Per-feature-group statistics (computed over batch dimension)
+    # Obs V3 has: slot features (per-slot), host features, context features
+    slot_features_mean: float = 0.0
+    slot_features_std: float = 0.0
+    host_features_mean: float = 0.0
+    host_features_std: float = 0.0
+    context_features_mean: float = 0.0
+    context_features_std: float = 0.0
+
+    # Outlier detection (observations outside 3-sigma)
+    outlier_pct: float = 0.0  # Fraction in [0, 1] (rendered as X.X%)
+
+    # Saturation / clipping indicators (computed on NORMALIZED obs)
+    near_clip_pct: float = 0.0  # Fraction with |x_norm| >= 0.9*clip
+    clip_pct: float = 0.0  # Fraction clamped at |x_norm| == clip
+
+    # Numerical health
+    nan_count: int = 0
+    inf_count: int = 0
+    nan_pct: float = 0.0  # Fraction of NaNs in raw obs tensor
+    inf_pct: float = 0.0  # Fraction of Infs in raw obs tensor
+
+    # Normalization drift (how much running mean/std has shifted since epoch 0)
+    normalization_drift: float = 0.0
+
+    # Batch size (for context)
+    batch_size: int = 0
+
+    def to_dict(self) -> dict[str, float | int]:
+        """Convert to dict for TelemetryEvent data field.
+
+        Uses explicit dict construction for performance (PyTorch Expert pattern).
+        """
+        return {
+            "slot_features_mean": self.slot_features_mean,
+            "slot_features_std": self.slot_features_std,
+            "host_features_mean": self.host_features_mean,
+            "host_features_std": self.host_features_std,
+            "context_features_mean": self.context_features_mean,
+            "context_features_std": self.context_features_std,
+            "outlier_pct": self.outlier_pct,
+            "near_clip_pct": self.near_clip_pct,
+            "clip_pct": self.clip_pct,
+            "nan_count": self.nan_count,
+            "inf_count": self.inf_count,
+            "nan_pct": self.nan_pct,
+            "inf_pct": self.inf_pct,
+            "normalization_drift": self.normalization_drift,
+            "batch_size": self.batch_size,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, float | int]) -> "ObservationStatsTelemetry":
+        """Reconstruct from dict (inverse of to_dict).
+
+        Uses direct key access (not .get()) per CLAUDE.md defensive programming
+        prohibition - if a field is missing, that's a bug to surface, not hide.
+        """
+        return cls(
+            slot_features_mean=float(data["slot_features_mean"]),
+            slot_features_std=float(data["slot_features_std"]),
+            host_features_mean=float(data["host_features_mean"]),
+            host_features_std=float(data["host_features_std"]),
+            context_features_mean=float(data["context_features_mean"]),
+            context_features_std=float(data["context_features_std"]),
+            outlier_pct=float(data["outlier_pct"]),
+            near_clip_pct=float(data["near_clip_pct"]),
+            clip_pct=float(data["clip_pct"]),
+            nan_count=int(data["nan_count"]),
+            inf_count=int(data["inf_count"]),
+            nan_pct=float(data["nan_pct"]),
+            inf_pct=float(data["inf_pct"]),
+            normalization_drift=float(data["normalization_drift"]),
+            batch_size=int(data["batch_size"]),
+        )
+
+
+__all__ = [
+    "RewardComponentsTelemetry",
+    "ObservationStatsTelemetry",
+]

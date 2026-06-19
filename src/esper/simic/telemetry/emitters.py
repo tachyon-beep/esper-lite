@@ -27,6 +27,7 @@ from esper.leyline import (
     DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
     EpochCompletedPayload,
     OP_NAMES,
+    PhaseProfileReport,
     PPOUpdatePayload,
     STYLE_ALPHA_ALGORITHMS,
     STYLE_BLEND_IDS,
@@ -42,9 +43,9 @@ from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
 from esper.simic.vectorized_types import ActionMaskFlags, ActionOutcome, ActionSpec
 
 if TYPE_CHECKING:
+    from esper.leyline.telemetry_contracts import ObservationStatsTelemetry
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
-    from .observation_stats import ObservationStatsTelemetry
     from .telemetry_config import TelemetryConfig
 
 _logger = logging.getLogger(__name__)
@@ -468,11 +469,21 @@ class VectorizedEmitter:
                 host_accuracy=avg_acc,
                 entropy=metrics.get("entropy", 0.0),
                 kl_divergence=metrics.get("approx_kl", 0.0),
-                value_variance=metrics.get("explained_variance", 0.0),
+                # Pre-update explained variance. Optional: a skipped/empty PPO
+                # update produces a metrics dict with no explained_variance key,
+                # so emit None ("no EV this batch") rather than a fabricated 0.0.
+                explained_variance=metrics.get("explained_variance"),
                 seeds_created=total_seeds_created,
                 seeds_fossilized=total_seeds_fossilized,
                 episodes_completed=episodes_completed,
                 skipped_update=update_skipped,
+                # Per-batch rollback observability. This snapshot fires unconditionally,
+                # so an all-first-step-panic batch (len(buffer)==0, no PPO_UPDATE_COMPLETED
+                # emitted) still surfaces its attempt/unattributed counts here. metrics may
+                # lack the keys on a no-rollback batch -> .get default 0 (heterogeneous
+                # metrics dict, not the typed PPOUpdatePayload contract).
+                rollback_attempt_count=metrics.get("rollback_attempt_count", 0),
+                rollback_unattributed_count=metrics.get("rollback_unattributed_count", 0),
             ),
         ))
 
@@ -597,6 +608,23 @@ class VectorizedEmitter:
                 num_alloc_retries=num_alloc_retries,
                 num_ooms=num_ooms,
             ),
+        ))
+
+    def on_phase_profile(self, phase_report: PhaseProfileReport) -> None:
+        """Emit a per-epoch Tier-0 phase-timing report.
+
+        Observation-only (Rule 4 of the GIL throughput profiler plan): the report
+        flows ONE-WAY to telemetry. It is a batch-level event (not per-env), emitted
+        directly via the hub like ALLOCATOR_STATS. The report's own epoch field is
+        carried on the event for the Karn phase_occupancy view; group_id keys A/B.
+        """
+        if not self.hub:
+            return
+        self.hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.PHASE_PROFILE_COMPLETED,
+            epoch=phase_report.epoch,
+            group_id=self.group_id,
+            data=phase_report,
         ))
 
 
@@ -966,6 +994,15 @@ def emit_ppo_update_event(
             pre_clip_grad_norm=metrics["pre_clip_grad_norm"],
             # Optional fields (computed once per update, not per-epoch)
             explained_variance=metrics.get("explained_variance"),
+            # EV-telemetry-robustness aggregated fields. The three live-path mandatory
+            # fields use DIRECT key access (fail loudly if the reducer/finalize plumbing
+            # dropped them — CLAUDE.md no-bug-hiding). ev_return_variance may legitimately
+            # be None on the degenerate-handled path, so it uses .get(..., None) like
+            # explained_variance above.
+            value_nrmse=metrics["value_nrmse"],
+            ev_low_return_variance=metrics["ev_low_return_variance"],
+            ev_low_return_variance_count=metrics["ev_low_return_variance_count"],
+            ev_return_variance=metrics.get("ev_return_variance", None),
             entropy_loss=0.0,
             # MANDATORY advantage statistics - computed in PPO update
             advantage_mean=metrics["advantage_mean"],
@@ -999,6 +1036,7 @@ def emit_ppo_update_event(
             op_valid_mask=metrics["op_valid_mask"],
             q_variance=metrics["q_variance"],
             q_spread=metrics["q_spread"],
+            q_aux_loss=metrics["q_aux_loss"],
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=metrics.get("inf_grad_count", 0),
@@ -1019,6 +1057,7 @@ def emit_ppo_update_event(
             head_alpha_curve_grad_norm=head_grad_norms_avg.get("head_alpha_curve_grad_norm"),
             head_op_grad_norm=head_grad_norms_avg.get("head_op_grad_norm"),
             head_value_grad_norm=head_grad_norms_avg["head_value_grad_norm"],
+            head_q_grad_norm=head_grad_norms_avg["head_q_grad_norm"],
             head_style_entropy=head_entropies_avg.get("head_style_entropy"),
             head_tempo_entropy=head_entropies_avg.get("head_tempo_entropy"),
             head_alpha_target_entropy=head_entropies_avg.get("head_alpha_target_entropy"),
@@ -1042,6 +1081,7 @@ def emit_ppo_update_event(
             head_alpha_curve_gradient_state=head_gradient_states["head_alpha_curve_gradient_state"],
             head_op_gradient_state=head_gradient_states["head_op_gradient_state"],
             head_value_gradient_state=head_gradient_states["head_value_gradient_state"],
+            head_q_gradient_state=head_gradient_states["head_q_gradient_state"],
             # Per-head ratio max (Policy V2 - multi-head ratio explosion detection)
             head_slot_ratio_max=metrics.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=metrics.get("head_blueprint_ratio_max", 1.0),
@@ -1122,6 +1162,12 @@ def emit_ppo_update_event(
             batch=batch_idx + 1,
             # BUG FIX: Track actual PPO update count (inner_epoch was misleading)
             ppo_updates_count=metrics["ppo_updates_count"],
+            # Rollback observability (per-rollout). Always populated by PPOCoordinator.run_update
+            # on the live emit path -> direct index (fail loud if the coordinator dropped them).
+            rollback_count=metrics["rollback_count"],
+            rollback_steps_zeroed=metrics["rollback_steps_zeroed"],
+            rollback_attempt_count=metrics["rollback_attempt_count"],
+            rollback_unattributed_count=metrics["rollback_unattributed_count"],
         ),
         group_id=group_id,
     ))

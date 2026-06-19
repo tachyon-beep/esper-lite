@@ -27,6 +27,21 @@ class TestRollingStats:
 class TestAnomalyDetectorAccuracyDrop:
     """Regression tests for accuracy drop detection units."""
 
+    def test_missing_accuracy_does_not_initialize_or_drop(self) -> None:
+        detector = AnomalyDetector()
+
+        missing = EpochSnapshot(epoch=1)
+
+        assert detector.check_epoch(missing) is None
+        assert detector.stats.accuracy_initialized is False
+
+        measured_zero = EpochSnapshot(epoch=2)
+        measured_zero.host.val_accuracy = 0.0
+
+        assert detector.check_epoch(measured_zero) is None
+        assert detector.stats.accuracy_initialized is True
+        assert detector.stats.prev_accuracy == 0.0
+
     def test_accuracy_drop_is_measured_in_percentage_points(self) -> None:
         """Accuracy is emitted as 0-100 points; drops should not be multiplied by 100."""
         detector = AnomalyDetector()

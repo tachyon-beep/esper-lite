@@ -216,17 +216,21 @@ def test_get_value_does_not_create_grad_graph(lstm_bundle, slot_config):
     )
 
 
-def test_lstm_bundle_get_value_uses_deterministic_argmax_value(
+def test_lstm_bundle_get_value_returns_state_value(
     lstm_bundle, slot_config, monkeypatch
 ):
-    """get_value() should ignore forward()'s sampled value and recompute argmax Q."""
+    """get_value() returns the op-INDEPENDENT V(s) (forward()['state_value']) directly.
+
+    P0-1: get_value() no longer recomputes an op-conditioned Q(s, argmax_op); it reads
+    the op-independent state_value straight from forward(). It must NOT touch _compute_q.
+    """
     features = torch.randn(1, lstm_bundle.feature_dim)
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, slot_config.num_slots))
     hidden_out = (
         torch.zeros(1, 1, lstm_bundle.hidden_dim),
         torch.zeros(1, 1, lstm_bundle.hidden_dim),
     )
-    call_count = {"forward": 0, "compute": 0}
+    call_count = {"forward": 0, "compute_q": 0}
 
     def fake_forward(
         features_arg: torch.Tensor,
@@ -234,7 +238,6 @@ def test_lstm_bundle_get_value_uses_deterministic_argmax_value(
         hidden_arg=None,
     ):
         call_count["forward"] += 1
-        sampled_value = 1.0 if call_count["forward"] == 1 else 2.0
         return {
             "slot_logits": torch.zeros(1, 1, slot_config.num_slots),
             "blueprint_logits": torch.zeros(1, 1, NUM_BLUEPRINTS),
@@ -244,20 +247,19 @@ def test_lstm_bundle_get_value_uses_deterministic_argmax_value(
             "alpha_speed_logits": torch.zeros(1, 1, NUM_ALPHA_SPEEDS),
             "alpha_curve_logits": torch.zeros(1, 1, NUM_ALPHA_CURVES),
             "op_logits": torch.tensor([[[0.0, 5.0, -1.0, -2.0, -3.0, -4.0]]]),
-            "value": torch.tensor([[sampled_value]]),
+            "state_value": torch.tensor([[42.0]]),  # V(s): what get_value must return
+            "q_value": torch.tensor([[99.0]]),  # Q(s, sampled_op): must be ignored
             "lstm_out": torch.ones(1, 1, lstm_bundle.hidden_dim),
             "sampled_op": torch.tensor([[0]]),
             "hidden": hidden_out,
         }
 
-    def fake_compute_value(lstm_out_arg: torch.Tensor, op_arg: torch.Tensor) -> torch.Tensor:
-        call_count["compute"] += 1
-        expected_op = torch.tensor([[1]])
-        torch.testing.assert_close(op_arg, expected_op)
-        return torch.tensor([[42.0]])
+    def fake_compute_q(lstm_out_arg: torch.Tensor, op_arg: torch.Tensor) -> torch.Tensor:
+        call_count["compute_q"] += 1  # get_value must NEVER call this
+        return torch.tensor([[0.0]])
 
     monkeypatch.setattr(lstm_bundle._network, "forward", fake_forward)
-    monkeypatch.setattr(lstm_bundle._network, "_compute_value", fake_compute_value)
+    monkeypatch.setattr(lstm_bundle._network, "_compute_q", fake_compute_q)
 
     value1 = lstm_bundle.get_value(features, bp_idx)
     value2 = lstm_bundle.get_value(features, bp_idx)
@@ -265,7 +267,7 @@ def test_lstm_bundle_get_value_uses_deterministic_argmax_value(
     torch.testing.assert_close(value1, torch.tensor([42.0]))
     torch.testing.assert_close(value2, torch.tensor([42.0]))
     assert call_count["forward"] == 2
-    assert call_count["compute"] == 2
+    assert call_count["compute_q"] == 0, "get_value() must not touch the op-conditioned Q head"
 
 
 def test_lstm_bundle_forward_missing_mask_key_raises(lstm_bundle, slot_config):

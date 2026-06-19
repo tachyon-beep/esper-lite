@@ -80,11 +80,13 @@ const clipFractionHealth = computed<HealthStatus>(() => {
   return 'good'
 })
 
-// Explained variance: higher is better (range -inf to 1, but typically 0-1)
+// Explained variance: higher is better (range -inf to 1, but typically 0-1).
+// EV-telemetry-robustness (no-bug-hiding): do NOT clamp the DISPLAYED value to [0,1]
+// — a blown-out negative EV must read as its true (negative) value, not a masking "0%".
+// The progress-arc geometry is clamped separately in getStrokeDasharray (a negative
+// dash length is invalid SVG); only the rendered number is honest about the collapse.
 const explainedVariancePercent = computed(() => {
-  // Clamp to 0-100 for display
-  const ev = Math.max(0, Math.min(1, props.tamiyo.explained_variance))
-  return Math.round(ev * 100)
+  return Math.round(props.tamiyo.explained_variance * 100)
 })
 
 const explainedVarianceHealth = computed<HealthStatus>(() => {
@@ -135,9 +137,13 @@ const gauges = computed<GaugeConfig[]>(() => [
 ])
 
 // Calculate stroke-dasharray for progress arc. Pending gauges have no arc.
+// The arc geometry is clamped to [0, CIRCUMFERENCE]: a negative dash length is invalid
+// SVG, and an arc cannot exceed a full circle. This clamps the GEOMETRY only — the
+// displayed numeric value (e.g. a negative EV) is rendered honestly elsewhere.
 function getStrokeDasharray(percent: number | null): string {
   if (percent === null) return `0 ${CIRCUMFERENCE}`
-  const progress = (percent / 100) * CIRCUMFERENCE
+  const fraction = Math.max(0, Math.min(1, percent / 100))
+  const progress = fraction * CIRCUMFERENCE
   return `${progress} ${CIRCUMFERENCE}`
 }
 
@@ -198,6 +204,18 @@ const showTempWarning = computed(
       class="temp-warning"
     >
       {{ vitals.gpu_temperature }}°C
+    </div>
+
+    <!-- EV-telemetry-robustness: low-return-variance badge. When the EV denominator is
+         ill-conditioned, a deeply negative EV gauge is a denominator artifact, not a collapse;
+         this badge tells the reader the EV reading is not trustworthy on this batch. -->
+    <div
+      v-if="tamiyo.ev_low_return_variance"
+      data-testid="ev-low-variance-badge"
+      class="ev-low-variance-badge"
+      title="EV denominator ill-conditioned (low return variance): the explained-variance gauge is artifact-prone on this batch."
+    >
+      low return var
     </div>
   </div>
 </template>
@@ -291,6 +309,21 @@ const showTempWarning = computed(
   font-size: 11px;
   font-weight: 600;
   color: var(--status-warn);
+}
+
+.ev-low-variance-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--text-dim);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 640px) {

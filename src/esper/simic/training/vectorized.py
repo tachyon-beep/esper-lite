@@ -59,6 +59,7 @@ from esper.leyline import (
     SlotConfig,
     TelemetryEvent,
     TelemetryEventType,
+    TopologyManifestPayload,
     TrainingStartedPayload,
 )
 from esper.simic.telemetry import (
@@ -79,10 +80,13 @@ from esper.simic.rewards import (
     RewardFamily,
     RewardMode,
 )
-from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
+from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput, NissaHub
 from esper.simic.telemetry.emitters import VectorizedEmitter
 from .env_factory import EnvFactoryContext
 from .helpers import policy_amp_context
+from .normalizer_checkpoint import (
+    restore_obs_normalizer_from_metadata as _restore_obs_normalizer_from_metadata,
+)
 from .parallel_env_state import ParallelEnvState
 from .vectorized_trainer import VectorizedPPOTrainer
 
@@ -180,12 +184,15 @@ def _calculate_value_warmup_steps(
 _PPO_MEAN_REDUCED_METRICS = frozenset({
     "policy_loss",
     "value_loss",
+    "q_aux_loss",  # P0-1: detached aux q_head regression loss (mean across updates, like value_loss)
     "entropy_floor_penalty",
     "approx_kl",
     "clip_fraction",
     "clip_fraction_positive",
     "clip_fraction_negative",
     "explained_variance",
+    "value_nrmse",  # EV-telemetry-robustness: floor-stabilized companion (mean over ALL updates)
+    "ev_return_variance",  # EV-telemetry-robustness: EV-denominator variance (mean over ALL updates)
     "entropy",
     "ratio_mean",
     "ratio_std",
@@ -234,6 +241,8 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     "effective_aux_coef",
     "aux_pred_variance",
     "aux_explained_variance",
+    # EV-telemetry-robustness (SLICE C): aux value-fit signal, mean-reduced like aux EV.
+    "aux_value_nrmse",
     "aux_pred_target_correlation",
 })
 
@@ -259,6 +268,8 @@ _PPO_SUM_REDUCED_METRICS = frozenset({
     "inf_grad_count",
     "dead_layers",
     "exploding_layers",
+    # EV-telemetry-robustness: sum of per-update int flags = flagged-update count.
+    "ev_low_return_variance_count",
 })
 
 _PPO_ANY_REDUCED_METRICS = frozenset({
@@ -266,6 +277,10 @@ _PPO_ANY_REDUCED_METRICS = frozenset({
     "advantage_std_floored",
     "lstm_has_nan",
     "lstm_has_inf",
+    # EV-telemetry-robustness: True if any update in the batch was floored.
+    "ev_low_return_variance",
+    # EV-telemetry-robustness (SLICE C): True if any update's aux target var < aux floor.
+    "aux_ev_low_return_variance",
 })
 
 _PPO_FIRST_REDUCED_METRICS = frozenset({
@@ -351,6 +366,26 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
 
     aggregated: dict[str, Any] = {}
     keys = {key for metrics in update_metrics for key in metrics}
+
+    # EV-telemetry-robustness flagged-exclusion (special case BEFORE the frozenset dispatch).
+    # The per-key loop below processes one key at a time and cannot read a sibling key, so the
+    # generic mean reducer would average a -8 floored-EV outlier into the run-level EV. Compute
+    # the EV mean over only updates whose ev_low_return_variance is False; if none are unflagged,
+    # set NaN. value_nrmse / ev_return_variance stay on the generic all-updates mean. This
+    # unflagged-only EV mean is exactly what the Step-6 gate keys on.
+    if "explained_variance" in keys:
+        unflagged_ev = [
+            metrics["explained_variance"]
+            for metrics in update_metrics
+            if metrics.get("explained_variance") is not None
+            and not metrics.get("ev_low_return_variance", False)
+        ]
+        if unflagged_ev:
+            aggregated["explained_variance"] = sum(unflagged_ev) / len(unflagged_ev)
+        else:
+            aggregated["explained_variance"] = float("nan")
+        keys.discard("explained_variance")
+
     for key in keys:
         values: list[Any] = []
         for metrics in update_metrics:
@@ -402,21 +437,28 @@ def _run_ppo_updates(
     amp_dtype: torch.dtype | None,  # Required: explicit dtype or None for no AMP
 ) -> dict[str, Any]:
     """Run one or more PPO updates on the current buffer and aggregate metrics."""
-    # P1 FIX: RECURRENT POLICY STALENESS GUARD
-    # Multiple external PPO updates with LSTM policies cause hidden state staleness:
-    # Update 1 changes policy weights, but Update 2+ uses the SAME hidden states
-    # from rollout collection (computed with old weights). This creates the exact
-    # mismatch that recurrent_n_epochs=1 is designed to prevent.
+    # RECURRENT MULTI-EPOCH INVARIANT (ppo_updates_per_batch == 1 for LSTM)
     #
-    # The agent's internal recurrent_n_epochs=1 safety is bypassed by this external loop.
-    # Standard R2D2/Recurrent PPO would require burn-in (recomputing hidden states
-    # for each update), which is not implemented here.
+    # Multi-epoch optimization for recurrent policies is owned by the agent's INTERNAL
+    # recurrent_n_epochs path: K epochs run WITHIN a single agent.update() call against
+    # an anchored reference forward pass. That internal loop is GAE-safe and normalizer-safe.
+    #
+    # The EXTERNAL ppo_updates_per_batch loop here is a different mechanism: each extra
+    # iteration re-runs GAE on the buffer and mutates the EMA value normalizer K times per
+    # rollout, on top of the stale hidden states stored at collection time. For LSTM that
+    # corrupts advantages and the value scale, so the external loop is disallowed — express
+    # K via recurrent_n_epochs instead and keep ppo_updates_per_batch pinned to 1.
+    #
+    # This guards the _run_ppo_updates callsite, not a direct PPOAgent.update() call.
     if ppo_updates_per_batch > 1 and agent.lstm_hidden_dim > 0:
         raise ValueError(
-            f"ppo_updates_per_batch={ppo_updates_per_batch} is incompatible with recurrent (LSTM) "
-            f"policies. After the first update, policy weights change but hidden states remain "
-            f"from the original rollout, causing gradient corruption. Use ppo_updates_per_batch=1 "
-            f"for LSTM policies, or implement hidden state burn-in. See PPOAgent C4 comment."
+            f"ppo_updates_per_batch={ppo_updates_per_batch} is invalid for recurrent (LSTM) "
+            f"policies: ppo_updates_per_batch must be 1. Recurrent multi-epoch optimization is "
+            f"owned by the agent's internal recurrent_n_epochs path (K epochs within a single "
+            f"update() against an anchored reference pass). The external ppo_updates_per_batch "
+            f"loop would re-run GAE and mutate the EMA value normalizer K times per rollout. "
+            f"Set recurrent_n_epochs=K and keep ppo_updates_per_batch=1. (Guards the "
+            f"_run_ppo_updates callsite, not a direct PPOAgent.update() call.)"
         )
 
     # C5 FIX: Update observation normalizer BEFORE PPO update.
@@ -600,6 +642,25 @@ def loss_and_correct(
 _compiled_loss_and_correct = loss_and_correct
 
 
+def _finalize_run_scoped_nissa_backends(
+    *,
+    hub: NissaHub,
+    analytics: BlueprintAnalytics,
+    directory_output: DirectoryOutput | None,
+    require_telemetry_flush: bool,
+) -> None:
+    telemetry_flush_succeeded = True
+    if directory_output is not None:
+        telemetry_flush_succeeded = hub.flush(timeout=10.0)
+        hub.remove_backend(directory_output)
+    hub.remove_backend(analytics)
+    if require_telemetry_flush and not telemetry_flush_succeeded:
+        raise RuntimeError(
+            "Nissa telemetry flush timed out before removing run-scoped telemetry "
+            "backend; proof evidence for this run is incomplete."
+        )
+
+
 # =============================================================================
 # Vectorized PPO Training
 # =============================================================================
@@ -627,6 +688,8 @@ def train_ppo_vectorized(
     gamma: float = DEFAULT_GAMMA,
     gae_lambda: float = DEFAULT_GAE_LAMBDA,  # From leyline
     ppo_updates_per_batch: int = 1,
+    recurrent_n_epochs: int = 1,
+    total_train_steps: int | None = None,
     save_path: str | None = None,
     resume_path: str | None = None,
     seed: int = 42,
@@ -680,9 +743,19 @@ def train_ppo_vectorized(
     torch_profiler_profile_memory: bool = False,
     torch_profiler_with_stack: bool = False,
     torch_profiler_summary: bool = False,
+    phase_profiler: bool = True,
     proof_baseline_mode: str | None = None,
     proof_baseline_pair_id: str | None = None,
     proof_baseline_lifecycle_policy: str | None = None,
+    proof_baseline_schedule_id: str | None = None,
+    proof_baseline_schedule_hash: str | None = None,
+    proof_baseline_schedule_version: int | None = None,
+    proof_baseline_schedule_action_count: int | None = None,
+    static_final_source_manifest: TopologyManifestPayload | None = None,
+    static_final_source_run_dir: str | None = None,
+    static_final_source_group_id: str | None = None,
+    static_final_source_episode_idx: int | None = None,
+    static_final_source_event_id: str | None = None,
 ) -> tuple[PPOAgent, list[dict[str, Any]]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -705,7 +778,13 @@ def train_ppo_vectorized(
         ppo_updates_per_batch: Number of PPO updates per batch of episodes.
             Higher values improve sample efficiency but risk policy divergence.
             With KL early stopping enabled, values of 2-4 are often safe.
-            Default: 1 (standard PPO behavior)
+            Default: 1 (standard PPO behavior). Pinned to 1 for LSTM policies.
+        recurrent_n_epochs: Internal multi-epoch count for recurrent (LSTM) policies.
+            K epochs of optimization run WITHIN a single agent.update() against an
+            anchored reference pass, avoiding GAE re-runs and value-normalizer drift.
+            Default: 1.
+        total_train_steps: Total optimizer steps over the run, used by the agent's
+            late-training decay schedule. None lets the agent fall back to its default.
         save_path: Optional path to save model
         resume_path: Optional path to resume from checkpoint
         seed: Random seed for reproducibility
@@ -921,6 +1000,7 @@ def train_ppo_vectorized(
     hub = get_hub()
     analytics = BlueprintAnalytics(quiet=quiet_analytics)
     hub.add_backend(analytics)
+    directory_output: DirectoryOutput | None = None
 
     # Ops-normal telemetry gates (UI snapshots, per-step decisions, etc).
     # NOTE: `use_telemetry` controls whether telemetry features are part of the
@@ -931,8 +1011,12 @@ def train_ppo_vectorized(
 
     # Optional file-based telemetry logging (for programmatic callers that bypass scripts/train.py)
     if telemetry_dir and use_telemetry:
-        hub.add_backend(DirectoryOutput(telemetry_dir))
-        _logger.info("Telemetry logging to: %s", telemetry_dir)
+        directory_output = DirectoryOutput(telemetry_dir)
+        hub.add_backend(directory_output)
+        telemetry_run_dir = directory_output.output_dir.name
+        _logger.info("Telemetry logging to: %s", directory_output.output_dir)
+    else:
+        telemetry_run_dir = None
 
     anomaly_detector = AnomalyDetector()
     start_episode = 0
@@ -998,22 +1082,13 @@ def train_ppo_vectorized(
             compile_mode=effective_compile_mode,
         )
 
-        # Restore observation normalizer state
         metadata = checkpoint["metadata"]
-        if "obs_normalizer_mean" in metadata:
-            obs_normalizer.mean = torch.tensor(
-                metadata["obs_normalizer_mean"], device=device
-            )
-            obs_normalizer.var = torch.tensor(
-                metadata["obs_normalizer_var"], device=device
-            )
-            obs_normalizer._device = device
-            if "obs_normalizer_count" in metadata:
-                obs_normalizer.count = torch.tensor(
-                    metadata["obs_normalizer_count"], device=device
-                )
-            if "obs_normalizer_momentum" in metadata:
-                obs_normalizer.momentum = metadata["obs_normalizer_momentum"]
+        _restore_obs_normalizer_from_metadata(
+            metadata,
+            obs_normalizer=obs_normalizer,
+            slot_config=slot_config,
+            device=device,
+        )
 
         # Restore reward normalizer state
         if "reward_normalizer_mean" in metadata:
@@ -1078,6 +1153,8 @@ def train_ppo_vectorized(
             chunk_length=chunk_length,
             num_envs=n_envs,
             max_steps_per_env=max_epochs,
+            recurrent_n_epochs=recurrent_n_epochs,
+            total_train_steps=total_train_steps,
             compile_mode=effective_compile_mode,  # Persisted for checkpoint resume
         )
 
@@ -1134,6 +1211,11 @@ def train_ppo_vectorized(
                 else None,
                 proof_baseline_mode=proof_baseline_mode,
                 proof_baseline_pair_id=proof_baseline_pair_id,
+                proof_baseline_lifecycle_policy=proof_baseline_lifecycle_policy,
+                proof_baseline_schedule_id=proof_baseline_schedule_id,
+                proof_baseline_schedule_hash=proof_baseline_schedule_hash,
+                proof_baseline_schedule_version=proof_baseline_schedule_version,
+                proof_baseline_schedule_action_count=proof_baseline_schedule_action_count,
             ),
         )
     )
@@ -1401,10 +1483,22 @@ def train_ppo_vectorized(
         torch_profiler_profile_memory=torch_profiler_profile_memory,
         torch_profiler_with_stack=torch_profiler_with_stack,
         torch_profiler_summary=torch_profiler_summary,
+        phase_profiler=phase_profiler,
         gpu_preload_augment=gpu_preload_augment,
         amp_enabled=amp_enabled,
         resolved_amp_dtype=resolved_amp_dtype,
+        proof_baseline_pair_id=proof_baseline_pair_id,
         proof_baseline_lifecycle_policy=proof_baseline_lifecycle_policy,
+        proof_baseline_schedule_id=proof_baseline_schedule_id,
+        proof_baseline_schedule_hash=proof_baseline_schedule_hash,
+        proof_baseline_schedule_version=proof_baseline_schedule_version,
+        proof_baseline_schedule_action_count=proof_baseline_schedule_action_count,
+        static_final_source_manifest=static_final_source_manifest,
+        static_final_source_run_dir=static_final_source_run_dir,
+        static_final_source_group_id=static_final_source_group_id,
+        static_final_source_episode_idx=static_final_source_episode_idx,
+        static_final_source_event_id=static_final_source_event_id,
+        telemetry_run_dir=telemetry_run_dir,
         env_factory=env_factory,
         compiled_loss_and_correct=_compiled_loss_and_correct,
         run_ppo_updates=_run_ppo_updates,
@@ -1420,7 +1514,23 @@ def train_ppo_vectorized(
         logger=_logger,
     )
 
-    history = trainer.run()
+    try:
+        history = trainer.run()
+    except Exception:
+        _finalize_run_scoped_nissa_backends(
+            hub=hub,
+            analytics=analytics,
+            directory_output=directory_output,
+            require_telemetry_flush=False,
+        )
+        raise
+
+    _finalize_run_scoped_nissa_backends(
+        hub=hub,
+        analytics=analytics,
+        directory_output=directory_output,
+        require_telemetry_flush=True,
+    )
 
     return agent, history
 

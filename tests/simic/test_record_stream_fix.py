@@ -15,6 +15,51 @@ import torch
 from esper.utils.data import SharedGPUBatchIterator, SharedGPUGatherBatchIterator
 
 
+_PRODUCER_DELAY_CYCLES = 100_000_000
+
+
+def _clone_after_default_stream_fill(*, wait_for_default_stream: bool) -> tuple[float, float]:
+    device = torch.device("cuda:0")
+    side_stream = torch.cuda.Stream(device=device)
+    default_stream = torch.cuda.default_stream(device)
+
+    source = torch.zeros(1024 * 1024, device=device)
+    torch.cuda.synchronize(device)
+
+    with torch.cuda.stream(default_stream):
+        torch.cuda._sleep(_PRODUCER_DELAY_CYCLES)  # type: ignore[attr-defined]
+        source.fill_(7.0)
+
+    if wait_for_default_stream:
+        side_stream.wait_stream(default_stream)
+
+    source.record_stream(side_stream)
+    with torch.cuda.stream(side_stream):
+        cloned = source.clone()
+        cloned.record_stream(side_stream)
+
+    side_stream.synchronize()
+    default_stream.synchronize()
+
+    return cloned.min().item(), cloned.max().item()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_record_stream_does_not_order_default_stream_producer() -> None:
+    """record_stream protects lifetime, not producer-consumer ordering."""
+    no_wait_min, no_wait_max = _clone_after_default_stream_fill(
+        wait_for_default_stream=False
+    )
+    assert no_wait_min == 0.0
+    assert no_wait_max == 0.0
+
+    wait_min, wait_max = _clone_after_default_stream_fill(
+        wait_for_default_stream=True
+    )
+    assert wait_min == 7.0
+    assert wait_max == 7.0
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_shared_gpu_iterator_returns_device_resident_tensors():
     """SharedGPUBatchIterator returns tensors already on the target device.

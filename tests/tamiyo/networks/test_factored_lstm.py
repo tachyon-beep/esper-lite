@@ -259,11 +259,12 @@ def test_evaluate_actions_returns_contributions():
         aux_stop_gradient=True,  # NEW parameter
     )
 
-    # Should return 5-tuple now: (log_probs, values, entropy, hidden, pred_contributions)
-    assert len(result) == 5
-    log_probs, values, entropy, hidden, pred_contributions = result
+    # Returns 6-tuple (P0-1): (log_probs, value, entropy, hidden, pred_contributions, q_value)
+    assert len(result) == 6
+    log_probs, values, entropy, hidden, pred_contributions, q_value = result
 
     assert pred_contributions.shape == (batch_size, seq_len, num_slots)
+    assert q_value.shape == (batch_size, seq_len)  # op-conditioned telemetry/aux
 
 
 def test_evaluate_actions_does_not_clamp_cell_state():
@@ -304,7 +305,7 @@ def test_evaluate_actions_does_not_clamp_cell_state():
     h0, c0 = policy.get_initial_hidden(batch_size, torch.device("cpu"))
     c_big = torch.full_like(c0, 5000.0)
 
-    _, _, _, hidden_out, _ = policy.evaluate_actions(
+    _, _, _, hidden_out, _, _ = policy.evaluate_actions(
         states,
         blueprint_indices,
         actions,
@@ -364,7 +365,7 @@ def test_evaluate_actions_aux_stop_gradient_true():
     # Clear gradients
     policy.zero_grad()
 
-    log_probs, values, entropy, hidden, pred_contributions = policy.evaluate_actions(
+    log_probs, values, entropy, hidden, pred_contributions, _ = policy.evaluate_actions(
         features,
         blueprint_indices,
         actions,
@@ -440,7 +441,7 @@ def test_evaluate_actions_aux_stop_gradient_false():
     # Clear gradients
     policy.zero_grad()
 
-    log_probs, values, entropy, hidden, pred_contributions = policy.evaluate_actions(
+    log_probs, values, entropy, hidden, pred_contributions, _ = policy.evaluate_actions(
         features,
         blueprint_indices,
         actions,

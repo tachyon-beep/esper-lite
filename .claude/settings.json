@@ -3,6 +3,18 @@
     "code-review@claude-plugins-official": true
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "/home/john/.local/bin/filigree ensure-dashboard",
+            "timeout": 5000,
+            "type": "command"
+          }
+        ],
+        "matcher": "mcp__filigree__.*"
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
@@ -15,35 +27,32 @@
       {
         "hooks": [
           {
-            "type": "command",
             "command": "/home/john/.local/bin/legis session-context",
-            "timeout": 5000
+            "timeout": 5000,
+            "type": "command"
           }
         ]
       },
       {
         "hooks": [
           {
-            "type": "command",
             "command": "/home/john/.local/bin/filigree session-context",
-            "timeout": 5000
+            "timeout": 5000,
+            "type": "command"
           },
           {
-            "type": "command",
             "command": "/home/john/.local/bin/filigree ensure-dashboard",
-            "timeout": 5000
+            "timeout": 5000,
+            "type": "command"
           }
         ]
-      }
-    ],
-    "PreToolUse": [
+      },
       {
-        "matcher": "mcp__filigree__.*",
         "hooks": [
           {
-            "type": "command",
-            "command": "/home/john/.local/bin/filigree ensure-dashboard",
-            "timeout": 5000
+            "command": "/home/john/.local/bin/warpline session-context --repo '/home/john/esper-lite'",
+            "timeout": 5000,
+            "type": "command"
           }
         ]
       }

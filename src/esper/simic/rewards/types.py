@@ -20,8 +20,8 @@ class SeedInfo(NamedTuple):
     """
 
     stage: int  # SeedStage.value
-    improvement_since_stage_start: float
-    total_improvement: float  # Since germination (for G5 gate alignment)
+    improvement_since_stage_start: float | None
+    total_improvement: float | None  # Since germination (for G5 gate alignment)
     epochs_in_stage: int
     seed_params: int = 0  # Trainable params of active seed
     previous_stage: int = 0  # For PBRS stage bonus calculation
@@ -54,8 +54,8 @@ class SeedInfo(NamedTuple):
         if seed_state is None:
             return None
         metrics = seed_state.metrics
-        improvement = 0.0
-        total_improvement = 0.0
+        improvement: float | None = None
+        total_improvement: float | None = None
         seed_age = 0
         interaction_sum = 0.0
         boost_received = 0.0

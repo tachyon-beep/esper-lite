@@ -16,15 +16,14 @@ import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Literal, cast
+from typing import Any, Callable, Literal, cast
 
-if TYPE_CHECKING:
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
-    from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+from esper.leyline.telemetry_contracts import ObservationStatsTelemetry, RewardComponentsTelemetry
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.factored_actions import NUM_OPS
+from esper.leyline.reports import PhaseProfileReport
 from esper.leyline.stages import SeedStage
 
 # =============================================================================
@@ -73,15 +72,13 @@ class TelemetryEventType(Enum):
     # Training events
     EPOCH_COMPLETED = auto()  # Per-env epoch (has env_id in data)
     BATCH_EPOCH_COMPLETED = auto()  # Batch-level epoch summary + progress (commit barrier)
+    PHASE_PROFILE_COMPLETED = auto()  # Per-epoch transaction-phase timing (Tier-0 profiler)
     PLATEAU_DETECTED = auto()
     DEGRADATION_DETECTED = auto()
     IMPROVEMENT_DETECTED = auto()
     TAMIYO_INITIATED = auto()  # Host stabilized, germination now allowed
 
     # Health events
-    # TODO: [DEAD CODE] - ISOLATION_VIOLATION is defined but never emitted or handled.
-    # Appears to be planned functionality that was never implemented. Delete or implement.
-    ISOLATION_VIOLATION = auto()
     GRADIENT_ANOMALY = auto()
     PERFORMANCE_DEGRADATION = auto()
 
@@ -100,6 +97,7 @@ class TelemetryEventType(Enum):
     # === Governor Events (Tolaria) ===
     GOVERNOR_ROLLBACK = auto()        # Emergency rollback executed
     MORPHOLOGY_CAUSAL_LOG = auto()    # Proposal/verdict/mutation/watch causal log row
+    TOPOLOGY_MANIFEST_RECORDED = auto()  # Source/replay topology proof manifest evidence
 
     # === Training Progress Events ===
     TRAINING_STARTED = auto()         # Training run initialized
@@ -145,31 +143,6 @@ class TelemetryEvent:
         event_type_raw = cast(Any, self.event_type)
         if type(event_type_raw) is str:
             self.event_type = TelemetryEventType[event_type_raw]
-
-
-# TODO: [DEAD CODE] - PerformanceBudgets and DEFAULT_BUDGETS are defined but never used
-# anywhere in production. Either integrate into training pipeline or delete.
-# See: architectural risk assessment 2024-12-24.
-@dataclass(frozen=True)
-class PerformanceBudgets:
-    """Performance budget constants."""
-
-    # Timing budgets (milliseconds)
-    epoch_budget_ms: float = 18.0
-    blending_budget_ms: float = 5.0
-    gate_check_budget_ms: float = 2.0
-
-    # Memory budgets (GB)
-    seed_memory_budget_gb: float = 2.0
-    total_memory_budget_gb: float = 12.0
-
-    # Serialization budgets
-    max_message_size_bytes: int = 280
-    serialization_budget_us: float = 80.0
-
-
-# Default budgets
-DEFAULT_BUDGETS = PerformanceBudgets()
 
 
 # =============================================================================
@@ -493,6 +466,11 @@ class TrainingStartedPayload:
     # Proof-control identity for blueprint-health baseline cohorts.
     proof_baseline_mode: str | None = None
     proof_baseline_pair_id: str | None = None
+    proof_baseline_lifecycle_policy: str | None = None
+    proof_baseline_schedule_id: str | None = None
+    proof_baseline_schedule_hash: str | None = None
+    proof_baseline_schedule_version: int | None = None
+    proof_baseline_schedule_action_count: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainingStartedPayload":
@@ -536,6 +514,23 @@ class TrainingStartedPayload:
             else None,
             proof_baseline_pair_id=data["proof_baseline_pair_id"]
             if "proof_baseline_pair_id" in data
+            else None,
+            proof_baseline_lifecycle_policy=data["proof_baseline_lifecycle_policy"]
+            if "proof_baseline_lifecycle_policy" in data
+            else None,
+            proof_baseline_schedule_id=data["proof_baseline_schedule_id"]
+            if "proof_baseline_schedule_id" in data
+            else None,
+            proof_baseline_schedule_hash=data["proof_baseline_schedule_hash"]
+            if "proof_baseline_schedule_hash" in data
+            else None,
+            proof_baseline_schedule_version=data["proof_baseline_schedule_version"]
+            if "proof_baseline_schedule_version" in data
+            else None,
+            proof_baseline_schedule_action_count=data[
+                "proof_baseline_schedule_action_count"
+            ]
+            if "proof_baseline_schedule_action_count" in data
             else None,
         )
 
@@ -585,7 +580,6 @@ class EpochCompletedPayload:
         if observation_stats_data is None:
             observation_stats = None
         else:
-            from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
             observation_stats = ObservationStatsTelemetry.from_dict(observation_stats_data)
 
         return cls(
@@ -724,6 +718,16 @@ class PPOUpdatePayload:
     # OPTIONAL - explained_variance can be NaN early training
     explained_variance: float | None = None
 
+    # EV-telemetry-robustness (additive). value_nrmse is the floor-stabilized value-fit
+    # companion; ev_low_return_variance flags a floored EV denominator (per update); the run-level
+    # ev_low_return_variance_count is the flagged-update count (a reward/return-regime diagnostic);
+    # ev_return_variance is the EV-denominator variance valid_returns.var() (Bessel, correction=1),
+    # DISTINCT from the buffer-wide return_variance below (correction=0).
+    value_nrmse: float | None = None
+    ev_low_return_variance: bool = False
+    ev_return_variance: float | None = None
+    ev_low_return_variance_count: int = 0
+
     # OPTIONAL - extended diagnostics
     entropy_loss: float = 0.0
     advantage_mean: float = 0.0
@@ -802,6 +806,7 @@ class PPOUpdatePayload:
     head_alpha_curve_grad_norm: float | None = None
     head_op_grad_norm: float | None = None
     head_value_grad_norm: float | None = None
+    head_q_grad_norm: float | None = None  # P0-1: grad norm of the op-conditioned aux q_head
     head_style_entropy: float | None = None
     head_tempo_entropy: float | None = None
     head_alpha_target_entropy: float | None = None
@@ -830,6 +835,7 @@ class PPOUpdatePayload:
     head_alpha_curve_gradient_state: str | None = None
     head_op_gradient_state: str | None = None
     head_value_gradient_state: str | None = None
+    head_q_gradient_state: str | None = None
 
     # Per-head PPO ratio max (Policy V2 - multi-head ratio explosion detection)
     # Individual head ratios can look healthy while joint ratio exceeds clip range
@@ -887,6 +893,10 @@ class PPOUpdatePayload:
     # Q-value analysis metrics
     q_variance: float = 0.0  # Variance across ops (low = critic ignoring op conditioning)
     q_spread: float = 0.0    # max(Q) - min(Q) across ops
+    # P0-1: detached aux regression loss training the telemetry-only q_head toward
+    # normalized returns. Should trend toward value_loss as Q(s,op) collapses toward V(s);
+    # divergence means the aux head is not converging.
+    q_aux_loss: float | None = None
 
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
@@ -949,6 +959,17 @@ class PPOUpdatePayload:
     decision_density: float = 1.0  # Fraction with agency (1 - forced_step_ratio), higher = healthier
     advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
     d5_pre_norm_advantage_std: float | None = None  # Raw std before normalization
+
+    # === Rollback observability (per-rollout aggregates; pure telemetry) ===
+    # rollback_count: governor rollbacks ATTRIBUTED to an executed transition this rollout.
+    # rollback_steps_zeroed: intermediate prefix steps forfeited to ROLLBACK_FORFEIT_REWARD.
+    # rollback_attempt_count: ALL governor rollback triggers this rollout (>= rollback_count).
+    # rollback_unattributed_count: attempts dropped because there was no executed transition
+    # to attribute the penalty to (first-step panic). attempts == count + unattributed.
+    rollback_count: int = 0
+    rollback_steps_zeroed: int = 0
+    rollback_attempt_count: int = 0
+    rollback_unattributed_count: int = 0
 
     def __post_init__(self) -> None:
         if len(self.op_q_values) != NUM_OPS:
@@ -1024,6 +1045,7 @@ class PPOUpdatePayload:
             head_alpha_curve_grad_norm=data.get("head_alpha_curve_grad_norm"),
             head_op_grad_norm=data.get("head_op_grad_norm"),
             head_value_grad_norm=data.get("head_value_grad_norm"),
+            head_q_grad_norm=data.get("head_q_grad_norm"),
             head_style_entropy=data.get("head_style_entropy"),
             head_tempo_entropy=data.get("head_tempo_entropy"),
             head_alpha_target_entropy=data.get("head_alpha_target_entropy"),
@@ -1048,6 +1070,7 @@ class PPOUpdatePayload:
             head_alpha_curve_gradient_state=data.get("head_alpha_curve_gradient_state"),
             head_op_gradient_state=data.get("head_op_gradient_state"),
             head_value_gradient_state=data.get("head_value_gradient_state"),
+            head_q_gradient_state=data.get("head_q_gradient_state"),
             # OPTIONAL: Per-head ratio max (only for factored policies, defaults to 1.0).
             head_slot_ratio_max=data.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=data.get("head_blueprint_ratio_max", 1.0),
@@ -1083,6 +1106,7 @@ class PPOUpdatePayload:
             op_valid_mask=_ensure_tuple(data["op_valid_mask"]),
             q_variance=data["q_variance"],
             q_spread=data["q_spread"],
+            q_aux_loss=data.get("q_aux_loss"),
             # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],
@@ -1137,6 +1161,13 @@ class PPOUpdatePayload:
             return_p90=data.get("return_p90", 0.0),
             return_variance=data.get("return_variance", 0.0),
             return_skewness=data.get("return_skewness", 0.0),
+            # OPTIONAL: EV-telemetry-robustness fields. Persisted-event boundary -> .get(default)
+            # per B4 schema evolution (a missing key means an OLD event predating this plan, NOT a
+            # current-code bug). Matches the TELE-220..228 .get pattern above.
+            value_nrmse=data.get("value_nrmse", None),
+            ev_low_return_variance=data.get("ev_low_return_variance", False),
+            ev_return_variance=data.get("ev_return_variance", None),
+            ev_low_return_variance_count=data.get("ev_low_return_variance_count", 0),
             # OPTIONAL: Value target scale (default 1.0, matching declaration).
             value_target_scale=data.get("value_target_scale", 1.0),
             # OPTIONAL: D5 slot saturation diagnostics (defaults for non-D5 batches).
@@ -1145,6 +1176,12 @@ class PPOUpdatePayload:
             decision_density=data.get("decision_density", 1.0),
             advantage_std_floored=data.get("advantage_std_floored", False),
             d5_pre_norm_advantage_std=data.get("d5_pre_norm_advantage_std"),
+            # OPTIONAL: Rollback observability. Persisted-event boundary -> .get(default)
+            # per schema evolution (a missing key means an OLD event predating this field).
+            rollback_count=data.get("rollback_count", 0),
+            rollback_steps_zeroed=data.get("rollback_steps_zeroed", 0),
+            rollback_attempt_count=data.get("rollback_attempt_count", 0),
+            rollback_unattributed_count=data.get("rollback_unattributed_count", 0),
         )
 
     @classmethod
@@ -1163,6 +1200,9 @@ class PPOUpdatePayload:
             op_valid_mask=tuple(False for _ in range(NUM_OPS)),
             q_variance=nan,
             q_spread=nan,
+            q_aux_loss=nan,
+            head_q_grad_norm=nan,
+            head_q_gradient_state="skipped",
             skipped=True,
         )
 
@@ -1741,10 +1781,16 @@ class AnalyticsSnapshotPayload:
     host_accuracy: float | None = None
     entropy: float | None = None
     kl_divergence: float | None = None
-    value_variance: float | None = None
+    explained_variance: float | None = None
     seeds_created: int | None = None
     seeds_fossilized: int | None = None
     skipped_update: bool | None = None
+    # Per-batch rollback observability (kind="batch_stats"). Present even on skipped/
+    # empty-buffer batches because this snapshot fires unconditionally — so an
+    # all-first-step-panic batch (which emits no PPO_UPDATE_COMPLETED) is still observable
+    # here. None = no rollback signal in this batch's metrics dict (old event / no rollbacks).
+    rollback_attempt_count: int | None = None
+    rollback_unattributed_count: int | None = None
 
     # For kind="summary_table", includes formatted tables (console output)
     summary_table: str | None = None
@@ -1857,10 +1903,12 @@ class AnalyticsSnapshotPayload:
             host_accuracy=data.get("host_accuracy"),
             entropy=data.get("entropy"),
             kl_divergence=data.get("kl_divergence"),
-            value_variance=data.get("value_variance"),
+            explained_variance=data.get("explained_variance"),
             seeds_created=data.get("seeds_created"),
             seeds_fossilized=data.get("seeds_fossilized"),
             skipped_update=data.get("skipped_update"),
+            rollback_attempt_count=data.get("rollback_attempt_count"),
+            rollback_unattributed_count=data.get("rollback_unattributed_count"),
             # kind="summary_table": formatted tables
             summary_table=data.get("summary_table"),
             scoreboard_tables=data.get("scoreboard_tables"),
@@ -1915,15 +1963,10 @@ class AnalyticsSnapshotPayload:
     @staticmethod
     def _parse_reward_components(
         data: dict[str, Any] | None,
-    ) -> "RewardComponentsTelemetry | None":
-        """Parse reward_components from dict if present.
-
-        Uses late import to avoid circular dependency at module load time.
-        """
+    ) -> RewardComponentsTelemetry | None:
+        """Parse reward_components from dict if present."""
         if data is None:
             return None
-        from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
-
         return RewardComponentsTelemetry.from_dict(data)
 
     @staticmethod
@@ -1936,15 +1979,10 @@ class AnalyticsSnapshotPayload:
     @staticmethod
     def _parse_observation_stats(
         data: dict[str, Any] | None,
-    ) -> "ObservationStatsTelemetry | None":
-        """Parse observation_stats from dict if present.
-
-        Uses late import to avoid circular dependency at module load time.
-        """
+    ) -> ObservationStatsTelemetry | None:
+        """Parse observation_stats from dict if present."""
         if data is None:
             return None
-        from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
-
         return ObservationStatsTelemetry.from_dict(data)
 
 
@@ -2303,6 +2341,83 @@ class MorphologyCausalLogPayload:
         )
 
 
+TopologyManifestRole = Literal["source_final", "static_final_replay"]
+
+
+@dataclass(slots=True, frozen=True)
+class TopologyManifestPayload:
+    """Proof evidence for source-final and replayed topology manifests."""
+
+    manifest_role: TopologyManifestRole
+    proof_baseline_pair_id: str
+    topology_manifest_version: int
+    topology_manifest_hash: str
+    topology_manifest_json: str
+    task: str
+    host_topology: str
+    slot_config_hash: str
+    slot_count: int
+    fossilized_seed_count: int
+    topology_delta_count: int
+    source_run_dir: str | None = None
+    source_group_id: str | None = None
+    source_episode_idx: int | None = None
+    source_event_id: str | None = None
+    source_topology_manifest_hash: str | None = None
+    replay_weight_policy: str | None = None
+    replay_env_id: int | None = None
+    replay_episode_idx: int | None = None
+    replayed_topology_manifest_hash: str | None = None
+    manifest_match: bool | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TopologyManifestPayload":
+        """Parse from dict. Raises KeyError on missing manifest identity fields."""
+        return cls(
+            manifest_role=data["manifest_role"],
+            proof_baseline_pair_id=data["proof_baseline_pair_id"],
+            topology_manifest_version=data["topology_manifest_version"],
+            topology_manifest_hash=data["topology_manifest_hash"],
+            topology_manifest_json=data["topology_manifest_json"],
+            task=data["task"],
+            host_topology=data["host_topology"],
+            slot_config_hash=data["slot_config_hash"],
+            slot_count=data["slot_count"],
+            fossilized_seed_count=data["fossilized_seed_count"],
+            topology_delta_count=data["topology_delta_count"],
+            source_run_dir=data["source_run_dir"]
+            if "source_run_dir" in data
+            else None,
+            source_group_id=data["source_group_id"]
+            if "source_group_id" in data
+            else None,
+            source_episode_idx=data["source_episode_idx"]
+            if "source_episode_idx" in data
+            else None,
+            source_event_id=data["source_event_id"]
+            if "source_event_id" in data
+            else None,
+            source_topology_manifest_hash=data["source_topology_manifest_hash"]
+            if "source_topology_manifest_hash" in data
+            else None,
+            replay_weight_policy=data["replay_weight_policy"]
+            if "replay_weight_policy" in data
+            else None,
+            replay_env_id=data["replay_env_id"]
+            if "replay_env_id" in data
+            else None,
+            replay_episode_idx=data["replay_episode_idx"]
+            if "replay_episode_idx" in data
+            else None,
+            replayed_topology_manifest_hash=data["replayed_topology_manifest_hash"]
+            if "replayed_topology_manifest_hash" in data
+            else None,
+            manifest_match=data["manifest_match"]
+            if "manifest_match" in data
+            else None,
+        )
+
+
 @dataclass(slots=True, frozen=True)
 class GovernorRollbackPayload:
     """Payload for GOVERNOR_ROLLBACK telemetry events.
@@ -2329,6 +2444,13 @@ class GovernorRollbackPayload:
     consecutive_panics: int | None = None
     panic_reason: GovernorPanicReason | None = None
 
+    # Simic attribution context (present when rollback is tied to a prior action)
+    triggering_action_id: str | None = None
+    raw_penalty: float | None = None
+    normalized_penalty: float | None = None
+    rollback_severity: float | None = None
+    watch_window_evidence: float | None = None
+
     # State dict mismatch context (present for key mismatch warnings)
     missing_keys: list[str] | None = None
     unexpected_keys: list[str] | None = None
@@ -2352,6 +2474,20 @@ class GovernorRollbackPayload:
             loss_threshold=data.get("loss_threshold"),
             consecutive_panics=data.get("consecutive_panics"),
             panic_reason=data.get("panic_reason"),
+            # OPTIONAL: Simic attribution context.
+            triggering_action_id=data["triggering_action_id"]
+            if "triggering_action_id" in data
+            else None,
+            raw_penalty=data["raw_penalty"] if "raw_penalty" in data else None,
+            normalized_penalty=data["normalized_penalty"]
+            if "normalized_penalty" in data
+            else None,
+            rollback_severity=data["rollback_severity"]
+            if "rollback_severity" in data
+            else None,
+            watch_window_evidence=data["watch_window_evidence"]
+            if "watch_window_evidence" in data
+            else None,
             # OPTIONAL: State dict mismatch context (present for key mismatch warnings).
             missing_keys=list(data["missing_keys"]) if data.get("missing_keys") else None,
             unexpected_keys=list(data["unexpected_keys"]) if data.get("unexpected_keys") else None,
@@ -2387,6 +2523,8 @@ TelemetryPayload = (
     | EpisodeOutcomePayload
     | GovernorRollbackPayload
     | MorphologyCausalLogPayload
+    | TopologyManifestPayload
+    | PhaseProfileReport
 )
 
 

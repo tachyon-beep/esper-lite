@@ -206,7 +206,7 @@ class LSTMPolicyBundle:
 
         return ForwardResult(
             logits=logits_dict,
-            value=output["value"],
+            value=output["state_value"],  # V(s): the op-INDEPENDENT PPO baseline
             hidden=output["hidden"],
         )
 
@@ -240,7 +240,7 @@ class LSTMPolicyBundle:
         Returns:
             EvalResult with log_probs, value, entropy, hidden, and pred_contributions
         """
-        log_probs, values, entropies, new_hidden, pred_contributions = self._network.evaluate_actions(
+        log_probs, values, entropies, new_hidden, pred_contributions, q_values = self._network.evaluate_actions(
             features,
             blueprint_indices,
             actions,
@@ -260,10 +260,11 @@ class LSTMPolicyBundle:
 
         return EvalResult(
             log_prob=log_probs,
-            value=values,
+            value=values,  # V(s): op-INDEPENDENT PPO baseline (full grad into LSTM)
             entropy=entropies,
             hidden=new_hidden,
             pred_contributions=pred_contributions,
+            q_value=q_values,  # Q(s, stored_op): detached telemetry/aux head
         )
 
     # === Off-Policy (not supported for LSTM) ===
@@ -318,11 +319,10 @@ class LSTMPolicyBundle:
             blueprint_indices = blueprint_indices.unsqueeze(1)
 
         output = self._network.forward(features, blueprint_indices, hidden)
-        # The network critic is Q(s, op), and forward() conditions that value on a
-        # sampled op. get_value() is the deterministic inference path, so recompute
-        # Q(s, argmax_op) instead of returning the sampled forward() value.
-        argmax_op = output["op_logits"].argmax(dim=-1)
-        value = self._network._compute_value(output["lstm_out"], argmax_op)
+        # The PPO baseline is the op-INDEPENDENT V(s). get_value() is the rollout
+        # bootstrap path, so return V(s) directly -- no op conditioning, no per-op
+        # recompute. (forward()["state_value"] is exactly this V(s).)
+        value = output["state_value"]
         return value[:, 0] if value.dim() > 1 else value
 
     # === Recurrent State ===

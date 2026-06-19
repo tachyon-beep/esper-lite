@@ -309,6 +309,7 @@ class TestFossilizeLegitimacyDiscount:
             stage=STAGE_HOLDING,
             improvement_since_stage_start=5.0,
             total_improvement=10.0,
+            counterfactual_total_improvement=10.0,  # clean signal: seed helped
             epochs_in_stage=1,  # Just entered holding
             seed_age_epochs=15,
         )
@@ -318,6 +319,7 @@ class TestFossilizeLegitimacyDiscount:
             stage=STAGE_HOLDING,
             improvement_since_stage_start=5.0,
             total_improvement=10.0,
+            counterfactual_total_improvement=10.0,  # clean signal: seed helped
             epochs_in_stage=MIN_HOLDING_EPOCHS,  # Full holding
             seed_age_epochs=20,
         )
@@ -356,7 +358,7 @@ class TestContributionRewardComponents:
 
     def test_return_components_returns_tuple(self):
         """Test that return_components=True returns (reward, components) tuple."""
-        from esper.simic.rewards import RewardComponentsTelemetry
+        from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
         from esper.leyline import SeedStage
 
         # Create a mock action enum
@@ -390,6 +392,57 @@ class TestContributionRewardComponents:
         assert isinstance(reward, float)
         # Use isinstance instead of hasattr (per CLAUDE.md policy)
         assert isinstance(components, RewardComponentsTelemetry)
+
+    def test_attribution_path_requires_counterfactual_measurement(self):
+        """Providing seed_contribution without the clean counterfactual is a
+        contract violation; host-drift total_improvement is NOT required.
+
+        The attribution/anti-gaming/fossilization gates key entirely on the
+        clean counterfactual, so an unmeasured counterfactual must fail loudly
+        rather than silently fall back to host drift. Conversely, a missing
+        host-drift total_improvement is fine once the counterfactual is present.
+        """
+        missing_counterfactual = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=None,
+            total_improvement=2.0,
+            epochs_in_stage=5,
+            counterfactual_total_improvement=None,
+        )
+        with pytest.raises(
+            ValueError,
+            match="seed_contribution provided without counterfactual_total_improvement",
+        ):
+            compute_contribution_reward(
+                action=LifecycleOp.WAIT,
+                seed_contribution=1.0,
+                val_acc=70.0,
+                seed_info=missing_counterfactual,
+                epoch=10,
+                max_epochs=25,
+                acc_at_germination=65.0,
+            )
+
+        # Missing host-drift total_improvement no longer raises: the gates do
+        # not read it. The clean counterfactual is the only required signal.
+        counterfactual_only = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=None,
+            total_improvement=None,
+            epochs_in_stage=5,
+            counterfactual_total_improvement=1.0,
+        )
+        reward, _ = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=1.0,
+            val_acc=70.0,
+            seed_info=counterfactual_only,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=65.0,
+            return_components=True,
+        )
+        assert isinstance(reward, float)
 
     def test_components_sum_to_total(self):
         """Test that component values sum to total_reward."""
@@ -689,20 +742,22 @@ class TestRansomwareSeedDetection:
     """Tests for ransomware seed detection mechanisms.
 
     Ransomware pattern: seed has high counterfactual contribution (entangled)
-    but negative total_improvement (hurt overall performance).
+    but negative clean counterfactual_total_improvement (the seed itself hurt
+    overall performance, distinct from mere host drift).
     """
 
     # Use production LifecycleOp values directly - see leyline/factored_actions.py
 
     def test_fossilize_penalty_for_negative_total_delta(self):
-        """FOSSILIZE with negative total_improvement should be penalized."""
+        """FOSSILIZE with negative clean counterfactual should be penalized."""
         config = ContributionRewardConfig()
 
-        # Ransomware seed: high contribution but negative total delta
+        # Ransomware seed: high contribution but negative clean counterfactual
         ransomware_seed = SeedInfo(
             stage=STAGE_HOLDING,
             improvement_since_stage_start=-0.3,
-            total_improvement=-0.48,  # Hurt performance
+            total_improvement=-0.48,  # host-level drift (confounded)
+            counterfactual_total_improvement=-0.48,  # clean signal: seed hurt
             epochs_in_stage=3,
             seed_params=2000,
             previous_stage=STAGE_BLENDING,
@@ -721,11 +776,12 @@ class TestRansomwareSeedDetection:
         """High contribution + negative delta should trigger extra ransomware penalty."""
         config = ContributionRewardConfig()
 
-        # Ransomware signature: contribution > 0.1 and total_delta < -0.2
+        # Ransomware signature: contribution > 0.1 and counterfactual < -0.2
         ransomware_seed = SeedInfo(
             stage=STAGE_HOLDING,
             improvement_since_stage_start=-0.5,
-            total_improvement=-0.5,  # < -0.2 threshold
+            total_improvement=-0.5,
+            counterfactual_total_improvement=-0.5,  # < -0.2 threshold (clean)
             epochs_in_stage=3,
             seed_age_epochs=15,
         )
@@ -735,6 +791,7 @@ class TestRansomwareSeedDetection:
             stage=STAGE_HOLDING,
             improvement_since_stage_start=-0.5,
             total_improvement=-0.5,
+            counterfactual_total_improvement=-0.5,  # clean signal
             epochs_in_stage=3,
             seed_age_epochs=15,
         )
@@ -745,6 +802,124 @@ class TestRansomwareSeedDetection:
         # Ransomware should get extra -0.3 penalty
         assert ransomware_penalty < regular_penalty, (
             f"Ransomware ({ransomware_penalty}) should be worse than regular ({regular_penalty})"
+        )
+
+    def test_fossilize_rewards_contributor_despite_host_drift(self):
+        """A genuinely contributing seed must be rewarded for fossilizing even
+        when the HOST drifted down over the seed's lifetime.
+
+        Regression for telemetry_2026-06-16_101153: the FOSSILIZE penalty
+        branch gated on host-drift-confounded total_improvement, so a seed with
+        large positive CLEAN counterfactual contribution (the seed genuinely
+        helped) was branded "ransomware" and penalised whenever the host
+        happened to regress around it (row 4: seed_contribution=18,
+        progress_since_germination=-7.9). The penalty must key on the clean
+        counterfactual, consistent with the immediate-bonus gate.
+        """
+        from esper.leyline import MIN_HOLDING_EPOCHS
+
+        config = ContributionRewardConfig()
+        seed = SeedInfo(
+            stage=STAGE_HOLDING,
+            improvement_since_stage_start=1.0,
+            total_improvement=-0.5,  # host drifted DOWN over the seed's life
+            counterfactual_total_improvement=2.4,  # but the seed itself helped
+            epochs_in_stage=MIN_HOLDING_EPOCHS,
+            seed_age_epochs=20,
+        )
+
+        shaping = _contribution_fossilize_shaping(seed, 2.0, config)
+
+        assert shaping > 0, (
+            f"Contributing seed (counterfactual=+2.4) must be rewarded for "
+            f"fossilizing despite host drift, got {shaping}"
+        )
+
+    def test_fossilize_attribution_is_host_drift_invariant(self):
+        """End-to-end: a contributing seed's FOSSILIZE attribution must not be
+        suppressed by host drift.
+
+        Sibling confound to the penalty-branch bug, in two stacked sites:
+        compute_contribution_reward (1) discounted attribution via a sigmoid on
+        host-drift total_improvement, then (2) zeroed bounded_attribution
+        entirely when host-drift total_improvement < 0. With the clean
+        counterfactual held fixed (the seed's causal effect is identical), the
+        attribution must be identical regardless of host trajectory.
+        """
+        from esper.leyline import MIN_HOLDING_EPOCHS
+
+        def fossilize_attribution(host_total_improvement: float) -> float:
+            seed = SeedInfo(
+                stage=STAGE_HOLDING,
+                improvement_since_stage_start=1.0,
+                total_improvement=host_total_improvement,  # host trajectory (varies)
+                counterfactual_total_improvement=2.4,  # clean signal (fixed)
+                epochs_in_stage=MIN_HOLDING_EPOCHS,
+                seed_age_epochs=5,
+            )
+            _, components = compute_contribution_reward(
+                action=LifecycleOp.FOSSILIZE,
+                seed_contribution=2.0,
+                val_acc=65.0,
+                seed_info=seed,
+                epoch=20,
+                max_epochs=25,
+                acc_at_germination=60.0,
+                return_components=True,
+            )
+            return components.bounded_attribution
+
+        rising_host = fossilize_attribution(3.0)
+        drifting_host = fossilize_attribution(-0.5)
+
+        assert drifting_host > 0, (
+            f"Contributing seed's attribution zeroed by host drift: {drifting_host}"
+        )
+        assert drifting_host == pytest.approx(rising_host), (
+            f"Attribution must be host-drift-invariant: rising={rising_host}, "
+            f"drifting={drifting_host}"
+        )
+
+    def test_attribution_discount_keys_on_counterfactual_not_host_drift(self):
+        """The attribution discount must reflect the seed's CLEAN causal effect,
+        not host trajectory.
+
+        Site B of the host-drift confound: the regression-discount sigmoid keyed
+        on host-drift total_improvement, so a genuinely helpful seed (positive
+        counterfactual) was discounted whenever the host drifted down, while a
+        genuinely harmful seed (negative counterfactual) escaped discount on a
+        rising host.
+        """
+        def discount(counterfactual: float, host_total: float) -> float:
+            seed = SeedInfo(
+                stage=STAGE_BLENDING,
+                improvement_since_stage_start=1.0,
+                total_improvement=host_total,
+                counterfactual_total_improvement=counterfactual,
+                epochs_in_stage=5,
+                seed_age_epochs=15,
+            )
+            _, components = compute_contribution_reward(
+                action=LifecycleOp.WAIT,
+                seed_contribution=5.0,
+                val_acc=65.0,
+                seed_info=seed,
+                epoch=10,
+                max_epochs=25,
+                acc_at_germination=60.0,
+                return_components=True,
+            )
+            return components.attribution_discount
+
+        # Seed genuinely helps (counterfactual +2.0) but host drifted down (-1.0):
+        # must NOT be discounted for regression it did not cause.
+        assert discount(2.0, -1.0) == pytest.approx(1.0), (
+            "Helpful seed discounted for host drift"
+        )
+        # Seed genuinely hurts (counterfactual -1.0) even though host rose (+2.0):
+        # MUST be discounted on its own causal harm.
+        assert discount(-1.0, 2.0) < 0.5, (
+            "Harmful seed escaped discount because host rose"
         )
 
     def test_blending_warning_escalates_over_epochs(self):
@@ -782,7 +957,7 @@ class TestRansomwareSeedDetection:
         assert warning_epoch_6 >= -0.5, f"Warning should cap around -0.4: {warning_epoch_6}"
 
     def test_no_blending_warning_for_positive_trajectory(self):
-        """No blending warning when total_improvement is positive."""
+        """No blending warning when counterfactual trajectory is positive."""
         seed_info = SeedInfo(
             stage=STAGE_BLENDING,
             improvement_since_stage_start=1.0,
@@ -804,6 +979,54 @@ class TestRansomwareSeedDetection:
         )
 
         assert components.blending_warning == 0.0, "No warning for positive trajectory"
+
+    def test_no_blending_warning_for_host_drift_when_counterfactual_positive(self):
+        """Host-drift-negative total_improvement must not penalize a helpful seed."""
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-1.0,
+            total_improvement=-2.0,
+            epochs_in_stage=5,
+            seed_age_epochs=15,
+            counterfactual_total_improvement=1.25,
+        )
+
+        _, components = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=1.25,
+            val_acc=61.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        assert components.blending_warning == 0.0
+
+    def test_no_blending_warning_without_counterfactual_data(self):
+        """Missing counterfactual data is not enough to blame the seed."""
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-1.0,
+            total_improvement=-2.0,
+            epochs_in_stage=5,
+            seed_age_epochs=15,
+            counterfactual_total_improvement=None,
+        )
+
+        _, components = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            val_acc=61.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        assert components.blending_warning == 0.0
 
     def test_attribution_discount_for_negative_total_improvement(self):
         """Attribution should be discounted when total_improvement is negative."""

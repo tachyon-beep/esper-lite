@@ -106,6 +106,7 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "op_valid_mask": tuple(True for _ in range(NUM_OPS)),
         "q_variance": 0.0,
         "q_spread": 0.0,
+        "q_aux_loss": 0.05,
         # Pre-normalization advantage statistics (mandatory)
         "pre_norm_advantage_mean": 0.5,
         "pre_norm_advantage_std": 1.2,
@@ -114,6 +115,19 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "return_std": 0.8,
         # Value target scale (mandatory) - std used to normalize returns
         "value_target_scale": 0.8,
+        # EV-telemetry-robustness aggregated metrics (mandatory live-path fields).
+        # value_nrmse / ev_low_return_variance / ev_low_return_variance_count are accessed
+        # by direct key in the emitter (fail-loud); ev_return_variance may be None.
+        "value_nrmse": 0.4,
+        "ev_low_return_variance": False,
+        "ev_return_variance": 0.64,
+        "ev_low_return_variance_count": 0,
+        # Rollback observability counters (mandatory live-path fields; the emitter
+        # reads them by direct key, so they must always be populated by run_update).
+        "rollback_count": 0,
+        "rollback_steps_zeroed": 0,
+        "rollback_attempt_count": 0,
+        "rollback_unattributed_count": 0,
         # Throughput metrics (mandatory for dataloader wait ratio)
         "throughput_step_time_ms_sum": 100.0,
         "throughput_dataloader_wait_ms_sum": 20.0,
@@ -122,10 +136,12 @@ def _make_mandatory_metrics(**overrides) -> dict:
         },
         "head_grad_norms": {
             "value": [0.4],
+            "q": [0.3],
         },
         "head_gradient_states": {
             **{head: ["finite"] for head in HEAD_NAMES},
             "value": ["finite"],
+            "q": ["finite"],
         },
     }
     base.update(overrides)
@@ -262,10 +278,13 @@ def test_emit_ppo_update_event_includes_value_head_gradient_state(
     emit_ppo_update_event(
         hub=hub,
         metrics=_make_mandatory_metrics(
-            head_grad_norms={"value": [grad_norm]},
+            # Under P0-1 the q_head is always trained via the aux loss, so its
+            # grad norm is always present alongside the value head's.
+            head_grad_norms={"value": [grad_norm], "q": [0.3]},
             head_gradient_states={
                 **{head: ["finite"] for head in HEAD_NAMES},
                 "value": [gradient_state],
+                "q": ["finite"],
             },
         ),
         episodes_completed=10,
@@ -282,6 +301,47 @@ def test_emit_ppo_update_event_includes_value_head_gradient_state(
     else:
         assert math.isnan(payload.head_value_grad_norm)
     assert payload.head_value_gradient_state == gradient_state
+
+
+def test_emit_ppo_update_event_surfaces_q_head_telemetry() -> None:
+    """P0-1: the op-conditioned aux q_head's grad norm and aux loss must reach the
+    payload (they were computed into metrics but previously dropped at the emitter)."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.q_aux_loss == pytest.approx(0.05)
+    assert payload.head_q_grad_norm == pytest.approx(0.3)
+    assert payload.head_q_gradient_state == "finite"
+
+
+def test_emit_ppo_update_event_requires_q_head_gradient_norm() -> None:
+    """Live q-head telemetry must fail loudly if the q grad norm is missing."""
+    hub = MagicMock()
+
+    with pytest.raises(KeyError):
+        emit_ppo_update_event(
+            hub=hub,
+            metrics=_make_mandatory_metrics(
+                head_grad_norms={"value": [0.4]},
+            ),
+            episodes_completed=10,
+            batch_idx=5,
+            epoch=100,
+            optimizer=None,
+            grad_norm=1.0,
+            update_time_ms=50.0,
+        )
 
 
 def test_emit_ppo_update_event_sets_dataloader_wait_ratio() -> None:
@@ -326,6 +386,121 @@ def test_emit_ppo_update_event_zero_step_time_sets_wait_ratio_zero() -> None:
 
     payload = hub.emit.call_args[0][0].data
     assert payload.dataloader_wait_ratio == 0.0
+
+
+def test_emitter_carries_ev_robustness_fields() -> None:
+    """emit_ppo_update_event threads the EV-robustness fields into PPOUpdatePayload (Step 4).
+
+    The three mandatory aggregated fields (value_nrmse, ev_low_return_variance,
+    ev_low_return_variance_count) are accessed by DIRECT key (B4 live-boundary, fail-loud);
+    ev_return_variance is .get(..., None) since the degenerate-handled path may leave it None.
+    The pre-existing gate signals bellman_error / value_loss / v_return_correlation remain present.
+    """
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            value_nrmse=0.37,
+            ev_low_return_variance=True,
+            ev_return_variance=0.81,
+            ev_low_return_variance_count=2,
+            # Gate signals (already emitted today) must survive.
+            bellman_error=3.2,
+            value_loss=0.42,
+            v_return_correlation=0.66,
+            explained_variance=-0.5,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+
+    # New EV-robustness fields threaded through.
+    assert payload.value_nrmse == 0.37
+    assert payload.ev_low_return_variance is True
+    assert payload.ev_return_variance == 0.81
+    assert payload.ev_low_return_variance_count == 2
+
+    # Gate's primary + secondary robust signals remain present.
+    assert payload.bellman_error == 3.2
+    assert payload.value_loss == 0.42
+    assert payload.v_return_correlation == 0.66
+    assert payload.explained_variance == -0.5
+
+
+def test_emitter_ev_return_variance_defaults_to_none_when_absent() -> None:
+    """ev_return_variance is genuinely optional (degenerate-handled path) -> .get default None."""
+    hub = MagicMock()
+
+    metrics = _make_mandatory_metrics()
+    del metrics["ev_return_variance"]
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=metrics,
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.ev_return_variance is None
+
+
+def test_emitter_carries_rollback_counters() -> None:
+    """emit_ppo_update_event threads the four rollback counters into PPOUpdatePayload."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            rollback_count=3,
+            rollback_steps_zeroed=12,
+            rollback_attempt_count=5,
+            rollback_unattributed_count=2,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.rollback_count == 3
+    assert payload.rollback_steps_zeroed == 12
+    assert payload.rollback_attempt_count == 5
+    assert payload.rollback_unattributed_count == 2
+
+
+def test_emit_ppo_update_event_requires_rollback_attempt_count() -> None:
+    """The rollback counters are live-path mandatory: a missing key must fail loudly."""
+    hub = MagicMock()
+
+    metrics = _make_mandatory_metrics()
+    del metrics["rollback_attempt_count"]
+
+    with pytest.raises(KeyError):
+        emit_ppo_update_event(
+            hub=hub,
+            metrics=metrics,
+            episodes_completed=10,
+            batch_idx=5,
+            epoch=100,
+            optimizer=None,
+            grad_norm=1.0,
+            update_time_ms=50.0,
+        )
 
 
 def test_batch_tail_event_order_is_stable() -> None:
@@ -390,6 +565,71 @@ def test_batch_tail_event_order_is_stable() -> None:
     ]
     assert hub.events[1].data.kind == "batch_stats"
     assert hub.events[3].data.kind == "action_distribution"
+
+
+def test_on_batch_completed_surfaces_rollback_counts_on_skipped_batch() -> None:
+    """Review MAJOR regression: an all-first-step-panic batch (len(buffer)==0) produces a
+    skipped PPO update, so NO PPO_UPDATE_COMPLETED is emitted. The per-batch batch_stats
+    ANALYTICS_SNAPSHOT (which fires unconditionally) must still carry the rollback
+    attempt/unattributed counts so the pathology this telemetry targets stays observable.
+    Asserts the counts reach an EMITTED event, not just run_update's return dict."""
+    hub = _RecordingHub()
+    telemetry_config = TelemetryConfig(level=TelemetryLevel.NORMAL)
+    emitter = VectorizedEmitter(
+        env_id=0,
+        device="cpu",
+        group_id="test",
+        hub=hub,
+        telemetry_config=telemetry_config,
+    )
+
+    # The sparse skipped-metrics dict PPOCoordinator.run_update returns on the
+    # empty-buffer-with-attempts path: no PPO update ran, but attempts were counted.
+    emitter.on_batch_completed(
+        batch_idx=0,
+        episodes_completed=5,
+        rolling_avg_acc=80.0,
+        avg_acc=80.0,
+        metrics={
+            "ppo_update_performed": False,
+            "rollback_count": 0,
+            "rollback_steps_zeroed": 0,
+            "rollback_attempt_count": 4,
+            "rollback_unattributed_count": 4,
+        },
+        env_states=[_StubEnvState()],
+        update_skipped=True,
+        plateau_threshold=0.5,
+        improvement_threshold=0.5,
+        prev_rolling_avg_acc=None,
+        total_episodes=5,
+        start_episode=0,
+        n_episodes=5,
+        env_final_accs=[80.0],
+        avg_reward=1.0,
+        train_losses=[0.0],
+        train_corrects=[1],
+        train_totals=[1],
+        val_losses=[0.0],
+        val_corrects=[1],
+        val_totals=[1],
+        num_train_batches=1,
+        num_test_batches=1,
+        analytics=None,
+        epoch=5,
+    )
+
+    batch_stats = [
+        e
+        for e in hub.events
+        if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT
+        and e.data.kind == "batch_stats"
+    ]
+    assert len(batch_stats) == 1
+    payload = batch_stats[0].data
+    assert payload.skipped_update is True
+    assert payload.rollback_attempt_count == 4
+    assert payload.rollback_unattributed_count == 4
 
 
 def test_emit_ppo_update_event_includes_lstm_health():
@@ -631,7 +871,7 @@ class TestVectorizedEmitterRewardComponents:
 
     def test_on_last_action_accepts_reward_components_dataclass(self, mock_hub):
         """on_last_action should accept RewardComponentsTelemetry directly."""
-        from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+        from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
         emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=mock_hub)
 

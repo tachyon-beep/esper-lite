@@ -116,7 +116,8 @@ class TestFeatureDimensionConsistency:
         assert output["alpha_speed_logits"].shape == (batch_size, seq_len, NUM_ALPHA_SPEEDS)
         assert output["alpha_curve_logits"].shape == (batch_size, seq_len, NUM_ALPHA_CURVES)
         assert output["op_logits"].shape == (batch_size, seq_len, NUM_OPS)
-        assert output["value"].shape == (batch_size, seq_len)
+        assert output["state_value"].shape == (batch_size, seq_len)
+        assert output["q_value"].shape == (batch_size, seq_len)
 
 
 class TestMaskDimensionConsistency:

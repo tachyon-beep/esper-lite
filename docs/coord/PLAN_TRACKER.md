@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-13 (baseline green; recovery bug drain closed; op/value mismatch verified resolved; Karn telemetry quality arc drafted; proof confounder drain implemented; Kasmina/Tolaria/Blueprint health report triaged into governor-integrity tasks)
+**Last Updated:** 2026-06-18 (P0-1 op-independent V(s) critic LANDED on 0.1.1 and pushed to origin — checkpoint-breaking VALUE_HEAD_SCHEMA_VERSION=2; subset-truncation GAE-bootstrap crash fixed (`esper-lite-6682b3faea`); post-P0-1 hardening sprint authored — umbrella `docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md` with spec+plan pairs for EV-telemetry robustness and the 0.1.1→main merge, reviewed by a 10-SME panel + synthesizer. Prior 2026-06-17: fossilize reward-economics host-drift confound fixed — all reward gates now key on the clean counterfactual, dead `_require_total_improvement` removed, committed `575482d7`; FOSSILIZE reward validated −0.81→+2.00; dead-critic root-caused to 1-PPO-step-per-rollout (value warmup ruled out); multi-epoch recurrent PPO via anchored-reference-pass design (`docs/superpowers/specs/2026-06-17-recurrent-ppo-multiepoch-design.md`) + executable two-PR plan (`docs/plans/ready/2026-06-17-recurrent-ppo-multiepoch-plan.md`) added — directly addresses the value-collapse blocker behind Focus Areas #7/#11) — prior: 2026-06-15 baseline green; recovery bug drain closed; op/value mismatch verified resolved; proof confounder drain implemented; correctness proof strategy drafted; proof packet defaults CLI and API callers to reward-efficiency profile; oracle sandbox and proof-baseline-control artifacts created; static-final source/replay manifest emission, runner handoff, live baseline rehearsal, and reward-efficiency-default blocked packet verified)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -49,20 +49,21 @@ recomputes Q(s,argmax op) in deterministic bootstrap mode, and focused regressio
 2. **Dependency/Branch Drain** - ✅ Completed; patch dependency PRs consolidated, stale branches drained, checkout returned to `main`
 3. **Karn Telemetry Quality Arc** - Drafted; next upgrade package focused on Sanctum, Overwatch, MCP analytics, and telemetry contracts
 4. **Proof Confounder Drain** - ✅ Implemented; ledger, learnability, freshness, reward-accounting closure, proof packet, and blocked rehearsal packet verified
-5. **Morphogenesis Governor Integrity** - Drafted from the Kasmina/Tolaria/Blueprint health report; next P1 correctness and evidence-hygiene package
-6. **PPO Stability / Oracle Sandbox** - Needed after governor-integrity to isolate value-collapse and gradient-anomaly proof blockers
-7. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
-8. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
-9. **Op/Value Mismatch** - ✅ Resolved; focused regression tests cover rollout and bootstrap consistency
-10. **Reward Efficiency Experiment** - Deferred; proof rehearsal is blocked by value-collapse, gradient-anomaly, and morphogenesis authority/truthfulness confounders
-11. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
-12. **Drip Reward Implementation** - ~70% done, needs integration completion
-13. **Telemetry Domain Separation** - ~30% done
-14. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
+5. **Correctness Proof Strategy** - Drafted 2026-06-15; proof packet now emits typed machine verdicts (`BLOCKED_*`, `CONTINUE`, `REVISE_ALGORITHM`, `STOP_THEORY`) and CLI/API defaults to the reward-efficiency proof profile for control/precision gates, outcome-bearing baseline evidence, fixed-schedule provenance/hash-pin, fixed-schedule realized-trace validation, joined static-final source/replay topology-manifest validation, static-final freeze validation, and lockstep reward A/B pair validation; static-final topology replay now has a runtime primitive, trainer source/replay evidence emission, runner handoff, and live baseline rehearsal; current packet advances past math/control and blocks on mechanics (`BLOCKED_MECHANICS`)
+6. **Morphogenesis Governor Integrity** - Drafted from the Kasmina/Tolaria/Blueprint health report; next P1 correctness and evidence-hygiene package
+7. **PPO Stability / Oracle Sandbox** - Planning artifact created 2026-06-15; needed after governor-integrity to isolate value-collapse and gradient-anomaly proof blockers
+8. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
+9. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
+10. **Op/Value Mismatch** - ✅ Resolved; focused regression tests cover rollout and bootstrap consistency
+11. **Reward Efficiency Experiment** - Deferred; reward-efficiency-default proof rehearsal has complete control evidence but is blocked by value-collapse and numerical-instability mechanics confounders
+12. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+13. **Drip Reward Implementation** - ~70% done, needs integration completion
+14. **Telemetry Domain Separation** - ~30% done
+15. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path (Updated)
 ```
-morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──► reward-efficiency verdict ──► counterfactual-oracle ──► emrakul-phase1
+correctness-proof-strategy ──► morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──► reward-efficiency verdict ──► counterfactual-oracle ──► emrakul-phase1
                  │                                     │                         │
                  │                                     │                         └──► blueprint-compiler ──► kasmina2-phase0
                  └──► proof-baseline-controls ◄────────┘
@@ -74,12 +75,12 @@ morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──�
 |--------|-------|-------|
 | 🔴 Critical | 0 | New governor-integrity issues are high-priority proof blockers, not active Tier 0 mainline breakage |
 | Completed | 16 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) |
-| Ready | 11 | Implementation-ready plans |
+| Ready | 14 | Implementation-ready plans (incl. post-P0-1 sprint umbrella + EV-telemetry-robustness + 0.1.1→main-merge, authored 2026-06-18) |
 | In Progress | 1 | phase3-tinystories (85%) |
-| Planning | 10 | Active design workspaces, including governor-integrity, PPO oracle sandbox, and proof baseline controls |
-| Concept | 3 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals |
+| Planning | 11 | Active design workspaces, including correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
+| Concept | 4 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals, gil-throughput-profiler |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
-| **Total Active** | **29** |
+| **Total Active** | **34** |
 
 ---
 
@@ -99,8 +100,9 @@ morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──�
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
 | morphogenesis-governor-integrity | Morphogenesis Governor Integrity | planning | high | L | high | Drafted 2026-06-13 from the Kasmina/Tolaria/Blueprint health report; owns rollback ordering, observation truthfulness, blueprint contracts, minimal Tolaria pre-flight, and causal morphology event identity |
-| ppo-stability-oracle-sandbox | PPO Stability / Oracle Sandbox | planning | high | M | high | Next after governor-integrity; isolates value-collapse and gradient-anomaly proof blockers and proves lifecycle mechanics under oracle/hardcoded policy |
-| reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment deferred until governor-integrity, PPO oracle sandbox, and a clean proof rehearsal packet |
+| correctness-proof-strategy | Correctness Proof Strategy | planning | high | L | high | Drafted 2026-06-15; owns the evidence ladder and typed proof-packet verdict taxonomy for instrumentation, precision, mechanics, math, algorithm revision, and theory stop decisions; packet now blocks outcome-empty baseline controls, missing/mismatched fixed-schedule provenance, misplaced schedule metadata, missing/mismatched fixed-schedule realized traces, missing/malformed/mismatched static-final source/replay manifests, static-final lifecycle mutations, and malformed lockstep pairs; runner-side static-final source handoff and live full-baseline rehearsal implemented; current blocker is mechanics, not proof math |
+| ppo-stability-oracle-sandbox | PPO Stability / Oracle Sandbox | planning | high | M | high | Artifact created 2026-06-15; current smoke test proves scripted lifecycle mechanics only, missing proof-grade oracle telemetry and packet profile |
+| reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment deferred until governor-integrity, PPO oracle sandbox, and a mechanics-clean proof rehearsal packet |
 | karn-telemetry-quality-arc | Karn Telemetry Quality Strategic Arc | planning | high | L | medium | Drafted 2026-06-13; establishes Karn as the next quality-upgrade package |
 | karn-telemetry-sprint-1 | Karn Telemetry Quality Sprint 1 | planning | high | M | medium | Drafted 2026-06-13; dependency drain, Sanctum CI determinism, branch hygiene, Overwatch contract inventory |
 | proof-confounder-drain | Proof Confounder Drain | completed | high | L | high | Implemented on `confounder-drain`; proof packet correctly blocks the rehearsal on value-collapse and gradient-anomaly confounders |
@@ -109,13 +111,16 @@ morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──�
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
 | blueprint-compiler | Blueprint Compiler (Phase 3 only) | ready | high | XL | medium | 0% - Correctly deferred until entropy stable |
 | training-perf-master | Training Pipeline Performance (Simic+Tolaria) | completed | high | L | medium | EXECUTED 2026-06-14 (→ completed/). Phase 0 (allocator/TF32/fragprobe), Phase 1 all 6 incl. CRITICAL-1 BLOCKER (FP32 masked-logit seam + BF16 symmetry, V0 joint_ratio<1e-3 GPU-validated) + sync folds, Phase 2 (FRAGMETRIC telemetry + stream pool + fenced del; CUDA_LAUNCH_BLOCKING clean, bit-identical val_acc), Phase 3 (DYN + pinned SNAP; GATE compile-works-without-sanctum validated). Deliberate calls: P2-RESET NO-GO (retries=0/ooms=0, frag cured), P3-HOST off (gated on RESET), P3-CLONE deferred (esper-lite-472b6477d2). Also deferred: op-sampler (esper-lite-05b4113bc1), carry-clamp (esper-lite-9827eb6bfe). Pending: real-run A/B wall-clock + TUI compile narrowing |
+| post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | sprint-umbrella | high | M | medium | Authored 2026-06-18 (`docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md`); umbrella for items 1-3 (EV-telemetry robustness, 0.1.1→main merge, dependency-vuln triage); 10-SME panel + synthesizer reviewed (verdict CHANGES_REQUESTED → must_do applied; child blockers fixed & codebase-verified) |
+| ev-telemetry-robustness | EV-Telemetry Robustness (low-return-variance artifact) | ready | high | M | medium | Authored 2026-06-18 (spec+plan); make `explained_variance` honest under P0-1's op-marginal V(s) (variance floor + `value_nrmse`/`ev_return_variance`, NOT bug-hiding) + audit EV consumers/gates; Step 0 empirical floor calibration is a HARD precondition |
+| main-merge-integration | 0.1.1 → main Merge & Integration | ready | high | L | high | Authored 2026-06-18 (spec+plan); ~42-commit FF merge carrying the VALUE_HEAD_SCHEMA_VERSION=2 checkpoint break; EV gate-fix (item 1) is a hard structural co-land precondition; dependency-vuln bump pass rides the window |
 
 ### Tier 2: Medium Priority (Next 2 Weeks)
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
 | phase3-tinystories | Transformer Domain Pivot | in-progress | medium | L | medium | ✅ 85% complete, needs validation runs |
-| proof-baseline-controls | Proof Baseline Control Cohorts | planning | medium | M | medium | New from architecture health report; off-switch, static initial/final, fixed-schedule, and lockstep reward A/B controls before final blueprint-health claims |
+| proof-baseline-controls | Proof Baseline Control Cohorts | planning | medium | M | medium | Artifact created 2026-06-15; mode/pair/lifecycle/seed/schedule provenance is emitted and packet-gated with valid outcome evidence, fixed-schedule provenance/hash-pin, fixed-schedule realized-trace validation, joined static-final source/replay topology-manifest validation, static-final freeze validation, and lockstep reward A/B pair validation; fixed-schedule and static-final source schedules execute through action-mask forcing with actor-loss suppression, static-final replay has source capture/materialization/trainer evidence/runner orchestration, and live rehearsal plus isolated run directories are verified; remaining gap is multi-seed statistical discipline |
 | kasmina2-phase0 | Submodule Intervention Foundation | planning | high | L | medium | Design complete, simic2 blocker removed |
 | defensive-patterns | Defensive Pattern Fixes | ready | medium | M | low | Removes 23 inappropriate defensive patterns |
 | sanctum-help | Sanctum Help System | ready | medium | L | low | Contextual help modals for TUI |
@@ -141,6 +146,7 @@ morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──�
 | tamiyo4 | Slot Transformer Architecture | ready | low | L | medium | Updated 2026-01: Q(s,op) value, contrib predictor, ResidualLSTM |
 | emrakul-sketch | Immune System Sketch | concept | medium | XL | high | Concept version (see emrakul-immune for planning) |
 | scaled-counterfactuals | Shapley Validation | concept | low | S | low | Diagnostic approach |
+| gil-throughput-profiler | Tiered GIL/Throughput Profiler | concept | high | L | medium | Drafted 2026-06-16. Decision tool between free-threading (3.13t/3.14t), 3.x upgrade, and Rust offload. **Phase A1 (Tier 0) IMPLEMENTED & MERGED** (0ee51801 core + 1af4e22b wiring): leyline types + profiler + run-loop wiring + nissa PHASE_PROFILE_COMPLETED + Karn phase_occupancy view; V1/V3/V5 green, gpu_sync 118/0, mypy clean. reviewed_by: pytorch-expert + determinism-reviewer + drl-expert all signed off (A1 wiring). Remaining: A2 Tier-1 CUDA events, B Tier-2 GIL attribution, A3 characterization run, C/D migration decision. `docs/plans/concepts/2026-06-16-gil-throughput-profiler.md` |
 
 ### Completed (in docs/plans/completed/)
 
@@ -1199,7 +1205,7 @@ percent_complete: 0
    PYTHONPATH=src uv run python -m esper.scripts.train ppo --task cifar_impaired --dual-ab shaped-vs-simplified --rounds 2 --envs 2 --episode-length 25
    ```
 
-4. **Draft proof baseline controls before final blueprint-health claims** - Add off-switch, static initial/final, fixed schedule, and lockstep reward A/B cohorts. This can trail the P1 governor work but should land before a final reward-efficiency verdict is used as architecture evidence.
+4. **Treat proof baseline controls as rehearsed, not final statistical evidence** - Mode/pair/lifecycle/seed/schedule provenance, outcome-bearing baseline evidence, fixed-schedule provenance/hash-pin, fixed-schedule realized-trace validation, static-final source/replay topology-manifest validation, static-final freeze validation, and lockstep reward A/B pair shape are packet-gated and live-rehearsed with isolated run directories. The remaining work is mechanics cleanup plus multi-seed statistical aggregation before a final reward-efficiency verdict is used as architecture evidence.
 
 5. **Run reward-efficiency experiment only after the rehearsal packet is valid** - Infrastructure is 100% complete and the op/value blocker is resolved, but the proof packet must be able to mark confounded runs invalid:
    ```bash
@@ -1239,6 +1245,8 @@ percent_complete: 0
 
 | Date | Change |
 |------|--------|
+| 2026-06-16 | **GIL PROFILER TIER-0 (PHASE A1) IMPLEMENTED & MERGED.** Wired the Tier-0 phase profiler into the vectorized PPO runtime (commits 0ee51801 core + 1af4e22b wiring on 0.1.1): per-phase wall + Python-CPU attribution at the 5 transaction-phase seams, drain -> nissa PHASE_PROFILE_COMPLETED -> Karn phase_occupancy view. Built test-first + adversarially reviewed via multi-agent workflow (determinism + pytorch approve; drl + test-coverage flagged 3 blocking items — ppo_update batch-misattribution + final-batch drop, untested exception-safety, narrow V1 digest — all fixed). Gates: 1476 passed/1 skipped, V1/V3/V5 integration green, gpu_sync unchanged 118/0, defensive + mypy clean. drl-expert sign-off (previously pending) now complete. Next: A2 Tier-1 CUDA-event occupancy, B Tier-2 GIL HOLD/WAIT, A3 characterization run. |
+| 2026-06-16 | **GIL/THROUGHPUT PROFILER DRAFTED (concept).** Added `docs/plans/concepts/2026-06-16-gil-throughput-profiler.md` to address the user's report that the vectorized PPO runtime hits a single-thread GIL ceiling before saturating GPU/VRAM. Tiered instrument (Tier 0 always-on per-phase wall+Python-CPU; Tier 1 CUDA-event occupancy/NVTX/torch.profiler; Tier 2 GIL HOLD/WAIT). Designed via multi-agent workflow across pytorch/determinism/training-opt/system-architect lenses; load-bearing file:line citations spot-verified. Reframed as the decision instrument between three remediations: (A) free-threaded CPython 3.13t/3.14t (interpreter upgrade authorized 2026-06-15), (B) plain 3.13/3.14 upgrade, (C) Rust/PyO3 offload of scalar reward/governor/telemetry. Corrected a workflow hallucination (runtime is 3.11.11, not 3.12.3 → `sys.monitoring` unavailable until upgrade). reviewed_by: pytorch-expert + determinism-reviewer (design-input-folded), drl-expert pending. |
 | 2026-06-13 | **ARCHITECTURE HEALTH REPORT TRIAGED.** Reviewed `docs/arch-analysis-2026-06-13-0836/01-kasmina-tolaria-blueprint-health.md`, added `docs/analysis/2026-06-13-arch-health-task-slotting.md`, and drafted `docs/plans/planning/2026-06-13-morphogenesis-governor-integrity.md`. The critical path now puts governor-integrity before PPO oracle sandbox and reward-efficiency proof runs. |
 | 2026-06-13 | **PROOF CONFOUNDER DRAIN IMPLEMENTED.** Moved plan to `docs/plans/completed/2026-06-13-proof-confounder-drain.md`. Implemented run-level confounder ledger, action-head learnability telemetry, fail-closed counterfactual freshness, reward-accounting closure, and generated proof packets. The rehearsal packet is `BLOCKED` by value-collapse and gradient-anomaly confounders, so the long reward-efficiency exam remains deferred. |
 | 2026-06-13 | **PROOF CONFOUNDER DRAIN DRAFTED.** Added `docs/plans/planning/2026-06-13-proof-confounder-drain.md` as the next major signal-recovery package. Framing: prior results strongly suggest Esper's underlying theory is sound, but weaker-than-expected effect size points to confounders. The package gates proof runs on anomaly/confounder ledger, action-head learnability, counterfactual freshness, reward-accounting closure, and a generated proof packet before the full reward-efficiency verdict. |
@@ -1343,6 +1351,7 @@ Quick reference for all tracked plans:
 | `h-tamiyo-updates.md` | heuristic-tamiyo |
 | `phase1-final-exam.md` | reward-efficiency |
 | `phase3-tinystories-strategy.md` | phase3-tinystories |
+| `2026-06-17-recurrent-ppo-multiepoch-plan.md` | recurrent-ppo-multiepoch |
 
 ### planning/ (Active Design)
 | Folder | ID |

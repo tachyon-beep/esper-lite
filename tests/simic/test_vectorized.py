@@ -204,6 +204,11 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "return_std": 0.3,
         # Value target scale (std used to normalize returns)
         "value_target_scale": 0.3,
+        # EV-telemetry-robustness aggregated fields (direct-access mandatory in emitter).
+        "value_nrmse": 0.4,
+        "ev_low_return_variance": False,
+        "ev_return_variance": 0.09,
+        "ev_low_return_variance_count": 0,
         # Throughput metrics (mandatory for dataloader wait ratio)
         "throughput_step_time_ms_sum": 100.0,
         "throughput_dataloader_wait_ms_sum": 20.0,
@@ -222,13 +227,21 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "op_valid_mask": tuple(True for _ in range(NUM_OPS)),
         "q_variance": 0.0,
         "q_spread": 0.0,
+        "q_aux_loss": 0.05,
+        # Rollback observability (always populated by PPOCoordinator.run_update on
+        # the live emit path -> direct-index mandatory in emitter).
+        "rollback_count": 0,
+        "rollback_steps_zeroed": 0,
+        "rollback_attempt_count": 0,
+        "rollback_unattributed_count": 0,
         # Per-head stats (optional but expected by emitter loop)
         "head_entropies": {},
-        "head_grad_norms": {"value": [0.4]},
+        "head_grad_norms": {"value": [0.4], "q": [0.3]},
         "head_learnable_fractions": {head: [1.0] for head in HEAD_NAMES},
         "head_gradient_states": {
             **{head: ["finite"] for head in HEAD_NAMES},
             "value": ["finite"],
+            "q": ["finite"],
         },
     }
     base.update(overrides)
@@ -919,6 +932,179 @@ def test_aggregate_ppo_metrics_mean_reduces_per_head_clip_fraction():
     assert metrics["clip_fraction"] == pytest.approx(0.2)
 
 
+def test_aggregate_ppo_metrics_no_keyerror_on_ev_fields():
+    """EV-robustness keys must have declared reducers (else _aggregate_ppo_metrics KeyErrors)."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {
+            "value_nrmse": 0.1,
+            "ev_low_return_variance": False,
+            "ev_return_variance": 100.0,
+            "ev_low_return_variance_count": 0,
+        },
+        {
+            "value_nrmse": 0.3,
+            "ev_low_return_variance": True,
+            "ev_return_variance": 0.5,
+            "ev_low_return_variance_count": 1,
+        },
+    ])
+
+    assert "value_nrmse" in metrics
+    assert "ev_return_variance" in metrics
+    assert "ev_low_return_variance" in metrics
+    assert "ev_low_return_variance_count" in metrics
+
+
+def test_ev_robustness_metrics_registered():
+    """Reducer-kind registration: mean for floats, any for bool flag, sum for count."""
+    from esper.simic.training.vectorized import (
+        _PPO_MEAN_REDUCED_METRICS,
+        _PPO_ANY_REDUCED_METRICS,
+        _PPO_SUM_REDUCED_METRICS,
+    )
+
+    assert "value_nrmse" in _PPO_MEAN_REDUCED_METRICS
+    assert "ev_return_variance" in _PPO_MEAN_REDUCED_METRICS
+    assert "ev_low_return_variance" in _PPO_ANY_REDUCED_METRICS
+    assert "ev_low_return_variance_count" in _PPO_SUM_REDUCED_METRICS
+
+
+def test_ev_aggregation_excludes_flagged_updates():
+    """explained_variance mean is computed over UNFLAGGED updates only; siblings over ALL."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    updates = [
+        {
+            "explained_variance": 0.8,
+            "ev_low_return_variance": False,
+            "value_nrmse": 0.1,
+            "v_return_correlation": 0.9,
+            "ev_return_variance": 100.0,
+            "ev_low_return_variance_count": 0,
+        },
+        {
+            "explained_variance": 0.6,
+            "ev_low_return_variance": False,
+            "value_nrmse": 0.2,
+            "v_return_correlation": 0.7,
+            "ev_return_variance": 90.0,
+            "ev_low_return_variance_count": 0,
+        },
+        {
+            # Flagged: this -8 outlier MUST NOT pollute the EV mean.
+            "explained_variance": -8.0,
+            "ev_low_return_variance": True,
+            "value_nrmse": 0.3,
+            "v_return_correlation": 0.0,
+            "ev_return_variance": 0.2,
+            "ev_low_return_variance_count": 1,
+        },
+    ]
+
+    metrics = _aggregate_ppo_metrics(updates)
+
+    # EV mean over unflagged only: (0.8 + 0.6) / 2 == 0.7
+    assert metrics["explained_variance"] == pytest.approx(0.7)
+    # Siblings aggregate over ALL updates.
+    assert metrics["value_nrmse"] == pytest.approx((0.1 + 0.2 + 0.3) / 3)
+    assert metrics["v_return_correlation"] == pytest.approx((0.9 + 0.7 + 0.0) / 3)
+    assert metrics["ev_return_variance"] == pytest.approx((100.0 + 90.0 + 0.2) / 3)
+    # Count == number of flagged updates.
+    assert metrics["ev_low_return_variance_count"] == 1
+    assert metrics["ev_low_return_variance"] is True
+
+
+def test_ev_aggregation_all_flagged():
+    """All flagged: aggregated EV is nan, value_nrmse still aggregates, count == N, no raise."""
+    import math
+
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    updates = [
+        {
+            "explained_variance": -8.0,
+            "ev_low_return_variance": True,
+            "value_nrmse": 0.3,
+            "ev_return_variance": 0.2,
+            "ev_low_return_variance_count": 1,
+        },
+        {
+            "explained_variance": -5.0,
+            "ev_low_return_variance": True,
+            "value_nrmse": 0.4,
+            "ev_return_variance": 0.1,
+            "ev_low_return_variance_count": 1,
+        },
+    ]
+
+    metrics = _aggregate_ppo_metrics(updates)
+
+    assert math.isnan(metrics["explained_variance"])
+    assert metrics["value_nrmse"] == pytest.approx(0.35)
+    assert metrics["ev_low_return_variance_count"] == 2
+    assert metrics["ev_low_return_variance"] is True
+
+
+def test_gate_sees_unflagged_only_ev_mean():
+    """Couples the Step-3.4 flagged-exclusion to the diagnostic EV the gate carries.
+
+    The aggregated explained_variance that reaches check_all is the unflagged-only mean
+    (a flagged -8 outlier is excluded). EV is a pure diagnostic under the robust-anchored
+    gate, so it never drives firing; with healthy robust signals the gate does NOT fire,
+    and the EV value it carries in telemetry is the clean unflagged-only mean.
+    """
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+    from esper.simic.telemetry import AnomalyDetector
+
+    updates = [
+        {
+            "explained_variance": 0.8,
+            "ev_low_return_variance": False,
+            "value_nrmse": 0.1,
+            "v_return_correlation": 0.9,
+            "ev_return_variance": 100.0,
+            "ev_low_return_variance_count": 0,
+            "bellman_error": 0.5,
+            "value_loss": 0.099,
+        },
+        {
+            # Flagged -8 outlier: excluded from the EV mean the gate keys on.
+            "explained_variance": -8.0,
+            "ev_low_return_variance": True,
+            "value_nrmse": 0.3,
+            "v_return_correlation": 0.0,
+            "ev_return_variance": 0.2,
+            "ev_low_return_variance_count": 1,
+            "bellman_error": 0.5,
+            "value_loss": 0.099,
+        },
+    ]
+
+    aggregated = _aggregate_ppo_metrics(updates)
+    # The gate keys on the unflagged-only EV mean (0.8), not the all-updates mean (-3.6).
+    assert aggregated["explained_variance"] == pytest.approx(0.8)
+
+    detector = AnomalyDetector()
+    report = detector.check_all(
+        ratio_max=1.1,
+        ratio_min=0.9,
+        explained_variance=aggregated["explained_variance"],
+        current_episode=80,
+        total_episodes=100,
+        value_collapse_applicable=True,
+        bellman_error=aggregated["bellman_error"],
+        value_loss=aggregated["value_loss"],
+        value_nrmse=aggregated["value_nrmse"],
+        v_return_correlation=aggregated["v_return_correlation"],
+        ev_low_return_variance=aggregated["ev_low_return_variance"],
+    )
+
+    # Healthy unflagged EV + healthy primary signals -> no spurious collapse.
+    assert "value_collapse" not in report.anomaly_types
+
+
 def test_aggregate_ppo_metrics_reduces_proof_fields_explicitly():
     """Proof-critical PPO fields must not fall through generic first-value merging."""
     from esper.simic.training.vectorized import _aggregate_ppo_metrics
@@ -1054,8 +1240,15 @@ def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
     assert metrics["approx_kl"] == pytest.approx((0.005 + 0.02) / 2.0)
 
 
-def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
-    """External PPO update loops are incompatible with LSTM policies (staleness guard)."""
+def test_lstm_requires_ppo_updates_per_batch_one():
+    """Recurrent policies MUST run with ppo_updates_per_batch=1.
+
+    LSTM multi-epoch optimization is owned by the agent's internal recurrent_n_epochs
+    path (within a single update() call). The external _run_ppo_updates loop is
+    disallowed for LSTM because each extra iteration would re-run GAE and mutate the
+    EMA value normalizer K times per rollout. This guards the _run_ppo_updates callsite,
+    not a direct PPOAgent.update() call.
+    """
     from esper.simic.training.vectorized import _run_ppo_updates
 
     class _StubBuffer:
@@ -1072,7 +1265,7 @@ def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
         def update(self, tensor: torch.Tensor) -> None:
             raise AssertionError("normalizer.update should not be reached in staleness guard path")
 
-    with pytest.raises(ValueError, match="incompatible with recurrent"):
+    with pytest.raises(ValueError, match="recurrent_n_epochs"):
         _run_ppo_updates(
             agent=_StubAgent(),
             ppo_updates_per_batch=2,
@@ -1081,6 +1274,52 @@ def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
             use_amp=False,
             amp_dtype=None,  # Explicit: no AMP
         )
+
+
+def test_recurrent_n_epochs_reaches_agent(monkeypatch):
+    """PRODUCTION GATE: train_ppo_vectorized must pass recurrent_n_epochs to PPOAgent.
+
+    This is the real entrypoint -> ctor binding. We install a ctor spy in place of
+    PPOAgent that records the recurrent_n_epochs kwarg and aborts training immediately
+    (raising a sentinel), so the test pays only for pre-ctor CPU setup, not a full
+    rollout. CPU smoke: lstm_hidden_dim>0, ppo_updates_per_batch=1, n_episodes=1.
+    """
+    import esper.simic.training.vectorized as vec
+
+    captured: dict[str, int] = {}
+
+    class _SpyDone(Exception):
+        pass
+
+    real_ppo_agent = vec.PPOAgent
+
+    def _spy(*args, **kwargs):
+        captured["recurrent_n_epochs"] = kwargs["recurrent_n_epochs"]
+        captured["total_train_steps"] = kwargs["total_train_steps"]
+        raise _SpyDone
+
+    # Preserve classmethods/attributes the entrypoint may touch before the ctor.
+    _spy.load_from_checkpoint_dict = real_ppo_agent.load_from_checkpoint_dict
+    monkeypatch.setattr(vec, "PPOAgent", _spy)
+
+    with pytest.raises(_SpyDone):
+        vec.train_ppo_vectorized(
+            n_episodes=1,
+            n_envs=1,
+            max_epochs=2,
+            device="cpu",
+            devices=["cpu"],
+            use_telemetry=False,
+            lstm_hidden_dim=16,
+            chunk_length=2,
+            ppo_updates_per_batch=1,
+            recurrent_n_epochs=4,
+            total_train_steps=7,
+            slots=["r0c0"],
+        )
+
+    assert captured["recurrent_n_epochs"] == 4
+    assert captured["total_train_steps"] == 7
 
 
 def test_run_ppo_updates_uses_policy_amp_context_when_enabled(monkeypatch):

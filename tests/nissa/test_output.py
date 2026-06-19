@@ -148,6 +148,31 @@ class TestDirectoryOutput:
 
         backend.close()
 
+    def test_same_second_outputs_get_unique_run_directories(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """DirectoryOutput must not share events.jsonl across rapid proof cohorts."""
+        import esper.nissa.output as output
+
+        class FixedDateTime:
+            @classmethod
+            def now(cls) -> datetime:
+                return datetime(2026, 6, 15, 12, 30, 45)
+
+        monkeypatch.setattr(output, "datetime", FixedDateTime)
+
+        first = DirectoryOutput(tmp_path)
+        second = DirectoryOutput(tmp_path)
+
+        assert first.output_dir != second.output_dir
+        assert first.output_dir.name == "telemetry_2026-06-15_123045"
+        assert second.output_dir.name == "telemetry_2026-06-15_123045_001"
+
+        first.close()
+        second.close()
+
 
 class TestNissaHubHealth:
     """Tests for queue-pressure health reporting."""
@@ -1104,6 +1129,11 @@ class TestTGV001JsonlPayloadFields:
             loss_threshold=10.0,
             consecutive_panics=3,
             panic_reason="governor_divergence",
+            triggering_action_id="morph-b0-e0-env0-r0c0-op0",
+            raw_penalty=-10.0,
+            normalized_penalty=-10.0,
+            rollback_severity=10.0,
+            watch_window_evidence=10.0,
         )
         event = TelemetryEvent(
             event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
@@ -1115,6 +1145,11 @@ class TestTGV001JsonlPayloadFields:
         assert data["consecutive_panics"] == 3
         assert data["panic_reason"] == "governor_divergence"
         assert data["episode_idx"] == 5
+        assert data["triggering_action_id"] == "morph-b0-e0-env0-r0c0-op0"
+        assert data["raw_penalty"] == -10.0
+        assert data["normalized_penalty"] == -10.0
+        assert data["rollback_severity"] == 10.0
+        assert data["watch_window_evidence"] == 10.0
         assert GovernorRollbackPayload.from_dict(data) == payload
 
     def test_morphology_causal_log_identity_fields_survive_jsonl(self, tmp_path: Path):
@@ -1156,7 +1191,7 @@ class TestTGV001JsonlPayloadFields:
     def test_epoch_completed_observation_stats_survive_jsonl(self, tmp_path: Path):
         """EpochCompletedPayload carries nested ObservationStatsTelemetry through JSONL."""
         from esper.leyline.telemetry import EpochCompletedPayload
-        from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+        from esper.leyline.telemetry_contracts import ObservationStatsTelemetry
 
         obs = ObservationStatsTelemetry(
             slot_features_mean=1.0,

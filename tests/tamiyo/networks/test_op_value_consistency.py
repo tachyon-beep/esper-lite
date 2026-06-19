@@ -1,10 +1,10 @@
-"""Unit tests for op/value consistency in get_action().
+"""Op/value semantics for get_action() under the op-INDEPENDENT V(s) baseline (P0-1).
 
-CRITICAL BUG FIX: Verify that get_action() uses the same op for both
-value computation and action selection. This prevents biased advantages
-and bootstrap corruption.
-
-Related bug report: docs/bugs/investigations/CRITICAL-op-value-mismatch.md
+The PPO baseline is now V(s) (state_value), which does NOT depend on the op. So
+get_action().values is op-independent and identical for deterministic and stochastic
+legs. What MUST still hold: the returned op action equals sampled_op (consistency
+between the action taken and the Q(s, op) telemetry head), and V(s) is unaffected by
+which op is selected.
 """
 
 import torch
@@ -14,8 +14,8 @@ from esper.tamiyo.networks import FactoredRecurrentActorCritic
 from esper.leyline import HEAD_NAMES
 
 
-class TestOpValueConsistency:
-    """Verify get_action() uses same op for value and action."""
+class TestOpIndependentBaseline:
+    """get_action() returns the op-INDEPENDENT V(s) baseline."""
 
     @pytest.fixture
     def network(self):
@@ -29,154 +29,71 @@ class TestOpValueConsistency:
         masks = {k: None for k in HEAD_NAMES}
         return state, bp_idx, masks
 
-    def test_stochastic_value_is_conditioned_on_returned_op(self, monkeypatch, network, inputs):
-        """Stochastic rollouts must not use a second independent op sample for value."""
+    def test_value_equals_state_value_head(self, network, inputs):
+        """get_action().values == V(s) from state_value_head (op-independent)."""
         state, bp_idx, _ = inputs
-
-        class UniformOpHead(nn.Module):
-            def forward(self, lstm_out: torch.Tensor) -> torch.Tensor:
-                return lstm_out.new_zeros((*lstm_out.shape[:-1], network.num_ops))
-
-        def value_equals_op(lstm_out: torch.Tensor, op: torch.Tensor) -> torch.Tensor:
-            return op.to(lstm_out)
-
-        network.op_head = UniformOpHead()
-        monkeypatch.setattr(network, "_compute_value", value_equals_op)
-
-        torch.manual_seed(0)
-        result = network.get_action(state, bp_idx, hidden=None, deterministic=False)
-
-        torch.testing.assert_close(
-            result.values,
-            result.actions["op"].to(result.values),
-            msg="rollout value must be Q(s, returned op), not Q(s, an earlier op sample)",
-        )
-
-    def test_deterministic_value_is_conditioned_on_argmax_op(self, monkeypatch, network, inputs):
-        """Bootstrap values must be recomputed for the deterministic argmax op."""
-        state, bp_idx, _ = inputs
-
-        class UniformOpHead(nn.Module):
-            def forward(self, lstm_out: torch.Tensor) -> torch.Tensor:
-                return lstm_out.new_zeros((*lstm_out.shape[:-1], network.num_ops))
-
-        def value_equals_op(lstm_out: torch.Tensor, op: torch.Tensor) -> torch.Tensor:
-            return op.to(lstm_out)
-
-        network.op_head = UniformOpHead()
-        monkeypatch.setattr(network, "_compute_value", value_equals_op)
-
-        torch.manual_seed(0)
         result = network.get_action(state, bp_idx, hidden=None, deterministic=True)
-
-        assert (result.actions["op"] == 0).all()
-        torch.testing.assert_close(
-            result.values,
-            torch.zeros_like(result.values),
-            msg="deterministic value must be Q(s, argmax op), not Q(s, forward sample)",
-        )
-
-    def test_deterministic_op_value_match(self, network, inputs):
-        """In deterministic mode, value must use argmax op."""
-        state, bp_idx, masks = inputs
-
-        result = network.get_action(state, bp_idx, hidden=None, deterministic=True)
-
-        # Get expected value by recomputing with argmax op
         with torch.inference_mode():
-            output = network.forward(
-                state.unsqueeze(1), bp_idx.unsqueeze(1), hidden=None
-            )
-            op_logits = output["op_logits"][:, 0, :]
-            argmax_op = op_logits.argmax(dim=-1)
-            expected_value = network._compute_value(
-                output["lstm_out"][:, 0:1, :], argmax_op.unsqueeze(1)
-            ).squeeze(1)
+            output = network.forward(state.unsqueeze(1), bp_idx.unsqueeze(1), hidden=None)
+            expected = network._compute_state_value(output["lstm_out"])[:, 0]
+        torch.testing.assert_close(result.values, expected, rtol=1e-5, atol=1e-5)
 
-        # Verify returned action is argmax
-        torch.testing.assert_close(result.actions["op"], argmax_op)
-        # Verify value corresponds to argmax op
-        torch.testing.assert_close(result.values, expected_value, rtol=1e-5, atol=1e-5)
+    def test_value_is_op_independent(self, monkeypatch, network, inputs):
+        """If only the op differs between two get_action calls, V(s) is unchanged."""
+        state, bp_idx, _ = inputs
 
-    def test_stochastic_op_value_match(self, network, inputs):
-        """In stochastic mode, value must use same op as action."""
-        state, bp_idx, masks = inputs
+        # Make the op head uniform so deterministic/stochastic ops vary, then confirm
+        # the value does NOT depend on which op is selected.
+        class UniformOpHead(nn.Module):
+            def forward(self, lstm_out: torch.Tensor) -> torch.Tensor:
+                return lstm_out.new_zeros((*lstm_out.shape[:-1], network.num_ops))
 
-        # Run multiple times to ensure it's not just luck
+        network.op_head = UniformOpHead()
+        network.eval()
+
+        det = network.get_action(state, bp_idx, hidden=None, deterministic=True)
+        torch.manual_seed(7)
+        stoch = network.get_action(state, bp_idx, hidden=None, deterministic=False)
+
+        # The deterministic and stochastic legs select (generally) different ops, but
+        # the V(s) baseline is identical because it never sees the op.
+        torch.testing.assert_close(
+            det.values, stoch.values, rtol=1e-5, atol=1e-5,
+            msg="V(s) must be op-independent (same value regardless of selected op)",
+        )
+
+    def test_sampled_op_matches_action_stochastic(self, network, inputs):
+        """The returned op action equals sampled_op (action / Q-telemetry consistency)."""
+        state, bp_idx, _ = inputs
         for _ in range(10):
             result = network.get_action(state, bp_idx, hidden=None, deterministic=False)
-
-            # Verify sampled_op matches action["op"]
             torch.testing.assert_close(result.sampled_op, result.actions["op"])
 
-            # Verify value was computed with the returned op
-            # We can't directly compare to forward() output because forward() samples differently,
-            # but we verify the contract: sampled_op == action["op"]
-            assert torch.equal(result.sampled_op, result.actions["op"]), \
-                "sampled_op must equal action['op'] in stochastic mode"
+    def test_deterministic_op_is_argmax(self, network, inputs):
+        """Deterministic mode selects the argmax op for the ACTION."""
+        state, bp_idx, _ = inputs
+        result = network.get_action(state, bp_idx, hidden=None, deterministic=True)
+        with torch.inference_mode():
+            output = network.forward(state.unsqueeze(1), bp_idx.unsqueeze(1), hidden=None)
+            argmax_op = output["op_logits"][:, 0, :].argmax(dim=-1)
+        torch.testing.assert_close(result.actions["op"], argmax_op)
+
+    def test_value_identical_det_vs_stoch(self, network, inputs):
+        """Even with a real (non-uniform) op head, V(s) is the same for both legs."""
+        state, bp_idx, _ = inputs
+        det = network.get_action(state, bp_idx, hidden=None, deterministic=True)
+        stoch = network.get_action(state, bp_idx, hidden=None, deterministic=False)
+        torch.testing.assert_close(det.values, stoch.values, rtol=1e-5, atol=1e-5)
 
     def test_single_valid_op_consistency(self, network, inputs):
-        """When only one op is valid, both modes should behave the same."""
+        """When only one op is valid, both modes select it and V(s) matches."""
         state, bp_idx, _ = inputs
-
-        # Create mask with single valid op
         single_op_mask = torch.zeros(state.shape[0], network.num_ops, dtype=torch.bool)
-        single_op_mask[:, 2] = True  # Only op 2 is valid
+        single_op_mask[:, 2] = True
 
         result_det = network.get_action(state, bp_idx, hidden=None, op_mask=single_op_mask, deterministic=True)
         result_stoch = network.get_action(state, bp_idx, hidden=None, op_mask=single_op_mask, deterministic=False)
 
-        # Both should select op 2
-        assert (result_det.actions["op"] == 2).all(), "Deterministic should select the only valid op"
-        assert (result_stoch.actions["op"] == 2).all(), "Stochastic should select the only valid op"
-
-        # Values should be identical (same op used)
+        assert (result_det.actions["op"] == 2).all()
+        assert (result_stoch.actions["op"] == 2).all()
         torch.testing.assert_close(result_det.values, result_stoch.values, rtol=1e-5, atol=1e-5)
-
-    def test_op_action_consistency_across_batch(self, network, inputs):
-        """Verify op/value consistency holds for every batch element."""
-        state, bp_idx, masks = inputs
-        batch_size = state.shape[0]
-
-        # Deterministic mode
-        result = network.get_action(state, bp_idx, hidden=None, deterministic=True)
-
-        # Check each batch element
-        for i in range(batch_size):
-            with torch.inference_mode():
-                # Get single-element batch
-                single_state = state[i:i+1]
-                single_bp = bp_idx[i:i+1]
-
-                output = network.forward(
-                    single_state.unsqueeze(1), single_bp.unsqueeze(1), hidden=None
-                )
-                argmax_op = output["op_logits"][:, 0, :].argmax(dim=-1)
-
-                # Verify this batch element used argmax
-                assert result.actions["op"][i] == argmax_op[0], \
-                    f"Batch element {i} action should be argmax"
-
-    def test_value_recomputation_in_deterministic_mode(self, network, inputs):
-        """Verify value is actually recomputed (not reused from forward())."""
-        state, bp_idx, masks = inputs
-
-        # Get forward() output
-        with torch.inference_mode():
-            output_forward = network.forward(
-                state.unsqueeze(1), bp_idx.unsqueeze(1), hidden=None
-            )
-            value_from_forward = output_forward["value"][:, 0]
-            sampled_op_from_forward = output_forward["sampled_op"][:, 0]
-
-        # Get deterministic action
-        result = network.get_action(state, bp_idx, hidden=None, deterministic=True)
-
-        # If argmax differs from sample, value must differ
-        op_differs = (result.actions["op"] != sampled_op_from_forward).any()
-        value_differs = not torch.allclose(result.values, value_from_forward, rtol=1e-5, atol=1e-5)
-
-        # If ops differ, values MUST differ (otherwise value wasn't recomputed)
-        if op_differs:
-            assert value_differs, \
-                "When argmax_op != sampled_op, value must be recomputed (not reused from forward())"

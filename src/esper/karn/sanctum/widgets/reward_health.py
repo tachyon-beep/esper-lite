@@ -3,7 +3,7 @@
 Displays DRL Expert recommended metrics:
 - PBRS fraction of total reward (healthy: 10-40%)
 - Anti-gaming penalty frequency (healthy: <5%)
-- Value function explained variance (healthy: >0.5)
+- Value-fit health via robust value_nrmse (healthy: NRMSE < 1.0)
 - Hypervolume indicator (should increase over training)
 """
 
@@ -15,6 +15,12 @@ from typing import Any
 from rich.text import Text
 from textual.widgets import Static
 
+# Robust value-fit health threshold. value_nrmse = RMSE(residual) / std(returns); below 1.0 the
+# value head's residual RMSE is smaller than the return spread, i.e. it explains some variance.
+# The artifact-prone explained_variance is NOT used for the health verdict (EV-telemetry-robustness):
+# a low-return-variance batch can crater EV while value_nrmse stays healthy.
+EV_VALUE_NRMSE_HEALTHY_THRESHOLD = 1.0
+
 
 @dataclass
 class RewardHealthData:
@@ -22,7 +28,10 @@ class RewardHealthData:
 
     pbrs_fraction: float = 0.0  # |PBRS| / |total_reward|
     anti_gaming_trigger_rate: float = 0.0  # Fraction of steps with penalties
-    ev_explained: float = 0.0  # Value function explained variance
+    ev_explained: float = 0.0  # Value function explained variance (DIAGNOSTIC display only)
+    # Robust value-fit signal (lower is better). Default inf = no data yet (unhealthy).
+    value_nrmse: float = float("inf")
+    ev_low_return_variance: bool = False  # EV denominator ill-conditioned (diagnostic flag)
     hypervolume: float = 0.0  # Pareto hypervolume indicator
 
     @property
@@ -37,8 +46,13 @@ class RewardHealthData:
 
     @property
     def is_ev_healthy(self) -> bool:
-        """Explained variance should be >0.5."""
-        return self.ev_explained > 0.5
+        """Value-fit is healthy when the robust value_nrmse is below threshold.
+
+        Keys on value_nrmse, the scale-stabilized fit signal, NOT the artifact-prone
+        explained_variance: a low-return-variance batch (ev_low_return_variance) can crater EV
+        while the value head is fitting fine (low NRMSE). EV is carried for display only.
+        """
+        return self.value_nrmse < EV_VALUE_NRMSE_HEALTHY_THRESHOLD
 
 
 class RewardHealthPanel(Static):

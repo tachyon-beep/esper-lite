@@ -31,6 +31,7 @@ from esper.leyline import (
     OBS_V3_BASE_FEATURE_SIZE,
     OBS_V3_NON_BLUEPRINT_DIM,
     OBS_V3_SLOT_FEATURE_SIZE,
+    OBS_V3_UNKNOWN_SENTINEL,
     TaskConfig,  # Cross-subsystem task configuration
     safe,  # Cross-subsystem safe value conversion
 )
@@ -55,7 +56,6 @@ from esper.leyline.stage_schema import (
 #   - counterfactual_fresh: DEFAULT_GAMMA ** n is in (0, 1] for finite n >= 0,
 #     and the stale limit is 0.0.
 # -1.0 collides with neither range and preserves the float32 tensor contract.
-OBS_V3_UNKNOWN_SENTINEL: float = -1.0
 
 
 def _counterfactual_freshness(

@@ -149,6 +149,10 @@ class TestProofGradeAccounting:
             {"event_type": "GOVERNOR_ROLLBACK", "data": {"reason": "nan"}},
             {"event_type": "GOVERNOR_ROLLBACK", "data": {"reason": "divergence"}},
             {"event_type": "MORPHOLOGY_CAUSAL_LOG", "data": {"phase": "proposal"}},
+            {
+                "event_type": "TOPOLOGY_MANIFEST_RECORDED",
+                "data": {"manifest_role": "source_final"},
+            },
             {"event_type": "SEED_GERMINATED", "data": {}},
             {"event_type": "PPO_UPDATE_COMPLETED", "data": {}},
         ]
@@ -160,6 +164,7 @@ class TestProofGradeAccounting:
         assert store.unsupported_event_counts["EPISODE_OUTCOME"] == 1
         assert store.unsupported_event_counts["GOVERNOR_ROLLBACK"] == 2
         assert store.unsupported_event_counts["MORPHOLOGY_CAUSAL_LOG"] == 1
+        assert store.unsupported_event_counts["TOPOLOGY_MANIFEST_RECORDED"] == 1
         assert store.unsupported_event_counts["SEED_GERMINATED"] == 1
         assert store.unsupported_event_counts["PPO_UPDATE_COMPLETED"] == 1
         # Modeled families are NOT counted as unsupported.
@@ -222,11 +227,24 @@ class TestProofGradeAccounting:
         host = store.epoch_snapshots[0].host
         # val_loss stays None (the dataclass default), not fabricated 0.0.
         assert host.val_loss is None
-        # Import wrote nothing for the absent val_accuracy. The field reads back
-        # as its dataclass default (0.0) — a pre-existing HostSnapshot schema
-        # limitation where absent and measured-zero accuracy are indistinguishable
-        # (val_accuracy is float=0.0, unlike val_loss which is float|None). Tracked
-        # as a separate observation; here we only assert no fabricated write occurred.
+        # val_accuracy also stays None; absent telemetry is not measured-zero accuracy.
+        assert host.val_accuracy is None
+
+    def test_explicit_zero_accuracy_preserved(self, tmp_path: Path) -> None:
+        """A real measured 0.0 accuracy must remain distinguishable from absence."""
+        records = [
+            self._training_started(),
+            {
+                "event_type": "EPOCH_COMPLETED",
+                "epoch": 1,
+                "data": {"val_loss": 0.0, "val_accuracy": 0.0},
+            },
+        ]
+        _write_nissa_events(tmp_path, records)
+        store = TelemetryStore.import_from_nissa_dir(tmp_path)
+
+        host = store.epoch_snapshots[0].host
+        assert host.val_loss == 0.0
         assert host.val_accuracy == 0.0
 
     def test_present_metrics_preserved(self, tmp_path: Path) -> None:

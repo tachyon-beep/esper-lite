@@ -47,6 +47,15 @@ class HindsightCreditResult:
     total_delay: int
 
 
+def _fossilized_total_improvement(seed_info: SeedInfo | None) -> float:
+    if seed_info is None:
+        return 0.0
+    total_improvement = seed_info.total_improvement
+    if total_improvement is None:
+        raise ValueError("fossilize handler requires seed_info.total_improvement")
+    return total_improvement
+
+
 def compute_hindsight_credit_for_beneficiary(
     ctx: HandlerContext,
     beneficiary_improvement: float,
@@ -188,15 +197,14 @@ def execute_fossilize(
             error="Fossilization failed (likely G5 gate not passed)",
         )
 
+    total_improvement = _fossilized_total_improvement(seed_info)
+
     # Update episode counters
     ctx.env_state.seeds_fossilized += 1
     ctx.env_state.fossilize_count += 1
 
     # Track contributing fossilized seeds
-    is_contributing = (
-        seed_info is not None
-        and seed_info.total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
-    )
+    is_contributing = total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
     if is_contributing:
         ctx.env_state.contributing_fossilized += 1
 
@@ -204,8 +212,7 @@ def execute_fossilize(
     ctx.env_state.acc_at_germination.pop(ctx.slot_id, None)
 
     # Compute hindsight credit for scaffolds
-    beneficiary_improvement = seed_info.total_improvement if seed_info else 0.0
-    hindsight = compute_hindsight_credit_for_beneficiary(ctx, beneficiary_improvement)
+    hindsight = compute_hindsight_credit_for_beneficiary(ctx, total_improvement)
 
     if hindsight.total_credit > 0:
         ctx.env_state.pending_hindsight_credit += hindsight.total_credit
@@ -223,7 +230,7 @@ def execute_fossilize(
         success=True,
         telemetry={
             "is_contributing": is_contributing,
-            "total_improvement": seed_info.total_improvement if seed_info else 0.0,
+            "total_improvement": total_improvement,
             "hindsight_credit": hindsight.total_credit,
             "scaffold_count": hindsight.scaffold_count,
             "avg_scaffold_delay": (

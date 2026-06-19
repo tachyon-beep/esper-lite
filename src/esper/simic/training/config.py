@@ -69,6 +69,12 @@ class TrainingConfig:
     gamma: float = DEFAULT_GAMMA
     gae_lambda: float = DEFAULT_GAE_LAMBDA
     ppo_updates_per_batch: int = 1
+    # Internal multi-epoch count for recurrent (LSTM) policies. K epochs of
+    # optimization run WITHIN a single agent.update() call against an anchored
+    # reference pass, so they do not re-run GAE or re-mutate the value normalizer.
+    # ppo_updates_per_batch stays pinned to 1 for LSTM runs (the external loop is
+    # disallowed); K is expressed here instead.
+    recurrent_n_epochs: int = 1
 
     # === Entropy (exploration) ===
     entropy_coef: float = DEFAULT_ENTROPY_COEF
@@ -298,9 +304,14 @@ class TrainingConfig:
         """Extract PPOAgent constructor kwargs aligned with runtime usage."""
         entropy_steps = 0
         if self.entropy_anneal_episodes > 0:
+            # NOTE: the *ppo_updates_per_batch multiplier is a no-op for recurrent runs:
+            # ppo_updates_per_batch is pinned to 1 for LSTM (K is within-batch via
+            # recurrent_n_epochs), so this reduces to ceil(episodes / n_envs).
             entropy_steps = math.ceil(self.entropy_anneal_episodes / self.n_envs) * self.ppo_updates_per_batch
 
-        # Value warmup: convert batches to PPO update steps
+        # Value warmup: convert batches to PPO update steps.
+        # NOTE: the *ppo_updates_per_batch multiplier is a no-op for recurrent runs
+        # (ppo_updates_per_batch pinned to 1 for LSTM; K is within-batch via recurrent_n_epochs).
         value_warmup_steps = self.value_warmup_batches * self.ppo_updates_per_batch
 
         return {
@@ -320,6 +331,7 @@ class TrainingConfig:
             "chunk_length": self.chunk_length,
             "num_envs": self.n_envs,
             "max_steps_per_env": self.max_epochs,
+            "recurrent_n_epochs": self.recurrent_n_epochs,
         }
 
     def to_train_kwargs(self) -> dict[str, Any]:
@@ -348,6 +360,10 @@ class TrainingConfig:
             "gamma": self.gamma,
             "gae_lambda": self.gae_lambda,
             "ppo_updates_per_batch": self.ppo_updates_per_batch,
+            "recurrent_n_epochs": self.recurrent_n_epochs,
+            # total_train_steps drives the agent's late-training decay schedule.
+            # For LSTM ppo_updates_per_batch is pinned to 1, so this reduces to n_episodes.
+            "total_train_steps": self.n_episodes * self.ppo_updates_per_batch,
             "amp": self.amp,
             "amp_dtype": self.amp_dtype,
             "compile_mode": self.compile_mode,

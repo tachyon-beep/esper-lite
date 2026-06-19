@@ -363,6 +363,22 @@ class TestTrainMainWiring:
             def close(self) -> None:
                 self.closed = True
 
+            def get_health_snapshot(self) -> dict[str, object]:
+                # Honors the NissaHub health contract: report every registered
+                # backend as healthy so train.main()'s requested-backend gate
+                # finds each requested sink and sees zero drops.
+                backend_stats = {
+                    backend.__class__.__name__: {"dropped_events": 0}
+                    for backend in self.backends
+                }
+                return {
+                    "status": "healthy",
+                    "dropped_events": 0,
+                    "hub_dropped_events": 0,
+                    "backend_dropped_events": 0,
+                    "backend_stats": backend_stats,
+                }
+
         class FakeConsoleOutput:
             def __init__(self, *, min_severity: str) -> None:
                 self.min_severity = min_severity
@@ -466,6 +482,22 @@ class TestTrainMainWiring:
             def close(self) -> None:
                 self.closed = True
 
+            def get_health_snapshot(self) -> dict[str, object]:
+                # Honors the NissaHub health contract: report every registered
+                # backend as healthy so train.main()'s requested-backend gate
+                # finds each requested sink and sees zero drops.
+                backend_stats = {
+                    backend.__class__.__name__: {"dropped_events": 0}
+                    for backend in self.backends
+                }
+                return {
+                    "status": "healthy",
+                    "dropped_events": 0,
+                    "hub_dropped_events": 0,
+                    "backend_dropped_events": 0,
+                    "backend_stats": backend_stats,
+                }
+
         class FakeConsoleOutput:
             def __init__(self, *, min_severity: str) -> None:
                 self.min_severity = min_severity
@@ -566,6 +598,8 @@ class TestTrainMainWiring:
         train.main()
 
         assert hub.closed is True
+        assert hub.backends.count(shared_karn_collector) == 1
+        assert sum(isinstance(backend, FakeKarnCollector) for backend in hub.backends) == 1
         assert ppo_calls["telemetry_config"].level == TelemetryLevel.OFF
         assert ppo_calls["n_episodes"] == 2
         assert ppo_calls["n_envs"] == 3
@@ -609,6 +643,17 @@ class TestTrainMainWiring:
 
             def close(self) -> None:
                 self.closed = True
+
+            def get_health_snapshot(self) -> dict[str, object]:
+                # This test requests no streaming sinks, so the gate iterates
+                # nothing; report healthy with empty backend stats.
+                return {
+                    "status": "healthy",
+                    "dropped_events": 0,
+                    "hub_dropped_events": 0,
+                    "backend_dropped_events": 0,
+                    "backend_stats": {},
+                }
 
         hub = FakeHub()
         monkeypatch.setattr(train, "get_hub", lambda: hub)

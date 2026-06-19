@@ -10,7 +10,6 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, cast
-import warnings
 
 import torch
 from torch.utils.data import DataLoader, Dataset, TensorDataset
@@ -160,8 +159,8 @@ def augment_cifar10_batch(
         flip_mask = torch.rand(
             (batch_size,), generator=generator, device=inputs.device
         ) < flip_prob
-        if flip_mask.any():
-            cropped[flip_mask] = torch.flip(cropped[flip_mask], dims=[3])
+        flipped = torch.flip(cropped, dims=[3])
+        cropped = torch.where(flip_mask.view(batch_size, 1, 1, 1), flipped, cropped)
 
     if inputs.is_contiguous(memory_format=torch.channels_last):
         return cropped.contiguous(memory_format=torch.channels_last)
@@ -612,26 +611,35 @@ def _stable_device_index(device: str) -> int:
     raise ValueError(f"Unsupported device string: {device}")
 
 
+def _split_batch_span(start: int, end: int, n_chunks: int) -> list[tuple[int, int]]:
+    """Split a global batch span across environments like torch.tensor_split."""
+    if n_chunks < 1:
+        raise ValueError(f"n_chunks must be >= 1 (got {n_chunks})")
+    batch_len = end - start
+    base_chunk, remainder = divmod(batch_len, n_chunks)
+    spans: list[tuple[int, int]] = []
+    chunk_start = start
+    for chunk_idx in range(n_chunks):
+        chunk_size = base_chunk + (1 if chunk_idx < remainder else 0)
+        chunk_end = chunk_start + chunk_size
+        spans.append((chunk_start, chunk_end))
+        chunk_start = chunk_end
+    return spans
+
+
 @dataclass
 class _GatherDeviceState:
     device: str
-    env_indices: list[int]
     dataset_x: torch.Tensor
     dataset_y: torch.Tensor
-    total_batch: int
-    drop_last: bool
-    shuffle: bool
-    cpu_gen: torch.Generator
-    perm: torch.Tensor | None = None
-    cursor: int = 0
 
 
 class SharedGPUGatherBatchIterator:
     """GPU-preload iterator that avoids DataLoader and uses direct gathers.
 
-    This is an experimental alternative to SharedGPUBatchIterator. It iterates the
-    GPU-cached CIFAR tensors directly, generating a per-device permutation and
-    slicing index windows to build per-env batches via index_select.
+    This is an experimental alternative to SharedGPUBatchIterator. It iterates
+    the GPU-cached CIFAR tensors directly, using one global permutation and
+    slicing index windows to build per-env batches with advanced indexing.
     """
 
     def __init__(
@@ -663,6 +671,12 @@ class SharedGPUGatherBatchIterator:
         self.shuffle = shuffle
         self.is_train = is_train
         self.drop_last = is_train
+        self._total_batch = batch_size_per_env * n_envs
+        self._cursor = 0
+        self._initialized = False
+        self._global_perm: torch.Tensor | None = None
+        self._cpu_gen = torch.Generator(device="cpu")
+        self._cpu_gen.manual_seed(seed)
 
         self._device_to_env_indices: dict[str, list[int]] = {}
         for env_idx, device in enumerate(env_devices):
@@ -682,99 +696,109 @@ class SharedGPUGatherBatchIterator:
                     torch.cuda.synchronize(torch.device(device))
 
         self._device_states: dict[str, _GatherDeviceState] = {}
-        per_device_lens: list[int] = []
-        for device, env_indices in self._device_to_env_indices.items():
+        dataset_len: int | None = None
+        for device in self._device_to_env_indices.keys():
             cache_key = _cifar10_cache_key(
                 device, data_root, augment_mode=augment_mode, seed=seed
             )
             train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
             if is_train:
                 dataset_x, dataset_y = train_x, train_y
+                split_name = "train"
             else:
                 dataset_x, dataset_y = test_x, test_y
+                split_name = "test"
 
-            n_envs_on_device = len(env_indices)
-            total_batch = batch_size_per_env * n_envs_on_device
-            dataset_len = dataset_x.size(0)
+            if dataset_x.size(0) != dataset_y.size(0):
+                raise ValueError(
+                    f"cached CIFAR {split_name} tensors length mismatch: "
+                    f"inputs have {dataset_x.size(0)} samples, "
+                    f"targets have {dataset_y.size(0)} samples"
+                )
 
-            if self.drop_last:
-                device_len = dataset_len // total_batch
-            else:
-                device_len = int(math.ceil(dataset_len / total_batch))
-            per_device_lens.append(device_len)
+            device_dataset_len = dataset_x.size(0)
+            if dataset_len is None:
+                dataset_len = device_dataset_len
+            elif device_dataset_len != dataset_len:
+                raise ValueError(
+                    "cached CIFAR tensors length mismatch across devices: "
+                    f"expected {dataset_len} samples, got {device_dataset_len} on {device}"
+                )
 
-            device_gen = torch.Generator(device="cpu")
-            device_seed = seed + 1009 * _stable_device_index(device)
-            device_gen.manual_seed(device_seed)
+            _stable_device_index(device)
 
             self._device_states[device] = _GatherDeviceState(
                 device=device,
-                env_indices=env_indices,
                 dataset_x=dataset_x,
                 dataset_y=dataset_y,
-                total_batch=total_batch,
-                drop_last=self.drop_last,
-                shuffle=shuffle,
-                cpu_gen=device_gen,
             )
 
-        self._len = min(per_device_lens)
+        if dataset_len is None:
+            raise ValueError("No devices available for SharedGPUGatherBatchIterator")
+        self._dataset_len = dataset_len
+        if self.drop_last:
+            self._len = dataset_len // self._total_batch
+        else:
+            self._len = int(math.ceil(dataset_len / self._total_batch))
 
     def __len__(self) -> int:
         return self._len
 
     def __iter__(self) -> "SharedGPUGatherBatchIterator":
-        for state in self._device_states.values():
-            dataset_len = state.dataset_x.size(0)
-
-            # CRITICAL: Explicitly delete old permutation tensor before creating new one.
-            # Without this, old perm tensors accumulate in GPU memory across epochs,
-            # causing the "fill → thrash → free" pattern as the allocator hits device limit.
-            if state.perm is not None:
-                del state.perm
-                state.perm = None
-
-            if state.shuffle:
-                perm_cpu = torch.randperm(dataset_len, generator=state.cpu_gen)
-                state.perm = perm_cpu.to(state.device)
-            else:
-                state.perm = torch.arange(dataset_len, device=state.device)
-            state.cursor = 0
+        # CRITICAL: Explicitly delete the old permutation tensor before creating a new one.
+        # Without this, old perm tensors accumulate across epochs and force allocator churn.
+        if self._global_perm is not None:
+            del self._global_perm
+            self._global_perm = None
+        if self.shuffle:
+            self._global_perm = torch.randperm(self._dataset_len, generator=self._cpu_gen)
+        self._cursor = 0
+        self._initialized = True
         return self
 
     def __next__(self) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        if not self._initialized:
+            raise RuntimeError("Iterator not initialized - call __iter__ first")
         result: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * self.n_envs
 
-        for state in self._device_states.values():
-            if state.perm is None:
-                raise RuntimeError("Iterator not initialized - call __iter__ first")
+        start = self._cursor
+        if start >= self._dataset_len:
+            raise StopIteration
 
-            dataset_len = state.dataset_x.size(0)
-            start = state.cursor
-            if start >= dataset_len:
+        end = start + self._total_batch
+        if end > self._dataset_len:
+            if self.drop_last:
                 raise StopIteration
+            end = self._dataset_len
+        self._cursor = end
 
-            end = start + state.total_batch
-            if end > dataset_len:
-                if state.drop_last:
-                    raise StopIteration
-                end = dataset_len
+        if self.shuffle:
+            if self._global_perm is None:
+                raise RuntimeError("Shuffle permutation missing after iterator initialization")
+            batch_indices = self._global_perm[start:end]
+        else:
+            batch_indices = None
 
-            batch_indices = state.perm[start:end]
-            state.cursor = end
-
-            n_envs_on_device = len(state.env_indices)
-            index_chunks = torch.tensor_split(batch_indices, n_envs_on_device)
-            for local_idx, idx_chunk in enumerate(index_chunks):
-                if idx_chunk.numel() == 0:
-                    continue
-                env_idx = state.env_indices[local_idx]
+        spans = _split_batch_span(0, end - start, self.n_envs)
+        for env_idx, (relative_start, relative_end) in enumerate(spans):
+            if relative_start == relative_end:
+                continue
+            state = self._device_states[self.env_devices[env_idx]]
+            if batch_indices is not None:
+                idx_chunk = batch_indices[relative_start:relative_end]
+                if state.dataset_x.device.type != "cpu":
+                    idx_chunk = idx_chunk.to(state.device)
                 # Use advanced indexing to preserve channels-last memory format.
                 # torch.index_select returns NCHW-contiguous by default, but
                 # dataset_x[idx_chunk] preserves the source tensor's memory format.
                 inputs = state.dataset_x[idx_chunk]
                 targets = state.dataset_y[idx_chunk]
-                result[env_idx] = (inputs, targets)
+            else:
+                sample_start = start + relative_start
+                sample_end = start + relative_end
+                inputs = state.dataset_x[sample_start:sample_end].clone()
+                targets = state.dataset_y[sample_start:sample_end].clone()
+            result[env_idx] = (inputs, targets)
 
         first_missing: int | None = None
         for i, item in enumerate(result):
@@ -897,17 +921,13 @@ def get_cifar10_datasets(
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
     ])
 
-    try:
-        trainset = torchvision.datasets.CIFAR10(
-            root=data_root, train=True, download=True, transform=train_transform
-        )
-        testset = torchvision.datasets.CIFAR10(
-            root=data_root, train=False, download=True, transform=test_transform
-        )
-        return trainset, testset
-    except Exception as exc:
-        warnings.warn(f"Falling back to synthetic CIFAR-10 data: {exc}")
-        return get_cifar10_datasets(data_root=data_root, mock=True)
+    trainset = torchvision.datasets.CIFAR10(
+        root=data_root, train=True, download=True, transform=train_transform
+    )
+    testset = torchvision.datasets.CIFAR10(
+        root=data_root, train=False, download=True, transform=test_transform
+    )
+    return trainset, testset
 
 
 def load_cifar10(
@@ -962,22 +982,12 @@ def load_cifar10(
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
     ])
 
-    try:
-        trainset = torchvision.datasets.CIFAR10(
-            root=data_root, train=True, download=True, transform=train_transform
-        )
-        testset = torchvision.datasets.CIFAR10(
-            root=data_root, train=False, download=True, transform=test_transform
-        )
-    except Exception as exc:
-        warnings.warn(f"Falling back to synthetic CIFAR-10 data: {exc}")
-        return load_cifar10(
-            batch_size=batch_size,
-            generator=generator,
-            data_root=data_root,
-            num_workers=0,
-            mock=True,
-        )
+    trainset = torchvision.datasets.CIFAR10(
+        root=data_root, train=True, download=True, transform=train_transform
+    )
+    testset = torchvision.datasets.CIFAR10(
+        root=data_root, train=False, download=True, transform=test_transform
+    )
 
     loader_kwargs: dict[str, Any] = {
         "batch_size": batch_size,

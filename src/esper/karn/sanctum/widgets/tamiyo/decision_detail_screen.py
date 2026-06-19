@@ -98,7 +98,7 @@ class DecisionDetailScreen(ModalScreen[None]):
         t.append(f"  Op:         {d.chosen_action}\n", style="dim")
         t.append(f"  Slot:       {d.chosen_slot or '—'}\n", style="dim")
         t.append(f"  Confidence: {d.confidence:.0%}\n", style="dim")
-        t.append(f"  Entropy:    {d.decision_entropy:.3f}\n", style="dim")
+        t.append(f"  Entropy:    {self._format_entropy(d.decision_entropy)}\n", style="dim")
         t.append("\n")
 
         t.append("Values\n", style="bold cyan")
@@ -117,12 +117,12 @@ class DecisionDetailScreen(ModalScreen[None]):
         t.append("\n")
 
         t.append("Factored Heads\n", style="bold cyan")
-        t.append(f"  Blueprint:  {d.chosen_blueprint or '—'}  (p={d.blueprint_confidence:.0%}, H={d.blueprint_entropy:.3f})\n", style="dim")
-        t.append(f"  Tempo:      {d.chosen_tempo or '—'}  (p={d.tempo_confidence:.0%}, H={d.tempo_entropy:.3f})\n", style="dim")
-        t.append(f"  Style:      {d.chosen_style or '—'}  (p={d.style_confidence:.0%}, H={d.style_entropy:.3f})\n", style="dim")
-        t.append(f"  Curve:      {d.chosen_curve or '—'}  (p={d.curve_confidence:.0%}, H={d.curve_entropy:.3f})\n", style="dim")
-        t.append(f"  α Target:   {d.chosen_alpha_target or '—'}  (p={d.alpha_target_confidence:.0%}, H={d.alpha_target_entropy:.3f})\n", style="dim")
-        t.append(f"  α Speed:    {d.chosen_alpha_speed or '—'}  (p={d.alpha_speed_confidence:.0%}, H={d.alpha_speed_entropy:.3f})\n", style="dim")
+        t.append(f"  Blueprint:  {d.chosen_blueprint or '—'}  (p={d.blueprint_confidence:.0%}, H={self._format_entropy(d.blueprint_entropy)})\n", style="dim")
+        t.append(f"  Tempo:      {d.chosen_tempo or '—'}  (p={d.tempo_confidence:.0%}, H={self._format_entropy(d.tempo_entropy)})\n", style="dim")
+        t.append(f"  Style:      {d.chosen_style or '—'}  (p={d.style_confidence:.0%}, H={self._format_entropy(d.style_entropy)})\n", style="dim")
+        t.append(f"  Curve:      {d.chosen_curve or '—'}  (p={d.curve_confidence:.0%}, H={self._format_entropy(d.curve_entropy)})\n", style="dim")
+        t.append(f"  α Target:   {d.chosen_alpha_target or '—'}  (p={d.alpha_target_confidence:.0%}, H={self._format_entropy(d.alpha_target_entropy)})\n", style="dim")
+        t.append(f"  α Speed:    {d.chosen_alpha_speed or '—'}  (p={d.alpha_speed_confidence:.0%}, H={self._format_entropy(d.alpha_speed_entropy)})\n", style="dim")
         t.append("\n")
 
         t.append("Slot State\n", style="bold cyan")
@@ -141,3 +141,9 @@ class DecisionDetailScreen(ModalScreen[None]):
             t.append("  (none captured)\n", style="dim")
 
         return t
+
+    @staticmethod
+    def _format_entropy(entropy: float | None) -> str:
+        if entropy is None:
+            return "-"
+        return f"{entropy:.3f}"

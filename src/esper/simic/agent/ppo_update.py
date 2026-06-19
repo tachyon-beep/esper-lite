@@ -38,6 +38,11 @@ class LossMetrics:
     value_loss: torch.Tensor
     entropy_loss: torch.Tensor
     entropy_floor_penalty: torch.Tensor  # DRL Expert: Track separately for calibration debugging
+    # P0-1: small auxiliary regression of the op-conditioned Q(s, op) telemetry head
+    # toward the SAME normalized-returns target as V(s). Detached from the LSTM (only
+    # trains the q_head's own params) so the op_q_values/q_variance/q_spread telemetry
+    # stays meaningful instead of emitting untrained init noise.
+    q_aux_loss: torch.Tensor
     total_loss: torch.Tensor
 
 
@@ -110,15 +115,15 @@ def compute_ratio_metrics(
         clip_pos = (joint_ratio > 1.0 + clip_ratio).float().mean()
         clip_neg = (joint_ratio < 1.0 - clip_ratio).float().mean()
 
-        # PER-HEAD clip-fraction: fraction of samples where this head's ratio is
-        # outside [1-clip, 1+clip] -- i.e. where compute_losses actually clipped
-        # this head's surrogate. Mean is unmasked to match the joint clip_fraction
-        # above (which is also taken over all samples), keeping the two directly
-        # comparable in telemetry.
-        per_head_clip_fraction = {
-            key: ((per_head_ratios[key] - 1.0).abs() > clip_ratio).float().mean()
-            for key in head_names
-        }
+        # PER-HEAD clip-fraction: fraction of causally relevant samples where
+        # this head's ratio is outside [1-clip, 1+clip], matching the head mask
+        # used by compute_losses for the clipped surrogate.
+        per_head_clip_fraction = {}
+        for key in head_names:
+            clipped = ((per_head_ratios[key] - 1.0).abs() > clip_ratio).float()
+            mask = head_masks[key]
+            n_valid = mask.sum().float()
+            per_head_clip_fraction[key] = (clipped * mask).sum() / n_valid.clamp(min=1)
 
         if target_kl is None:
             early_stop = torch.tensor(False, device=approx_kl.device)
@@ -254,6 +259,8 @@ def compute_losses(
     clip_value: bool,
     value_clip: float,
     value_coef: float,
+    q_values: torch.Tensor,
+    q_aux_coef: float,
     head_names: tuple[str, ...],
     entropy_floor: dict[str, float] | None = None,
     entropy_floor_penalty_coef: dict[str, float] | None = None,
@@ -352,6 +359,17 @@ def compute_losses(
     else:
         value_loss = 0.5 * per_step_value_loss.mean()
 
+    # P0-1: Q-aux loss. The op-conditioned Q(s, op) telemetry head is trained as a
+    # small auxiliary regression toward the SAME normalized-returns target as V(s),
+    # using the SAME forced-step weighting. q_values is detached-from-LSTM (only the
+    # q_head's own params train), so this term cannot reshape the shared features.
+    # Reuses the exact normalized_returns tensor (matched scale with the value loss).
+    per_step_q_loss = (q_values - normalized_returns) ** 2
+    if value_weight is not None:
+        q_aux_loss = 0.5 * (per_step_q_loss * value_weight).sum() / value_weight.sum().clamp(min=1)
+    else:
+        q_aux_loss = 0.5 * per_step_q_loss.mean()
+
     # D1: Entropy loss - also exclude forced steps (entropy is meaningless when no choice)
     # ChatGPT Pro review 2025-01-08: Entropy over a single-valid-action distribution is
     # either 0 (if masked properly) or noise (if computed over full logits). Either way,
@@ -408,6 +426,7 @@ def compute_losses(
         + value_coef * value_loss
         + entropy_coef * entropy_loss
         + entropy_floor_penalty
+        + q_aux_coef * q_aux_loss  # P0-1: small detached Q telemetry regression
     )
 
     return LossMetrics(
@@ -415,6 +434,7 @@ def compute_losses(
         value_loss=value_loss,
         entropy_loss=entropy_loss,
         entropy_floor_penalty=entropy_floor_penalty,
+        q_aux_loss=q_aux_loss,
         total_loss=total_loss,
     )
 

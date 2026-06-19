@@ -61,6 +61,37 @@ describe('ExperimentVerdictPanel', () => {
     expect(wrapper.find('[data-testid="gate-numerics"]').text()).toContain('3 tensor faults')
   })
 
+  it('does not flag the policy gate on an artefactual low EV when value_nrmse is healthy', () => {
+    // EV-telemetry-robustness: a deeply negative EV with ev_low_return_variance set is a
+    // denominator artifact, not a policy collapse. The gate keys on the robust value_nrmse and
+    // must NOT enter watch when the value head is actually fitting (low NRMSE).
+    const snapshot = createSnapshot()
+    snapshot.tamiyo.explained_variance = -8.0
+    snapshot.tamiyo.ev_low_return_variance = true
+    snapshot.tamiyo.value_nrmse = 0.3
+
+    const wrapper = mount(ExperimentVerdictPanel, {
+      props: { snapshot }
+    })
+
+    expect(wrapper.find('[data-testid="gate-policy"]').classes()).not.toContain('gate-watch')
+  })
+
+  it('flags the policy gate on a genuinely bad value fit (high value_nrmse)', () => {
+    // A high value_nrmse means residual RMSE exceeds the return spread — a real fit failure,
+    // regardless of the EV sign.
+    const snapshot = createSnapshot()
+    snapshot.tamiyo.explained_variance = 0.85
+    snapshot.tamiyo.ev_low_return_variance = false
+    snapshot.tamiyo.value_nrmse = 1.5
+
+    const wrapper = mount(ExperimentVerdictPanel, {
+      props: { snapshot }
+    })
+
+    expect(wrapper.find('[data-testid="gate-policy"]').classes()).toContain('gate-watch')
+  })
+
   it('renders the dominant cumulative action mix in descending order', () => {
     const snapshot = createSnapshot()
     snapshot.tamiyo.cumulative_action_counts = {

@@ -982,6 +982,17 @@ class SanctumAggregator:
         self._tamiyo.explained_variance = explained_variance
         self._tamiyo.explained_variance_history.append(explained_variance)
 
+        # EV-telemetry-robustness diagnostics (additive; pure telemetry, never gate inputs).
+        # value_nrmse is float | None on the payload (None on a degenerate batch); coerce to 0.0
+        # for the scalar gauge, matching the explained_variance convention above.
+        self._tamiyo.value_nrmse = (
+            payload.value_nrmse if payload.value_nrmse is not None else 0.0
+        )
+        self._tamiyo.ev_low_return_variance = payload.ev_low_return_variance
+        self._tamiyo.ev_return_variance = payload.ev_return_variance
+        self._tamiyo.rollback_attempt_count = payload.rollback_attempt_count
+        self._tamiyo.rollback_unattributed_count = payload.rollback_unattributed_count
+
         grad_norm = payload.grad_norm
         self._tamiyo.grad_norm = grad_norm
         self._tamiyo.grad_norm_history.append(grad_norm)
@@ -1106,6 +1117,9 @@ class SanctumAggregator:
         if payload.head_op_grad_norm is not None:
             self._tamiyo.head_op_grad_norm_prev = self._tamiyo.head_op_grad_norm
             self._tamiyo.head_op_grad_norm = payload.head_op_grad_norm
+        if payload.head_q_grad_norm is not None:
+            self._tamiyo.head_q_grad_norm_prev = self._tamiyo.head_q_grad_norm
+            self._tamiyo.head_q_grad_norm = payload.head_q_grad_norm
 
         # Per-head entropies (for heatmap visualization) - optional with None
         if payload.head_style_entropy is not None:
@@ -1149,6 +1163,19 @@ class SanctumAggregator:
         self._tamiyo.op_valid_mask = payload.op_valid_mask
         self._tamiyo.q_variance = payload.q_variance
         self._tamiyo.q_spread = payload.q_spread
+
+        # P0-1 AUX q-head diagnostics. q_aux_loss is float | None on the payload (None on a
+        # degenerate/older event); coerce to 0.0 for the scalar gauge, matching the
+        # explained_variance/value_nrmse convention above. head_q_gradient_state is str | None;
+        # coerce None -> "missing" (the established no-signal vocabulary value).
+        self._tamiyo.q_aux_loss = (
+            payload.q_aux_loss if payload.q_aux_loss is not None else 0.0
+        )
+        self._tamiyo.head_q_gradient_state = (
+            payload.head_q_gradient_state
+            if payload.head_q_gradient_state is not None
+            else "missing"
+        )
 
         # Set initial spread after warmup for relative thresholds
         WARMUP_BATCHES = 50
@@ -1875,7 +1902,7 @@ class SanctumAggregator:
                 alternatives=payload.alternatives or [],
                 action_success=payload.action_success,
                 decision_id=str(uuid.uuid4())[:8],
-                decision_entropy=payload.decision_entropy or 0.0,
+                decision_entropy=payload.decision_entropy,
                 env_id=env_id,
                 episode=self._current_episode,
                 epoch=self._current_epoch,
@@ -1899,14 +1926,14 @@ class SanctumAggregator:
                 alpha_speed_confidence=ht.alpha_speed_confidence if ht else 0.0,
                 curve_confidence=ht.curve_confidence if ht else 0.0,
                 # Per-head entropy values (from HeadTelemetry)
-                op_entropy=ht.op_entropy if ht else 0.0,
-                slot_entropy=ht.slot_entropy if ht else 0.0,
-                blueprint_entropy=ht.blueprint_entropy if ht else 0.0,
-                style_entropy=ht.style_entropy if ht else 0.0,
-                tempo_entropy=ht.tempo_entropy if ht else 0.0,
-                alpha_target_entropy=ht.alpha_target_entropy if ht else 0.0,
-                alpha_speed_entropy=ht.alpha_speed_entropy if ht else 0.0,
-                curve_entropy=ht.curve_entropy if ht else 0.0,
+                op_entropy=ht.op_entropy if ht is not None else None,
+                slot_entropy=ht.slot_entropy if ht is not None else None,
+                blueprint_entropy=ht.blueprint_entropy if ht is not None else None,
+                style_entropy=ht.style_entropy if ht is not None else None,
+                tempo_entropy=ht.tempo_entropy if ht is not None else None,
+                alpha_target_entropy=ht.alpha_target_entropy if ht is not None else None,
+                alpha_speed_entropy=ht.alpha_speed_entropy if ht is not None else None,
+                curve_entropy=ht.curve_entropy if ht is not None else None,
             )
 
             # Store as pending for TD advantage computation on next decision
@@ -2081,8 +2108,10 @@ class SanctumAggregator:
             )
             gaming_rate = gaming_steps / max(1, len(components))
 
-            # Get latest EV from Tamiyo PPO state
+            # Get latest EV (diagnostic display) and the robust value-fit signal from Tamiyo state.
             ev = self._tamiyo.explained_variance
+            value_nrmse = self._tamiyo.value_nrmse
+            ev_low_return_variance = self._tamiyo.ev_low_return_variance
 
             # Hypervolume from episode outcomes
             hv = self._compute_hypervolume()
@@ -2091,6 +2120,8 @@ class SanctumAggregator:
                 pbrs_fraction=pbrs_fraction,
                 anti_gaming_trigger_rate=gaming_rate,
                 ev_explained=ev,
+                value_nrmse=value_nrmse,
+                ev_low_return_variance=ev_low_return_variance,
                 hypervolume=hv,
             )
 

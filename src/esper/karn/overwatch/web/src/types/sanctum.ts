@@ -231,7 +231,7 @@ export interface DecisionSnapshot {
   batch: number;
   value_residual: number;
   td_advantage: number | null;
-  decision_entropy: number;
+  decision_entropy: number | null;
   chosen_blueprint: string | null;
   chosen_tempo: string | null;
   chosen_style: string | null;
@@ -246,14 +246,14 @@ export interface DecisionSnapshot {
   alpha_target_confidence: number;
   alpha_speed_confidence: number;
   curve_confidence: number;
-  op_entropy: number;
-  slot_entropy: number;
-  blueprint_entropy: number;
-  style_entropy: number;
-  tempo_entropy: number;
-  alpha_target_entropy: number;
-  alpha_speed_entropy: number;
-  curve_entropy: number;
+  op_entropy: number | null;
+  slot_entropy: number | null;
+  blueprint_entropy: number | null;
+  style_entropy: number | null;
+  tempo_entropy: number | null;
+  alpha_target_entropy: number | null;
+  alpha_speed_entropy: number | null;
+  curve_entropy: number | null;
 }
 
 export interface EventLogEntry {
@@ -314,6 +314,11 @@ export interface TamiyoState {
   clip_fraction: number;
   kl_divergence: number;
   explained_variance: number;
+  value_nrmse: number;
+  ev_low_return_variance: boolean;
+  ev_return_variance: number | null;
+  rollback_attempt_count: number;
+  rollback_unattributed_count: number;
   policy_loss: number;
   value_loss: number;
   entropy_loss: number;
@@ -378,6 +383,7 @@ export interface TamiyoState {
   head_alpha_speed_grad_norm: number;
   head_alpha_curve_grad_norm: number;
   head_op_grad_norm: number;
+  head_q_grad_norm: number;
   head_slot_grad_norm_prev: number;
   head_blueprint_grad_norm_prev: number;
   head_style_grad_norm_prev: number;
@@ -386,6 +392,7 @@ export interface TamiyoState {
   head_alpha_speed_grad_norm_prev: number;
   head_alpha_curve_grad_norm_prev: number;
   head_op_grad_norm_prev: number;
+  head_q_grad_norm_prev: number;
   head_slot_ratio_max: number;
   head_blueprint_ratio_max: number;
   head_style_ratio_max: number;
@@ -427,6 +434,8 @@ export interface TamiyoState {
   op_valid_mask: boolean[];
   q_variance: number;
   q_spread: number;
+  q_aux_loss: number;
+  head_q_gradient_state: string;
   last_action_success: boolean;
   last_action_op: string;
   infrastructure: InfrastructureMetrics;

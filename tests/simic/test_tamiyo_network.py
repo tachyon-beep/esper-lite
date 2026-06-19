@@ -45,7 +45,9 @@ class TestFactoredRecurrentActorCritic:
         assert "alpha_speed_logits" in output
         assert "alpha_curve_logits" in output
         assert "op_logits" in output
-        assert "value" in output
+        assert "state_value" in output
+        assert "q_value" in output
+        assert "value" not in output
         assert "hidden" in output
 
         # Check shapes
@@ -57,7 +59,8 @@ class TestFactoredRecurrentActorCritic:
         assert output["alpha_speed_logits"].shape == (2, 1, NUM_ALPHA_SPEEDS)
         assert output["alpha_curve_logits"].shape == (2, 1, NUM_ALPHA_CURVES)
         assert output["op_logits"].shape == (2, 1, NUM_OPS)
-        assert output["value"].shape == (2, 1)
+        assert output["state_value"].shape == (2, 1)
+        assert output["q_value"].shape == (2, 1)
 
     def test_hidden_state_propagates(self):
         """LSTM hidden state must propagate across time steps."""
@@ -121,7 +124,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        log_probs, values, entropy, hidden, pred_contributions = net.evaluate_actions(state, bp_idx, actions)
+        log_probs, values, entropy, hidden, pred_contributions, _ = net.evaluate_actions(state, bp_idx, actions)
 
         # Per-head log probs
         assert "slot" in log_probs
@@ -187,7 +190,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        *_, entropy, _, _ = net.evaluate_actions(state, bp_idx, actions)
+        _, _, entropy, _, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
         # Normalized entropy should be between 0 and 1
         for key in [
@@ -457,7 +460,8 @@ def test_logits_no_inf_after_masking():
         "alpha_speed_logits",
         "alpha_curve_logits",
         "op_logits",
-        "value",
+        "state_value",
+        "q_value",
     ]:
         tensor = output[key]
         assert not torch.isinf(tensor).any(), f"{key} should not contain -inf"
@@ -484,7 +488,7 @@ def test_entropy_normalization_with_single_action():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, hidden, _ = net.evaluate_actions(state, bp_idx, actions)
+    log_probs, values, entropy, hidden, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy for single-action head should be 0 (no uncertainty), not inf/nan
     assert not torch.isnan(entropy["slot"]).any(), "Entropy should not be NaN"
@@ -512,7 +516,7 @@ def test_entropy_normalization_in_loss():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, _, _ = net.evaluate_actions(state, bp_idx, actions)
+    log_probs, values, entropy, _, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy loss should be bounded
     entropy_loss = sum(-ent.mean() for ent in entropy.values())
@@ -547,7 +551,7 @@ def test_entropy_respects_valid_actions_only():
         "op": torch.zeros(1, 2, dtype=torch.long),
     }
 
-    _, _, entropy, _, _ = net.evaluate_actions(
+    _, _, entropy, _, _, _ = net.evaluate_actions(
         states=state,
         blueprint_indices=bp_idx,
         actions=actions,
@@ -625,7 +629,7 @@ def test_no_gradient_memory_leak_over_episodes():
         output = model.forward(state, bp_idx, hidden)
 
         # Compute loss and backprop
-        loss = output["value"].sum()
+        loss = output["state_value"].sum()
         loss.backward()
 
         # Clear gradients
@@ -666,14 +670,12 @@ def test_no_gradient_memory_leak_over_episodes():
 # === Op-Conditioning Consistency Tests (Phase 4 Addendum) ===
 
 
-def test_op_conditioned_value_forward():
-    """Verify forward() computes Q(s, sampled_op).
+def test_op_independent_state_value_forward():
+    """Verify forward() computes the op-INDEPENDENT V(s) baseline (P0-1).
 
-    Critical test from Phase 4 addendum: The value head is now op-conditioned,
-    meaning it computes Q(s, op) instead of V(s). This test verifies:
-    1. Forward pass samples an op
-    2. Value is conditioned on that sampled op
-    3. Output contains the sampled_op for storage in rollout buffer
+    The PPO baseline is now V(s) (state_value), NOT Q(s, sampled_op). forward() still
+    samples an op (for the action + the Q telemetry head), but the state_value does
+    not depend on it.
     """
     net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
     state = torch.randn(2, 5, OBS_V3_NON_BLUEPRINT_DIM)  # [batch, seq, state_dim]
@@ -681,38 +683,31 @@ def test_op_conditioned_value_forward():
 
     out = net(state, bp_idx)
 
-    # Should have sampled op (used for value conditioning)
+    # sampled_op still present (drives action + Q telemetry, NOT the V baseline).
     assert "sampled_op" in out, "Forward output missing sampled_op field"
     assert out["sampled_op"].shape == (2, 5), f"sampled_op wrong shape: {out['sampled_op'].shape}"
 
-    # Value should be conditioned on that op
-    assert out["value"].shape == (2, 5), f"Value wrong shape: {out['value'].shape}"
+    # V(s) baseline and Q(s, op) telemetry are both exposed; 'value' is gone.
+    assert "value" not in out, "Op-conditioned 'value' key must be removed (P0-1)"
+    assert out["state_value"].shape == (2, 5), f"state_value wrong shape: {out['state_value'].shape}"
+    assert out["q_value"].shape == (2, 5), f"q_value wrong shape: {out['q_value'].shape}"
 
     # sampled_op should be valid (in range [0, NUM_OPS))
     assert (out["sampled_op"] >= 0).all(), "sampled_op has negative values"
     assert (out["sampled_op"] < NUM_OPS).all(), f"sampled_op exceeds NUM_OPS={NUM_OPS}"
 
 
-def test_stored_op_value_consistency():
-    """Verify evaluate_actions uses stored_op from rollout buffer.
-
-    Critical test from Phase 4 addendum: During PPO updates, evaluate_actions
-    must use the STORED op from the rollout buffer (not resample). This ensures:
-    1. Forward: samples op_t, computes Q(s_t, op_t), stores op_t
-    2. Evaluate: retrieves stored op_t, computes Q(s_t, op_t) [same value]
-
-    If evaluate_actions resampled the op, values would differ and gradients
-    would be biased.
-    """
+def test_state_value_matches_forward_and_evaluate():
+    """The op-INDEPENDENT V(s) is identical between forward() and evaluate_actions()
+    for the same (state, hidden) -- it does NOT depend on the stored op (P0-1)."""
     net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
+    net.eval()
     state = torch.randn(2, 5, OBS_V3_NON_BLUEPRINT_DIM)
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
 
-    # Get actions from forward (simulates rollout collection)
     fwd_out = net(state, bp_idx)
     stored_op = fwd_out["sampled_op"]
 
-    # Build actions dict with stored op (what rollout buffer stores)
     actions = {
         "op": stored_op,
         "slot": torch.randint(0, 3, (2, 5)),
@@ -724,18 +719,18 @@ def test_stored_op_value_consistency():
         "alpha_curve": torch.randint(0, NUM_ALPHA_CURVES, (2, 5)),
     }
 
-    # Evaluate with stored actions (simulates PPO update)
-    eval_log_probs, eval_value, eval_entropy, _, _ = net.evaluate_actions(
+    eval_log_probs, eval_value, eval_entropy, _, _, eval_q = net.evaluate_actions(
         state, bp_idx, actions
     )
 
-    # Values should match when same op is used
-    # (allow small FP error due to different computation paths)
-    assert torch.allclose(fwd_out["value"], eval_value, atol=1e-5), (
-        f"Value mismatch: forward={fwd_out['value'].mean():.6f}, "
-        f"evaluate={eval_value.mean():.6f}. "
-        "evaluate_actions may be resampling op instead of using stored op."
+    # V(s) is op-independent, so the forward and evaluate baselines match exactly
+    # (same LSTM trajectory from the timestep-0 hidden).
+    assert torch.allclose(fwd_out["state_value"], eval_value, atol=1e-5), (
+        f"V(s) mismatch: forward={fwd_out['state_value'].mean():.6f}, "
+        f"evaluate={eval_value.mean():.6f}."
     )
+    # And Q(s, stored_op) likewise matches between the two paths.
+    assert torch.allclose(fwd_out["q_value"], eval_q, atol=1e-5)
 
 
 def test_blueprint_embedding_shapes():
@@ -759,17 +754,17 @@ def test_blueprint_embedding_shapes():
     out1 = net(state, bp_idx_active)
     out2 = net(state, bp_idx_inactive)
 
-    # Both should produce valid outputs
-    assert out1["value"].shape == (2, 1), f"out1 value wrong shape: {out1['value'].shape}"
-    assert out2["value"].shape == (2, 1), f"out2 value wrong shape: {out2['value'].shape}"
+    # Both should produce valid outputs (V(s) baseline)
+    assert out1["state_value"].shape == (2, 1), f"out1 value wrong shape: {out1['state_value'].shape}"
+    assert out2["state_value"].shape == (2, 1), f"out2 value wrong shape: {out2['state_value'].shape}"
 
     # Different indices should produce different values
-    # (same state, different blueprint patterns → different Q-values)
-    assert not torch.allclose(out1["value"], out2["value"]), (
+    # (same state, different blueprint patterns → different V(s) via the LSTM)
+    assert not torch.allclose(out1["state_value"], out2["state_value"]), (
         "Different blueprint patterns produced identical values. "
         "Blueprint embeddings may not be influencing the network."
     )
 
     # Verify no NaN/Inf (inactive slots shouldn't break the network)
-    assert torch.isfinite(out1["value"]).all(), "Active slots produced non-finite values"
-    assert torch.isfinite(out2["value"]).all(), "Inactive slots produced non-finite values"
+    assert torch.isfinite(out1["state_value"]).all(), "Active slots produced non-finite values"
+    assert torch.isfinite(out2["state_value"]).all(), "Inactive slots produced non-finite values"

@@ -6,6 +6,12 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from esper.leyline.proof_baselines import (
+    FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT,
+    FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
+    FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+    FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
+)
 from esper.karn.mcp.views import (
     create_views,
     scan_ingestion_integrity,
@@ -33,6 +39,8 @@ def test_view_definitions_exist():
         "episode_outcomes",
         "shapley_computed",
         "morphology_causal_log",
+        "topology_manifests",
+        "phase_occupancy",
     }
     assert set(VIEW_DEFINITIONS.keys()) == expected
 
@@ -77,6 +85,138 @@ def test_raw_events_includes_filename_and_run_dir(tmp_path):
     assert filename.endswith("/telemetry_2025-01-01_000000/events.jsonl") or filename.endswith(
         "\\telemetry_2025-01-01_000000\\events.jsonl"
     )
+
+
+def test_runs_view_exposes_proof_baseline_lifecycle_policy(tmp_path):
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "start-1",
+        "event_type": "TRAINING_STARTED",
+        "timestamp": "2026-06-15T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": None,
+        "group_id": "proof",
+        "message": "",
+        "data": {
+            "episode_id": "proof",
+            "task": "cifar_impaired",
+            "reward_mode": "shaped",
+            "seed": 12345,
+            "proof_baseline_mode": "fixed_schedule",
+            "proof_baseline_pair_id": "blueprint-health-proof",
+            "proof_baseline_lifecycle_policy": "apply_declared_lifecycle_schedule",
+            "proof_baseline_schedule_id": FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+            "proof_baseline_schedule_hash": FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
+            "proof_baseline_schedule_version": FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
+            "proof_baseline_schedule_action_count": (
+                FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+            ),
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    (
+        mode,
+        pair_id,
+        lifecycle_policy,
+        seed,
+        schedule_id,
+        schedule_hash,
+        schedule_version,
+        schedule_action_count,
+    ) = conn.execute(
+        """
+        SELECT
+            proof_baseline_mode,
+            proof_baseline_pair_id,
+            proof_baseline_lifecycle_policy,
+            seed,
+            proof_baseline_schedule_id,
+            proof_baseline_schedule_hash,
+            proof_baseline_schedule_version,
+            proof_baseline_schedule_action_count
+        FROM runs
+        """
+    ).fetchone()
+
+    assert mode == "fixed_schedule"
+    assert pair_id == "blueprint-health-proof"
+    assert lifecycle_policy == "apply_declared_lifecycle_schedule"
+    assert seed == 12345
+    assert schedule_id == FIXED_SCHEDULE_GERMINATE_R0C0_V1
+    assert schedule_hash == FIXED_SCHEDULE_GERMINATE_R0C0_HASH
+    assert schedule_version == FIXED_SCHEDULE_GERMINATE_R0C0_VERSION
+    assert schedule_action_count == FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+
+
+def test_phase_occupancy_view_expands_phase_timings(tmp_path):
+    """phase_occupancy expands the per-epoch phases dict into one row per phase."""
+    run_dir = tmp_path / "phase_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "phase-1",
+        "event_type": "PHASE_PROFILE_COMPLETED",
+        "timestamp": "2026-06-16T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 3,
+        "group_id": "default",
+        "message": None,
+        "data": {
+            "phases": {
+                "train": {
+                    "wall_ms": 12.5,
+                    "python_cpu_ms": 11.0,
+                    "python_cpu_ratio": 0.88,
+                },
+                "rollout": {
+                    "wall_ms": 4.0,
+                    "python_cpu_ms": 3.8,
+                    "python_cpu_ratio": 0.95,
+                },
+            },
+            "epoch": 3,
+            "batch_idx": 2,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    rows = conn.execute(
+        """
+        SELECT run_dir, epoch, batch_idx, phase_name, wall_ms,
+               python_cpu_ms, python_cpu_ratio
+        FROM phase_occupancy
+        ORDER BY phase_name
+        """
+    ).fetchall()
+
+    assert len(rows) == 2  # one row per phase
+    by_name = {r[3]: r for r in rows}
+    assert set(by_name) == {"train", "rollout"}
+
+    run_dir_val, epoch, batch_idx, _name, wall_ms, cpu_ms, ratio = by_name["train"]
+    assert run_dir_val == "phase_run"
+    assert epoch == 3
+    assert batch_idx == 2
+    assert wall_ms == pytest.approx(12.5)
+    assert cpu_ms == pytest.approx(11.0)
+    assert ratio == pytest.approx(0.88)
+
+    assert by_name["rollout"][4] == pytest.approx(4.0)
 
 
 def test_morphology_causal_log_view_extracts_joinable_fields(tmp_path):
@@ -169,6 +309,207 @@ def test_morphology_causal_log_view_extracts_joinable_fields(tmp_path):
         None,
         1.25,
         "morph-b1-e7-env0-r0c0-op1-mutation",
+    )
+
+
+def test_morphology_causal_log_accepts_uint64_rng_seed(tmp_path):
+    """Morphology evidence uses uint64 RNG seeds from lifecycle streams."""
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+    uint64_seed = 14_576_210_837_687_595_958
+
+    event = {
+        "event_id": "causal-uint64",
+        "event_type": "MORPHOLOGY_CAUSAL_LOG",
+        "timestamp": "2026-06-13T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 1,
+        "group_id": "default",
+        "message": "Morphology audit evidence",
+        "data": {
+            "phase": "commit",
+            "env_id": 0,
+            "slot_id": "r0c0",
+            "operation": "GERMINATE",
+            "action_id": "morph-b0-e1-env0-r0c0-op1",
+            "proposal_id": "morph-b0-e1-env0-r0c0-op1-proposal",
+            "verdict_id": "morph-b0-e1-env0-r0c0-op1-verdict",
+            "mutation_id": "morph-b0-e1-env0-r0c0-op1-mutation",
+            "observation_hash": "obs-abc123",
+            "rng_stream": "simic.lifecycle.env0",
+            "rng_seed": uint64_seed,
+            "topology": "cnn",
+            "blueprint_id": "conv_l",
+            "governor_approved": True,
+            "governor_reason": "approved",
+            "governor_blocked_factor": None,
+            "watch_window_evidence": None,
+            "linked_event_id": "morph-b0-e1-env0-r0c0-op1-mutation",
+        },
+        "severity": "debug",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    (rng_seed,) = conn.execute(
+        "SELECT rng_seed FROM morphology_causal_log"
+    ).fetchone()
+
+    assert rng_seed == uint64_seed
+
+
+def test_morphology_causal_log_derives_epoch_from_action_id(tmp_path):
+    """Morphology evidence remains epoch-joinable when event.epoch is absent."""
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "causal-derived-epoch",
+        "event_type": "MORPHOLOGY_CAUSAL_LOG",
+        "timestamp": "2026-06-13T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": None,
+        "group_id": "default",
+        "message": "Morphology audit evidence",
+        "data": {
+            "phase": "commit",
+            "env_id": 0,
+            "slot_id": "r0c0",
+            "operation": "GERMINATE",
+            "action_id": "morph-b1-e7-env0-r0c0-op1",
+            "proposal_id": "morph-b1-e7-env0-r0c0-op1-proposal",
+            "verdict_id": "morph-b1-e7-env0-r0c0-op1-verdict",
+            "mutation_id": "morph-b1-e7-env0-r0c0-op1-mutation",
+            "observation_hash": "obs-abc123",
+            "rng_stream": "simic.lifecycle.env0",
+            "rng_seed": 12345,
+            "topology": "cnn",
+            "blueprint_id": "conv_l",
+            "governor_approved": True,
+            "governor_reason": "approved",
+            "governor_blocked_factor": None,
+            "watch_window_evidence": None,
+            "linked_event_id": "morph-b1-e7-env0-r0c0-op1-mutation",
+        },
+        "severity": "debug",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    (epoch,) = conn.execute("SELECT epoch FROM morphology_causal_log").fetchone()
+
+    assert epoch == 7
+
+
+def test_topology_manifests_view_extracts_static_final_replay_evidence(tmp_path):
+    """topology_manifests exposes source/replay join fields for static-final proof."""
+    run_dir = tmp_path / "static_final_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "replay-manifest-1",
+        "event_type": "TOPOLOGY_MANIFEST_RECORDED",
+        "timestamp": "2026-06-15T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 0,
+        "group_id": "final",
+        "message": "Static-final replay manifest",
+        "data": {
+            "manifest_role": "static_final_replay",
+            "proof_baseline_pair_id": "blueprint-health-proof",
+            "topology_manifest_version": 1,
+            "topology_manifest_hash": "topo-hash",
+            "topology_manifest_json": '{"slots":["r0c0"]}',
+            "task": "cifar_impaired",
+            "host_topology": "cnn",
+            "slot_config_hash": "slots-hash",
+            "slot_count": 1,
+            "fossilized_seed_count": 1,
+            "topology_delta_count": 1,
+            "source_run_dir": "source_run",
+            "source_group_id": "dynamic",
+            "source_episode_idx": 0,
+            "source_event_id": "source-manifest-1",
+            "source_topology_manifest_hash": "topo-hash",
+            "replay_weight_policy": "topology_only",
+            "replay_env_id": 3,
+            "replay_episode_idx": 9,
+            "replayed_topology_manifest_hash": "topo-hash",
+            "manifest_match": True,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            run_dir,
+            group_id,
+            epoch,
+            manifest_role,
+            proof_baseline_pair_id,
+            topology_manifest_version,
+            topology_manifest_hash,
+            topology_manifest_json,
+            task,
+            host_topology,
+            slot_config_hash,
+            slot_count,
+            fossilized_seed_count,
+            topology_delta_count,
+            source_run_dir,
+            source_group_id,
+            source_episode_idx,
+            source_event_id,
+            source_topology_manifest_hash,
+            replay_weight_policy,
+            replay_env_id,
+            replay_episode_idx,
+            replayed_topology_manifest_hash,
+            manifest_match
+        FROM topology_manifests
+        """
+    ).fetchone()
+
+    assert row == (
+        "static_final_run",
+        "final",
+        0,
+        "static_final_replay",
+        "blueprint-health-proof",
+        1,
+        "topo-hash",
+        '{"slots":["r0c0"]}',
+        "cifar_impaired",
+        "cnn",
+        "slots-hash",
+        1,
+        1,
+        1,
+        "source_run",
+        "dynamic",
+        0,
+        "source-manifest-1",
+        "topo-hash",
+        "topology_only",
+        3,
+        9,
+        "topo-hash",
+        True,
     )
 
 
@@ -388,6 +729,11 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "lr": 0.0003,
             "entropy_coef": 0.01,
             "entropy_collapsed": False,
+            "forced_step_ratio": 0.75,
+            "usable_actor_timesteps": 5,
+            "decision_density": 0.25,
+            "advantage_std_floored": True,
+            "d5_pre_norm_advantage_std": 0.125,
             "head_slot_entropy": 0.9,
             "head_blueprint_entropy": 0.8,
             "head_style_entropy": 0.7,
@@ -405,6 +751,7 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "head_alpha_curve_grad_norm": 1.7,
             "head_op_grad_norm": 1.8,
             "head_value_grad_norm": 1.9,
+            "head_q_grad_norm": 2.0,
             "head_slot_learnable_fraction": 0.25,
             "head_blueprint_learnable_fraction": 0.0,
             "head_style_learnable_fraction": 0.5,
@@ -422,6 +769,7 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             "head_alpha_curve_gradient_state": "finite",
             "head_op_gradient_state": "finite",
             "head_value_gradient_state": "finite",
+            "head_q_gradient_state": "finite",
         },
         "severity": "info",
     }
@@ -441,14 +789,162 @@ def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):
             head_slot_entropy,
             head_op_grad_norm,
             head_value_grad_norm,
+            head_q_grad_norm,
             head_blueprint_learnable_fraction,
             head_blueprint_gradient_state,
-            head_value_gradient_state
+            head_value_gradient_state,
+            head_q_gradient_state,
+            forced_step_ratio,
+            usable_actor_timesteps,
+            decision_density,
+            advantage_std_floored,
+            d5_pre_norm_advantage_std
         FROM ppo_updates
         """
     ).fetchone()
 
-    assert row == (42, "A", 7, 3, 0.1, 0.9, 1.8, 1.9, 0.0, "not_learnable", "finite")
+    assert row == (
+        42,
+        "A",
+        7,
+        3,
+        0.1,
+        0.9,
+        1.8,
+        1.9,
+        2.0,
+        0.0,
+        "not_learnable",
+        "finite",
+        "finite",
+        0.75,
+        5,
+        0.25,
+        True,
+        0.125,
+    )
+
+
+def test_ppo_updates_exposes_ev_robustness_columns(tmp_path):
+    """ppo_updates view should expose value_nrmse / ev_low_return_variance / ev_return_variance."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-ev-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 11,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "explained_variance": -3.5,
+            "value_nrmse": 0.42,
+            "ev_low_return_variance": True,
+            "ev_return_variance": 0.7,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            explained_variance,
+            value_nrmse,
+            ev_low_return_variance,
+            ev_return_variance
+        FROM ppo_updates
+        """
+    ).fetchone()
+
+    assert row == (-3.5, 0.42, True, 0.7)
+
+
+def test_ppo_updates_exposes_q_aux_loss(tmp_path):
+    """ppo_updates view should expose the q-head auxiliary loss diagnostic."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-q-aux-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 13,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "q_aux_loss": 0.31,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    (q_aux_loss,) = conn.execute(
+        "SELECT q_aux_loss FROM ppo_updates"
+    ).fetchone()
+
+    assert q_aux_loss == 0.31
+
+
+def test_ppo_updates_exposes_rollback_columns(tmp_path):
+    """ppo_updates view should expose the rollback observability aggregates."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-rollback-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 14,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "rollback_count": 3,
+            "rollback_steps_zeroed": 12,
+            "rollback_attempt_count": 5,
+            "rollback_unattributed_count": 1,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            rollback_count,
+            rollback_steps_zeroed,
+            rollback_attempt_count,
+            rollback_unattributed_count
+        FROM ppo_updates
+        """
+    ).fetchone()
+
+    assert row == (3, 12, 5, 1)
 
 
 def test_run_confounders_view_surfaces_numerical_instability(tmp_path):
@@ -818,10 +1314,12 @@ def test_batch_stats_view_parses_payload(tmp_path):
             "host_accuracy": 0.50,
             "entropy": 1.2,
             "kl_divergence": 0.01,
-            "value_variance": 0.02,
+            "explained_variance": 0.02,
             "seeds_created": 5,
             "seeds_fossilized": 2,
             "skipped_update": False,
+            "rollback_attempt_count": 6,
+            "rollback_unattributed_count": 2,
         },
         "severity": "info",
     }
@@ -841,11 +1339,13 @@ def test_batch_stats_view_parses_payload(tmp_path):
             entropy,
             seeds_created,
             seeds_fossilized,
-            skipped_update
+            skipped_update,
+            rollback_attempt_count,
+            rollback_unattributed_count
         FROM batch_stats
         """
     ).fetchone()
-    assert row == (12, 3, 7, 0.55, 0.5, 1.2, 5, 2, False)
+    assert row == (12, 3, 7, 0.55, 0.5, 1.2, 5, 2, False, 6, 2)
 
 
 def test_batch_epochs_and_trends_views_parse_payloads(tmp_path):
@@ -1050,3 +1550,83 @@ def test_run_confounders_view_empty_on_clean_run(tmp_path):
 
     rows = conn.execute("SELECT * FROM run_confounders").fetchall()
     assert rows == []
+
+
+def test_episode_outcomes_view_extracts_required_proof_fields(tmp_path):
+    """episode_outcomes exposes every required proof ROI contract field."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    event = {
+        "event_id": "outcome-1",
+        "event_type": "EPISODE_OUTCOME",
+        "timestamp": datetime.now().isoformat(),
+        "epoch": 8,
+        "group_id": "A",
+        "data": {
+            "env_id": 2,
+            "episode_idx": 8,
+            "final_accuracy": 91.5,
+            "param_ratio": 1.2,
+            "num_fossilized": 3,
+            "num_contributing_fossilized": 2,
+            "episode_reward": 4.5,
+            "stability_score": 0.8,
+            "reward_mode": "simplified",
+            "episode_length": 25,
+            "outcome_type": "success",
+            "germinate_count": 4,
+            "prune_count": 1,
+            "fossilize_count": 3,
+        },
+        "severity": "info",
+    }
+    (run_dir / "events.jsonl").write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            event_id,
+            run_dir,
+            group_id,
+            env_id,
+            episode_idx,
+            final_accuracy,
+            param_ratio,
+            num_fossilized,
+            num_contributing_fossilized,
+            episode_reward,
+            stability_score,
+            reward_mode,
+            episode_length,
+            outcome_type,
+            germinate_count,
+            prune_count,
+            fossilize_count
+        FROM episode_outcomes
+        """
+    ).fetchone()
+
+    assert row == (
+        "outcome-1",
+        "proof_run",
+        "A",
+        2,
+        8,
+        91.5,
+        1.2,
+        3,
+        2,
+        4.5,
+        0.8,
+        "simplified",
+        25,
+        "success",
+        4,
+        1,
+        3,
+    )

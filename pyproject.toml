@@ -1,6 +1,6 @@
 [project]
 name = "esper-lite"
-version = "0.1.0"
+version = "0.2.0"
 description = "Morphogenetic neural network training - proof of concept"
 requires-python = ">=3.11"
 dependencies = [
@@ -146,6 +146,10 @@ module = "scripts.*"
 disallow_untyped_defs = false
 warn_return_any = false
 check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "esper.leyline.telemetry_contracts"
+strict = true  # Wire-format contracts must be fully strict
 
 [[tool.mypy.overrides]]
 module = "esper.leyline.telemetry"

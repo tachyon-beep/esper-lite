@@ -1,6 +1,7 @@
 """Tests for KarnCollector ingest validation/coercion."""
 
 from esper.karn.collector import KarnCollector
+from esper.karn.store import EpochSnapshot
 from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
     EpochCompletedPayload,
@@ -56,6 +57,22 @@ class TestCollectorIngestValidation:
         assert isinstance(snap.host.val_accuracy, float)
         assert snap.host.val_loss == 0.25
         assert snap.host.val_accuracy == 42.5
+
+    def test_accuracy_accessors_preserve_missingness_and_zero(self) -> None:
+        collector = KarnCollector()
+
+        missing_accuracy = EpochSnapshot(epoch=1)
+        measured_zero = EpochSnapshot(epoch=2)
+        measured_zero.host.val_accuracy = 0.0
+        collector.store.epoch_snapshots.append(missing_accuracy)
+
+        assert collector.latest_accuracy is None
+        assert collector.accuracy_trajectory == []
+
+        collector.store.epoch_snapshots.append(measured_zero)
+
+        assert collector.latest_accuracy == 0.0
+        assert collector.accuracy_trajectory == [(2, 0.0)]
 
     def test_seed_germinated_coerces_env_id_and_params(self) -> None:
         collector = KarnCollector()

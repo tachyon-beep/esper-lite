@@ -265,13 +265,13 @@ python -m esper.scripts.train ppo --reward-mode minimal
 
 * Obs V3: compact obs + blueprint embeddings (116 dims + 12 blueprint embed = 128 total network input)
 * Policy V2: 512/512 feature+LSTM, 150-step horizon
-* Q(s,op) critic: action-conditioned value baseline
+* V(s) critic: op-independent value baseline (P0-1, commit 6a27b8e3, replaced the original action-conditioned Q(s,op) baseline). Q(s,op) retained as a detached aux/telemetry head.
 * Differential entropy coefficients by head (protect sparse heads from collapse)
 
 **Q-values telemetry (2025-12-31):** ✅ COMPLETE
-- Op-conditioned Q(s,op) values wired end-to-end from PPO → telemetry → UI
+- Op-conditioned Q(s,op) values wired end-to-end from PPO → telemetry → UI (as of P0-1 / commit 6a27b8e3, Q(s,op) is a detached aux/telemetry head — the PPO baseline is the op-independent V(s) head; see Phase 2.5B "Delivered Capabilities")
 - Sanctum HealthStatusPanel displays Q-values with variance diagnostic
-- Detects if critic ignores op conditioning (Q-variance < 0.01 = critical)
+- Detects if the Q-head ignores op conditioning (Q-variance < 0.01 = critical)
 
 **Status:** IMPLEMENTED (Q-values telemetry ✅ 2025-12-31)
 **Operational status:** Waiting on Phase 2.5 gates below before proceeding to Phase 3.
@@ -283,7 +283,7 @@ python -m esper.scripts.train ppo --reward-mode minimal
 **Objective:** Validate the “Rent & Churn Economy” and select the winning reward signal for Phase 3 (Transformers).
 
 **Context:**
-We have successfully trained `cifar_blind`, a model that achieves ~60% accuracy on CIFAR-10 with only +10% parameter growth using a heuristic/random strategy. This sets the **Baseline for Competence**.
+Current proof rehearsals target `cifar_impaired`, the valid CIFAR task used by the reward-efficiency packet and tracker commands. The heuristic/random control sets the **Baseline for Competence**.
 
 For the RL agent (`Simic`) to justify its existence, it must outperform this baseline not just in accuracy, but in **structural efficiency** (getting more accuracy *per unit of growth*).
 
@@ -293,14 +293,14 @@ We have observed that the current 7-component `SHAPED` reward might be creating 
 
 | Cohort             | Description        | Reward Function                                         | Hypothesis                                                            |
 | :----------------- | :----------------- | :------------------------------------------------------ | :-------------------------------------------------------------------- |
-| **Control**        | `cifar_blind`      | Heuristic / Random                                      | **Baseline.** The floor for performance.                              |
+| **Control**        | `cifar_impaired` heuristic | Heuristic / Random                                      | **Baseline.** The floor for performance.                              |
 | **A (Shaped)**     | Current Default    | 7-component (PBRS + Attribution + Warnings + Rent...)   | **Over-engineered.** likely to cause confusion/instability.           |
 | **B (Simplified)** | **The Challenger** | 3-component (PBRS + Intervention Cost + Terminal Bonus) | **Optimal.** Cleanest gradient for temporal credit assignment.        |
 | **C (Sparse)**     | Hard Mode          | Terminal Accuracy - Rent                                | **The Truth.** Hardest to learn, but theoretically perfect alignment. |
 
 ##### Configuration
 
-* **Task:** `cifar_blind` topology (ResNet host + 2 seed slots)
+* **Task:** `cifar_impaired` topology (ResNet host + seed slots)
 * **Duration:** 100 Episodes
 * **Envs:** 8–12 concurrent environments (split evenly across cohorts)
 * **Seed Budget:** Max 2 active seeds
@@ -314,7 +314,7 @@ We have observed that the current 7-component `SHAPED` reward might be creating 
 ##### Pass Criteria
 
 * **Essential:** Cohort B (Simplified) outperforms Cohort A (Shaped) in Accuracy ROI
-* **Essential:** Cohort B outperforms Control (`cifar_blind`) in Final Accuracy
+* **Essential:** Cohort B outperforms Control (`cifar_impaired` heuristic) in Final Accuracy
 * **Stretch:** Cohort C (Sparse) learns anything better than random chance
 
 ##### Execution Plan

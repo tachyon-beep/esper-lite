@@ -870,6 +870,10 @@ class TestSeedSlotEmitsTypedPayloads:
         slot, events = slot_with_capture
 
         slot.germinate("depthwise", "test-seed-001")
+        slot.state.metrics.initial_val_accuracy = 70.0
+        slot.state.metrics.current_val_accuracy = 72.5
+        slot.state.metrics.accuracy_at_blending_start = 71.0
+        slot.state.metrics._blending_started = True
         events.clear()
 
         slot.prune("test_reason", initiator="policy")
@@ -885,6 +889,7 @@ class TestSeedSlotEmitsTypedPayloads:
         assert event.data.reason == "test_reason"
         assert event.data.blueprint_id == "depthwise"
         assert event.data.initiator == "policy"
+        assert event.data.blending_delta == 1.5
 
     def test_fossilize_emits_seed_fossilized_payload(self, slot_with_capture):
         """SeedSlot.advance_stage() to FOSSILIZED emits SeedFossilizedPayload."""
@@ -896,6 +901,8 @@ class TestSeedSlotEmitsTypedPayloads:
         # Set up state for fossilization
         slot.state.metrics.initial_val_accuracy = 70.0
         slot.state.metrics.current_val_accuracy = 75.0
+        slot.state.metrics.accuracy_at_blending_start = 72.0
+        slot.state.metrics._blending_started = True
         slot.state.metrics.counterfactual_contribution = 5.0
         slot.state.stage = SeedStage.HOLDING
         slot.state.is_healthy = True
@@ -911,6 +918,7 @@ class TestSeedSlotEmitsTypedPayloads:
         assert isinstance(event.data, SeedFossilizedPayload)
         assert event.data.blueprint_id == "depthwise"
         assert event.data.improvement == 5.0
+        assert event.data.blending_delta == 3.0
         assert event.data.params_added > 0
 
 

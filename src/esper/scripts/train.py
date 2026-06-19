@@ -30,6 +30,8 @@ if _t.cuda.is_initialized():  # type: ignore[no-untyped-call]
 import argparse
 import logging
 import sys
+import threading
+from collections.abc import Callable
 from textwrap import dedent
 
 import torch
@@ -40,6 +42,83 @@ from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_LSTM_HIDDEN_DIM
 from esper.simic.training import TrainingConfig
 
 _logger = logging.getLogger(__name__)
+
+
+def _run_training_capturing_errors(
+    run_training: Callable[[], None],
+    training_error: list[str | None],
+    shutdown_event: threading.Event,
+) -> None:
+    """Run training, capturing any unhandled exception.
+
+    On crash, records the traceback into ``training_error`` and sets
+    ``shutdown_event`` so the TUI and any waiters know the process must exit
+    non-zero. Without signalling shutdown, the main thread could exit 0 even
+    though training crashed. Extracted to module scope so the crash-handling
+    contract is directly testable.
+    """
+    import traceback
+
+    try:
+        run_training()
+    except Exception:
+        training_error[0] = traceback.format_exc()
+        shutdown_event.set()
+        # Log to stderr (visible in the Textual console).
+        print(f"\n[TRAINING ERROR]\n{training_error[0]}", file=sys.stderr)
+
+
+def _exit_nonzero_if_training_failed(training_error: list[str | None]) -> None:
+    """Exit the process non-zero if the (background) training thread recorded a crash.
+
+    In sanctum/TUI mode training runs in a background thread, so its exception cannot
+    propagate to the main thread — ``shutdown_event`` only requests a graceful TUI stop,
+    it does NOT set the exit code. Without this, a crashed run exits 0 and reports
+    success to the shell/CI. Normal (non-sanctum) mode re-raises and exits non-zero on
+    its own, so this is a no-op there (training_error stays [None]).
+    """
+    if training_error[0] is not None:
+        sys.exit(1)
+
+
+def _degraded_requested_backends(
+    health_snapshot: "dict[str, object]",
+    requested_backend_names: "set[str]",
+) -> "set[str]":
+    """Return the subset of REQUESTED telemetry backends that degraded (dropped events).
+
+    A telemetry backend the user explicitly asked for (``--telemetry-file``,
+    ``--telemetry-dir``, ``--wandb``, ``--sanctum``, ``--overwatch``) failing
+    asynchronously must not let the CLI exit 0. This consults the hub health
+    snapshot and reports which requested backends dropped events so the shutdown
+    path can fail loud.
+
+    The always-on research collector is intentionally excluded by the caller: it
+    is never placed in ``requested_backend_names`` because it is not a requested
+    streaming sink.
+
+    A requested backend that is absent from ``backend_stats`` is a real bug (the
+    hub failed to register a sink the user asked for), so we index directly and
+    let the resulting KeyError surface — per the no-bug-hiding policy, we do NOT
+    silently treat a missing backend as healthy.
+
+    Args:
+        health_snapshot: The dict returned by ``NissaHub.get_health_snapshot()``.
+        requested_backend_names: Worker names of backends the user requested.
+
+    Returns:
+        The set of requested backend names that dropped one or more events.
+
+    Raises:
+        KeyError: If a requested backend name is missing from ``backend_stats``.
+    """
+    backend_stats = health_snapshot["backend_stats"]
+    degraded: set[str] = set()
+    for name in requested_backend_names:
+        # Direct index (not .get): a missing requested backend is a bug, fail loud.
+        if int(backend_stats[name]["dropped_events"]) > 0:
+            degraded.add(name)
+    return degraded
 
 
 def _load_config_with_friendly_errors(config_path: str) -> "TrainingConfig":
@@ -168,6 +247,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print a compact torch.profiler op summary at the end of training",
     )
+    telemetry_parent.add_argument(
+        "--no-phase-profiler",
+        dest="phase_profiler",
+        action="store_false",
+        help="Disable the always-on Tier-0 phase profiler (per-epoch phase timing)",
+    )
+    telemetry_parent.set_defaults(phase_profiler=True)
     telemetry_parent.add_argument(
         "--gradient-telemetry-stride",
         type=int,
@@ -427,6 +513,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Sequential reward-mode A/B: train separate policies on separate GPUs",
     )
+    ppo_parser.add_argument(
+        "--proof-baseline",
+        type=str,
+        choices=["blueprint-health"],
+        default=None,
+        help=(
+            "Run the blueprint-health proof-baseline cohort plan (6 control "
+            "cohorts: off-switch, static-initial, static-final, fixed-schedule, "
+            "lockstep A/B) sequentially instead of a single policy run. Pair with "
+            "--telemetry-dir, then analyze via "
+            "scripts/proof_packet.py --proof-profile reward-efficiency."
+        ),
+    )
 
     # === Tamiyo Training Scale ===
     # These control how much and how Tamiyo learns, exposed with Tamiyo-centric names.
@@ -462,6 +561,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="E",
         help="Gradient steps per round (passes over rollout data). Higher = more sample-efficient "
              "but risks overfitting. (Maps to ppo_updates_per_batch. Default: 1)",
+    )
+    ppo_parser.add_argument(
+        "--value-warmup-batches",
+        type=int,
+        default=None,
+        metavar="W",
+        help="Batches over which the value-loss coefficient ramps from value_coef_start to "
+             "value_coef. 0 disables warmup (fixed value_coef from step 0). "
+             "(Maps to value_warmup_batches. Default: 10)",
     )
     ppo_parser.add_argument(
         "--memory-size",
@@ -615,13 +723,6 @@ def main() -> None:
         hub.add_backend(dir_backend)
         print(f"Telemetry will be saved to: {dir_backend.output_dir}")
 
-    # Setup Karn collector for stateful telemetry (P1-04)
-    karn_collector = None
-    if args.export_karn:
-        from esper.karn import KarnCollector
-        karn_collector = KarnCollector()
-        hub.add_backend(karn_collector)
-
     # Add Wandb backend if requested
     wandb_backend = None
     if args.wandb:
@@ -723,6 +824,23 @@ def main() -> None:
     karn_collector = get_collector()
     hub.add_backend(karn_collector)
 
+    # Names of the REQUESTED streaming sinks (worker name == backend class name).
+    # The always-on research collector and ConsoleOutput are deliberately excluded:
+    # they are not requested streaming sinks, so their drops must not fail the run.
+    # The shutdown path consults the hub health snapshot for these names and exits
+    # non-zero if any of them degraded (dropped events) asynchronously.
+    requested_telemetry_backends: set[str] = {
+        backend.__class__.__name__
+        for backend in (
+            file_backend,
+            dir_backend,
+            wandb_backend,
+            sanctum_backend,
+            overwatch_backend,
+        )
+        if backend is not None
+    }
+
     # Events for TUI synchronization
     # - dataloader_ready_event: Signals when DataLoader workers are spawned
     # - shutdown_event: Signals training to stop gracefully at epoch end
@@ -815,11 +933,17 @@ def main() -> None:
                     config.chunk_length = args.episode_length
                 if args.ppo_epochs is not None:
                     config.ppo_updates_per_batch = args.ppo_epochs
+                if args.value_warmup_batches is not None:
+                    config.value_warmup_batches = args.value_warmup_batches
                 if memory_size_override:
                     config.lstm_hidden_dim = args.memory_size
                 if args.entropy_anneal_episodes is not None:
                     config.entropy_anneal_episodes = args.entropy_anneal_episodes
 
+                if args.dual_ab and args.proof_baseline:
+                    raise ValueError(
+                        "--dual-ab and --proof-baseline are mutually exclusive run modes"
+                    )
                 # Handle dual-policy A/B testing
                 if args.dual_ab:
                     # Check for GPU availability
@@ -901,6 +1025,7 @@ def main() -> None:
                             "torch_profiler_profile_memory": args.torch_profiler_profile_memory,
                             "torch_profiler_with_stack": args.torch_profiler_with_stack,
                             "torch_profiler_summary": args.torch_profiler_summary,
+                            "phase_profiler": args.phase_profiler,
                         }
                     )
                     train_dual_policy_ab(
@@ -921,6 +1046,73 @@ def main() -> None:
                         use_telemetry=config.use_telemetry,
                         slots=config.slots,
                         **dual_ab_kwargs,
+                    )
+                elif args.proof_baseline:
+                    # Blueprint-health proof: run the control cohorts sequentially
+                    # with the SAME config / telemetry / device wiring as a normal
+                    # run, so each cohort is comparable to a real policy run. Analyze
+                    # afterwards with scripts/proof_packet.py --proof-profile
+                    # reward-efficiency over the same --telemetry-dir.
+                    from esper.simic.rewards import RewardMode
+                    from esper.simic.training.proof_baselines import (
+                        build_blueprint_health_proof_plan,
+                        train_blueprint_health_proof_baselines,
+                    )
+
+                    print(config.summary())
+                    plan = build_blueprint_health_proof_plan(
+                        primary_reward_mode=RewardMode.SHAPED,
+                        comparison_reward_mode=RewardMode.SIMPLIFIED,
+                        base_seed=config.seed,
+                    )
+                    print(
+                        f"[Proof Baseline] Running plan '{plan.plan_id}' "
+                        f"({len(plan.cohorts)} cohorts) sequentially on {args.device}"
+                    )
+
+                    # Mirror the single-run kwargs (config + the call-site extras the
+                    # normal path passes), but OMIT save_path/resume_path: each cohort
+                    # is an isolated run and must not share or clobber a checkpoint.
+                    train_kwargs = config.to_train_kwargs()
+                    if "task" not in train_kwargs:
+                        train_kwargs["task"] = args.task
+                    train_kwargs.update(
+                        {
+                            "device": args.device,
+                            "devices": args.devices,
+                            "num_workers": args.num_workers,
+                            "gpu_preload": args.gpu_preload,
+                            "experimental_gpu_preload_gather": args.experimental_gpu_preload_gather,
+                            "gpu_preload_augment": args.gpu_preload_augment,
+                            "gpu_preload_precompute_augment": args.gpu_preload_precompute_augment,
+                            "telemetry_config": telemetry_config,
+                            "telemetry_lifecycle_only": args.telemetry_lifecycle_only,
+                            "quiet_analytics": use_sanctum,
+                            "force_compile": args.force_compile,
+                            "ready_event": dataloader_ready_event,
+                            "shutdown_event": shutdown_event,
+                            "torch_profiler": args.torch_profiler,
+                            "torch_profiler_dir": args.torch_profiler_dir,
+                            "torch_profiler_wait": args.torch_profiler_wait,
+                            "torch_profiler_warmup": args.torch_profiler_warmup,
+                            "torch_profiler_active": args.torch_profiler_active,
+                            "torch_profiler_repeat": args.torch_profiler_repeat,
+                            "torch_profiler_record_shapes": args.torch_profiler_record_shapes,
+                            "torch_profiler_profile_memory": args.torch_profiler_profile_memory,
+                            "torch_profiler_with_stack": args.torch_profiler_with_stack,
+                            "torch_profiler_summary": args.torch_profiler_summary,
+                            "phase_profiler": args.phase_profiler,
+                        }
+                    )
+
+                    results = train_blueprint_health_proof_baselines(
+                        plan=plan,
+                        train_kwargs=train_kwargs,
+                    )
+                    print(
+                        f"[Proof Baseline] Completed {len(results)} cohort run(s). "
+                        "Analyze with: PYTHONPATH=src uv run python scripts/proof_packet.py "
+                        "--proof-profile reward-efficiency --telemetry-dir <telemetry-dir>"
                     )
                 else:
                     print(config.summary())
@@ -962,32 +1154,24 @@ def main() -> None:
                         torch_profiler_profile_memory=args.torch_profiler_profile_memory,
                         torch_profiler_with_stack=args.torch_profiler_with_stack,
                         torch_profiler_summary=args.torch_profiler_summary,
+                        phase_profiler=args.phase_profiler,
                         **train_kwargs,
                     )
         except Exception:
-            import traceback
-            traceback.print_exc()
+            _logger.exception("Training run failed with unhandled exception")
             raise
 
+    # Track training errors from the background sanctum thread; consulted after the
+    # try/finally to drive a non-zero exit on crash (see _exit_nonzero_if_training_failed).
+    training_error: list[str | None] = [None]  # list allows mutation from the training thread
     try:
         if use_sanctum:
             # Sanctum mode: run training in background thread, Sanctum controls terminal
-            import threading
-            import traceback
             from esper.karn.sanctum import SanctumApp
 
-            # Track training errors for debugging
-            training_error: list[str | None] = [None]  # Use list to allow mutation from thread
-
             def training_wrapper() -> None:
-                """Wrap training to capture exceptions."""
-                try:
-                    run_training()
-                except Exception:
-                    training_error[0] = traceback.format_exc()
-                    # Log to stderr (visible in Textual console)
-                    import sys
-                    print(f"\n[TRAINING ERROR]\n{training_error[0]}", file=sys.stderr)
+                """Wrap training to capture exceptions (see _run_training_capturing_errors)."""
+                _run_training_capturing_errors(run_training, training_error, shutdown_event)
 
             # daemon=False so we can wait for graceful shutdown
             training_thread = threading.Thread(target=training_wrapper, daemon=False)
@@ -1044,8 +1228,31 @@ def main() -> None:
             count = karn_collector.store.export_jsonl(export_path)
             print(f"Exported {count} Karn records to {export_path}")
 
-        # Close all hub backends (includes Sanctum if used)
+        # Close all hub backends (includes Sanctum if used). close() flushes
+        # pending events before stopping workers, so the health snapshot taken
+        # afterwards reflects final delivery state. close() does NOT clear the
+        # worker list, so the snapshot remains valid here.
         hub.close()
+        telemetry_health = hub.get_health_snapshot()
+
+    # A crash inside the sanctum background thread is captured, not raised — surface it
+    # as a non-zero process exit so the shell/CI sees the failure (normal mode already
+    # propagates its exception above).
+    _exit_nonzero_if_training_failed(training_error)
+
+    # A REQUESTED telemetry backend can fail asynchronously (its worker catches
+    # backend.emit() failures and only records dropped events). Without this gate the
+    # CLI would exit 0 while a sink the user explicitly asked for silently lost data.
+    # Only requested streaming sinks gate the exit; the always-on research collector
+    # and ConsoleOutput are excluded by construction of requested_telemetry_backends.
+    degraded = _degraded_requested_backends(telemetry_health, requested_telemetry_backends)
+    if degraded:
+        print(
+            "ERROR: requested telemetry backend(s) degraded (dropped events): "
+            f"{', '.join(sorted(degraded))}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 if __name__ == "__main__":
     # CRITICAL: Set spawn method before main() to avoid fork issues with

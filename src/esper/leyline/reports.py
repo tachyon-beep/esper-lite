@@ -169,3 +169,54 @@ class FieldReport:
     # Failure info (if pruned)
     failure_reason: str = ""
     failure_stage: SeedStage = SeedStage.UNKNOWN
+
+
+@dataclass(slots=True)
+class PhaseTiming:
+    """Per-transaction-phase timing for one epoch.
+
+    wall_ms          real elapsed wall time in the phase (perf_counter).
+    python_cpu_ms    Python CPU time the dispatch thread spent in the phase
+                     (thread_time) — the GIL-holding work that starves dispatch.
+    python_cpu_ratio python_cpu_ms / wall_ms; near 1.0 means the phase is almost
+                     entirely single-thread Python with no GPU work to overlap
+                     (the Tier-0 dispatch-starvation proxy).
+    """
+
+    wall_ms: float
+    python_cpu_ms: float
+    python_cpu_ratio: float
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "wall_ms": self.wall_ms,
+            "python_cpu_ms": self.python_cpu_ms,
+            "python_cpu_ratio": self.python_cpu_ratio,
+        }
+
+
+@dataclass(slots=True)
+class PhaseProfileReport:
+    """Observation-only Tier-0 profiler payload emitted once per epoch.
+
+    Carries per-phase timings keyed by transaction-phase name. epoch/batch_idx
+    are stamped by the caller at drain(). This report flows ONE-WAY to telemetry
+    (Rule 4 of the profiler plan): it MUST NOT be read by reward, governor,
+    scheduler, or PPO, and MUST NOT enter any snapshot/divergence hash.
+    """
+
+    phases: dict[str, PhaseTiming]
+    epoch: int | None = None
+    batch_idx: int | None = None
+
+    def total_wall_ms(self) -> float:
+        """Sum of per-phase wall_ms (reconciles against throughput_step_time_ms_sum)."""
+        return sum(t.wall_ms for t in self.phases.values())
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for nissa telemetry (phases -> {name: PhaseTiming dict})."""
+        return {
+            "phases": {name: timing.to_dict() for name, timing in self.phases.items()},
+            "epoch": self.epoch,
+            "batch_idx": self.batch_idx,
+        }

@@ -80,6 +80,39 @@ def test_ppo_update_populates_history():
     assert abs(clip_fractions[2] - 0.14) < 1e-9
 
 
+def test_ev_robustness_fields_round_trip():
+    """EV-robustness diagnostics survive aggregator -> schema -> snapshot_copy intact."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.5,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+            explained_variance=-3.5,
+            value_nrmse=0.42,
+            ev_low_return_variance=True,
+            ev_return_variance=0.7,
+        ),
+    )
+    agg.process_event(event)
+
+    # get_snapshot() routes through snapshot_copy (the production isolated-copy path);
+    # if any new field is dropped in schema or copy, this asserts it.
+    snapshot = agg.get_snapshot()
+    tamiyo = snapshot.tamiyo
+
+    assert abs(tamiyo.value_nrmse - 0.42) < 1e-9
+    assert tamiyo.ev_low_return_variance is True
+    assert tamiyo.ev_return_variance is not None
+    assert abs(tamiyo.ev_return_variance - 0.7) < 1e-9
+
+
 def test_get_snapshot_returns_isolated_copy() -> None:
     """get_snapshot() must never expose live, mutable aggregator state."""
     agg = SanctumAggregator(num_envs=2)
@@ -450,7 +483,7 @@ def test_aggregator_reads_reward_components_dataclass():
     from datetime import datetime, timezone
     from esper.karn.sanctum.aggregator import SanctumAggregator
     from esper.leyline.telemetry import AnalyticsSnapshotPayload, TelemetryEvent, TelemetryEventType
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     agg = SanctumAggregator(num_envs=1)
     agg._connected = True
@@ -507,7 +540,7 @@ def test_aggregator_wires_all_reward_component_fields():
     from datetime import datetime, timezone
     from esper.karn.sanctum.aggregator import SanctumAggregator
     from esper.leyline.telemetry import AnalyticsSnapshotPayload, TelemetryEvent, TelemetryEventType
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     agg = SanctumAggregator(num_envs=1)
     agg._connected = True
@@ -720,6 +753,65 @@ def test_decision_snapshot_populates_from_head_telemetry():
     assert decision.curve_entropy == 0.35
 
 
+def test_decision_snapshot_preserves_missing_entropy_as_unavailable():
+    """Missing entropy evidence must not be converted into zero entropy."""
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import (
+        AnalyticsSnapshotPayload,
+        TelemetryEvent,
+        TelemetryEventType,
+        TrainingStartedPayload,
+    )
+
+    agg = SanctumAggregator()
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        epoch=0,
+        data=TrainingStartedPayload(
+            n_envs=1,
+            max_epochs=25,
+            max_batches=100,
+            task="mnist",
+            host_params=1000000,
+            slot_ids=("r0c0",),
+            seed=42,
+            n_episodes=100,
+            lr=3e-4,
+            clip_ratio=0.2,
+            entropy_coef=0.01,
+            param_budget=500000,
+            policy_device="cuda:0",
+            env_devices=("cuda:0",),
+            reward_mode="shaped",
+        ),
+    ))
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=1,
+        timestamp=datetime.now(timezone.utc),
+        data=AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            action_name="WAIT",
+            action_confidence=0.85,
+            action_success=True,
+        ),
+    ))
+
+    decision = agg.get_snapshot().tamiyo.recent_decisions[0]
+    assert decision.decision_entropy is None
+    assert decision.op_entropy is None
+    assert decision.slot_entropy is None
+    assert decision.blueprint_entropy is None
+    assert decision.style_entropy is None
+    assert decision.tempo_entropy is None
+    assert decision.alpha_target_entropy is None
+    assert decision.alpha_speed_entropy is None
+    assert decision.curve_entropy is None
+
+
 def test_aggregator_populates_compile_status():
     """Aggregator should populate compile status from TrainingStartedPayload."""
     from esper.karn.sanctum.aggregator import SanctumAggregator
@@ -785,6 +877,8 @@ def test_aggregator_wires_q_values():
             op_valid_mask=(True, True, True, True, True, True),
             q_variance=2.3,
             q_spread=6.7,
+            q_aux_loss=0.31,
+            head_q_gradient_state="finite",
         ),
     )
 
@@ -796,6 +890,65 @@ def test_aggregator_wires_q_values():
     assert snapshot.tamiyo.op_valid_mask == (True, True, True, True, True, True)
     assert snapshot.tamiyo.q_variance == 2.3
     assert snapshot.tamiyo.q_spread == 6.7
+    # P0-1 AUX q-head diagnostics
+    assert abs(snapshot.tamiyo.q_aux_loss - 0.31) < 1e-9
+    assert snapshot.tamiyo.head_q_gradient_state == "finite"
+
+
+def test_aggregator_coerces_none_q_head_diagnostics():
+    """q_aux_loss=None coerces to 0.0 and head_q_gradient_state=None to 'missing'.
+
+    Mirrors the explained_variance/value_nrmse coercion convention: a degenerate
+    or older event leaves these optional payload fields as None, which the scalar
+    gauge / vocabulary field must surface as the established no-signal defaults.
+    """
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.1,
+            nan_grad_count=0,
+            q_aux_loss=None,
+            head_q_gradient_state=None,
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.q_aux_loss == 0.0
+    assert snapshot.tamiyo.head_q_gradient_state == "missing"
+
+
+def test_aggregator_wires_rollback_counts():
+    """PPO_UPDATE_COMPLETED rollback counts reach TamiyoState (non-optional ints)."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.1,
+            nan_grad_count=0,
+            rollback_attempt_count=7,
+            rollback_unattributed_count=3,
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.rollback_attempt_count == 7
+    assert snapshot.tamiyo.rollback_unattributed_count == 3
+
 
 def test_aggregator_tracks_previous_gradient_norms():
     """Aggregator should track previous gradient norms for trend detection."""
@@ -820,6 +973,7 @@ def test_aggregator_tracks_previous_gradient_norms():
             head_alpha_target_grad_norm=0.16,
             head_alpha_speed_grad_norm=0.13,
             head_alpha_curve_grad_norm=0.11,
+            head_q_grad_norm=0.19,
         ),
     )
     agg.process_event(event1)
@@ -830,6 +984,8 @@ def test_aggregator_tracks_previous_gradient_norms():
     assert snapshot1.tamiyo.head_op_grad_norm_prev == 0.0
     assert snapshot1.tamiyo.head_slot_grad_norm == 0.15
     assert snapshot1.tamiyo.head_slot_grad_norm_prev == 0.0
+    assert snapshot1.tamiyo.head_q_grad_norm == 0.19
+    assert snapshot1.tamiyo.head_q_grad_norm_prev == 0.0
 
     # Second PPO update - should move current to prev
     event2 = TelemetryEvent(
@@ -850,6 +1006,7 @@ def test_aggregator_tracks_previous_gradient_norms():
             head_alpha_target_grad_norm=0.26,
             head_alpha_speed_grad_norm=0.24,
             head_alpha_curve_grad_norm=0.21,
+            head_q_grad_norm=0.33,
         ),
     )
     agg.process_event(event2)
@@ -860,6 +1017,8 @@ def test_aggregator_tracks_previous_gradient_norms():
     assert snapshot2.tamiyo.head_op_grad_norm_prev == 0.12  # Previous value saved
     assert snapshot2.tamiyo.head_slot_grad_norm == 0.30
     assert snapshot2.tamiyo.head_slot_grad_norm_prev == 0.15
+    assert snapshot2.tamiyo.head_q_grad_norm == 0.33
+    assert snapshot2.tamiyo.head_q_grad_norm_prev == 0.19  # Previous value saved
     assert snapshot2.tamiyo.head_blueprint_grad_norm == 0.35
     assert snapshot2.tamiyo.head_blueprint_grad_norm_prev == 0.20
     assert snapshot2.tamiyo.head_style_grad_norm == 0.28

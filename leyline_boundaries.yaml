@@ -46,9 +46,6 @@ allow_hits:
     owner: "john"
     reason: "Typed inputs for loss-primary reward computation, simic-internal"
 
-  - key: "src/esper/simic/rewards/reward_telemetry.py:dataclass:RewardComponentsTelemetry"
-    owner: "john"
-    reason: "Reward debugging telemetry, simic-internal"
 
   - key: "src/esper/simic/rewards/contribution.py:dataclass:FossilizedSeedDripState"
     owner: "john"
@@ -106,10 +103,9 @@ allow_hits:
     owner: "john"
     reason: "LSTM health monitoring, simic-internal"
 
-  - key: "src/esper/simic/telemetry/observation_stats.py:dataclass:ObservationStatsTelemetry"
+  - key: "src/esper/simic/agent/rollout_buffer.py:dataclass:RollbackPenaltyResult"
     owner: "john"
-    reason: "TODO: Telemetry payload used outside simic, consider moving to leyline"
-    expires: "2026-12-31"
+    reason: "Rollback penalty computation result, simic-internal rollout-buffer type"
 
   # ============================================================================
   # SIMIC: Training Infrastructure
@@ -147,6 +143,10 @@ allow_hits:
     owner: "john"
     reason: "Batch training summary, simic-internal"
 
+  - key: "src/esper/simic/vectorized_types.py:dataclass:EnvStepRecord"
+    owner: "john"
+    reason: "Per-env per-step training workspace, simic-internal"
+
   - key: "src/esper/simic/training/action_execution.py:protocol:ResolveTargetSlot"
     owner: "john"
     reason: "Protocol for slot resolution callback, simic-internal"
@@ -170,6 +170,18 @@ allow_hits:
   - key: "src/esper/simic/training/vectorized_trainer.py:dataclass:VectorizedPPOTrainer"
     owner: "john"
     reason: "Vectorized training orchestrator, simic-internal"
+
+  - key: "src/esper/simic/training/vectorized_trainer.py:dataclass:FusedValResult"
+    owner: "john"
+    reason: "Fused validation + counterfactual pass result, simic-internal"
+
+  - key: "src/esper/simic/training/vectorized_trainer.py:dataclass:ActionInputBundle"
+    owner: "john"
+    reason: "Pre-execute_actions batch input bundle for one epoch step, simic-internal"
+
+  - key: "src/esper/simic/training/vectorized_trainer.py:dataclass:ActionTransactionResult"
+    owner: "john"
+    reason: "Action execution + bootstrap phase result for one epoch step, simic-internal"
 
   - key: "src/esper/simic/training/parallel_env_state.py:dataclass:ParallelEnvState"
     owner: "john"

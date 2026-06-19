@@ -160,12 +160,13 @@ class DecisionCard(Static):
 
         result.append(f"host:{decision.host_accuracy:.0f}%", style="cyan")
         result.append("  ", style="dim")
-        result.append(f"entropy:{decision.decision_entropy:.2f}", style="dim")
+        entropy_text = self._format_entropy(decision.decision_entropy, precision=2)
+        result.append(f"entropy:{entropy_text}", style="dim")
         result.append(" ", style="dim")
         result.append(entropy_label, style=entropy_style)
 
         # Right-align badge
-        content_so_far = f"host:{decision.host_accuracy:.0f}%  entropy:{decision.decision_entropy:.2f} {entropy_label}"
+        content_so_far = f"host:{decision.host_accuracy:.0f}%  entropy:{entropy_text} {entropy_label}"
         badge_padding = self.CARD_WIDTH - len(content_so_far) - len(outcome_badge) - 4
         result.append(" " * max(1, badge_padding))
         result.append(outcome_badge, style=badge_style)
@@ -250,7 +251,7 @@ class DecisionCard(Static):
         elif action == "WAIT":
             if training_count > 0:
                 return f"{training_count} slot{'s' if training_count > 1 else ''} still training"
-            if entropy > 1.0:
+            if entropy is not None and entropy > 1.0:
                 return "high uncertainty, gathering data"
             if dormant_count == 0:
                 return "all slots occupied"
@@ -290,6 +291,9 @@ class DecisionCard(Static):
         confidence = decision.confidence
         slot_states = decision.slot_states
 
+        if entropy is None:
+            return "[unavailable]", "dim italic"
+
         # Count slot states for context
         dormant_count = sum(1 for s in slot_states.values() if "Dormant" in s or "Empty" in s)
         training_count = sum(1 for s in slot_states.values() if "Training" in s)
@@ -319,6 +323,12 @@ class DecisionCard(Static):
         elif entropy < 1.2:
             return "[balanced]", "green"
         return "[exploring]", "cyan"
+
+    @staticmethod
+    def _format_entropy(entropy: float | None, *, precision: int) -> str:
+        if entropy is None:
+            return "-"
+        return f"{entropy:.{precision}f}"
 
     def _is_forced_choice(self, decision: "DecisionSnapshot") -> bool:
         """Return True when the op head is effectively forced by masks."""

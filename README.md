@@ -35,7 +35,7 @@ As of the current “Tamiyo Next” baseline, the RL-controlled stack supports l
   * Blueprint embedding: **4 × slots** (e.g. 12 dims for 3 slots)
   * Total policy input: **128 dims**
 * **Policy V2**: **512-dim feature net + 512 hidden LSTM**, designed for ~150-step horizons
-* **Critic**: action-conditioned baseline (**Q(s, op)** style), reducing value aliasing
+* **Critic**: op-independent **V(s)** baseline (the PPO baseline, GAE bootstrap, and value-loss target). An op-conditioned **Q(s, op)** head is retained as a small detached auxiliary/telemetry signal (op-value diagnostics), not as the baseline.
 * **Default episode length**: **150** steps (epochs) per rollout horizon
 
 ---

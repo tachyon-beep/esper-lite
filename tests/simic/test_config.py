@@ -116,7 +116,13 @@ class TestTrainingConfigConversion:
         assert kwargs["reward_mode"] == "shaped"
 
     def test_to_train_kwargs_is_subset_of_vectorized_signature(self):
-        """Config → train kwargs must stay in sync with train_ppo_vectorized signature."""
+        """Config → train kwargs must stay in sync with train_ppo_vectorized signature.
+
+        ATOMICITY TRIPWIRE: the recurrent multi-epoch params (recurrent_n_epochs,
+        total_train_steps) must be present in BOTH to_train_kwargs AND the
+        train_ppo_vectorized signature. If to_train_kwargs emits a key the signature
+        lacks, the subset assertion fails — keeping config and entrypoint in lockstep.
+        """
         signature = inspect.signature(train_ppo_vectorized)
         allowed = set(signature.parameters)
 
@@ -124,9 +130,16 @@ class TestTrainingConfigConversion:
         kwargs = set(config.to_train_kwargs())
 
         assert kwargs <= allowed
+        # Recurrent multi-epoch params must thread through both ends in lockstep.
+        assert {"recurrent_n_epochs", "total_train_steps"} <= kwargs
+        assert {"recurrent_n_epochs", "total_train_steps"} <= allowed
 
     def test_to_ppo_kwargs_is_subset_of_ppo_agent_signature(self):
-        """Config → PPO kwargs must stay in sync with PPOAgent constructor."""
+        """Config → PPO kwargs must stay in sync with PPOAgent constructor.
+
+        ATOMICITY TRIPWIRE: recurrent_n_epochs must be present in BOTH to_ppo_kwargs
+        AND the PPOAgent constructor signature.
+        """
         signature = inspect.signature(PPOAgent.__init__)
         allowed = set(signature.parameters)
 
@@ -134,6 +147,23 @@ class TestTrainingConfigConversion:
         kwargs = set(config.to_ppo_kwargs())
 
         assert kwargs <= allowed
+        assert "recurrent_n_epochs" in kwargs
+        assert "recurrent_n_epochs" in allowed
+
+    def test_recurrent_n_epochs_threads_through_kwargs(self):
+        """recurrent_n_epochs must reach both PPO and train kwargs unchanged."""
+        config = TrainingConfig(recurrent_n_epochs=4)
+        assert config.to_ppo_kwargs()["recurrent_n_epochs"] == 4
+        assert config.to_train_kwargs()["recurrent_n_epochs"] == 4
+
+    def test_total_train_steps_threads_through(self):
+        """total_train_steps must be computed as n_episodes * ppo_updates_per_batch.
+
+        For LSTM runs ppo_updates_per_batch is pinned to 1, so this reduces to
+        n_episodes. Here we choose a non-trivial multiplier to prove the product.
+        """
+        config = TrainingConfig(n_episodes=50, ppo_updates_per_batch=2)
+        assert config.to_train_kwargs()["total_train_steps"] == 100
 
 
 class TestTrainingConfigSummary:

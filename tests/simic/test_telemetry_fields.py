@@ -4,9 +4,86 @@ Tests gradient health aggregation, reward shaping ratio, and entropy collapse de
 """
 
 
+import dataclasses
+
 from esper.simic.telemetry import LayerGradientStats
-from esper.simic.rewards import RewardComponentsTelemetry
+from esper.leyline.telemetry import PPOUpdatePayload
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from esper.simic.telemetry.emitters import aggregate_layer_gradient_health
+
+
+class TestPPOUpdatePayloadEVRobustnessFields:
+    """EV-telemetry-robustness additive contract on PPOUpdatePayload (leyline)."""
+
+    def test_ppo_update_payload_carries_ev_robustness_fields(self):
+        """Payload exposes the four new fields, and pre-existing robust signals remain reachable."""
+        fields = {f.name: f for f in dataclasses.fields(PPOUpdatePayload)}
+
+        # New additive fields
+        assert "value_nrmse" in fields
+        assert "ev_low_return_variance" in fields
+        assert "ev_return_variance" in fields
+        assert "ev_low_return_variance_count" in fields
+
+        # Rollback observability counters (additive int fields, default 0)
+        assert "rollback_count" in fields
+        assert "rollback_steps_zeroed" in fields
+        assert "rollback_attempt_count" in fields
+        assert "rollback_unattributed_count" in fields
+
+        # Pre-existing fields the gate already reads (NOT new)
+        assert "bellman_error" in fields
+        assert "value_loss" in fields
+        assert "v_return_correlation" in fields
+        assert "return_variance" in fields
+
+        # Defaults match the additive/schema-evolution contract
+        payload = PPOUpdatePayload(
+            policy_loss=0.0,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+        )
+        assert payload.value_nrmse is None
+        assert payload.ev_low_return_variance is False
+        assert payload.ev_return_variance is None
+        assert payload.ev_low_return_variance_count == 0
+        assert payload.rollback_count == 0
+        assert payload.rollback_steps_zeroed == 0
+        assert payload.rollback_attempt_count == 0
+        assert payload.rollback_unattributed_count == 0
+
+    def test_ppo_update_payload_from_dict_old_event_without_ev_fields(self):
+        """B4 schema-evolution: an old persisted event (no EV-robustness keys) deserializes with defaults."""
+        # Build a complete current payload, serialize, then strip the new keys to
+        # simulate an event persisted BEFORE this plan landed.
+        full = PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=0.3,
+            grad_norm=1.0,
+            kl_divergence=0.01,
+            clip_fraction=0.1,
+            nan_grad_count=0,
+        )
+        data = dataclasses.asdict(full)
+        for key in (
+            "value_nrmse",
+            "ev_low_return_variance",
+            "ev_return_variance",
+            "ev_low_return_variance_count",
+        ):
+            data.pop(key, None)
+
+        restored = PPOUpdatePayload.from_dict(data)
+
+        assert restored.value_nrmse is None
+        assert restored.ev_low_return_variance is False
+        assert restored.ev_return_variance is None
+        assert restored.ev_low_return_variance_count == 0
 
 
 class TestLayerGradientAggregation:

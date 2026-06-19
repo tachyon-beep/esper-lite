@@ -410,13 +410,14 @@ class VitalSignsMonitor:
 
         # Check accuracy improvement
         current_acc = latest.host.val_accuracy
-        if current_acc > self._best_accuracy:
-            self._best_accuracy = current_acc
-            self._epochs_since_improvement = 0
-            vitals.accuracy_improving = True
-        else:
-            self._epochs_since_improvement += 1
-            vitals.accuracy_improving = False
+        if current_acc is not None:
+            if current_acc > self._best_accuracy:
+                self._best_accuracy = current_acc
+                self._epochs_since_improvement = 0
+                vitals.accuracy_improving = True
+            else:
+                self._epochs_since_improvement += 1
+                vitals.accuracy_improving = False
 
         vitals.epochs_without_improvement = self._epochs_since_improvement
 

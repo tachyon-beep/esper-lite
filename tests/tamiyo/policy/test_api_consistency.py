@@ -163,7 +163,8 @@ def test_network_forward_accepts_tuple():
     output = network.forward(obs, blueprint_indices)
 
     # Output is a TypedDict
-    assert output["value"].shape == (2, 10)
+    assert output["state_value"].shape == (2, 10)
+    assert output["q_value"].shape == (2, 10)
     assert output["sampled_op"].shape == (2, 10)
 
 
@@ -189,10 +190,11 @@ def test_network_evaluate_actions_accepts_tuple():
     }
 
     # Should NOT raise
-    log_probs, values, entropy, hidden, pred_contributions = network.evaluate_actions(obs, blueprint_indices, actions)
+    log_probs, values, entropy, hidden, pred_contributions, q_values = network.evaluate_actions(obs, blueprint_indices, actions)
 
     # Check outputs
-    assert values.shape == (2, 10)
+    assert values.shape == (2, 10)  # V(s): op-INDEPENDENT baseline
+    assert q_values.shape == (2, 10)  # Q(s, op): telemetry/aux
     assert "op" in log_probs
     assert log_probs["op"].shape == (2, 10)
     assert pred_contributions.shape == (2, 10, config.num_slots)

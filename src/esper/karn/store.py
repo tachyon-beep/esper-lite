@@ -64,8 +64,8 @@ __all__ = [
 # =============================================================================
 
 # Event families whose proof fields the store MUST capture to be proof-grade.
-# These carry the multi-objective Pareto outcome, the rollback confounder, and
-# the joinable causal log that a counterfactual proof depends on. The store's
+# These carry the multi-objective Pareto outcome, rollback confounders, joinable
+# causal logs, and topology manifests that proof baselines depend on. The store's
 # reduced analytics schema (context + epoch snapshots + dense traces) does NOT
 # model these, so any store that merely *observed* them is not a proof archive.
 PROOF_CRITICAL_EVENT_TYPES: frozenset[str] = frozenset(
@@ -73,6 +73,7 @@ PROOF_CRITICAL_EVENT_TYPES: frozenset[str] = frozenset(
         "EPISODE_OUTCOME",
         "GOVERNOR_ROLLBACK",
         "MORPHOLOGY_CAUSAL_LOG",
+        "TOPOLOGY_MANIFEST_RECORDED",
     }
 )
 
@@ -214,7 +215,7 @@ class HostSnapshot:
 
     # Performance (optional metrics - None = not computed, 0.0 = computed as zero)
     val_loss: float | None = None
-    val_accuracy: float = 0.0
+    val_accuracy: float | None = None
 
     # Training performance (optional metrics - None = not computed, 0.0 = computed as zero)
     train_loss: float | None = None
@@ -753,7 +754,7 @@ class TelemetryStore:
                 data.get("train_accuracy"), field="HostSnapshot.train_accuracy"
             )
             data["val_loss"] = coerce_float_or_none(data.get("val_loss"), field="HostSnapshot.val_loss")
-            data["val_accuracy"] = coerce_float(data.get("val_accuracy"), field="HostSnapshot.val_accuracy", default=0.0)
+            data["val_accuracy"] = coerce_float_or_none(data.get("val_accuracy"), field="HostSnapshot.val_accuracy")
             data["host_params"] = coerce_int(data.get("host_params"), field="HostSnapshot.host_params", default=0, minimum=0)
             data["total_seed_params"] = coerce_int(
                 data.get("total_seed_params"), field="HostSnapshot.total_seed_params", default=0, minimum=0

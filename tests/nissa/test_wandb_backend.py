@@ -15,6 +15,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.proof_baselines import (
+    FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT,
+    FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
+    FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+    FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
+)
 from esper.leyline.telemetry import (
     BatchEpochCompletedPayload,
     EpochCompletedPayload,
@@ -483,6 +489,84 @@ class TestPPODiagnosticsPreservation:
         assert logged["ppo/amp_overflow_detected"] == 1
         assert logged["ppo/lstm_has_nan"] == 0
 
+    def test_wandb_emits_ev_robustness_metrics(self, backend, mock_wandb):
+        """EV-robustness diagnostics (value_nrmse / ev_low_return_variance) are logged when present."""
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            epoch=100,
+            data=PPOUpdatePayload(
+                policy_loss=0.5,
+                value_loss=0.3,
+                entropy=0.1,
+                grad_norm=1.0,
+                kl_divergence=0.01,
+                clip_fraction=0.1,
+                nan_grad_count=0,
+                explained_variance=-3.5,
+                value_nrmse=0.42,
+                ev_low_return_variance=True,
+            ),
+        )
+
+        backend.emit(event)
+
+        logged = mock_wandb.log.call_args[0][0]
+        assert logged["ppo/value_nrmse"] == 0.42
+        # bool encoded as int for the metric series
+        assert logged["ppo/ev_low_return_variance"] == 1
+
+    def test_wandb_emits_q_head_aux_diagnostics_when_present(self, backend, mock_wandb):
+        """P0-1 aux q-head diagnostics (q_aux_loss / head_q_grad_norm) are logged when present."""
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            epoch=100,
+            data=PPOUpdatePayload(
+                policy_loss=0.5,
+                value_loss=0.3,
+                entropy=0.1,
+                grad_norm=1.0,
+                kl_divergence=0.01,
+                clip_fraction=0.1,
+                nan_grad_count=0,
+                q_aux_loss=0.31,
+                head_q_grad_norm=2.0,
+            ),
+        )
+
+        backend.emit(event)
+
+        logged = mock_wandb.log.call_args[0][0]
+        assert logged["ppo/q_aux_loss"] == 0.31
+        assert logged["ppo/head_q_grad_norm"] == 2.0
+
+    def test_wandb_logs_rollback_observability_counters(self, backend, mock_wandb):
+        """Rollback per-rollout aggregate counters are always logged on a live PPO update."""
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            epoch=100,
+            data=PPOUpdatePayload(
+                policy_loss=0.5,
+                value_loss=0.3,
+                entropy=0.1,
+                grad_norm=1.0,
+                kl_divergence=0.01,
+                clip_fraction=0.1,
+                nan_grad_count=0,
+                rollback_count=2,
+                rollback_steps_zeroed=7,
+                rollback_attempt_count=5,
+                rollback_unattributed_count=3,
+            ),
+        )
+
+        backend.emit(event)
+
+        logged = mock_wandb.log.call_args[0][0]
+        assert logged["ppo/rollback_count"] == 2
+        assert logged["ppo/rollback_steps_zeroed"] == 7
+        assert logged["ppo/rollback_attempt_count"] == 5
+        assert logged["ppo/rollback_unattributed_count"] == 3
+
     def test_ppo_logs_lstm_health_when_present(self, backend, mock_wandb):
         """Update-time and rollout-time LSTM RMS metrics are logged when present."""
         event = TelemetryEvent(
@@ -526,7 +610,8 @@ class TestPPODiagnosticsPreservation:
                 kl_divergence=0.01,
                 clip_fraction=0.1,
                 nan_grad_count=0,
-                # lstm_*_rms, loss_scale, explained_variance, lr default to None
+                # lstm_*_rms, loss_scale, explained_variance, lr,
+                # q_aux_loss, head_q_grad_norm default to None
             ),
         )
 
@@ -538,6 +623,8 @@ class TestPPODiagnosticsPreservation:
         assert "ppo/loss_scale" not in logged
         assert "ppo/explained_variance" not in logged
         assert "ppo/lr" not in logged
+        assert "ppo/q_aux_loss" not in logged
+        assert "ppo/head_q_grad_norm" not in logged
 
 
 class TestTrainingStartedDiagnostics:
@@ -580,6 +667,60 @@ class TestTrainingStartedDiagnostics:
         # Optional absent fields omitted
         assert "amp_dtype" not in cfg
         assert "proof_baseline_mode" not in cfg
+
+    def test_training_started_logs_proof_baseline_lifecycle_policy(
+        self,
+        backend,
+        mock_wandb,
+    ):
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=4,
+                max_epochs=150,
+                max_batches=100,
+                task="cifar10",
+                host_params=1_200_000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=400,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=2_000_000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                reward_mode="shaped",
+                proof_baseline_mode="fixed_schedule",
+                proof_baseline_pair_id="blueprint-health-proof",
+                proof_baseline_lifecycle_policy="apply_declared_lifecycle_schedule",
+                proof_baseline_schedule_id=FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+                proof_baseline_schedule_hash=FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
+                proof_baseline_schedule_version=FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
+                proof_baseline_schedule_action_count=(
+                    FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+                ),
+            ),
+        )
+
+        backend.emit(event)
+
+        cfg = mock_wandb.config.update.call_args[0][0]
+        assert cfg["proof_baseline_mode"] == "fixed_schedule"
+        assert cfg["proof_baseline_pair_id"] == "blueprint-health-proof"
+        assert cfg["proof_baseline_lifecycle_policy"] == (
+            "apply_declared_lifecycle_schedule"
+        )
+        assert cfg["proof_baseline_schedule_id"] == FIXED_SCHEDULE_GERMINATE_R0C0_V1
+        assert cfg["proof_baseline_schedule_hash"] == (
+            FIXED_SCHEDULE_GERMINATE_R0C0_HASH
+        )
+        assert cfg["proof_baseline_schedule_version"] == (
+            FIXED_SCHEDULE_GERMINATE_R0C0_VERSION
+        )
+        assert cfg["proof_baseline_schedule_action_count"] == (
+            FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+        )
 
 
 class TestPayloadOnlySlotId:

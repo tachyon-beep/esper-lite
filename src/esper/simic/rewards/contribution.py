@@ -17,7 +17,7 @@ from esper.leyline import (
     SeedStage,
 )
 from esper.nissa import get_hub
-from .reward_telemetry import RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from .shaping import STAGE_POTENTIALS
 from .types import (
     SeedInfo,
@@ -352,6 +352,7 @@ class ContributionRewardConfig:
 # Default config singleton (avoid repeated allocations)
 _DEFAULT_CONTRIBUTION_CONFIG = ContributionRewardConfig()
 
+
 # =============================================================================
 # Contribution-Primary Reward (uses counterfactual validation)
 # =============================================================================
@@ -436,8 +437,6 @@ def compute_contribution_reward(
     attribution_discount = 1.0
     ratio_penalty = 0.0
     if seed_contribution is not None and seed_info is not None:
-        total_imp = seed_info.total_improvement
-
         # Anti-gaming + ransomware gates must key on the CLEAN counterfactual
         # (val_acc - all_disabled_acc = total seed-attributable improvement), NOT the
         # host-drift-confounded total_improvement. In a still-learning host
@@ -455,8 +454,11 @@ def compute_contribution_reward(
         counterfactual_imp = seed_info.counterfactual_total_improvement
 
         if not escrow_mode:
-            if total_imp < 0:
-                exp_arg = min(-config.attribution_sigmoid_steepness * total_imp, 700.0)
+            # Discount on the seed's CLEAN causal regression, NOT host drift. A
+            # plateaued/declining host must not discount a genuinely helpful
+            # seed; counterfactual_imp is guaranteed non-None here (raised above).
+            if counterfactual_imp < 0:
+                exp_arg = min(-config.attribution_sigmoid_steepness * counterfactual_imp, 700.0)
                 attribution_discount = 1.0 / (1.0 + math.exp(exp_arg))
 
         if seed_contribution > 1.0 and attribution_discount >= 0.5 and not config.disable_anti_gaming:
@@ -569,9 +571,12 @@ def compute_contribution_reward(
                     bounded_attribution *= timing_discount
         elif seed_info is not None and not seed_is_fossilized:
             # Proxy path: a seed exists but its clean leave-one-out counterfactual has
-            # not been measured yet (seed_contribution is None, e.g. before the
-            # all-disabled ablation runs early in a seed's life). We fall back to a
-            # HEAVILY DISCOUNTED, SEED-CAUSAL proxy -- proxy_contribution_weight is
+            # not been measured yet. The live rollout window is the first BLENDING
+            # step after TRAINING -> BLENDING: action execution transitions the stage,
+            # then step_epoch() ticks alpha later, while fused validation only includes
+            # slots with alpha > 0 in baseline_accs. During that gap seed_contribution
+            # is None even though the seed has entered the output-path stage. We fall
+            # back to a HEAVILY DISCOUNTED, SEED-CAUSAL proxy -- proxy_contribution_weight is
             # contribution_weight * proxy_confidence_factor (0.3), i.e. the proxy is
             # treated as only 30% as reliable as a true counterfactual.
             #
@@ -607,7 +612,12 @@ def compute_contribution_reward(
                 bounded_attribution = config.proxy_contribution_weight * stage_improvement
 
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
-        if seed_info.total_improvement < 0:
+        # Suppress attribution only when the seed's CLEAN counterfactual is
+        # negative (it genuinely harmed), not when the host merely drifted down.
+        # None => no causal proof of harm => do not suppress (mirrors the
+        # blending-warning gate below and the proxy-path reasoning above).
+        counterfactual_imp = seed_info.counterfactual_total_improvement
+        if counterfactual_imp is not None and counterfactual_imp < 0:
             bounded_attribution = 0.0
 
     if action == LifecycleOp.PRUNE and not escrow_mode:
@@ -642,8 +652,10 @@ def compute_contribution_reward(
 
     blending_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_BLENDING:
-        total_imp = seed_info.total_improvement
-        if total_imp < 0:
+        # Gate on clean seed-attributable improvement. If the counterfactual is
+        # absent, skip the warning rather than penalizing host drift.
+        warning_counterfactual_imp = seed_info.counterfactual_total_improvement
+        if warning_counterfactual_imp is not None and warning_counterfactual_imp < 0:
             escalation = min(seed_info.epochs_in_stage * 0.05, 0.3)
             blending_warning = -0.1 - escalation
             reward += blending_warning
@@ -664,17 +676,12 @@ def compute_contribution_reward(
         terminal_actions = (LifecycleOp.FOSSILIZE, LifecycleOp.PRUNE)
         if action not in terminal_actions:
             if seed_info.epochs_in_stage >= 2 and bounded_attribution > 0:
-                has_counterfactual = (
-                    seed_info.total_improvement is not None
-                    or seed_info.improvement_since_stage_start is not None
-                )
-                if has_counterfactual:
-                    epochs_waiting = seed_info.epochs_in_stage - 1
-                    base_penalty = 0.1
-                    ramp_penalty = max(0, epochs_waiting - 1) * 0.05
-                    per_epoch_penalty = min(base_penalty + ramp_penalty, 0.3)
-                    holding_warning = -per_epoch_penalty
-                    reward += holding_warning
+                epochs_waiting = seed_info.epochs_in_stage - 1
+                base_penalty = 0.1
+                ramp_penalty = max(0, epochs_waiting - 1) * 0.05
+                per_epoch_penalty = min(base_penalty + ramp_penalty, 0.3)
+                holding_warning = -per_epoch_penalty
+                reward += holding_warning
     if components:
         components.holding_warning = holding_warning
 
@@ -1251,15 +1258,23 @@ def _contribution_fossilize_shaping(
     if seed_info.stage != STAGE_HOLDING:
         return config.invalid_fossilize_penalty
 
-    total_delta = seed_info.total_improvement
-    if total_delta < 0:
+    # Gate on the CLEAN leave-one-out counterfactual, NOT host-drift
+    # total_improvement. A plateaued or declining host must not brand a
+    # genuinely valuable seed as "damaging" for regression it did not cause
+    # (the immediate-bonus gate at the FOSSILIZE call site already keys on
+    # this signal; the penalty branch must agree). None => no causal proof of
+    # non-harm => treat conservatively as an invalid fossilize.
+    counterfactual_delta = seed_info.counterfactual_total_improvement
+    if counterfactual_delta is None:
+        return config.invalid_fossilize_penalty
+    if counterfactual_delta < 0:
         base_penalty = -0.5
-        damage_scale = min(abs(total_delta) * 0.2, 1.0)
+        damage_scale = min(abs(counterfactual_delta) * 0.2, 1.0)
 
         ransomware_signature = (
             seed_contribution is not None
             and seed_contribution > 0.1
-            and total_delta < -0.2
+            and counterfactual_delta < -0.2
         )
         ransomware_penalty = -0.3 if ransomware_signature else 0.0
 

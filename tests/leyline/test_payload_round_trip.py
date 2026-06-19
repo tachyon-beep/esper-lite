@@ -73,6 +73,7 @@ from esper.leyline.factored_actions import NUM_OPS
 
 _LITERAL_VALUES: dict[str, Any] = {
     "phase": "verdict",  # MorphologyCausalLogPhase
+    "manifest_role": "static_final_replay",  # TopologyManifestRole
     "pattern": "ransomware_signature",  # RewardHackingPattern
     "panic_reason": "governor_nan",  # GovernorPanicReason
 }
@@ -84,7 +85,7 @@ def _make_head_telemetry() -> "T.HeadTelemetry":
 
 
 def _make_reward_components() -> Any:
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
     # Distinctive, non-default values across a representative spread of fields.
     return RewardComponentsTelemetry(
@@ -100,7 +101,7 @@ def _make_reward_components() -> Any:
 
 
 def _make_observation_stats() -> Any:
-    from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+    from esper.leyline.telemetry_contracts import ObservationStatsTelemetry
 
     return ObservationStatsTelemetry(
         slot_features_mean=1.1,
@@ -309,6 +310,7 @@ def test_round_trip_covers_every_payload_with_from_dict() -> None:
         "EpisodeOutcomePayload",
         "GovernorRollbackPayload",
         "MorphologyCausalLogPayload",
+        "TopologyManifestPayload",
         "AnomalyDetectedPayload",
         "TrainingStartedPayload",
     }
@@ -347,6 +349,7 @@ def test_every_union_payload_has_a_serialization_path() -> None:
         T.EpisodeOutcomePayload,
         T.GovernorRollbackPayload,
         T.MorphologyCausalLogPayload,
+        T.TopologyManifestPayload,
     ]
     for cls in union_members:
         if hasattr(cls, "from_dict"):

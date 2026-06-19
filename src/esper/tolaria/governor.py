@@ -406,6 +406,11 @@ class TolariaGovernor:
         self,
         *,
         env_id: int = 0,
+        triggering_action_id: str | None = None,
+        raw_penalty: float | None = None,
+        normalized_penalty: float | None = None,
+        rollback_severity: float | None = None,
+        watch_window_evidence: float | None = None,
     ) -> GovernorReport:
         """Emergency stop: restore LKG state and return punishment info.
 
@@ -547,6 +552,11 @@ class TolariaGovernor:
                     loss_threshold=threshold,
                     consecutive_panics=self.consecutive_panics,
                     panic_reason=panic_reason,
+                    triggering_action_id=triggering_action_id,
+                    raw_penalty=raw_penalty,
+                    normalized_penalty=normalized_penalty,
+                    rollback_severity=rollback_severity,
+                    watch_window_evidence=watch_window_evidence,
                     # Include key mismatch info if present (diagnostic context)
                     missing_keys=list(missing_keys) if missing_keys else None,
                     unexpected_keys=list(unexpected_keys) if unexpected_keys else None,

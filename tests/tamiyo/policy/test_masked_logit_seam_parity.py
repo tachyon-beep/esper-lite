@@ -166,7 +166,7 @@ def test_v2_cross_path_log_prob_symmetry_fp32():
     # Feed the rollout actions back through the update leg on the SAME weights/hidden.
     # .clone() lifts them out of inference_mode (the real rollout buffer stores copies).
     actions_seq = {k: v.clone().unsqueeze(1) for k, v in res.actions.items()}  # [batch, 1]
-    log_probs_eval, _, _, _, _ = policy.evaluate_actions(
+    log_probs_eval, _, _, _, _, _ = policy.evaluate_actions(
         state.unsqueeze(1),
         blueprint_indices.unsqueeze(1),
         actions_seq,
@@ -182,10 +182,7 @@ def test_v2_cross_path_log_prob_symmetry_fp32():
 
 
 def test_v2_cross_path_log_prob_symmetry_stochastic_op():
-    """Stochastic rollout: ratio symmetry must hold even though forward() samples op
-    from the unfloored distribution (the op is SCORED against the floored FP32 one in
-    both legs, so old_log_prob == new_log_prob). Pins MEDIUM-1 from review.
-    """
+    """Stochastic rollout: op ratio symmetry must hold through the floored FP32 seam."""
     torch.manual_seed(11)
     slot_config = SlotConfig.default()
     num_slots = len(slot_config.slot_ids)
@@ -201,19 +198,89 @@ def test_v2_cross_path_log_prob_symmetry_stochastic_op():
         state, blueprint_indices, deterministic=False, probability_floor=floor
     )
     actions_seq = {k: v.clone().unsqueeze(1) for k, v in res.actions.items()}
-    log_probs_eval, _, _, _, _ = policy.evaluate_actions(
+    log_probs_eval, _, _, _, _, _ = policy.evaluate_actions(
         state.unsqueeze(1),
         blueprint_indices.unsqueeze(1),
         actions_seq,
         probability_floor=floor,
     )
     # The op head is the one under scrutiny: its stored old_log_prob must equal the
-    # recomputed new log_prob to FP32 precision (unbiased ratio), regardless of how the
-    # op was sampled.
+    # recomputed new log_prob to FP32 precision (unbiased ratio).
     torch.testing.assert_close(
         log_probs_eval["op"][:, 0], res.log_probs["op"], rtol=1e-4, atol=1e-5,
         msg="stochastic-op ratio asymmetry (CRITICAL-1 regression)",
     )
+
+
+def test_v2_stochastic_op_sampling_uses_floored_fp32_distribution(monkeypatch):
+    """Stochastic rollout samples op from the same floored FP32 policy it scores."""
+    torch.manual_seed(17)
+    slot_config = SlotConfig.default()
+    num_slots = len(slot_config.slot_ids)
+    policy = FactoredRecurrentActorCritic(state_dim=64, slot_config=slot_config)
+    policy.eval()
+
+    fixed_op_logits = torch.linspace(3.0, -3.0, policy.num_ops)
+    with torch.no_grad():
+        policy.op_head[2].weight.zero_()
+        policy.op_head[2].bias.copy_(fixed_op_logits)
+
+    batch = 3
+    state = torch.randn(batch, 64)
+    blueprint_indices = torch.full((batch, num_slots), -1, dtype=torch.long)
+    op_mask = torch.ones(batch, policy.num_ops, dtype=torch.bool)
+    floor = {"op": 0.20}
+
+    real_multinomial = torch.multinomial
+    captured_probs: list[torch.Tensor] = []
+
+    def capture_first_multinomial(
+        input: torch.Tensor,
+        num_samples: int,
+        replacement: bool = False,
+        *,
+        generator: torch.Generator | None = None,
+        out: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if not captured_probs:
+            captured_probs.append(input.detach().clone())
+            return torch.zeros(
+                input.shape[0],
+                num_samples,
+                dtype=torch.long,
+                device=input.device,
+            )
+        return real_multinomial(
+            input,
+            num_samples,
+            replacement=replacement,
+            generator=generator,
+            out=out,
+        )
+
+    monkeypatch.setattr(torch, "multinomial", capture_first_multinomial)
+
+    policy.get_action(
+        state,
+        blueprint_indices,
+        op_mask=op_mask,
+        probability_floor=floor,
+        deterministic=False,
+    )
+
+    expected_logits = _apply_floor_to_logits(
+        fixed_op_logits.unsqueeze(0)
+        .expand(batch, -1)
+        .float()
+        .masked_fill(~op_mask, MASKED_LOGIT_VALUE),
+        op_mask,
+        0.20,
+    )
+    expected_probs = torch.softmax(expected_logits, dim=-1)
+
+    assert captured_probs
+    assert captured_probs[0].dtype == torch.float32
+    torch.testing.assert_close(captured_probs[0], expected_probs)
 
 
 # --- V0: BF16-regime epoch-0 joint-ratio ~ 1 (CRITICAL-1 shipping gate, GPU) ----------
@@ -248,7 +315,7 @@ def test_v0_bf16_epoch0_joint_ratio_approx_one():
 
     # Update leg under the SAME BF16 autocast, unchanged weights.
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        new_lp, _, _, _, _ = policy.evaluate_actions(
+        new_lp, _, _, _, _, _ = policy.evaluate_actions(
             state.unsqueeze(1),
             blueprint_indices.unsqueeze(1),
             actions_seq,

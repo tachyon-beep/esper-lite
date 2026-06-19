@@ -967,6 +967,19 @@ class TamiyoState:
     clip_fraction: float = 0.0
     kl_divergence: float = 0.0
     explained_variance: float = 0.0
+    # EV-telemetry-robustness diagnostics (additive; pure telemetry, never gate inputs).
+    # value_nrmse is the floor-stabilized value-fit companion; ev_low_return_variance flags a
+    # floored EV denominator (denominator ill-conditioned); ev_return_variance is the
+    # EV-denominator variance valid_returns.var().
+    value_nrmse: float = 0.0
+    ev_low_return_variance: bool = False
+    ev_return_variance: float | None = None
+    # Rollback observability (per-rollout aggregates; pure telemetry, never gate inputs).
+    # Only the attempt/unattributed pair is mirrored on the live dashboard state: it is the
+    # rollback-starvation health signal. rollback_count/rollback_steps_zeroed (forfeited-signal
+    # volume) are intentionally karn-view/wandb-only and not surfaced on TamiyoState.
+    rollback_attempt_count: int = 0
+    rollback_unattributed_count: int = 0
 
     # Losses (Losses panel)
     policy_loss: float = 0.0
@@ -1069,6 +1082,8 @@ class TamiyoState:
     head_alpha_speed_grad_norm: float = 0.0
     head_alpha_curve_grad_norm: float = 0.0
     head_op_grad_norm: float = 0.0
+    # P0-1: op-conditioned AUX q_head grad norm (NOT the PPO baseline; tracks aux-head training).
+    head_q_grad_norm: float = 0.0
 
     # Previous gradient norms (Policy V2 - for trend detection)
     # Enables distinguishing transient spikes from sustained gradient issues
@@ -1080,6 +1095,7 @@ class TamiyoState:
     head_alpha_speed_grad_norm_prev: float = 0.0
     head_alpha_curve_grad_norm_prev: float = 0.0
     head_op_grad_norm_prev: float = 0.0
+    head_q_grad_norm_prev: float = 0.0
 
     # Per-head PPO ratios (Policy V2 - multi-head ratio explosion detection)
     # Individual head ratios can look healthy while joint ratio exceeds clip range
@@ -1156,6 +1172,11 @@ class TamiyoState:
     # Q-value analysis metrics
     q_variance: float = 0.0  # Variance across ops (low = critic ignoring op conditioning)
     q_spread: float = 0.0  # max(Q) - min(Q) across ops
+    # P0-1 AUX q-head training diagnostics (telemetry-only; q_head is no longer the PPO baseline).
+    # q_aux_loss: detached aux regression loss toward normalized returns. head_q_gradient_state:
+    # finite|missing|nonfinite|not_learnable|skipped — "is the aux q-head still training".
+    q_aux_loss: float = 0.0
+    head_q_gradient_state: str = "missing"
 
     # Action feedback (Policy V2 - added to observations for credit assignment)
     last_action_success: bool = True  # Whether previous action executed successfully
@@ -1352,7 +1373,7 @@ class DecisionSnapshot:
     td_advantage: float | None = None  # r + γV(s') - V(s): true TD(0) advantage (None until next step)
 
     # Decision-specific entropy (per DRL review - more useful than policy entropy)
-    decision_entropy: float = 0.0  # -sum(p*log(p)) for this action distribution
+    decision_entropy: float | None = None  # -sum(p*log(p)) when available
 
     # Head choice details for factored action heads (per DRL/UX specialist review)
     # These enable decision cards to show sub-decisions like 'bpnt:conv_l(87%) tmp:STD'
@@ -1376,14 +1397,14 @@ class DecisionSnapshot:
 
     # Per-head entropy values (distribution spread - higher means more uncertain)
     # Useful for diagnosing policy collapse (entropy -> 0) or exploration issues
-    op_entropy: float = 0.0
-    slot_entropy: float = 0.0
-    blueprint_entropy: float = 0.0
-    style_entropy: float = 0.0
-    tempo_entropy: float = 0.0
-    alpha_target_entropy: float = 0.0
-    alpha_speed_entropy: float = 0.0
-    curve_entropy: float = 0.0
+    op_entropy: float | None = None
+    slot_entropy: float | None = None
+    blueprint_entropy: float | None = None
+    style_entropy: float | None = None
+    tempo_entropy: float | None = None
+    alpha_target_entropy: float | None = None
+    alpha_speed_entropy: float | None = None
+    curve_entropy: float | None = None
 
 
 @dataclass

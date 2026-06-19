@@ -8,7 +8,7 @@
 
 ## 1. Context
 
-We have successfully trained `cifar_blind`, a model that achieves ~60% accuracy on CIFAR-10 with only +10% parameter growth using a heuristic/random strategy. This sets the **Baseline for Competence**.
+Current proof rehearsals target `cifar_impaired`, the valid CIFAR task used by the reward-efficiency packet and tracker commands. The heuristic/random control sets the **Baseline for Competence**.
 
 For the RL agent (`Simic`) to justify its existence, it must outperform this baseline not just in accuracy, but in **structural efficiency** (getting more accuracy *per unit of growth*).
 
@@ -24,14 +24,14 @@ We will run a concurrent A/B/C test on the CIFAR-10 task to determine the winnin
 
 | Cohort | Description | Reward Function | Hypothesis |
 | :--- | :--- | :--- | :--- |
-| **Control** | `cifar_blind` | Heuristic / Random | **Baseline.** The floor for performance. |
+| **Control** | `cifar_impaired` heuristic | Heuristic / Random | **Baseline.** The floor for performance. |
 | **A (Shaped)** | Current Default | 7-component (PBRS + Attribution + Warnings + Rent...) | **Over-engineered.** likely to cause confusion/instability. |
 | **B (Simplified)** | **The Challenger** | 3-component (PBRS + Intervention Cost + Terminal Bonus) | **Optimal.** Cleanest gradient for temporal credit assignment. |
 | **C (Sparse)** | Hard Mode | Terminal Accuracy - Rent | **The Truth.** Hardest to learn, but theoretically perfect alignment. |
 
 ### 2.2 Configuration
 
-- **Task:** `cifar_blind` topology (ResNet host + 2 seed slots).
+- **Task:** `cifar_impaired` topology (ResNet host + seed slots).
 - **Duration:** 100 Episodes.
 - **Envs:** 8-12 concurrent environments (split evenly across cohorts).
 - **Seed Budget:** Max 2 active seeds.
@@ -51,7 +51,7 @@ We are measuring **Return on Investment (ROI)**, not just profit.
 
 ### 3.1 Pass Criteria
 *   **Essential:** Cohort B (Simplified) must outperform Cohort A (Shaped) in Accuracy ROI.
-*   **Essential:** Cohort B must outperform Control (`cifar_blind`) in Final Accuracy.
+*   **Essential:** Cohort B must outperform Control (`cifar_impaired` heuristic) in Final Accuracy.
 *   **Stretch:** Cohort C (Sparse) learns *anything* better than random chance.
 
 ---

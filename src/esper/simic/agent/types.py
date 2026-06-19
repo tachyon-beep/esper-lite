@@ -60,6 +60,7 @@ class PPOUpdateMetrics(TypedDict, total=False):
     # Scalar metrics (aggregated across epochs)
     policy_loss: float
     value_loss: float
+    q_aux_loss: float  # P0-1: detached Q(s, op) telemetry head regression loss
     entropy_floor_penalty: float  # Per-head entropy floor penalty (for calibration debugging)
     approx_kl: float
     clip_fraction: float
@@ -78,6 +79,14 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_alpha_curve_clip_fraction: float
     head_op_clip_fraction: float
     explained_variance: float
+    # EV-telemetry-robustness (additive). value_nrmse: floor-stabilized companion;
+    # ev_low_return_variance: per-update floored-denominator flag; ev_return_variance:
+    # EV-denominator variance (Bessel, correction=1); ev_low_return_variance_count: per-update
+    # int flag (1/0), summed across updates into the run-level flagged-update count.
+    value_nrmse: float
+    ev_low_return_variance: bool
+    ev_return_variance: float
+    ev_low_return_variance_count: int
     entropy: float
     ratio_mean: float
     ratio_max: float
@@ -186,6 +195,9 @@ class PPOUpdateMetrics(TypedDict, total=False):
     effective_aux_coef: float  # Current warmup-scaled coefficient
     aux_pred_variance: float  # Prediction variance - warn if < 0.01 (collapse)
     aux_explained_variance: float  # Should increase over training
+    # EV-telemetry-robustness (SLICE C): aux (contribution-target) EV companions.
+    aux_value_nrmse: float  # Floor-stabilized aux value-fit signal (denominator floored)
+    aux_ev_low_return_variance: bool  # True if target var < data-relative floor (DIAGNOSTIC-ONLY)
     aux_pred_target_correlation: float  # Should be > 0.5 eventually
 
 
