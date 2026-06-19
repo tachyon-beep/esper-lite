@@ -34,15 +34,15 @@ class LoomweaveCapabilities:
         *,
         db_path: Path,
         database_present: bool,
-        class_contract_kind_present: bool,
         module_import_edges_present: bool,
         module_cycles: list[list[str]],
+        analyzed_at_commit: str | None,
     ) -> None:
         self.db_path = db_path
         self.database_present = database_present
-        self.class_contract_kind_present = class_contract_kind_present
         self.module_import_edges_present = module_import_edges_present
         self.module_cycles = module_cycles
+        self.analyzed_at_commit = analyzed_at_commit
 
 
 def inspect_loomweave_db(db_path: Path) -> LoomweaveCapabilities:
@@ -50,20 +50,12 @@ def inspect_loomweave_db(db_path: Path) -> LoomweaveCapabilities:
         return LoomweaveCapabilities(
             db_path=db_path,
             database_present=False,
-            class_contract_kind_present=False,
             module_import_edges_present=False,
             module_cycles=[],
+            analyzed_at_commit=None,
         )
 
     connection = sqlite3.connect(db_path)
-    class_kind_count = connection.execute(
-        """
-        select count(*)
-        from entities
-        where kind = 'class'
-          and json_extract(properties, '$.python.class_contract_kind') is not null
-        """
-    ).fetchone()[0]
     import_edge_count = connection.execute(
         """
         select count(*)
@@ -82,14 +74,24 @@ def inspect_loomweave_db(db_path: Path) -> LoomweaveCapabilities:
           and target.kind = 'module'
         """
     ).fetchall()
+    analyzed_row = connection.execute(
+        """
+        select analyzed_at_commit
+        from runs
+        where status = 'completed'
+          and analyzed_at_commit is not null
+        order by completed_at desc
+        limit 1
+        """
+    ).fetchone()
     connection.close()
 
     return LoomweaveCapabilities(
         db_path=db_path,
         database_present=True,
-        class_contract_kind_present=class_kind_count > 0,
         module_import_edges_present=import_edge_count > 0,
         module_cycles=_module_cycles(import_edges),
+        analyzed_at_commit=None if analyzed_row is None else analyzed_row[0],
     )
 
 
@@ -134,7 +136,9 @@ def _module_cycles(import_edges: list[tuple[str, str]]) -> list[list[str]]:
             component.append(member)
             if member == node:
                 break
-        if len(component) > 1:
+        if len(component) > 1 or (
+            len(component) == 1 and component[0] in graph[component[0]]
+        ):
             components.append(sorted(component))
 
     for node in sorted(graph):
@@ -217,13 +221,25 @@ def build_phase_a_report(
     *,
     wardline_output: Path,
     loomweave: LoomweaveCapabilities,
+    head_commit: str,
     defensive_findings: list[NormalizedFinding],
+    defensive_exit_code: int,
     leyline_findings: list[NormalizedFinding],
+    leyline_exit_code: int,
 ) -> dict[str, Any]:
+    index_stale = (
+        loomweave.database_present and loomweave.analyzed_at_commit != head_commit
+    )
+
     wardline_missing = not wardline_output.exists()
     wardline_has_defensive_rule = (
         False if wardline_missing else _wardline_has_defensive_rule(wardline_output)
     )
+    # TODO: [FUTURE FUNCTIONALITY] No wardline rule maps to defensive patterns yet
+    # (wardline's vocabulary is trust/taint only and it emits no line-anchored findings),
+    # so matches/weft_only stay empty by construction and no homegrown-vs-weft diff is
+    # performed; the check is marked comparison="deferred". Implement a real diff once
+    # wardline ships a mapped defensive-pattern rule family (plan Replacement Readiness).
     defensive_blockers: list[str] = []
     if wardline_missing:
         defensive_blockers.append(
@@ -233,17 +249,37 @@ def build_phase_a_report(
         defensive_blockers.append(
             "Wardline emitted no defensive-pattern rule mapping; keep lint_defensive_patterns.py blocking."
         )
+    if defensive_exit_code != 0 and len(defensive_findings) == 0:
+        defensive_blockers.append(
+            "lint_defensive_patterns.py exited non-zero with no parsed findings "
+            f"(exit_code={defensive_exit_code}); treat the defensive-pattern shadow run as failed."
+        )
 
-    leyline_blockers: list[str] = []
-    if not loomweave.class_contract_kind_present:
+    # TODO: [FUTURE FUNCTIONALITY] Loomweave 1.x exposes no per-kind class-contract
+    # metadata (enum/dataclass/protocol/typeddict/namedtuple) and no whitelist/expiry
+    # state, so leyline parity cannot be computed; the check stays comparison="deferred"
+    # and lint_leyline_types.py remains blocking until a real Loomweave surface lands.
+    leyline_blockers: list[str] = [
+        "Loomweave exposes no per-kind class-contract metadata "
+        "(enum/dataclass/protocol/typeddict/namedtuple) and cannot model "
+        "leyline_boundaries stale-whitelist semantics; keep lint_leyline_types.py blocking."
+    ]
+    if leyline_exit_code != 0 and len(leyline_findings) == 0:
         leyline_blockers.append(
-            "Loomweave class_contract_kind metadata is not present; keep lint_leyline_types.py blocking."
+            "lint_leyline_types.py exited non-zero with no parsed findings "
+            f"(exit_code={leyline_exit_code}); treat the leyline-types shadow run as failed."
         )
 
     module_cycle_blockers: list[str] = []
     if not loomweave.database_present:
         module_cycle_blockers.append(
             "Loomweave database is missing; run loomweave analyze before evaluating module cycles."
+        )
+    if index_stale:
+        module_cycle_blockers.append(
+            f"Loomweave index was analyzed at {loomweave.analyzed_at_commit or 'unknown'} "
+            f"but HEAD is {head_commit}; re-run loomweave analyze before trusting "
+            "module-cycle evidence."
         )
     if not loomweave.module_import_edges_present:
         module_cycle_blockers.append(
@@ -259,6 +295,7 @@ def build_phase_a_report(
         "checks": [
             _phase_a_check(
                 check="defensive-patterns",
+                comparison="deferred",
                 shadow_signal_ready=len(defensive_blockers) == 0
                 and len(defensive_findings) == 0,
                 matches=[],
@@ -268,6 +305,7 @@ def build_phase_a_report(
             ),
             _phase_a_check(
                 check="leyline-types",
+                comparison="deferred",
                 shadow_signal_ready=len(leyline_blockers) == 0
                 and len(leyline_findings) == 0,
                 matches=[],
@@ -277,6 +315,7 @@ def build_phase_a_report(
             ),
             _phase_a_check(
                 check="module-cycles",
+                comparison="weft_native",
                 shadow_signal_ready=len(module_cycle_blockers) == 0,
                 matches=[],
                 weft_only=[
@@ -297,6 +336,7 @@ def build_phase_a_report(
 def _phase_a_check(
     *,
     check: str,
+    comparison: str,
     shadow_signal_ready: bool,
     matches: list[dict[str, Any]],
     weft_only: list[dict[str, Any]],
@@ -309,6 +349,7 @@ def _phase_a_check(
     )
     return {
         "check": check,
+        "comparison": comparison,
         "replacement_ready": False,
         "shadow_signal_ready": shadow_signal_ready,
         "matches": matches,
