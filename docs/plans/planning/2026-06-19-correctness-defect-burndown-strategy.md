@@ -416,8 +416,10 @@ open Sanctum pre-ready crash behavior is tracked as `esper-lite-440748cb34`.
 - `tests/karn/sanctum/`
 
 **Steps:**
-1. Add an EV Step 0 preflight: either assert required `ppo_updates` columns
-   exist or switch the calibration query to `raw_events` JSON.
+1. Add an EV Step 0 preflight: assert required `ppo_updates` columns exist.
+   P-EV-RECAL resolved this by adding `bellman_error` and
+   `v_return_correlation` to `ppo_updates`; `raw_events` remains an internal
+   evidence source, not the public calibration query path.
 2. Add a telemetry-producing smoke that proves `run_confounders` is clean for
    known low-return-variance artifact batches.
 3. Remove or isolate defaulted robust-signal parameters from live anomaly paths.
@@ -432,6 +434,15 @@ open Sanctum pre-ready crash behavior is tracked as `esper-lite-440748cb34`.
 - EV calibration is executable on current telemetry.
 - A false EV denominator artifact cannot block a proof verdict.
 - A genuine value collapse still blocks quickly with robust evidence.
+
+**2026-06-19 P-EV-RECAL outcome:** `esper-lite-26e96f0578` selected the
+`ppo_updates` path and added a fail-loud preflight query that blocks when a run
+has no PPO updates or when `return_std`, `value_loss`, `bellman_error`, or
+`v_return_correlation` are absent. This removes the query ambiguity for
+`esper-lite-a20b180e26`. Live evidence on `telemetry_2026-06-16_160350`:
+`preflight_status=ok`, `updates=10`, and `missing_required_rows=0`. The
+remaining Package B work is the downstream EV robustness implementation and
+consumer audit.
 
 ### Package C: Checkpoint And Recurrent PPO Mechanics Harness
 

@@ -415,6 +415,13 @@ Finding reconciliation:
   Evidence:
   `uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_robustness_columns tests/karn/mcp/test_views.py::test_run_confounders_view_empty_on_clean_run tests/karn/sanctum/test_reward_health.py -q`
   -> 12 passed.
+- P-EV-RECAL corrected the remaining EV calibration preflight ambiguity:
+  `ppo_updates` now projects `bellman_error` and `v_return_correlation` directly,
+  and the Step 0 preflight uses a fail-loud `ppo_updates` query instead of a
+  `raw_events` fallback. Regression coverage:
+  `uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_calibration_preflight_fields tests/karn/mcp/test_views.py::test_ev_calibration_preflight_raises_when_required_evidence_missing -q`
+  -> 2 passed. Live Karn evidence on `telemetry_2026-06-16_160350`:
+  `preflight_status=ok`, `updates=10`, `missing_required_rows=0`.
 - Robust value-collapse gating checks are fixed on current branch. Evidence:
   `uv run pytest tests/simic/telemetry/test_anomaly_detector.py tests/simic/training/test_ppo_coordinator.py::test_coordinator_emits_value_collapse_on_low_var_real_collapse tests/simic/training/test_ppo_coordinator.py::test_coordinator_does_not_emit_value_collapse_on_artifact -q`
   -> 26 passed.

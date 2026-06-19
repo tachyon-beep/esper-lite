@@ -6,7 +6,7 @@ id: ev-telemetry-robustness
 title: EV-Telemetry Robustness Under the Op-Marginal V(s) Critic
 type: ready
 created: 2026-06-18
-updated: 2026-06-18
+updated: 2026-06-19
 owner: Claude
 
 urgency: high
@@ -52,6 +52,8 @@ status_notes: >
     explained_variance. B1: thread the PRIMARY robust signals bellman_error + value_loss (already on the
     payload: value_loss decl :706, bellman_error decl :744) plus secondary value_nrmse/v_return_correlation + ev_low_return_variance
     through ALL THREE layers. value_nrmse/v_return_correlation are floor-/sentinel-stabilized -> SECONDARY only.
+  - P-EV-RECAL (2026-06-19) resolved the Step 0 query ambiguity by adding bellman_error
+    and v_return_correlation to Karn ppo_updates; Step 0 uses ppo_updates, not raw_events.
   EV compute ppo_agent.py:619-628; aux EV :1268-1271; ppo_agent has NO `import math`.
 percent_complete: 0
 
@@ -130,7 +132,7 @@ Strict TDD, **RED → GREEN**, no-legacy single path. Every behavior-changing st
 | Gate aggregator method | `src/esper/simic/telemetry/anomaly_detector.py:447` `check_all` (calls `check_value_function` at :485, guarded by `value_collapse_applicable` :483) — **today forwards no robust signal** | **Thread `bellman_error`/`value_loss`/`value_nrmse`/`v_return_correlation`/`ev_low_return_variance` through here too (Step 5, B1)** |
 | Gate logic | `anomaly_detector.py:140-175` `check_value_function` (**today signature receives only `explained_variance`, `current_episode`, `total_episodes`** — verified :140-145); thresholds :66-69 (−0.5/−0.2/0.0/+0.1) | **Gate migration: add primary-robust-signal arm keyed on `bellman_error`/`value_loss` (Step 5, B1)** |
 | Event mapping | `vectorized.py:480-493` (verbosity escalation), `:517` (`VALUE_COLLAPSE_DETECTED`), `:193` (EV metric registered), `:241` (aux EV) | Register new metrics; event unchanged but driven by stricter gate |
-| Karn `ppo_updates` view | `src/esper/karn/mcp/views.py:127` (`explained_variance` column) | Add `value_nrmse`, `ev_low_return_variance`, `ev_return_variance` columns (Step 6) |
+| Karn `ppo_updates` view | `src/esper/karn/mcp/views.py:123-131` (`value_loss`, `bellman_error`, `v_return_correlation`, `explained_variance`, `value_nrmse`, `ev_low_return_variance`, `ev_return_variance`) | Step 0 calibration evidence is queryable from `ppo_updates`; Step 6 keeps the robustness columns first-class |
 | Karn `anomalies` view | `karn/mcp/views.py:596` (`VALUE_COLLAPSE_DETECTED`) | Inherits stricter gate (Step 5/6) |
 | **Karn `run_confounders`** | `karn/mcp/views.py:606-662` (`true as proof_blocking` at :649; event at :652) | **Highest teeth — proof-blocking confounder.** Stays event-type based (B2): artefactual collapse is suppressed UPSTREAM by the Step 5 gate not emitting the event, NOT by a view-level filter. Optional flagged-exclusion on the cross-update EV std/mean is display-only and must not drop a proof-blocking row. |
 | TUI health bool | `src/esper/karn/sanctum/widgets/reward_health.py:39` (`is_ev_healthy = ev_explained > 0.5`) | Base on `value_nrmse` (Step 6) |
@@ -153,11 +155,75 @@ Strict TDD, **RED → GREEN**, no-legacy single path. Every behavior-changing st
 
 > Locked decision 3 sets the default `ev_return_variance_floor = 1.0`, but drl-expert review requires confirming it sits well below the normal operating band before locking AND that the low-variance tail is genuinely a denominator-only artifact (not a real fit failure). This step produces the numeric the unit tests in Step 1 assert against and the evidence for the Step 5 robust-arm test.
 
-- Using the Karn MCP (`mcp__esper-karn__query_sql` over the most recent K=4 P0-1 run via `run_dir`), pull the per-update `return_std` distribution from the `ppo_updates` view and compute `var_returns = return_std**2` percentiles.
+- Using the Karn MCP (`mcp__esper-karn__query_sql` over the most recent K=4 P0-1 run via `run_dir`), pull the per-update `return_std` distribution from the `ppo_updates` view and compute `var_returns = return_std**2` percentiles. P-EV-RECAL locks `ppo_updates` as the executable path; do not fall back to `raw_events` unless these columns regress and the preflight blocks.
 - Confirm: healthy-run `var_returns` is in the ~49–169 band (return std 7–13, per the multi-epoch design doc), and that the EV-blowout updates correspond to the low-`var_returns` tail.
 - **Validate the tail's value-fit (Phase-2 question).** For the low-`var_returns` tail updates identified, ALSO pull `bellman_error`, `v_return_correlation`, and `value_loss` from the same updates. Confirm they are healthy (low `bellman_error`, high `v_return_correlation`, low `value_loss`). If ANY tail update has a bad robust signal, that is evidence the artifact and a real regression can CO-OCCUR; record it and ensure Acceptance #6b's robust-arm test covers that regime — the floor must not be relied on to classify those.
 - **Lock the floor** at the value that excludes only the (confirmed-healthy) pathological tail (default `1.0` unless the data argues otherwise). Record the chosen value and the percentile rationale inline in the Step 1 ctor docstring.
 - **No RED/GREEN** — this is calibration. Output is the locked constant + a one-line justification carried into the code comment + the tail value-fit evidence.
+
+### Step 0 executable preflight (P-EV-RECAL, 2026-06-19)
+
+`src/esper/karn/mcp/views.py` now projects the full calibration evidence from
+`ppo_updates`: `return_std`, `value_loss`, `bellman_error`, and
+`v_return_correlation`. The preflight query below fails loudly when the selected
+run has no PPO updates or when any required evidence is absent; it uses no
+defaults, `COALESCE`, or fallback payload path. Replace `<RUN_DIR>` with the
+selected run, defaulting to the newest local PPO run observed during
+P-EV-RECAL orientation: `telemetry_2026-06-16_160350`.
+
+```sql
+WITH updates AS (
+    SELECT
+        episodes_completed,
+        group_id,
+        return_std,
+        power(return_std, 2) AS var_returns,
+        explained_variance,
+        value_loss,
+        bellman_error,
+        v_return_correlation
+    FROM ppo_updates
+    WHERE run_dir = '<RUN_DIR>'
+),
+summary AS (
+    SELECT
+        count(*) AS updates,
+        sum(
+            CASE
+                WHEN return_std IS NULL
+                  OR value_loss IS NULL
+                  OR bellman_error IS NULL
+                  OR v_return_correlation IS NULL
+                THEN 1 ELSE 0
+            END
+        ) AS missing_required_rows,
+        quantile_cont(var_returns, [0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0]) AS var_return_quantiles,
+        min(value_loss) AS min_value_loss,
+        max(value_loss) AS max_value_loss,
+        min(bellman_error) AS min_bellman_error,
+        max(bellman_error) AS max_bellman_error,
+        min(v_return_correlation) AS min_v_return_correlation,
+        max(v_return_correlation) AS max_v_return_correlation
+    FROM updates
+)
+SELECT
+    CASE
+        WHEN updates = 0 THEN error('EV calibration preflight found no PPO updates for run_dir')
+        WHEN missing_required_rows > 0 THEN error('EV calibration preflight missing required value evidence')
+        ELSE 'ok'
+    END AS preflight_status,
+    *
+FROM summary;
+```
+
+Live evidence captured 2026-06-19 with `KarnMCPServer("telemetry")` for
+`run_dir = 'telemetry_2026-06-16_160350'`: `preflight_status = 'ok'`,
+`updates = 10`, `missing_required_rows = 0`, `var_return_quantiles =
+[5.693101418319429, 6.490904748950143, 17.48170978181183,
+40.15395539813676, 46.41391027192975, 54.826956276346074,
+57.97769175911617]`, `value_loss = 0.10646478831768036..0.8902218341827393`,
+`bellman_error = 0.25563251972198486..0.45969972014427185`, and
+`v_return_correlation = -0.08301542699337006..0.12338030338287354`.
 
 ### Step 0 LOCKED values (Slice 3 — robust-arm gate thresholds, drl-expert sign-off 2026-06-18)
 

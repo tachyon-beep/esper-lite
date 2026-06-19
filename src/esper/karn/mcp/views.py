@@ -121,6 +121,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.batch')::INTEGER as batch,
             json_extract(data, '$.policy_loss')::DOUBLE as policy_loss,
             json_extract(data, '$.value_loss')::DOUBLE as value_loss,
+            json_extract(data, '$.bellman_error')::DOUBLE as bellman_error,
+            json_extract(data, '$.v_return_correlation')::DOUBLE as v_return_correlation,
             json_extract(data, '$.entropy')::DOUBLE as entropy,
             json_extract(data, '$.kl_divergence')::DOUBLE as kl_divergence,
             json_extract(data, '$.clip_fraction')::DOUBLE as clip_fraction,

@@ -63,6 +63,21 @@ recomputes Q(s,argmax op) in deterministic bootstrap mode, and focused regressio
 15. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 16. **Correctness Defect Burndown Strategy** - Drafted 2026-06-19; Package A tracker/ready-folder/defect-report reconciliation executed on 2026-06-19 with Filigree IDs recorded for the next sprint work
 
+### P-EV-RECAL Execution Note (2026-06-19)
+
+Filigree task `esper-lite-26e96f0578` removes the EV calibration ambiguity for
+`esper-lite-a20b180e26`. The chosen public query path is `ppo_updates`, not
+`raw_events`; `ppo_updates` must expose `return_std`, `value_loss`,
+`bellman_error`, and `v_return_correlation` for the Step 0 calibration
+preflight. The exact fail-loud SQL is recorded in
+`docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md` under
+`Step 0 executable preflight (P-EV-RECAL, 2026-06-19)`. Focused evidence command:
+`uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_robustness_columns tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_calibration_preflight_fields tests/karn/mcp/test_views.py::test_ev_calibration_preflight_raises_when_required_evidence_missing tests/karn/mcp/test_views.py::test_run_confounders_view_empty_on_clean_run -q`
+-> 4 passed. Live preflight evidence on `telemetry_2026-06-16_160350`:
+`preflight_status=ok`, `updates=10`, `missing_required_rows=0`, value-loss
+range `0.10646478831768036..0.8902218341827393`, bellman-error range
+`0.25563251972198486..0.45969972014427185`.
+
 ### Critical Path (Updated)
 ```
 correctness-proof-strategy ──► morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──► reward-efficiency verdict ──► counterfactual-oracle ──► emrakul-phase1

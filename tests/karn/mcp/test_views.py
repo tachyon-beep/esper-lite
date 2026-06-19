@@ -19,6 +19,60 @@ from esper.karn.mcp.views import (
 )
 
 
+def _ev_calibration_preflight_sql(run_dir: str) -> str:
+    return f"""
+    WITH updates AS (
+        SELECT
+            episodes_completed,
+            group_id,
+            return_std,
+            power(return_std, 2) AS var_returns,
+            explained_variance,
+            value_loss,
+            bellman_error,
+            v_return_correlation
+        FROM ppo_updates
+        WHERE run_dir = '{run_dir}'
+    ),
+    summary AS (
+        SELECT
+            count(*) AS updates,
+            sum(
+                CASE
+                    WHEN return_std IS NULL
+                      OR value_loss IS NULL
+                      OR bellman_error IS NULL
+                      OR v_return_correlation IS NULL
+                    THEN 1 ELSE 0
+                END
+            ) AS missing_required_rows,
+            quantile_cont(
+                var_returns,
+                [0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0]
+            ) AS var_return_quantiles,
+            min(value_loss) AS min_value_loss,
+            max(value_loss) AS max_value_loss,
+            min(bellman_error) AS min_bellman_error,
+            max(bellman_error) AS max_bellman_error,
+            min(v_return_correlation) AS min_v_return_correlation,
+            max(v_return_correlation) AS max_v_return_correlation
+        FROM updates
+    )
+    SELECT
+        CASE
+            WHEN updates = 0 THEN error(
+                'EV calibration preflight found no PPO updates for run_dir'
+            )
+            WHEN missing_required_rows > 0 THEN error(
+                'EV calibration preflight missing required value evidence'
+            )
+            ELSE 'ok'
+        END AS preflight_status,
+        *
+    FROM summary
+    """
+
+
 def test_view_definitions_exist():
     """All expected views are defined."""
     expected = {
@@ -867,6 +921,86 @@ def test_ppo_updates_exposes_ev_robustness_columns(tmp_path):
     ).fetchone()
 
     assert row == (-3.5, 0.42, True, 0.7)
+
+
+def test_ppo_updates_exposes_ev_calibration_preflight_fields(tmp_path):
+    """ppo_updates exposes every field needed by the EV floor calibration preflight."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "ev_calibration_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-ev-preflight-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 11,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "return_std": 7.0,
+            "value_loss": 0.11,
+            "bellman_error": 0.35,
+            "v_return_correlation": 0.82,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            return_std,
+            value_loss,
+            bellman_error,
+            v_return_correlation
+        FROM ppo_updates
+        """
+    ).fetchone()
+
+    assert row == (7.0, 0.11, 0.35, 0.82)
+
+
+def test_ev_calibration_preflight_raises_when_required_evidence_missing(tmp_path):
+    """The documented EV preflight fails loudly when robust value evidence is absent."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "missing_ev_evidence"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-ev-preflight-missing-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 12,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "return_std": 7.0,
+            "value_loss": 0.11,
+            "bellman_error": 0.35,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    with pytest.raises(
+        duckdb.InvalidInputException,
+        match="EV calibration preflight missing required value evidence",
+    ):
+        conn.execute(_ev_calibration_preflight_sql("missing_ev_evidence")).fetchall()
 
 
 def test_ppo_updates_exposes_q_aux_loss(tmp_path):
