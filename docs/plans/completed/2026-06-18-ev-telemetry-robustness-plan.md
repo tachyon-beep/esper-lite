@@ -458,7 +458,7 @@ closeout behavior would require changing those fields and the robust-only regres
 - **Cross-dependency (load-bearing):** the gate consumes the **aggregated** `explained_variance` (`ppo_coordinator.py:516` passes `metrics["explained_variance"]`, the cross-update value from Step 3.4). So the Step 3.4 flagged-exclusion rule is exactly what the Step 5 gate keys on. Add **`test_gate_sees_unflagged_only_ev_mean`**: drive `check_all` with an aggregated metrics dict produced by `_aggregate_ppo_metrics` over a flagged/unflagged mix and assert the EV the gate evaluates equals the unflagged-only mean.
 - **GREEN command:** `uv run pytest tests/simic/telemetry -k value_function -q` and `uv run pytest tests/simic/test_vectorized.py -k unflagged_only_ev -q`
 
-**Rollback note:** gate condition is rewritten predicates + the coordinator/`check_all`/`check_value_function` passing extra args (keyword-only, defaulted: `bellman_error`/`value_loss` primary, `value_nrmse`/`v_return_correlation` secondary, `ev_low_return_variance`) + the unflagged-mean coupling test; revert restores the previous EV-only threshold behavior. The closeout implementation intentionally does not retain that EV firing path.
+**Rollback note:** gate condition is rewritten predicates + the coordinator/`check_all`/`check_value_function` passing extra args (`bellman_error`/`value_loss` primary, `value_nrmse`/`v_return_correlation` secondary, `ev_low_return_variance`) + the unflagged-mean coupling test. The production coordinator path passes those fields by direct-indexing mandatory aggregated metrics; the standalone detector's quiescent defaults are not accepted as proof evidence. Revert restores the previous EV-only threshold behavior. The closeout implementation intentionally does not retain that EV firing path.
 
 ---
 
@@ -642,28 +642,27 @@ closeout behavior would require changing those fields and the robust-only regres
 | Gate migration masks a real value collapse | High | Possible if thresholds loose | Acceptance #6 + #6b regression locks; robust-only `value_loss > 5.0 OR bellman_error > 5.0`; drl-expert threshold review (Step 5) |
 | Degenerate batch (numel<2) silently swallowed into telemetry | High | Certain if a NaN-acceptance path were added | Locked decision B3: degenerate masks are a hard bug; existing `:636` return-stat raise preserved; NO NaN-by-convention path; `test_ev_degenerate_batch_raises_loudly` |
 | `_aggregate_ppo_metrics` KeyError on unregistered new keys | High | Certain without registration | Reducer registration (Step 3.4); `test_aggregate_ppo_metrics_no_keyerror_on_ev_fields` |
-| Floor mis-set attenuates legitimate negative EV | Medium | Possible | Step 0 calibration + tail value-fit validation; config-exposed; robust arm fires independently |
+| Floor mis-set attenuates legitimate negative EV | Medium | Possible | Step 0 calibration + tail value-fit validation; config-exposed; robust-only gate fires independently |
 | Aux floor reuses raw-return scale | Medium | Possible | Step 7 aux-floor pre-flight; separate `aux_ev_return_variance_floor`; never reuse `ev_return_variance_floor` |
 | Mislabel rename breaks a `batch_stats.value_variance` chart | Medium | Possible | Step 8.1 reader audit (required pre-merge checklist) |
 | Web clamp removal regresses gauge rendering | Low | Possible | Vitest component specs `HealthGauges` / `ExperimentVerdictPanel` (B5 — `npm test -- --run`, NOT Playwright/e2e) (Step 6.4) |
 
-## Information Gaps
+## Resolved Closeout Notes
 
-1. [ ] **Floor numeric** (Step 0): the locked `ev_return_variance_floor` value must be confirmed from the recent K=4 run's `return_std` distribution before the Step 1 tests are finalized, AND `test_ev_floor_default_matches_calibration` must assert the ctor default equals it.
-2. [x] **Aux floor basis** (Step 7): RESOLVED to a required pre-flight (parallel to Step 0). Compute `contribution_targets.var()` percentiles via an **in-process harness/test** (W6: `contribution_targets` is an in-buffer tensor, NOT persisted/queryable via Karn SQL — `ppo_agent.py:1239`/`:1263`; emitters expose only aggregates), OR first persist an `aux_ev_target_variance` metric and query that. Lock a SEPARATE `aux_ev_return_variance_floor`; do NOT reuse the raw-return floor.
-3. [x] **`batch_stats.value_variance` reader set** (Step 8): RESOLVED to a required pre-merge audit in Step 8.1 (not deferred) — grep + classify every reader before renaming.
-4. [x] **Web type-gen** (Step 6.4): RESOLVED — `sanctum.ts` is generated via `npm run generate:types` → `scripts/generate_overwatch_types.py` (confirmed in `package.json`). Regenerate; do NOT hand-edit.
-
-## Caveats & Required Follow-ups
-
-**Before relying on this plan:**
-- [ ] Run Step 0 calibration (floor + tail value-fit) and lock the floor constant; finalize Step 1 test bounds + `test_ev_floor_default_matches_calibration` against it.
-- [ ] Run the Step 7 aux-floor pre-flight and lock `aux_ev_return_variance_floor` on the contribution-target scale.
-- [ ] Run the Step 8.1 `batch_stats.value_variance` reader audit and enumerate readers before renaming.
-- [ ] Obtain drl-expert sign-off on the Step 5 gate thresholds (PRIMARY `bellman_error` / `value_loss`; secondary `value_nrmse` / `v_return_correlation`) before PR-B merges.
-- [ ] Extract the EV helper seam (Step 1.2, W7) into `leyline/value_metrics.py` (or a private `PPOAgent` method) BEFORE writing the Step 1/2 unit tests, and add the end-to-end `test_ppo_update_emits_ev_robustness_fields` wiring regression.
-- [ ] Thread the PRIMARY robust signals `bellman_error` + `value_loss` (Step 5, B1) through coordinator → `check_all` → `check_value_function` and add `test_coordinator_emits_value_collapse_on_low_var_real_collapse`.
-- [ ] Generate web types via `npm run generate:types` (Step 6.4) rather than hand-editing `sanctum.ts` (Information Gap 4 RESOLVED).
+- Step 0 preflight is executable from `ppo_updates` after P-EV-RECAL (`ddd63e37`);
+  live evidence on `telemetry_2026-06-16_160350` returned `preflight_status=ok`,
+  `updates=10`, and `missing_required_rows=0`.
+- Robust gate thresholds are locked at `value_loss_threshold=5.0` and
+  `bellman_error_threshold=5.0` from the 400-update calibration basis described
+  above; `test_value_collapse_threshold_boundaries_are_strict` locks the strict
+  `>` boundary.
+- The EV helper seam, payload/reducer/emitter plumbing, and consumer wiring were
+  already present in the main implementation (`97ae84d8`) before this closeout.
+- The closeout patch adds the remaining regression locks for mandatory
+  `ev_low_return_variance`, proof-blocking emitted value-collapse rows, Sanctum's
+  `value_nrmse` sentinel, and Overwatch low-return-variance styling.
+- Web types remain generated from the existing pipeline; this closeout did not
+  introduce a new generated type field.
 
 **Assumptions:** P0-1 (op-marginal V(s)) is landed and stable before the 0.3.0 closeout; the EV-std blowout is the denominator artifact characterized in the spec (corroborated by lowest `value_loss` + best median EV co-occurring with the crater); `VALUE_HEAD_SCHEMA_VERSION` is **not** touched (telemetry payload only).
 
