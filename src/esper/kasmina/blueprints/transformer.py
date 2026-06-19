@@ -304,7 +304,13 @@ def create_flex_attention_seed(dim: int, n_head: int = 4, **kwargs: Any) -> nn.M
             block_mask = self._get_causal_block_mask(t, x.device, x.dtype)
             # B3-PT-02: flex_attention returns Tensor in PyTorch 2.5+
             # Removed isinstance check that caused torch.compile graph break
-            out = flex_attention(q, k, v, block_mask=block_mask)
+            if x.device.type == "cpu" and torch.is_grad_enabled():
+                # Torch 2.12 FlexAttention does not support CPU backward. Keep
+                # CPU training/tests differentiable with the same causal SDPA
+                # contract used by the standard transformer attention seed.
+                out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+            else:
+                out = flex_attention(q, k, v, block_mask=block_mask)
             # Type narrowing: flex_attention returns Tensor when return_lse=False (default)
             assert isinstance(out, torch.Tensor)
 

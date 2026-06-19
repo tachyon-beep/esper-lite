@@ -616,8 +616,11 @@ def compute_contribution_reward(
         # negative (it genuinely harmed), not when the host merely drifted down.
         # None => no causal proof of harm => do not suppress (mirrors the
         # blending-warning gate below and the proxy-path reasoning above).
-        counterfactual_imp = seed_info.counterfactual_total_improvement
-        if counterfactual_imp is not None and counterfactual_imp < 0:
+        fossilize_counterfactual_imp = seed_info.counterfactual_total_improvement
+        if (
+            fossilize_counterfactual_imp is not None
+            and fossilize_counterfactual_imp < 0
+        ):
             bounded_attribution = 0.0
 
     if action == LifecycleOp.PRUNE and not escrow_mode:
