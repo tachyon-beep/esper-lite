@@ -7,10 +7,6 @@ Run with:
 """
 from __future__ import annotations
 
-import contextlib
-from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
-
 import pytest
 import torch
 
@@ -70,7 +66,6 @@ def test_i6_rollout_autocast_reads_trainer_fields():
     reading these two trainer fields. This test verifies the factory returns
     the context manager from policy_amp_context with those args.
     """
-    from esper.simic.training.vectorized_trainer import VectorizedPPOTrainer
     from esper.simic.training.helpers import policy_amp_context  # NOTE: lives in helpers.py, not a policy_amp module
 
     # We cannot instantiate VectorizedPPOTrainer easily, but we can verify
@@ -96,8 +91,6 @@ def test_i11_profiler_exits_in_finally_on_exception():
     is in a finally block. We verify by patching training_profiler to a
     recording context manager and injecting an exception in the batch loop.
     """
-    from esper.simic.training import vectorized_trainer
-
     exit_calls = []
 
     class _RecordingCM:
@@ -108,9 +101,8 @@ def test_i11_profiler_exits_in_finally_on_exception():
             exit_calls.append(args)
             return False
 
-    # Use SimpleNamespace stub to verify the finally branch.
     cm = _RecordingCM()
-    prof = cm.__enter__()
+    cm.__enter__()
     try:
         raise RuntimeError("injected test exception")
     except RuntimeError:

@@ -37,6 +37,83 @@ jobs:
         with:
           args: "check src/ tests/"
 
+  weft-shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install project dependencies
+        run: uv sync --group dev
+
+      - name: Install Weft CLI tools
+        run: |
+          uv tool install wardline==1.0.1
+          uv tool install loomweave==1.1.0
+          uv tool install loomweave-plugin-python==1.1.0rc5
+          uv tool install legis==1.0.0
+          uv tool install warpline==1.0.0
+
+      - name: Prepare Weft artifact directory
+        run: mkdir -p "$RUNNER_TEMP/weft-shadow"
+
+      - name: Run Wardline shadow scan
+        continue-on-error: true
+        run: |
+          wardline doctor --root . > "$RUNNER_TEMP/weft-shadow/wardline-doctor.txt"
+          wardline scan . \
+            --config weft.toml \
+            --local-only \
+            --format jsonl \
+            --fail-on error \
+            --fail-on-unanalyzed \
+            --output "$RUNNER_TEMP/weft-shadow/wardline.jsonl"
+
+      - name: Refresh Loomweave index
+        continue-on-error: true
+        run: |
+          loomweave install --path . \
+            > "$RUNNER_TEMP/weft-shadow/loomweave-install.txt"
+          loomweave analyze . --config loomweave.yaml --no-incremental --json \
+            > "$RUNNER_TEMP/weft-shadow/loomweave-analyze.txt"
+          loomweave doctor --path . --format json \
+            > "$RUNNER_TEMP/weft-shadow/loomweave-doctor.json"
+
+      - name: Capture Legis and Warpline readiness
+        continue-on-error: true
+        run: |
+          legis doctor --format json > "$RUNNER_TEMP/weft-shadow/legis-doctor.json"
+          warpline install --repo . --config --json \
+            > "$RUNNER_TEMP/weft-shadow/warpline-install.json"
+          warpline doctor --repo . --json > "$RUNNER_TEMP/weft-shadow/warpline-doctor.json"
+
+      - name: Build Weft parity report
+        run: |
+          uv run python scripts/ci_weft_parity.py \
+            --output "$RUNNER_TEMP/weft-shadow/parity.json" \
+            --artifacts-dir "$RUNNER_TEMP/weft-shadow" \
+            --wardline-output "$RUNNER_TEMP/weft-shadow/wardline.jsonl"
+
+      - name: Upload Weft shadow artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weft-shadow-${{ github.sha }}
+          path: ${{ runner.temp }}/weft-shadow/**
+
   typecheck:
     runs-on: ubuntu-latest
     timeout-minutes: 10
