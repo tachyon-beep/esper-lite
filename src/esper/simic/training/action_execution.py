@@ -65,8 +65,6 @@ from .handlers import (
 )
 from .parallel_env_state import ParallelEnvState
 from esper.simic.vectorized_types import (
-    ActionMaskFlags,
-    ActionOutcome,
     ActionSpec,
     EnvStepRecord,
     EpisodeRecord,

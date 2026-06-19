@@ -76,11 +76,11 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | 🔴 Critical | 0 | New governor-integrity issues are high-priority proof blockers, not active Tier 0 mainline breakage |
 | Completed | 16 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) |
 | Ready | 14 | Implementation-ready plans (incl. post-P0-1 sprint umbrella + EV-telemetry-robustness + 0.1.1→main-merge, authored 2026-06-18) |
-| In Progress | 1 | phase3-tinystories (85%) |
+| In Progress | 2 | phase3-tinystories (85%); weft-phase-a-ci-migration (Phase A shadow-CI) |
 | Planning | 11 | Active design workspaces, including correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
 | Concept | 4 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals, gil-throughput-profiler |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
-| **Total Active** | **34** |
+| **Total Active** | **35** |
 
 ---
 
@@ -114,6 +114,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | sprint-umbrella | high | M | medium | Authored 2026-06-18 (`docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md`); umbrella for items 1-3 (EV-telemetry robustness, 0.1.1→main merge, dependency-vuln triage); 10-SME panel + synthesizer reviewed (verdict CHANGES_REQUESTED → must_do applied; child blockers fixed & codebase-verified) |
 | ev-telemetry-robustness | EV-Telemetry Robustness (low-return-variance artifact) | ready | high | M | medium | Authored 2026-06-18 (spec+plan); make `explained_variance` honest under P0-1's op-marginal V(s) (variance floor + `value_nrmse`/`ev_return_variance`, NOT bug-hiding) + audit EV consumers/gates; Step 0 empirical floor calibration is a HARD precondition |
 | main-merge-integration | 0.1.1 → main Merge & Integration | ready | high | L | high | Authored 2026-06-18 (spec+plan); ~42-commit FF merge carrying the VALUE_HEAD_SCHEMA_VERSION=2 checkpoint break; EV gate-fix (item 1) is a hard structural co-land precondition; dependency-vuln bump pass rides the window |
+| weft-phase-a-ci-migration | Weft Phase A CI Migration | in-progress | high | M | medium | Phase A landed on `weft-phase-a` (PR into 0.1.1): non-blocking `weft-shadow` CI job + `weft_parity.py`/`ci_weft_parity.py` parity report. Homegrown gates stay blocking; no gate retires until zero homegrown-only burn-in evidence exists |
 
 ### Tier 2: Medium Priority (Next 2 Weeks)
 
