@@ -983,10 +983,10 @@ class SanctumAggregator:
         self._tamiyo.explained_variance_history.append(explained_variance)
 
         # EV-telemetry-robustness diagnostics (additive; pure telemetry, never gate inputs).
-        # value_nrmse is float | None on the payload (None on a degenerate batch); coerce to 0.0
-        # for the scalar gauge, matching the explained_variance convention above.
+        # value_nrmse is float | None on the payload (None on a degenerate batch). Missing value
+        # fit evidence is rendered as the finite unknown/unhealthy sentinel 1.0, not healthy 0.0.
         self._tamiyo.value_nrmse = (
-            payload.value_nrmse if payload.value_nrmse is not None else 0.0
+            payload.value_nrmse if payload.value_nrmse is not None else 1.0
         )
         self._tamiyo.ev_low_return_variance = payload.ev_low_return_variance
         self._tamiyo.ev_return_variance = payload.ev_return_variance

@@ -281,7 +281,7 @@ Generate the floor assertion map from the Dependabot API immediately before the 
 
 Files:
 
-- `docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md:158`
+- `docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md:158`
 - `src/esper/karn/mcp/views.py:122`
 
 Evidence:
@@ -311,7 +311,7 @@ Rewrite the design to keep emitted `VALUE_COLLAPSE_DETECTED` rows proof-blocking
 
 File:
 
-- `docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md:294`
+- `docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md:294`
 
 Evidence:
 
@@ -429,3 +429,52 @@ Finding reconciliation:
   (`uv run pytest tests/nissa/test_p1_1_silent_swallow_fixes.py::TestTrainingWrapperSetsShutdownEventOnException tests/nissa/test_p1_1_silent_swallow_fixes.py::TestSanctumTrainingCrashExitsNonzero -q`
   -> 4 passed), but the stricter pre-TUI behavior remains tracked by
   `esper-lite-440748cb34`.
+
+## 2026-06-20 EV Telemetry Robustness Closeout
+
+Current branch during closeout: `0.3.0`.
+
+Filigree task `esper-lite-a20b180e26` is implemented after unblocker
+`esper-lite-26e96f0578` landed in `ddd63e37`. The main EV robustness
+implementation is `97ae84d8`; the final closeout patch adds regression locks
+and documentation reconciliation before closing the task.
+
+Defect reconciliation:
+
+- EV is now honest diagnostic telemetry under the op-marginal `V(s)` critic,
+  not a proof-blocking trigger.
+- Value-collapse proof blocking is robust-only:
+  `VALUE_COLLAPSE_DETECTED` fires from `value_loss > 5.0` or
+  `bellman_error > 5.0`; equality at `5.0` is non-firing.
+- Emitted `VALUE_COLLAPSE_DETECTED` rows remain proof-blocking in Karn
+  `run_confounders` and `scripts/proof_packet.py` even when
+  `ev_low_return_variance=True`; artifact suppression stays upstream in the
+  detector/gate emission path.
+- Cross-update EV aggregation now fails loudly when an update has non-`None`
+  `explained_variance` but lacks mandatory `ev_low_return_variance` evidence.
+- Sanctum no longer renders missing `value_nrmse` as healthy `0.0`; the finite
+  unknown/unhealthy sentinel is `1.0`.
+- Overwatch still displays the true negative EV value and low-return-variance
+  badge, but does not style the gauge as critical solely from that artifact.
+
+Closeout verification:
+
+- `uv run pytest tests/simic/test_ppo_value_metrics.py tests/simic/test_telemetry_fields.py tests/simic/test_vectorized.py -q` -> 102 passed.
+- `uv run pytest tests/simic/telemetry tests/simic/training/test_ppo_coordinator.py -q` -> 130 passed.
+- `uv run pytest tests/karn/mcp/test_views.py tests/karn/sanctum/test_reward_health.py tests/karn/sanctum/test_aggregator.py tests/nissa/test_wandb_backend.py tests/telemetry/test_batch_stats_ev_field.py tests/scripts/test_proof_packet.py -q` -> 140 passed.
+- `uv run pytest tests/simic/test_ppo_update_golden.py tests/simic/test_ppo.py tests/simic/test_ppo_normalization.py -q` -> 27 passed.
+- `npm --prefix src/esper/karn/overwatch/web test -- --run -t "HealthGauges|ExperimentVerdictPanel"` -> 29 passed, 271 skipped.
+- `uv run ruff check src/ tests/` -> passed.
+- `uv run python scripts/lint_leyline_types.py` -> stale whitelist entries 0.
+- `uv run python scripts/lint_defensive_patterns.py` -> violations 0.
+- `uv run python scripts/lint_gpu_sync.py` -> violations 0.
+- `MYPYPATH=src uv run mypy -p esper` -> success, 214 source files.
+- `npm --prefix src/esper/karn/overwatch/web run build` -> passed.
+- `wardline scan . --fail-on ERROR` -> exit 0, 0 active findings.
+- `git diff --check` -> passed.
+
+Remaining dependency order:
+
+- Dependency triage `esper-lite-d289d208ac` remains before main merge.
+- Main merge `esper-lite-569292a32b` remains blocked until dependency triage is
+  also closed; it was not started during this closeout.

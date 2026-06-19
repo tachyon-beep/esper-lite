@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-19 (correctness queue reconciliation executed on `0.3.0` at `a42bf5fa`: stale recurrent PPO P1 `esper-lite-6682b3faea` is closed, observation queue is empty, June 18 defect report now has a reconciliation section, and new Filigree work items exist for the sprint epic `esper-lite-5e6ff9f907`, P-EV-RECAL `esper-lite-26e96f0578`, EV robustness `esper-lite-a20b180e26`, dependency triage `esper-lite-d289d208ac`, main merge `esper-lite-569292a32b`, and Sanctum pre-ready crash bug `esper-lite-440748cb34`. Ready-folder hygiene moved completed green-state/P1-stability plans to `completed/` and demoted main-merge integration to `planning/`. Prior same-day note: correctness-defect-burndown strategy drafted in `docs/plans/planning/2026-06-19-correctness-defect-burndown-strategy.md` and peer reviewed by Python/process, PyTorch/reproducibility, deep-RL, and quality lenses. Prior 2026-06-18: P0-1 op-independent V(s) critic LANDED on 0.1.1 and pushed to origin — checkpoint-breaking VALUE_HEAD_SCHEMA_VERSION=2; subset-truncation GAE-bootstrap crash fixed (`esper-lite-6682b3faea`); post-P0-1 hardening sprint authored — umbrella `docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md` with spec+plan pairs for EV-telemetry robustness and the 0.1.1→main merge, reviewed by a 10-SME panel + synthesizer. Prior 2026-06-17: fossilize reward-economics host-drift confound fixed — all reward gates now key on the clean counterfactual, dead `_require_total_improvement` removed, committed `575482d7`; FOSSILIZE reward validated −0.81→+2.00; dead-critic root-caused to 1-PPO-step-per-rollout (value warmup ruled out); multi-epoch recurrent PPO via anchored-reference-pass design (`docs/superpowers/specs/2026-06-17-recurrent-ppo-multiepoch-design.md`) + executable two-PR plan (`docs/plans/ready/2026-06-17-recurrent-ppo-multiepoch-plan.md`) added — directly addresses the value-collapse blocker behind Focus Areas #7/#11) — prior: 2026-06-15 baseline green; recovery bug drain closed; op/value mismatch verified resolved; proof confounder drain implemented; correctness proof strategy drafted; proof packet defaults CLI and API callers to reward-efficiency profile; oracle sandbox and proof-baseline-control artifacts created; static-final source/replay manifest emission, runner handoff, live baseline rehearsal, and reward-efficiency-default blocked packet verified)
+**Last Updated:** 2026-06-20 (EV telemetry robustness closeout completed on `0.3.0`: main implementation `97ae84d8`, calibration-preflight unblocker `ddd63e37`, and a final closeout patch reconcile the plan to robust-only value-collapse semantics. `explained_variance` is diagnostic-only; proof-blocking `VALUE_COLLAPSE_DETECTED` rows fire from `value_loss > 5.0` or `bellman_error > 5.0` and remain proof-blocking even when `ev_low_return_variance=True`. Focused pytest/Vitest suites, guardrails, Overwatch build, Wardline, and `git diff --check` passed. Dependency order remains: dependency triage `esper-lite-d289d208ac` must close before main merge `esper-lite-569292a32b`; do not start main merge yet. Prior 2026-06-19: correctness queue reconciliation executed on `0.3.0` at `a42bf5fa`, stale recurrent PPO P1 `esper-lite-6682b3faea` closed, observation queue empty, sprint Filigree work items created, P-EV-RECAL `esper-lite-26e96f0578` closed.)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -70,13 +70,47 @@ Filigree task `esper-lite-26e96f0578` removes the EV calibration ambiguity for
 `raw_events`; `ppo_updates` must expose `return_std`, `value_loss`,
 `bellman_error`, and `v_return_correlation` for the Step 0 calibration
 preflight. The exact fail-loud SQL is recorded in
-`docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md` under
+`docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md` under
 `Step 0 executable preflight (P-EV-RECAL, 2026-06-19)`. Focused evidence command:
 `uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_robustness_columns tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_calibration_preflight_fields tests/karn/mcp/test_views.py::test_ev_calibration_preflight_raises_when_required_evidence_missing tests/karn/mcp/test_views.py::test_run_confounders_view_empty_on_clean_run -q`
 -> 4 passed. Live preflight evidence on `telemetry_2026-06-16_160350`:
 `preflight_status=ok`, `updates=10`, `missing_required_rows=0`, value-loss
 range `0.10646478831768036..0.8902218341827393`, bellman-error range
 `0.25563251972198486..0.45969972014427185`.
+
+### EV Telemetry Robustness Closeout (2026-06-20)
+
+Filigree task `esper-lite-a20b180e26` is implemented and ready to close after
+the final closeout commit. The completed plan moved to
+`docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md`.
+
+Semantics now recorded in source, tests, and plan:
+
+- `explained_variance` is honest diagnostic telemetry under the op-marginal
+  `V(s)` critic; it is not a proof-blocking trigger.
+- `VALUE_COLLAPSE_DETECTED` fires from robust signals only:
+  `value_loss > 5.0 OR bellman_error > 5.0`; equality at `5.0` does not fire.
+- Emitted `VALUE_COLLAPSE_DETECTED` rows stay proof-blocking through Karn
+  `run_confounders` and `scripts/proof_packet.py`, even with
+  `ev_low_return_variance=True`.
+- Artifact suppression belongs upstream in detector/gate emission, not in
+  `run_confounders`.
+
+Closeout verification:
+
+- `uv run pytest tests/simic/test_ppo_value_metrics.py tests/simic/test_telemetry_fields.py tests/simic/test_vectorized.py -q` -> 102 passed.
+- `uv run pytest tests/simic/telemetry tests/simic/training/test_ppo_coordinator.py -q` -> 130 passed.
+- `uv run pytest tests/karn/mcp/test_views.py tests/karn/sanctum/test_reward_health.py tests/karn/sanctum/test_aggregator.py tests/nissa/test_wandb_backend.py tests/telemetry/test_batch_stats_ev_field.py tests/scripts/test_proof_packet.py -q` -> 140 passed.
+- `uv run pytest tests/simic/test_ppo_update_golden.py tests/simic/test_ppo.py tests/simic/test_ppo_normalization.py -q` -> 27 passed.
+- `npm --prefix src/esper/karn/overwatch/web test -- --run -t "HealthGauges|ExperimentVerdictPanel"` -> 29 passed, 271 skipped.
+- `uv run ruff check src/ tests/` -> passed.
+- `uv run python scripts/lint_leyline_types.py` -> stale whitelist entries 0.
+- `uv run python scripts/lint_defensive_patterns.py` -> violations 0.
+- `uv run python scripts/lint_gpu_sync.py` -> violations 0.
+- `MYPYPATH=src uv run mypy -p esper` -> success, 214 source files.
+- `npm --prefix src/esper/karn/overwatch/web run build` -> passed.
+- `wardline scan . --fail-on ERROR` -> exit 0, 0 active findings.
+- `git diff --check` -> passed.
 
 ### Critical Path (Updated)
 ```
@@ -130,7 +164,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | blueprint-compiler | Blueprint Compiler (Phase 3 only) | ready | high | XL | medium | 0% - Correctly deferred until entropy stable |
 | training-perf-master | Training Pipeline Performance (Simic+Tolaria) | completed | high | L | medium | EXECUTED 2026-06-14 (→ completed/). Phase 0 (allocator/TF32/fragprobe), Phase 1 all 6 incl. CRITICAL-1 BLOCKER (FP32 masked-logit seam + BF16 symmetry, V0 joint_ratio<1e-3 GPU-validated) + sync folds, Phase 2 (FRAGMETRIC telemetry + stream pool + fenced del; CUDA_LAUNCH_BLOCKING clean, bit-identical val_acc), Phase 3 (DYN + pinned SNAP; GATE compile-works-without-sanctum validated). Deliberate calls: P2-RESET NO-GO (retries=0/ooms=0, frag cured), P3-HOST off (gated on RESET), P3-CLONE deferred (esper-lite-472b6477d2). Also deferred: op-sampler (esper-lite-05b4113bc1), carry-clamp (esper-lite-9827eb6bfe). Pending: real-run A/B wall-clock + TUI compile narrowing |
 | post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | sprint-umbrella | high | M | medium | Filigree epic `esper-lite-5e6ff9f907`; children: P-EV-RECAL `esper-lite-26e96f0578`, EV robustness `esper-lite-a20b180e26`, dependency triage `esper-lite-d289d208ac`, main merge `esper-lite-569292a32b` |
-| ev-telemetry-robustness | EV-Telemetry Robustness (low-return-variance artifact) | ready | high | M | medium | Filigree task `esper-lite-a20b180e26`, blocked by calibration preflight `esper-lite-26e96f0578`; make `explained_variance` honest under P0-1's op-marginal V(s) without bug-hiding |
+| ev-telemetry-robustness | EV-Telemetry Robustness (low-return-variance artifact) | completed | high | M | medium | Filigree task `esper-lite-a20b180e26`; implemented after P-EV-RECAL `esper-lite-26e96f0578` exposed executable preflight fields. Robust-only gate: EV diagnostic-only; value collapse fires from `value_loss > 5.0 OR bellman_error > 5.0`; plan moved to `completed/` |
 | main-merge-integration | 0.1.1 → main Merge & Integration | planning | high | L | high | Demoted from ready; plan moved to `docs/plans/planning/2026-06-18-main-merge-integration-plan.md`; Filigree task `esper-lite-569292a32b` is blocked by EV robustness `esper-lite-a20b180e26` and dependency triage `esper-lite-d289d208ac` |
 | weft-phase-a-ci-migration | Weft Phase A CI Migration | in-progress | high | M | medium | Phase A merged to `main` via PR #110 (f8089677): non-blocking `weft-shadow` CI job + `weft_parity.py`/`ci_weft_parity.py` parity report. Post-merge hardening landed: readiness now gates on homegrown linter exit codes + Loomweave index freshness (`runs.analyzed_at_commit` vs HEAD); defensive/leyline checks carry `comparison: "deferred"` (no Wardline/Loomweave equivalent yet). Homegrown gates stay blocking; no gate retires until a real comparison shows zero homegrown-only burn-in evidence |
 
@@ -186,6 +220,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | tele-340-lstm-health | TELE-340 LSTM Health Wiring | ✅ completed | 100% (27 tests passing) | `docs/plans/completed/` |
 | tele-610-episode-stats | TELE-610 Episode Stats Wiring | ✅ completed | 95% (19/20 tasks) | `docs/plans/completed/` |
 | value-function-metrics | Value Function Metrics Wiring | ✅ completed | 100% (97 tests passing) | `docs/plans/completed/` |
+| ev-telemetry-robustness | EV-Telemetry Robustness | ✅ completed | Robust-only value-collapse gate, proof-blocking regressions, Karn/Sanctum/Overwatch/W&B consumers verified | `docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md` |
 
 ### Abandoned
 

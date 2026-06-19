@@ -374,12 +374,13 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
     # set NaN. value_nrmse / ev_return_variance stay on the generic all-updates mean. This
     # unflagged-only EV mean is exactly what the Step-6 gate keys on.
     if "explained_variance" in keys:
-        unflagged_ev = [
-            metrics["explained_variance"]
-            for metrics in update_metrics
-            if metrics.get("explained_variance") is not None
-            and not metrics.get("ev_low_return_variance", False)
-        ]
+        unflagged_ev = []
+        for metrics in update_metrics:
+            if "explained_variance" not in metrics:
+                continue
+            explained_variance = metrics["explained_variance"]
+            if explained_variance is not None and not metrics["ev_low_return_variance"]:
+                unflagged_ev.append(explained_variance)
         if unflagged_ev:
             aggregated["explained_variance"] = sum(unflagged_ev) / len(unflagged_ev)
         else:

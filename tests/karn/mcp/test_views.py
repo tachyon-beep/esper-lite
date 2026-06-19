@@ -1147,6 +1147,59 @@ def test_run_confounders_view_surfaces_numerical_instability(tmp_path):
     )
 
 
+def test_run_confounders_keeps_emitted_value_collapse_proof_blocking_when_ev_flagged(tmp_path):
+    """An emitted value-collapse event is still proof-blocking even on flagged EV rows."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "test_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "collapse-1",
+        "event_type": "VALUE_COLLAPSE_DETECTED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 13,
+        "group_id": "treatment",
+        "message": "value collapse",
+        "data": {
+            "anomaly_type": "value_collapse",
+            "env_id": 1,
+            "episode": 13,
+            "batch": 4,
+            "inner_epoch": 0,
+            "total_episodes": 100,
+            "detail": "robust value_loss crossed threshold; ev_low_return_variance=True",
+            "ev_low_return_variance": True,
+        },
+        "severity": "error",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            event_type,
+            anomaly_type,
+            detail,
+            proof_blocking
+        FROM run_confounders
+        """
+    ).fetchone()
+
+    assert row == (
+        "VALUE_COLLAPSE_DETECTED",
+        "value_collapse",
+        "robust value_loss crossed threshold; ev_low_return_variance=True",
+        True,
+    )
+
+
 def test_run_confounders_view_surfaces_integrity_confounders(tmp_path):
     """run_confounders must surface rollback, reward-hacking, and degradation
     as proof-blocking confounders (KARN-PROOF-002)."""

@@ -4,10 +4,10 @@
 # Plan Metadata
 id: ev-telemetry-robustness
 title: EV-Telemetry Robustness Under the Op-Marginal V(s) Critic
-type: ready
+type: completed
 created: 2026-06-18
-updated: 2026-06-19
-owner: Claude
+updated: 2026-06-20
+owner: codex
 
 urgency: high
 value: >
@@ -23,18 +23,26 @@ risk_notes: >
   NO VALUE_HEAD_SCHEMA_VERSION bump (telemetry payload, not checkpoint format). Two with-teeth risks:
   (a) a mis-set variance floor could attenuate a legitimately-negative EV — mitigated by unguarded
   companion signals (value_loss / v_return_correlation / bellman_error) that no floor touches, plus a
-  config-exposed floor; (b) gate migration could mask a real value collapse — mitigated by making the
-  gates STRICTER (require a bad robust signal AND a non-flagged EV), regression-locked by Acceptance #6
-  AND the disagreement/co-occurrence regression in Acceptance #6b.
+  config-exposed floor; (b) gate migration could mask a real value collapse — resolved by the final
+  robust-only owner decision: explained_variance is diagnostic-only, and VALUE_COLLAPSE_DETECTED fires
+  only when value_loss > 5.0 or bellman_error > 5.0. Emitted VALUE_COLLAPSE_DETECTED rows stay
+  proof-blocking; artifact suppression belongs upstream in the detector/gate emission path.
 
 depends_on:
   - recurrent-ppo-multiepoch     # P0-1 / multi-epoch landed on 0.1.1; this is the telemetry follow-up
+  - P-EV-RECAL                   # closed in ddd63e37; ppo_updates exposes executable preflight fields
 
 soft_depends: []
 
 blocks: []
 
 status_notes: >
+  Closed on branch 0.3.0 after main implementation commit 97ae84d8 and calibration-preflight commit
+  ddd63e37. Final closeout reconciled the plan to the implemented robust-only gate semantics, added
+  regression locks for mandatory ev_low_return_variance evidence, 5.0/5.0 strict threshold boundaries,
+  proof-blocking VALUE_COLLAPSE_DETECTED rows with ev_low_return_variance=True, non-healthy missing
+  value_nrmse in Sanctum, and non-critical Overwatch styling for flagged EV artifacts.
+
   Spec approved (docs/superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md). All code
   anchors re-verified against source 2026-06-18 and CORRECTED after a path/symbol audit:
   - Emitter is src/esper/simic/telemetry/emitters.py (NOT simic/emitters.py); mislabel :472, snapshot wiring :986.
@@ -55,7 +63,7 @@ status_notes: >
   - P-EV-RECAL (2026-06-19) resolved the Step 0 query ambiguity by adding bellman_error
     and v_return_correlation to Karn ppo_updates; Step 0 uses ppo_updates, not raw_events.
   EV compute ppo_agent.py:619-628; aux EV :1268-1271; ppo_agent has NO `import math`.
-percent_complete: 0
+percent_complete: 100
 
 # Expert Review (REQUIRED before promotion to ready)
 reviewed_by:
@@ -65,12 +73,10 @@ reviewed_by:
     notes: >
       Estimator semantics and the no-bug-hiding argument are sound (floor changes only the
       ill-conditioned ratio denominator; value_loss / v_return_correlation / bellman_error stay
-      unfloored as ground truth). Required changes folded in: (1) gate migration must be STRICTER not
-      blinder — require both a bad robust signal AND a non-flagged EV before firing value_collapse
-      (Step 5); (2) Acceptance #6 (genuine-collapse-still-fires) is a mandatory regression lock, plus
-      #6b (disagreement / low-var-collapse via the robust arm); (3) lock the absolute floor default 1.0
-      only after the empirical pass in Step 0, and validate the low-var tail's value-fit is genuinely
-      healthy before declaring it a denominator-only artifact.
+      unfloored as ground truth). Closeout review narrowed the with-teeth behavior further than the
+      original ready draft: explained_variance is diagnostic-only; value_collapse is robust-only and
+      fires from value_loss > 5.0 or bellman_error > 5.0. Acceptance #6 / #6b remain the mandatory
+      regression locks, and proof blocking stays attached to emitted VALUE_COLLAPSE_DETECTED rows.
   - reviewer: axiom-python-engineering
     date: 2026-06-18
     verdict: approved
@@ -90,7 +96,49 @@ reviewed_by:
 
 ## Branch
 
-`0.1.1` (active). This is a telemetry-payload change only; **no `VALUE_HEAD_SCHEMA_VERSION` bump** (additive payload schema; checkpoint format unchanged).
+`0.3.0` (active closeout branch). This is a telemetry-payload change only; **no `VALUE_HEAD_SCHEMA_VERSION` bump** (additive payload schema; checkpoint format unchanged).
+
+## Closeout Evidence (2026-06-20)
+
+Implementation lineage:
+
+- Main EV robustness implementation: `97ae84d8`.
+- Executable Karn calibration preflight fields: `ddd63e37`.
+- Closeout patch: mandatory cross-update `ev_low_return_variance` evidence, strict 5.0/5.0 threshold-boundary locks, proof-blocking VALUE_COLLAPSE_DETECTED regressions, Sanctum unknown/unhealthy `value_nrmse` sentinel, and Overwatch non-critical styling for flagged EV artifacts.
+
+TDD closeout:
+
+- RED command:
+  `uv run pytest tests/simic/test_vectorized.py::test_ev_aggregation_requires_low_variance_flag_when_ev_present tests/simic/telemetry/test_anomaly_detector.py::TestCheckValueFunctionRobustAnchored::test_value_collapse_threshold_boundaries_are_strict tests/karn/mcp/test_views.py::test_run_confounders_keeps_emitted_value_collapse_proof_blocking_when_ev_flagged tests/karn/sanctum/test_aggregator.py::test_missing_value_nrmse_does_not_default_to_healthy_zero -q`
+  -> expected failures on the mandatory EV flag and Sanctum sentinel tests; threshold and Karn proof-blocking locks already passed.
+- RED command:
+  `npm --prefix src/esper/karn/overwatch/web test -- --run -t "does not style flagged low-return-variance EV as critical"`
+  -> expected failure: flagged negative EV gauge still had `health-critical`.
+- GREEN command:
+  `uv run pytest tests/simic/test_vectorized.py::test_ev_aggregation_requires_low_variance_flag_when_ev_present tests/simic/telemetry/test_anomaly_detector.py::TestCheckValueFunctionRobustAnchored::test_value_collapse_threshold_boundaries_are_strict tests/karn/mcp/test_views.py::test_run_confounders_keeps_emitted_value_collapse_proof_blocking_when_ev_flagged tests/karn/sanctum/test_aggregator.py::test_missing_value_nrmse_does_not_default_to_healthy_zero tests/scripts/test_proof_packet.py::test_proof_packet_blocks_value_collapse_even_when_ev_low_variance -q`
+  -> 5 passed.
+- GREEN command:
+  `npm --prefix src/esper/karn/overwatch/web test -- --run -t "does not style flagged low-return-variance EV as critical"`
+  -> 1 passed, 299 skipped.
+
+Focused verification:
+
+- `uv run pytest tests/simic/test_ppo_value_metrics.py tests/simic/test_telemetry_fields.py tests/simic/test_vectorized.py -q` -> 102 passed.
+- `uv run pytest tests/simic/telemetry tests/simic/training/test_ppo_coordinator.py -q` -> 130 passed.
+- `uv run pytest tests/karn/mcp/test_views.py tests/karn/sanctum/test_reward_health.py tests/karn/sanctum/test_aggregator.py tests/nissa/test_wandb_backend.py tests/telemetry/test_batch_stats_ev_field.py tests/scripts/test_proof_packet.py -q` -> 140 passed.
+- `uv run pytest tests/simic/test_ppo_update_golden.py tests/simic/test_ppo.py tests/simic/test_ppo_normalization.py -q` -> 27 passed.
+- `npm --prefix src/esper/karn/overwatch/web test -- --run -t "HealthGauges|ExperimentVerdictPanel"` -> 29 passed, 271 skipped.
+
+Guardrails:
+
+- `uv run ruff check src/ tests/` -> passed.
+- `uv run python scripts/lint_leyline_types.py` -> stale whitelist entries 0.
+- `uv run python scripts/lint_defensive_patterns.py` -> violations 0.
+- `uv run python scripts/lint_gpu_sync.py` -> violations 0.
+- `MYPYPATH=src uv run mypy -p esper` -> success, 214 source files.
+- `npm --prefix src/esper/karn/overwatch/web run build` -> passed.
+- `wardline scan . --fail-on ERROR` -> exit 0, 0 active findings; generated `findings.jsonl` was removed before closeout.
+- `git diff --check` -> passed.
 
 ## Discipline
 
@@ -128,9 +176,9 @@ Strict TDD, **RED → GREEN**, no-legacy single path. Every behavior-changing st
 | Payload-from-dict builder | `telemetry.py:962-976` (`explained_variance=data.get("explained_variance")`), optional-field block `:1129-1140` (every optional metric uses `data.get(..., default)`) | Carry new fields **via `.get(..., default)`** — schema evolution for persisted events, NOT direct indexing (Step 3.2, B4) |
 | Emit EV → PPO update payload | `src/esper/simic/telemetry/emitters.py:986` (`explained_variance=metrics.get("explained_variance")`) | Carry new fields (Step 4) — **direct access for new mandatory fields** |
 | **Mislabel: EV → value_variance** | `emitters.py:472` (`value_variance=metrics.get("explained_variance", 0.0)` → `AnalyticsSnapshotPayload.value_variance` → `batch_stats.value_variance`) | **Mislabel fix (Step 8)** |
-| Gate call site | `src/esper/simic/training/ppo_coordinator.py:512-524` (`anomaly_detector.check_all(... explained_variance=metrics["explained_variance"] :516 ... value_collapse_applicable=metrics["usable_actor_timesteps"] > 0 :523)`) — **today passes ONLY `explained_variance`** | Pass PRIMARY robust signals (`bellman_error`, `value_loss`) + secondary (`value_nrmse`, `v_return_correlation`) + flag into gate (Step 5, B1) |
-| Gate aggregator method | `src/esper/simic/telemetry/anomaly_detector.py:447` `check_all` (calls `check_value_function` at :485, guarded by `value_collapse_applicable` :483) — **today forwards no robust signal** | **Thread `bellman_error`/`value_loss`/`value_nrmse`/`v_return_correlation`/`ev_low_return_variance` through here too (Step 5, B1)** |
-| Gate logic | `anomaly_detector.py:140-175` `check_value_function` (**today signature receives only `explained_variance`, `current_episode`, `total_episodes`** — verified :140-145); thresholds :66-69 (−0.5/−0.2/0.0/+0.1) | **Gate migration: add primary-robust-signal arm keyed on `bellman_error`/`value_loss` (Step 5, B1)** |
+| Gate call site | `src/esper/simic/training/ppo_coordinator.py:555-576` (`anomaly_detector.check_all(... explained_variance=metrics["explained_variance"] ... bellman_error=metrics["bellman_error"], value_loss=metrics["value_loss"], value_nrmse=metrics["value_nrmse"], v_return_correlation=metrics["v_return_correlation"], ev_low_return_variance=metrics["ev_low_return_variance"])`) | Closeout-current direct-key robust-signal plumbing; missing mandatory evidence fails loudly |
+| Gate aggregator method | `src/esper/simic/telemetry/anomaly_detector.py:513-566` `check_all` forwards `bellman_error`/`value_loss`/`value_nrmse`/`v_return_correlation`/`ev_low_return_variance` into `check_value_function` when `value_collapse_applicable` | Closeout-current robust-only gate threading |
+| Gate logic | `anomaly_detector.py:140-240` `check_value_function` takes the robust signals and uses `value_loss > 5.0 OR bellman_error > 5.0` as the only firing path; EV fields are diagnostic detail only | Final robust-only owner decision (Step 5, B1) |
 | Event mapping | `vectorized.py:480-493` (verbosity escalation), `:517` (`VALUE_COLLAPSE_DETECTED`), `:193` (EV metric registered), `:241` (aux EV) | Register new metrics; event unchanged but driven by stricter gate |
 | Karn `ppo_updates` view | `src/esper/karn/mcp/views.py:123-131` (`value_loss`, `bellman_error`, `v_return_correlation`, `explained_variance`, `value_nrmse`, `ev_low_return_variance`, `ev_return_variance`) | Step 0 calibration evidence is queryable from `ppo_updates`; Step 6 keeps the robustness columns first-class |
 | Karn `anomalies` view | `karn/mcp/views.py:596` (`VALUE_COLLAPSE_DETECTED`) | Inherits stricter gate (Step 5/6) |
@@ -225,37 +273,30 @@ Live evidence captured 2026-06-19 with `KarnMCPServer("telemetry")` for
 `bellman_error = 0.25563251972198486..0.45969972014427185`, and
 `v_return_correlation = -0.08301542699337006..0.12338030338287354`.
 
-### Step 0 LOCKED values (Slice 3 — robust-arm gate thresholds, drl-expert sign-off 2026-06-18)
+### Step 0 LOCKED values (final closeout — robust-only gate thresholds)
 
-> The live Karn telemetry store was unavailable for an interactive percentile pull during Slice 3
-> (the `ppo_updates` scan exceeded the 30s query budget). The robust-arm thresholds were therefore
-> derived analytically from the design-doc healthy-band anchors (P0-1 K=4 A/B table) and the actual
-> loss formula, then locked with drl-expert reasoning. They are exposed as `AnomalyDetector` dataclass
-> fields so a future empirical pass can refine them without code surgery.
+The final implementation uses a robust-only value-collapse gate. `explained_variance`,
+`value_nrmse`, `ev_low_return_variance`, and `v_return_correlation` are diagnostic
+fields carried in telemetry and event detail; they are not gate triggers.
 
-- **`value_loss_threshold = 0.5`.** `value_loss = 0.5 * mean((value - normalized_return)**2)` on the
-  value-normalizer (unit-variance) target scale (`ppo_update.py:354-360`). Healthy median ≈ **0.099**
-  (lowest of all arms, design-doc table). On the normalized scale the value head explains ZERO variance
-  of its own trained target precisely when `mean((v - r_norm)**2) ≥ Var(r_norm) ≈ 1.0`, i.e.
-  `value_loss ≥ 0.5`. So `0.5` is the principled "value head stopped explaining its target" boundary —
-  ~5× the healthy median, firing on a genuine fit regression while leaving generous margin above
-  healthy noise. This is the PRIMARY, scale-invariant signal.
-- **`bellman_error_threshold = 10.0`.** `bellman_error = mean |TD error|` on the RAW return scale
-  (returns std ~7–13 → var ~49–169). A healthy critic keeps mean |TD| well below the return spread;
-  a genuine collapse drives the absolute residual to rival the signal magnitude. `10.0` sits at the
-  lower edge of the healthy return-std band, so the residual must rival the return spread itself
-  before it fires. Conservative against false-firing on a critic doing any useful work. SECONDARY
-  primary (corroborates `value_loss`).
-- Both are `OR`'d in the robust arm (`primary_robust_bad = bellman_error > 10.0 or value_loss > 0.5`).
-  The EV arm additionally requires `primary_robust_bad AND not ev_low_return_variance` (B1: EV needs
-  primary-robust agreement; it never fires alone). `value_nrmse` / `v_return_correlation` are SECONDARY
-  corroboration in the detail string only.
-- **Follow-up:** when the Karn store is queryable, run the Step-0 percentile pull to confirm the
-  healthy `value_loss` / `bellman_error` distributions sit below these bounds with margin; refine the
-  two dataclass fields if the empirical tail argues otherwise (no code change beyond the two numbers).
+- **Calibration basis:** `AnomalyDetector` source comments lock the thresholds against
+  400 `PPO_UPDATE_COMPLETED` events from two P0-1 A/B runs (`K=4 n=200`, `K=1 n=200`),
+  with drl-expert sign-off on 2026-06-18.
+- **`value_loss_threshold = 5.0`.** `value_loss` is the primary trigger. In the 400-update
+  calibration set, strict-healthy rows (`EV > 0.1` and `v_return_corr > 0.3`) had
+  `value_loss` p99=1.01 and max=3.0; `5.0` gives 1.67x margin over the strict-healthy
+  max and fires on the 18 worst observed updates, all with EV <= 0.001.
+- **`bellman_error_threshold = 5.0`.** `bellman_error` is the secondary safety-net
+  trigger. The calibration max across both arms was 3.5, with strict-healthy max 3.44;
+  `5.0` sits above the healthy max and produces 0 healthy-run fires in the evidence set.
+- **Strict boundary:** both thresholds fire only on `>`; exactly `5.0` is non-firing.
+  This is regression-locked by `test_value_collapse_threshold_boundaries_are_strict`.
+- **Proof behavior:** if the detector emits `VALUE_COLLAPSE_DETECTED`, Karn
+  `run_confounders` keeps it `proof_blocking=true` even when `ev_low_return_variance=True`.
+  Artifact suppression is upstream in detector emission, never a view or proof-packet filter.
 
-**Rollback note:** none (no code change for the calibration itself; the two thresholds are additive
-`AnomalyDetector` dataclass fields landed in Slice 3 Step 5.0).
+**Rollback note:** the threshold values live as `AnomalyDetector` dataclass fields. Reverting the
+closeout behavior would require changing those fields and the robust-only regression tests together.
 
 ---
 
@@ -387,7 +428,7 @@ Live evidence captured 2026-06-19 with `KarnMCPServer("telemetry")` for
 > **Threading note (corrected, B1):** `check_value_function` (`:140`) is invoked from `check_all` (`:485`), guarded by `value_collapse_applicable` (`:483`). The coordinator (`:512-524`) passes args INTO `check_all`, not into `check_value_function` directly. **`check_value_function` today only receives `explained_variance`** (verified `anomaly_detector.py:140-145`); `check_all` does not forward any robust signal (verified `:447-486`); the coordinator passes only `explained_variance=metrics["explained_variance"]` (verified `ppo_coordinator.py:516`). The new signals — **`value_loss` and `bellman_error` (primary)** plus `value_nrmse` and `v_return_correlation` (secondary) and `ev_low_return_variance` — MUST be threaded through **all three** layers: the coordinator call site, the `check_all` signature (`:447`), AND the `check_value_function` signature (`:140`). `bellman_error` and `value_loss` already exist on `PPOUpdatePayload` (`value_loss` declared `telemetry.py:706`; `bellman_error` declared `:744`) AND are registered aggregated metric keys (`vectorized.py:186` `value_loss`, `:214` `bellman_error`), so they are present in the coordinator's aggregated `metrics` dict — the gap is purely the gate-call plumbing, not new payload/reducer fields.
 
 ### 5.0 Signature safety (no-TypeError window)
-- Add the new `check_all` parameters **keyword-only with conservative defaults**: `bellman_error: float = 0.0`, `value_loss: float = 0.0`, `value_nrmse: float = 0.0`, `v_return_correlation: float = 1.0`, `ev_low_return_variance: bool = False`. The `0.0` defaults for `bellman_error`/`value_loss` keep an un-updated caller's robust arm quiescent (conservative — does not false-fire), while the `False` default for `ev_low_return_variance` keeps the EV arm able to FIRE (conservative — never silently suppresses a real collapse). Add the same params to `check_value_function`'s signature. **`bellman_error` and `value_loss` are the PRIMARY robust signals (B1); `value_nrmse` / `v_return_correlation` are SECONDARY.**
+- Add the new `check_all` parameters **keyword-only with conservative defaults**: `bellman_error: float = 0.0`, `value_loss: float = 0.0`, `value_nrmse: float = 0.0`, `v_return_correlation: float = 1.0`, `ev_low_return_variance: bool = False`. The `0.0` defaults for `bellman_error`/`value_loss` keep an un-updated caller's robust-only gate quiescent (conservative — does not false-fire); the EV-related defaults are diagnostic only and never suppress a real collapse. Add the same params to `check_value_function`'s signature. **`bellman_error` and `value_loss` are the PRIMARY robust signals (B1); `value_nrmse` / `v_return_correlation` are SECONDARY.**
 - Update the coordinator call site (`ppo_coordinator.py:516-523` region) in the **same commit** as the signature change, passing `bellman_error=metrics["bellman_error"]`, `value_loss=metrics["value_loss"]`, `value_nrmse=metrics["value_nrmse"]`, `v_return_correlation=metrics["v_return_correlation"]`, `ev_low_return_variance=metrics["ev_low_return_variance"]` (direct access — these are mandatory aggregated fields already present on the payload).
 
 ### 5.1 RED — artifact no longer false-alarms (Acceptance #5)
@@ -404,13 +445,20 @@ Live evidence captured 2026-06-19 with `KarnMCPServer("telemetry")` for
 - **Expected RED before 5.3, GREEN after.**
 
 ### 5.3 GREEN — rewrite the gate condition
-- In `anomaly_detector.py:140-175` rewrite `check_value_function`: keep the phase-dependent EV thresholds (`:66-69`) as **one** condition, and require **(PRIMARY-robust-signal-bad) AND (not ev_low_return_variance)** before emitting `value_collapse` via the EV arm; add a separate **robust arm** that fires when a **PRIMARY** robust signal is bad (**high `bellman_error` or high `value_loss`**) regardless of `ev_low_return_variance` (covers 5.2b). `value_nrmse` / `v_return_correlation` are SECONDARY corroboration only and must NOT be the sole trigger (B1: they are floor-/sentinel-stabilized). No dual path — replace the EV-only condition. Add `bellman_error_threshold` / `value_loss_threshold` config alongside the existing EV thresholds (`:66-69`); calibrate from the Step 0 healthy-band evidence.
+- In `anomaly_detector.py:140-175` rewrite `check_value_function` to the final
+  robust-only owner decision: phase-dependent EV thresholds remain display/context
+  constants only; `explained_variance` never fires `value_collapse`. The only firing
+  path is `value_loss > value_loss_threshold OR bellman_error > bellman_error_threshold`,
+  regardless of `ev_low_return_variance`. `value_nrmse` / `v_return_correlation` are
+  diagnostic corroboration only and must NOT be the sole trigger (B1: they are
+  floor-/sentinel-stabilized). No dual path — replace the EV-only condition. The
+  calibrated defaults are `value_loss_threshold=5.0` and `bellman_error_threshold=5.0`.
 - In `check_all` (`:447-485`): thread `bellman_error`, `value_loss`, `value_nrmse`, `v_return_correlation`, `ev_low_return_variance` into the `check_value_function(...)` call at `:485`.
 - The `VALUE_COLLAPSE_DETECTED` event mapping (`vectorized.py:517`) and verbosity escalation (`:480-493`) are unchanged; they are now driven by the stricter gate.
 - **Cross-dependency (load-bearing):** the gate consumes the **aggregated** `explained_variance` (`ppo_coordinator.py:516` passes `metrics["explained_variance"]`, the cross-update value from Step 3.4). So the Step 3.4 flagged-exclusion rule is exactly what the Step 5 gate keys on. Add **`test_gate_sees_unflagged_only_ev_mean`**: drive `check_all` with an aggregated metrics dict produced by `_aggregate_ppo_metrics` over a flagged/unflagged mix and assert the EV the gate evaluates equals the unflagged-only mean.
 - **GREEN command:** `uv run pytest tests/simic/telemetry -k value_function -q` and `uv run pytest tests/simic/test_vectorized.py -k unflagged_only_ev -q`
 
-**Rollback note:** gate condition is rewritten predicates + the coordinator/`check_all`/`check_value_function` passing extra args (keyword-only, defaulted: `bellman_error`/`value_loss` primary, `value_nrmse`/`v_return_correlation` secondary, `ev_low_return_variance`) + the unflagged-mean coupling test; revert restores the EV-only threshold. Because the change is *stricter* on the EV arm and additive on the primary-robust arm, a revert can only make the gate noisier, never strand a run.
+**Rollback note:** gate condition is rewritten predicates + the coordinator/`check_all`/`check_value_function` passing extra args (keyword-only, defaulted: `bellman_error`/`value_loss` primary, `value_nrmse`/`v_return_correlation` secondary, `ev_low_return_variance`) + the unflagged-mean coupling test; revert restores the previous EV-only threshold behavior. The closeout implementation intentionally does not retain that EV firing path.
 
 ---
 
@@ -537,8 +585,8 @@ Live evidence captured 2026-06-19 with `KarnMCPServer("telemetry")` for
 
 ## Residual risks (carried into the plan)
 
-1. **Floor mis-set** (medium): too high attenuates legitimate negative EV on moderate-variance batches. Mitigation: Step 0 empirical calibration + tail value-fit validation; config-exposed; unguarded `value_loss` / `v_return_correlation` / `bellman_error` never floored; the robust arm (Acceptance #6b) fires independently of the flag. drl-expert review on the locked value.
-2. **Gate migration masks a real collapse** (medium, with teeth): the EV arm could be set so loose it never fires. Mitigation: Acceptance #6 + #6b mandatory regression locks; the EV arm is **stricter** (bad PRIMARY robust signal AND non-flagged EV), and the **primary-robust arm keyed on scale-anchored `bellman_error`/`value_loss`** (NOT the floor-stabilized `value_nrmse` or sentinel `v_return_correlation`) fires on real collapse regardless of variance (B1); the coordinator-level test proves the primary signals are threaded end-to-end; drl-expert review on thresholds.
+1. **Floor mis-set** (medium): too high attenuates legitimate negative EV on moderate-variance batches. Mitigation: Step 0 empirical calibration + tail value-fit validation; config-exposed; unguarded `value_loss` / `v_return_correlation` / `bellman_error` never floored; the robust-only gate fires independently of the flag. drl-expert review on the locked value.
+2. **Gate migration masks a real collapse** (medium, with teeth): resolved by removing EV from the firing path entirely. Mitigation: Acceptance #6 + #6b mandatory regression locks; the **robust-only gate keyed on scale-anchored `bellman_error`/`value_loss`** (NOT the floor-stabilized `value_nrmse` or sentinel `v_return_correlation`) fires on real collapse regardless of variance (B1); the coordinator-level test proves the primary signals are threaded end-to-end; drl-expert review on 5.0/5.0 thresholds.
 3. **Degenerate-batch handling** (Locked decision B3 — hard bug, fails loudly): degenerate `numel<2` valid-return masks are NOT a telemetry-safe NaN case. The existing non-finite return-stat raise at `ppo_agent.py:636` is the correct loud-failure path and is preserved; the floored EV path runs only on finite `numel>=2` batches and never NaN-sanitizes via `clamp`. No NaN reaches `_aggregate_ppo_metrics` (which skips only `None`, not NaN), so no reducer poisoning. Locked by `test_ev_degenerate_batch_raises_loudly`.
 4. **`_aggregate_ppo_metrics` KeyError** (was a blocker): new keys MUST be registered in reducer frozensets or the PPO update crashes. Locked by `test_aggregate_ppo_metrics_no_keyerror_on_ev_fields` and `test_ev_robustness_metrics_registered`.
 5. **Mislabel fix ripples** into `batch_stats.value_variance` readers (low): Step 8.1 audits readers before renaming (required pre-merge checklist).
@@ -587,11 +635,11 @@ Live evidence captured 2026-06-19 with `KarnMCPServer("telemetry")` for
 
 ## Risk Assessment
 
-**Implementation Risk: Medium.** The source fix (Steps 1–2) and contract plumbing (Steps 3–4) are mechanical with explicit unit tests, but two previously-latent blockers (degenerate-batch NaN leak; `_aggregate_ppo_metrics` KeyError) are now regression-locked. The with-teeth risk is concentrated in Step 5 (gate migration), gated by Acceptance #6 / #6b and a mandated stricter-not-blinder condition with an independent robust arm. **Reversibility: Easy** — additive payload fields, NaN/False defaults, no schema-version bump; old telemetry consumers tolerate missing fields via defaults; no checkpoint format change.
+**Implementation Risk: Medium.** The source fix (Steps 1–2) and contract plumbing (Steps 3–4) are mechanical with explicit unit tests, but two previously-latent blockers (degenerate-batch NaN leak; `_aggregate_ppo_metrics` KeyError) are now regression-locked. The with-teeth risk is concentrated in Step 5 (gate migration), gated by Acceptance #6 / #6b and the robust-only `value_loss > 5.0 OR bellman_error > 5.0` firing path. **Reversibility: Easy** — additive payload fields, NaN/False defaults, no schema-version bump; old telemetry consumers tolerate missing fields via defaults; no checkpoint format change.
 
 | Risk | Severity | Likelihood | Mitigation |
 |------|----------|------------|------------|
-| Gate migration masks a real value collapse | High | Possible if thresholds loose | Acceptance #6 + #6b regression locks; stricter EV arm + independent robust arm; drl-expert threshold review (Step 5) |
+| Gate migration masks a real value collapse | High | Possible if thresholds loose | Acceptance #6 + #6b regression locks; robust-only `value_loss > 5.0 OR bellman_error > 5.0`; drl-expert threshold review (Step 5) |
 | Degenerate batch (numel<2) silently swallowed into telemetry | High | Certain if a NaN-acceptance path were added | Locked decision B3: degenerate masks are a hard bug; existing `:636` return-stat raise preserved; NO NaN-by-convention path; `test_ev_degenerate_batch_raises_loudly` |
 | `_aggregate_ppo_metrics` KeyError on unregistered new keys | High | Certain without registration | Reducer registration (Step 3.4); `test_aggregate_ppo_metrics_no_keyerror_on_ev_fields` |
 | Floor mis-set attenuates legitimate negative EV | Medium | Possible | Step 0 calibration + tail value-fit validation; config-exposed; robust arm fires independently |
@@ -617,6 +665,6 @@ Live evidence captured 2026-06-19 with `KarnMCPServer("telemetry")` for
 - [ ] Thread the PRIMARY robust signals `bellman_error` + `value_loss` (Step 5, B1) through coordinator → `check_all` → `check_value_function` and add `test_coordinator_emits_value_collapse_on_low_var_real_collapse`.
 - [ ] Generate web types via `npm run generate:types` (Step 6.4) rather than hand-editing `sanctum.ts` (Information Gap 4 RESOLVED).
 
-**Assumptions:** P0-1 (op-marginal V(s)) is landed and stable on 0.1.1; the EV-std blowout is the denominator artifact characterized in the spec (corroborated by lowest `value_loss` + best median EV co-occurring with the crater); `VALUE_HEAD_SCHEMA_VERSION` is **not** touched (telemetry payload only).
+**Assumptions:** P0-1 (op-marginal V(s)) is landed and stable before the 0.3.0 closeout; the EV-std blowout is the denominator artifact characterized in the spec (corroborated by lowest `value_loss` + best median EV co-occurring with the crater); `VALUE_HEAD_SCHEMA_VERSION` is **not** touched (telemetry payload only).
 
 **Limitations:** This plan does not re-run training or execute the floor against live telemetry beyond the Step 0 / Step 7 calibrations; it verifies line/field/signature facts the steps depend on. It does not modify the value-std-derived `value_collapse` path (`karn/triggers.py`, `store.py`) — explicitly out of scope (different signal, same name).
