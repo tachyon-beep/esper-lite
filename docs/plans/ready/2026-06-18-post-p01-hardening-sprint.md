@@ -112,7 +112,7 @@ story, and clear the dependency surface — in one coordinated window.
 | Item | Spec | Plan |
 |------|------|------|
 | (1) EV-telemetry robustness | [docs/superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md](../../superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md) | [docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md](./2026-06-18-ev-telemetry-robustness-plan.md) |
-| (2) 0.1.1 → main merge | [docs/superpowers/specs/2026-06-18-main-merge-integration-design.md](../../superpowers/specs/2026-06-18-main-merge-integration-design.md) | [docs/plans/ready/2026-06-18-main-merge-integration-plan.md](./2026-06-18-main-merge-integration-plan.md) |
+| (2) 0.1.1 → main merge | [docs/superpowers/specs/2026-06-18-main-merge-integration-design.md](../../superpowers/specs/2026-06-18-main-merge-integration-design.md) | [docs/plans/planning/2026-06-18-main-merge-integration-plan.md](../planning/2026-06-18-main-merge-integration-plan.md) |
 | (3) Dependency vuln triage | *(inline below — no separate spec/plan)* | *(inline below)* |
 
 **Child sign-offs (for reference; do not cover this umbrella's unique decisions):**

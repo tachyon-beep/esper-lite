@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-19 (correctness-defect-burndown strategy drafted in `docs/plans/planning/2026-06-19-correctness-defect-burndown-strategy.md` and peer reviewed by Python/process, PyTorch/reproducibility, deep-RL, and quality lenses. First package starts with live tracker/ready-folder/defect-report reconciliation, executable EV preflight, checkpoint semantics, oracle sandbox promotion, and proof/CUDA/statistics lanes. Prior 2026-06-18: P0-1 op-independent V(s) critic LANDED on 0.1.1 and pushed to origin — checkpoint-breaking VALUE_HEAD_SCHEMA_VERSION=2; subset-truncation GAE-bootstrap crash fixed (`esper-lite-6682b3faea`); post-P0-1 hardening sprint authored — umbrella `docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md` with spec+plan pairs for EV-telemetry robustness and the 0.1.1→main merge, reviewed by a 10-SME panel + synthesizer. Prior 2026-06-17: fossilize reward-economics host-drift confound fixed — all reward gates now key on the clean counterfactual, dead `_require_total_improvement` removed, committed `575482d7`; FOSSILIZE reward validated −0.81→+2.00; dead-critic root-caused to 1-PPO-step-per-rollout (value warmup ruled out); multi-epoch recurrent PPO via anchored-reference-pass design (`docs/superpowers/specs/2026-06-17-recurrent-ppo-multiepoch-design.md`) + executable two-PR plan (`docs/plans/ready/2026-06-17-recurrent-ppo-multiepoch-plan.md`) added — directly addresses the value-collapse blocker behind Focus Areas #7/#11) — prior: 2026-06-15 baseline green; recovery bug drain closed; op/value mismatch verified resolved; proof confounder drain implemented; correctness proof strategy drafted; proof packet defaults CLI and API callers to reward-efficiency profile; oracle sandbox and proof-baseline-control artifacts created; static-final source/replay manifest emission, runner handoff, live baseline rehearsal, and reward-efficiency-default blocked packet verified)
+**Last Updated:** 2026-06-19 (correctness queue reconciliation executed on `0.3.0` at `a42bf5fa`: stale recurrent PPO P1 `esper-lite-6682b3faea` is closed, observation queue is empty, June 18 defect report now has a reconciliation section, and new Filigree work items exist for the sprint epic `esper-lite-5e6ff9f907`, P-EV-RECAL `esper-lite-26e96f0578`, EV robustness `esper-lite-a20b180e26`, dependency triage `esper-lite-d289d208ac`, main merge `esper-lite-569292a32b`, and Sanctum pre-ready crash bug `esper-lite-440748cb34`. Ready-folder hygiene moved completed green-state/P1-stability plans to `completed/` and demoted main-merge integration to `planning/`. Prior same-day note: correctness-defect-burndown strategy drafted in `docs/plans/planning/2026-06-19-correctness-defect-burndown-strategy.md` and peer reviewed by Python/process, PyTorch/reproducibility, deep-RL, and quality lenses. Prior 2026-06-18: P0-1 op-independent V(s) critic LANDED on 0.1.1 and pushed to origin — checkpoint-breaking VALUE_HEAD_SCHEMA_VERSION=2; subset-truncation GAE-bootstrap crash fixed (`esper-lite-6682b3faea`); post-P0-1 hardening sprint authored — umbrella `docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md` with spec+plan pairs for EV-telemetry robustness and the 0.1.1→main merge, reviewed by a 10-SME panel + synthesizer. Prior 2026-06-17: fossilize reward-economics host-drift confound fixed — all reward gates now key on the clean counterfactual, dead `_require_total_improvement` removed, committed `575482d7`; FOSSILIZE reward validated −0.81→+2.00; dead-critic root-caused to 1-PPO-step-per-rollout (value warmup ruled out); multi-epoch recurrent PPO via anchored-reference-pass design (`docs/superpowers/specs/2026-06-17-recurrent-ppo-multiepoch-design.md`) + executable two-PR plan (`docs/plans/ready/2026-06-17-recurrent-ppo-multiepoch-plan.md`) added — directly addresses the value-collapse blocker behind Focus Areas #7/#11) — prior: 2026-06-15 baseline green; recovery bug drain closed; op/value mismatch verified resolved; proof confounder drain implemented; correctness proof strategy drafted; proof packet defaults CLI and API callers to reward-efficiency profile; oracle sandbox and proof-baseline-control artifacts created; static-final source/replay manifest emission, runner handoff, live baseline rehearsal, and reward-efficiency-default blocked packet verified)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -12,7 +12,7 @@
 The recovery stabilization program has reached steady state. PR #52 (`env-refactor`) was made green and
 merged into `main` as the new baseline at merge commit `cdff9c43`; post-merge
 main CI passed. The completed recovery plan is
-`docs/plans/ready/2026-06-12-green-state-recovery.md`.
+`docs/plans/completed/2026-06-12-green-state-recovery.md`.
 
 Current operating rule: drain high-risk correctness bugs before feature work.
 Recovery PR #72 is merged. Follow-up PRs #78 and #79 merged telemetry and
@@ -25,9 +25,10 @@ config contract batch and closed two tracker bugs. PR #85 merged the P2
 config-contract batch and closed two tracker bugs. PR #86 merged the P2
 telemetry-contract batch and closed three tracker bugs. The import-hygiene
 batch landed in PR #87 and closed three tracker bugs. The final bug-drain
-batch landed in PR #88 and closed the last two recovery bugs. Filigree now has
-0 WIP bugs, 0 blocked items, and only the non-startable P4 `Future` release
-planning shell ready.
+batch landed in PR #88 and closed the last two recovery bugs. The 2026-06-19
+queue reconciliation confirmed the stale recurrent PPO P1 is closed, the
+observation queue is empty, and current ready work is explicit Filigree sprint
+work rather than stale recovery bugs.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -60,7 +61,7 @@ recomputes Q(s,argmax op) in deterministic bootstrap mode, and focused regressio
 13. **Drip Reward Implementation** - ~70% done, needs integration completion
 14. **Telemetry Domain Separation** - ~30% done
 15. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
-16. **Correctness Defect Burndown Strategy** - Drafted 2026-06-19; multi-month correctness repair strategy with a first two-week package focused on tracker truth, executable EV preflight, checkpoint/recurrent-PPO mechanics, oracle sandbox readiness, governor-integrity packaging, and proof/CUDA/statistics lanes
+16. **Correctness Defect Burndown Strategy** - Drafted 2026-06-19; Package A tracker/ready-folder/defect-report reconciliation executed on 2026-06-19 with Filigree IDs recorded for the next sprint work
 
 ### Critical Path (Updated)
 ```
@@ -75,13 +76,13 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | Status | Count | Notes |
 |--------|-------|-------|
 | 🔴 Critical | 0 | New governor-integrity issues are high-priority proof blockers, not active Tier 0 mainline breakage |
-| Completed | 16 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) |
-| Ready | 14 | Implementation-ready plans (incl. post-P0-1 sprint umbrella + EV-telemetry-robustness + 0.1.1→main-merge, authored 2026-06-18) |
+| Completed | 18 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) + green-state-recovery + p1-stability-batch-1 |
+| Ready | 11 | Implementation-ready plans after moving completed recovery/stability plans out of `ready/` and demoting main-merge integration back to planning |
 | In Progress | 2 | phase3-tinystories (85%); weft-phase-a-ci-migration (Phase A shadow-CI) |
-| Planning | 12 | Active design workspaces, including correctness defect burndown, correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
+| Planning | 13 | Active design workspaces, including correctness defect burndown, main-merge integration, correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
 | Concept | 4 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals, gil-throughput-profiler |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
-| **Total Active** | **36** |
+| **Total Active** | **34** |
 
 ---
 
@@ -100,7 +101,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| correctness-defect-burndown | Correctness Defect Burndown Strategy | planning | high | XL | high | Drafted 2026-06-19; peer-reviewed strategy for finding, testing, prioritizing, and repairing correctness defects across tracker state, proof evidence, PPO mechanics, morphogenesis, reward telemetry, determinism/replay, and operator surfaces |
+| correctness-defect-burndown | Correctness Defect Burndown Strategy | planning | high | XL | high | Drafted 2026-06-19; Package A executed 2026-06-19: stale P1 closed, observation queue empty, June 18 defect report reconciled, and sprint work bound to Filigree IDs |
 | morphogenesis-governor-integrity | Morphogenesis Governor Integrity | planning | high | L | high | Drafted 2026-06-13 from the Kasmina/Tolaria/Blueprint health report; owns rollback ordering, observation truthfulness, blueprint contracts, minimal Tolaria pre-flight, and causal morphology event identity |
 | correctness-proof-strategy | Correctness Proof Strategy | planning | high | L | high | Drafted 2026-06-15; owns the evidence ladder and typed proof-packet verdict taxonomy for instrumentation, precision, mechanics, math, algorithm revision, and theory stop decisions; packet now blocks outcome-empty baseline controls, missing/mismatched fixed-schedule provenance, misplaced schedule metadata, missing/mismatched fixed-schedule realized traces, missing/malformed/mismatched static-final source/replay manifests, static-final lifecycle mutations, and malformed lockstep pairs; runner-side static-final source handoff and live full-baseline rehearsal implemented; current blocker is mechanics, not proof math |
 | ppo-stability-oracle-sandbox | PPO Stability / Oracle Sandbox | planning | high | M | high | Artifact created 2026-06-15; current smoke test proves scripted lifecycle mechanics only, missing proof-grade oracle telemetry and packet profile |
@@ -113,9 +114,9 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
 | blueprint-compiler | Blueprint Compiler (Phase 3 only) | ready | high | XL | medium | 0% - Correctly deferred until entropy stable |
 | training-perf-master | Training Pipeline Performance (Simic+Tolaria) | completed | high | L | medium | EXECUTED 2026-06-14 (→ completed/). Phase 0 (allocator/TF32/fragprobe), Phase 1 all 6 incl. CRITICAL-1 BLOCKER (FP32 masked-logit seam + BF16 symmetry, V0 joint_ratio<1e-3 GPU-validated) + sync folds, Phase 2 (FRAGMETRIC telemetry + stream pool + fenced del; CUDA_LAUNCH_BLOCKING clean, bit-identical val_acc), Phase 3 (DYN + pinned SNAP; GATE compile-works-without-sanctum validated). Deliberate calls: P2-RESET NO-GO (retries=0/ooms=0, frag cured), P3-HOST off (gated on RESET), P3-CLONE deferred (esper-lite-472b6477d2). Also deferred: op-sampler (esper-lite-05b4113bc1), carry-clamp (esper-lite-9827eb6bfe). Pending: real-run A/B wall-clock + TUI compile narrowing |
-| post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | sprint-umbrella | high | M | medium | Authored 2026-06-18 (`docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md`); umbrella for items 1-3 (EV-telemetry robustness, 0.1.1→main merge, dependency-vuln triage); 10-SME panel + synthesizer reviewed (verdict CHANGES_REQUESTED → must_do applied; child blockers fixed & codebase-verified) |
-| ev-telemetry-robustness | EV-Telemetry Robustness (low-return-variance artifact) | ready | high | M | medium | Authored 2026-06-18 (spec+plan); make `explained_variance` honest under P0-1's op-marginal V(s) (variance floor + `value_nrmse`/`ev_return_variance`, NOT bug-hiding) + audit EV consumers/gates; Step 0 empirical floor calibration is a HARD precondition |
-| main-merge-integration | 0.1.1 → main Merge & Integration | ready | high | L | high | Authored 2026-06-18 (spec+plan); ~42-commit FF merge carrying the VALUE_HEAD_SCHEMA_VERSION=2 checkpoint break; EV gate-fix (item 1) is a hard structural co-land precondition; dependency-vuln bump pass rides the window |
+| post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | sprint-umbrella | high | M | medium | Filigree epic `esper-lite-5e6ff9f907`; children: P-EV-RECAL `esper-lite-26e96f0578`, EV robustness `esper-lite-a20b180e26`, dependency triage `esper-lite-d289d208ac`, main merge `esper-lite-569292a32b` |
+| ev-telemetry-robustness | EV-Telemetry Robustness (low-return-variance artifact) | ready | high | M | medium | Filigree task `esper-lite-a20b180e26`, blocked by calibration preflight `esper-lite-26e96f0578`; make `explained_variance` honest under P0-1's op-marginal V(s) without bug-hiding |
+| main-merge-integration | 0.1.1 → main Merge & Integration | planning | high | L | high | Demoted from ready; plan moved to `docs/plans/planning/2026-06-18-main-merge-integration-plan.md`; Filigree task `esper-lite-569292a32b` is blocked by EV robustness `esper-lite-a20b180e26` and dependency triage `esper-lite-d289d208ac` |
 | weft-phase-a-ci-migration | Weft Phase A CI Migration | in-progress | high | M | medium | Phase A merged to `main` via PR #110 (f8089677): non-blocking `weft-shadow` CI job + `weft_parity.py`/`ci_weft_parity.py` parity report. Post-merge hardening landed: readiness now gates on homegrown linter exit codes + Loomweave index freshness (`runs.analyzed_at_commit` vs HEAD); defensive/leyline checks carry `comparison: "deferred"` (no Wardline/Loomweave equivalent yet). Homegrown gates stay blocking; no gate retires until a real comparison shows zero homegrown-only burn-in evidence |
 
 ### Tier 2: Medium Priority (Next 2 Weeks)
@@ -155,6 +156,8 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 
 | ID | Title | Type | Status | Location |
 |----|-------|------|--------|----------|
+| green-state-recovery-2026-06-12 | Green State Recovery Program | ✅ completed | PRs #52, #72, #78-#88 merged; recovery bugs closed | `docs/plans/completed/2026-06-12-green-state-recovery.md` |
+| p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | ✅ completed | Six high-risk PPO/telemetry correctness bugs closed | `docs/plans/completed/2026-06-12-p1-stability-batch-1.md` |
 | op-entropy-collapse | Op Head Entropy Collapse Fix | ✅ completed | Two-pronged fix: probability floors + entropy floors. Jan 9-11 sprint. | `docs/plans/completed/` |
 | entropy-collapse | Per-Head Entropy Collapse Fix | ✅ completed | All 7 tasks, tests passing | `docs/plans/completed/` |
 | holding-warning | SET_ALPHA_TARGET Turntabling Fix | ✅ completed | Committed 2026-01-08, DRL signed | `docs/plans/completed/` |

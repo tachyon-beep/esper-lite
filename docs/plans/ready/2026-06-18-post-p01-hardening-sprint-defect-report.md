@@ -254,7 +254,7 @@ These are not committed branch-code defects, but they affect the safety of the n
 
 File:
 
-- `docs/plans/ready/2026-06-18-main-merge-integration-plan.md:428`
+- `docs/plans/planning/2026-06-18-main-merge-integration-plan.md:428`
 
 Evidence:
 
@@ -325,7 +325,7 @@ Make the new parameters required keyword-only, update the coordinator call in th
 
 File:
 
-- `docs/plans/ready/2026-06-18-main-merge-integration-plan.md:385`
+- `docs/plans/planning/2026-06-18-main-merge-integration-plan.md:385`
 
 Evidence:
 
@@ -377,3 +377,48 @@ Auxiliary verification:
 - Filigree `session_context_get` confirmed `esper-lite-6682b3faea` remains ready P1.
 - Filigree searches for the post-P0-1 sprint, EV robustness, main merge, and dependency triage returned no matching open issues.
 - Warpline `reverify` returned `NO_SNAPSHOT`; its output was treated as advisory changed-set coverage, not a complete proof.
+
+## 2026-06-19 Reconciliation
+
+Current branch during reconciliation: `0.3.0` at `a42bf5fa`.
+
+Queue outcomes:
+
+- `esper-lite-6682b3faea` is now closed in Filigree. Focused local recheck:
+  `uv run pytest tests/simic/training/test_batch_bootstrap.py -q` -> 6 passed.
+- Observation `esper-lite-obs-c8de6a4b7b` is no longer pending. Focused local
+  recheck: `uv run pytest tests/telemetry/test_reward_metrics.py -q` -> 25
+  passed.
+- Created sprint umbrella epic `esper-lite-5e6ff9f907`.
+- Created `P-EV-RECAL` preflight task `esper-lite-26e96f0578`.
+- Created EV robustness task `esper-lite-a20b180e26`, blocked by
+  `esper-lite-26e96f0578`.
+- Created dependency triage task `esper-lite-d289d208ac`.
+- Created main merge task `esper-lite-569292a32b`, blocked by
+  `esper-lite-a20b180e26` and `esper-lite-d289d208ac`.
+- Created open Sanctum P1 bug `esper-lite-440748cb34` because existing tests
+  prove captured crashes eventually exit nonzero, but do not prove
+  `SanctumApp.run()` is skipped after a pre-ready training crash.
+
+Finding reconciliation:
+
+- q-aux non-finite PPO gate: fixed on current branch. Evidence:
+  `uv run pytest tests/simic/agent/test_q_finiteness_and_contract.py -q` -> 3
+  passed.
+- Leyline stale whitelist entries: fixed on current branch. Evidence:
+  `uv run python scripts/lint_leyline_types.py` -> stale whitelist entries 0.
+- q-head consumer propagation: fixed on current branch. Evidence:
+  `uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_q_aux_loss tests/karn/sanctum/test_aggregator.py::test_aggregator_wires_q_values tests/karn/sanctum/test_aggregator.py::test_aggregator_coerces_none_q_head_diagnostics -q`
+  -> 3 passed; `uv run pytest tests/nissa/test_wandb_backend.py -k q_head_aux
+  -q` -> 1 passed.
+- EV view and low-return-variance consumer checks are fixed on current branch.
+  Evidence:
+  `uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_robustness_columns tests/karn/mcp/test_views.py::test_run_confounders_view_empty_on_clean_run tests/karn/sanctum/test_reward_health.py -q`
+  -> 12 passed.
+- Robust value-collapse gating checks are fixed on current branch. Evidence:
+  `uv run pytest tests/simic/telemetry/test_anomaly_detector.py tests/simic/training/test_ppo_coordinator.py::test_coordinator_emits_value_collapse_on_low_var_real_collapse tests/simic/training/test_ppo_coordinator.py::test_coordinator_does_not_emit_value_collapse_on_artifact -q`
+  -> 26 passed.
+- Sanctum training crash handling is partially fixed: helper-level tests pass
+  (`uv run pytest tests/nissa/test_p1_1_silent_swallow_fixes.py::TestTrainingWrapperSetsShutdownEventOnException tests/nissa/test_p1_1_silent_swallow_fixes.py::TestSanctumTrainingCrashExitsNonzero -q`
+  -> 4 passed), but the stricter pre-TUI behavior remains tracked by
+  `esper-lite-440748cb34`.
