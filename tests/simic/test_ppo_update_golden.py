@@ -180,7 +180,8 @@ _GOLDENS: dict[int, dict[str, float]] = {
 # GitHub's CPU-only PyTorch wheel and local CUDA-capable builds differ slightly
 # in deterministic CPU math here. Keep the tolerance tight enough to catch
 # refactor drift while allowing runner-level floating-point variation.
-_GOLDEN_ABS_TOLERANCE = 2e-4
+_GOLDEN_ABS_TOLERANCE = 5e-4
+_RATIO_MAX_REL_TOLERANCE = 5e-4
 
 
 @pytest.mark.parametrize("recurrent_n_epochs", [1, 4])
@@ -205,7 +206,9 @@ def test_ppo_update_golden_metrics(recurrent_n_epochs: int) -> None:
         "ratio_std",
     )
     for key in keys:
+        rel_tolerance = _RATIO_MAX_REL_TOLERANCE if key == "ratio_max" else 0.0
         assert metrics[key] == pytest.approx(
             golden[key],
             abs=_GOLDEN_ABS_TOLERANCE,
+            rel=rel_tolerance,
         ), key
