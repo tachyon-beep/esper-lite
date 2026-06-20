@@ -111,8 +111,8 @@ story, and clear the dependency surface — in one coordinated window.
 
 | Item | Spec | Plan |
 |------|------|------|
-| (1) EV-telemetry robustness | [docs/superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md](../../superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md) | [docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md](./2026-06-18-ev-telemetry-robustness-plan.md) |
-| (2) 0.1.1 → main merge | [docs/superpowers/specs/2026-06-18-main-merge-integration-design.md](../../superpowers/specs/2026-06-18-main-merge-integration-design.md) | [docs/plans/planning/2026-06-18-main-merge-integration-plan.md](../planning/2026-06-18-main-merge-integration-plan.md) |
+| (1) EV-telemetry robustness | [docs/superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md](../../superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md) | [docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md](../completed/2026-06-18-ev-telemetry-robustness-plan.md) |
+| (2) 0.1.1 → main merge | [docs/superpowers/specs/2026-06-18-main-merge-integration-design.md](../../superpowers/specs/2026-06-18-main-merge-integration-design.md) | [docs/plans/completed/2026-06-18-main-merge-integration-plan.md](../completed/2026-06-18-main-merge-integration-plan.md) |
 | (3) Dependency vuln triage | *(inline below — no separate spec/plan)* | *(inline below)* |
 
 **Child sign-offs (for reference; do not cover this umbrella's unique decisions):**
@@ -415,6 +415,21 @@ See the 2026-06-20 dependency triage section in
 `docs/plans/ready/2026-06-18-post-p01-hardening-sprint-defect-report.md` for the
 full advisory disposition table and command results.
 
+#### 3.7 Main-merge reconciliation (2026-06-21)
+
+Filigree task `esper-lite-569292a32b` was reclaimed as a live-state
+reconciliation rather than a pending fast-forward. GitHub PR #111,
+"Release 0.2.0: merge 0.1.1 -> main", already merged on 2026-06-19 at
+`d57ecf65`; current `origin/main` is `f8089677` and contains that release
+commit. `origin/0.1.1` is gone, and `backup/0.1.1-pre-p01` is explicitly not a
+valid source because it is behind `main` and still carries the old EV branch.
+
+The original 0.1.1 merge plan is now historical/completed. The still-open
+mainline risk is the later `0.3.0` follow-up line: current `0.3.0` is 9 commits
+ahead of `origin/main`, while `origin/0.3.0` is at `ddd63e37` and lacks the final
+local closeout commits. That landing/splitting work is tracked separately by
+Filigree task `esper-lite-224fdba503`.
+
 ## Sequencing & Dependencies
 
 The three items share one delivery window. Ordering within it is what controls
@@ -556,7 +571,11 @@ same as recalibrating every consumer.**
    consumer is silently left miscalibrated.
 3. **`main` carries the full `0.1.1` line.** Fast-forward complete; CI
    (`test-suite.yml`) green across lint/typecheck/property/unit+integration/
-   overwatch-web; checkpoint-break documented as retrain-only.
+   overwatch-web; checkpoint-break documented as retrain-only. Live
+   reconciliation on 2026-06-21 confirmed GitHub PR #111 merged this line on
+   2026-06-19 at `d57ecf65`, and current `origin/main` is `f8089677` with the
+   release commit in history. The old `origin/0.1.1` branch is absent; do not use
+   `backup/0.1.1-pre-p01` as a source.
 4. **Dependency surface clean, with the required-runtime high verified.**
    Critical + all HIGH alerts resolved via lock refresh + `npm audit fix`;
    **pyarrow #77 (required-runtime via `datasets`) confirmed advanced to

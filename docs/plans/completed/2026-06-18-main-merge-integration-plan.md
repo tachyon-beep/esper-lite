@@ -1,12 +1,24 @@
-# 0.1.1 → main Merge Integration — Executable Plan
+# 0.1.1 → main Merge Integration — Completed Historical Plan
+
+> **Completion/reconciliation note (2026-06-21):** do not execute the
+> step-by-step commands in this file as a current release plan. Live GitHub state
+> shows PR #111, "Release 0.2.0: merge 0.1.1 -> main", merged on 2026-06-19 at
+> `d57ecf65`, and current `origin/main` is `f8089677` with that release commit in
+> history. The old `origin/0.1.1` branch no longer exists. Local
+> `backup/0.1.1-pre-p01` is not a valid substitute because it is behind `main`
+> and still contains the pre-EV-robustness branch. Filigree task
+> `esper-lite-569292a32b` is closed as a tracker reconciliation of that already
+> completed merge. The remaining mainline work is not this historical 0.1.1
+> merge; it is the separate `0.3.0` post-merge closeout landing tracked by
+> `esper-lite-224fdba503`.
 
 ```yaml
 # Plan Metadata
 id: main-merge-integration
 title: 0.1.1 → main Merge Integration
-type: ready
+type: completed
 created: 2026-06-18
-updated: 2026-06-18  # revised per post-P0.1 hardening-sprint defect report (B2,B6-B12,W1-W5,W13,W14)
+updated: 2026-06-21  # reconciled against PR #111 / live main state
 owner: Claude
 
 # Prioritization
@@ -46,17 +58,13 @@ blocks: []
 
 # Status
 status_notes: >
-  READY AFTER EV TELEMETRY ROBUSTNESS LANDS. This plan is NOT unconditionally
-  ready to execute: it hard-depends on the EV-telemetry-robustness fix being
-  STRUCTURALLY present on 0.1.1. Current 0.1.1 HEAD still carries the OLD EV
-  branch (`var_returns > 1e-8 → torch.tensor(0.0)` at ppo_agent.py:624) and does
-  NOT yet contain the planned ev_return_variance_floor / ev_low_return_variance
-  artifacts. The EV structural check (Step 1.5) is the FIRST blocking execution
-  gate — execution MUST NOT begin until it passes. Topology verified at spec time
-  (merge-base == main HEAD == f7f1aece). Execution order: EV-structural gate →
-  schema/checkpoint confirmation → all five CI lanes locally → PR → FF push →
-  dependency bumps last.
-percent_complete: 0
+  COMPLETED/HISTORICAL. Live reconciliation on 2026-06-21 found the intended
+  0.1.1 -> main integration already landed through GitHub PR #111 at d57ecf65
+  and is present under current origin/main f8089677. The old origin/0.1.1 source
+  branch is gone, so the commands below are retained as execution history and
+  must not be replayed. Remaining 0.3.0 follow-up landing is tracked separately
+  by Filigree task esper-lite-224fdba503.
+percent_complete: 100
 
 # Expert Review (REQUIRED before promotion to ready)
 reviewed_by:
@@ -97,9 +105,12 @@ reviewed_by:
 
 ## Branch
 
-- **Source:** `0.1.1` (HEAD carries the 46-commit lead; already pushed to origin).
+- **Historical source:** `0.1.1` (merged by PR #111; the remote branch is now absent).
 - **Target:** `main`.
-- **Topology:** `main` HEAD *is* the merge-base — this is a fast-forward, not a three-way merge. **No working branch is created**; the integration *is* the fast-forward of `main` to `0.1.1`. The dependency-bump pass lands as new commits *after* the FF, on `0.1.1` (which becomes `== main` post-FF) so they ride the same push.
+- **Historical result:** PR #111 merged on 2026-06-19 at `d57ecf65`; current
+  `origin/main` (`f8089677`) contains that merge. The old fast-forward execution
+  surface is no longer current. Do not use `backup/0.1.1-pre-p01` as a source; it
+  is behind `main` and lacks the EV-robustness artifacts.
 
 ## Discipline: Gated execution (PRECONDITION → ACTION → VERIFY → ROLLBACK)
 

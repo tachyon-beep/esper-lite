@@ -254,7 +254,7 @@ These are not committed branch-code defects, but they affect the safety of the n
 
 File:
 
-- `docs/plans/planning/2026-06-18-main-merge-integration-plan.md:428`
+- `docs/plans/completed/2026-06-18-main-merge-integration-plan.md:428`
 
 Evidence:
 
@@ -325,7 +325,7 @@ Make the new parameters required keyword-only, update the coordinator call in th
 
 File:
 
-- `docs/plans/planning/2026-06-18-main-merge-integration-plan.md:385`
+- `docs/plans/completed/2026-06-18-main-merge-integration-plan.md:385`
 
 Evidence:
 
@@ -478,7 +478,8 @@ Remaining dependency order:
 - Dependency triage `esper-lite-d289d208ac` remained before main merge and is
   now closed.
 - Main merge `esper-lite-569292a32b` was newly unblocked by the dependency
-  triage close, but it was not started during this closeout.
+  triage close, but it was not started during this closeout. It was later
+  reconciled on 2026-06-21 as already completed by PR #111.
 
 ## 2026-06-20 Dependency Triage Closeout
 
@@ -578,5 +579,33 @@ Verification:
 Filigree outcome:
 
 - `esper-lite-d289d208ac` closed.
-- `esper-lite-569292a32b` newly unblocked.
-- `esper-lite-569292a32b` was not started.
+- `esper-lite-569292a32b` newly unblocked at dependency closeout time; the
+  2026-06-21 reconciliation below later confirmed the original `0.1.1 -> main`
+  integration had already completed through PR #111.
+
+## 2026-06-21 Main-Merge Reconciliation
+
+Filigree task `esper-lite-569292a32b` was reclaimed after dependency triage and
+checked against live Git/GitHub state before any mainline mutation. The original
+`0.1.1 -> main` work had already completed:
+
+- GitHub PR #111, "Release 0.2.0: merge 0.1.1 -> main", is merged.
+- PR #111 merge commit: `d57ecf6577dcaadb75a5013c7b1435b9f6c3110b`.
+- PR #111 merged at: 2026-06-19T03:07:55Z.
+- Current `origin/main`: `f80896771dafbb1db26c07c44bdeee3c4454e246`.
+- Current `origin/main` contains the PR #111 release commit.
+- `origin/0.1.1` is absent.
+- Local `backup/0.1.1-pre-p01` is not a valid source: it is behind `main` and
+  still contains the old `var_returns > 1e-8` EV branch.
+
+Outcome:
+
+- The main-merge plan moved to
+  `docs/plans/completed/2026-06-18-main-merge-integration-plan.md` as historical
+  execution record, with a warning not to replay the stale commands.
+- `esper-lite-569292a32b` is closed as reconciled/completed against PR #111.
+- Follow-up task `esper-lite-224fdba503` tracks the real remaining default-branch
+  risk: landing or deliberately splitting the `0.3.0` post-merge closeout line.
+  At reconciliation time, local `0.3.0` was 9 commits ahead of `origin/main`,
+  and `origin/0.3.0` was at `ddd63e37` without the final four local closeout
+  commits.
