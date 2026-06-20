@@ -20,6 +20,7 @@ Usage:
 
 from __future__ import annotations
 
+import importlib
 import logging
 from typing import Any
 
@@ -37,15 +38,12 @@ from esper.leyline.telemetry import (
     AnomalyDetectedPayload,
 )
 
-_wandb: Any
 try:
-    import wandb as _wandb
+    wandb: Any = importlib.import_module("wandb")
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
-    _wandb = None
-
-wandb: Any = _wandb
+    wandb = None
 
 _logger = logging.getLogger(__name__)
 

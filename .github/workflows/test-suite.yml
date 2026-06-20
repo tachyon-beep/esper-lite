@@ -63,7 +63,7 @@ jobs:
         run: |
           uv tool install wardline==1.0.1
           uv tool install loomweave==1.1.0
-          uv tool install loomweave-plugin-python==1.1.0rc5
+          uv tool install loomweave-plugin-python==1.1.0
           uv tool install legis==1.0.0
           uv tool install warpline==1.0.0
 
