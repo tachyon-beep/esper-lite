@@ -478,3 +478,98 @@ Remaining dependency order:
 - Dependency triage `esper-lite-d289d208ac` remains before main merge.
 - Main merge `esper-lite-569292a32b` remains blocked until dependency triage is
   also closed; it was not started during this closeout.
+
+## 2026-06-20 Dependency Triage Closeout
+
+Current branch during closeout: `0.3.0`.
+
+Live source:
+
+- `gh api /repos/tachyon-beep/esper-lite/dependabot/alerts --paginate`
+  using the `tachyon-beep` GitHub account.
+- The API returned 125 total alerts and 36 open high/critical alerts.
+- The live high/critical cluster is patched in the current Python/npm locks.
+  GitHub may continue to show the alerts as open until this branch reaches the
+  default branch.
+
+Dependency reconciliation:
+
+- `a42bf5fa chore(deps): resolve dependabot alert cluster` had already upgraded
+  the high/critical Python and Overwatch packages, including the newer
+  `jupyter-server` critical floor `2.20.0`.
+- This closeout adds `scripts/assert_dependabot_advisories.py`, which consumes a
+  live Dependabot JSON export or fetches alerts directly with `gh`, then fails if
+  any present high/critical package is below the live patched floor.
+- This closeout also adds a uv constraint for `transformers>=4.57.3,<4.58.0` and
+  re-locks `transformers` from `5.12.1` back to `4.57.6`. There was no reviewed
+  exception for a 5.x Transformers window, and the main-merge plan explicitly
+  requires the `<4.58.0` cap.
+- No `[tool.uv].override-dependencies` entry was used.
+- `npm --prefix src/esper/karn/overwatch/web audit --audit-level=high` reports
+  `found 0 vulnerabilities`.
+
+Live advisory disposition:
+
+| # | ecosystem | package | severity | GHSA | current | first patched | manifest | disposition |
+|---|-----------|---------|----------|------|---------|---------------|----------|-------------|
+| 128 | pip | jupyter-server | critical | GHSA-fcw5-x6j4-ccmp | 2.20.0 | 2.20.0 | uv.lock | patched |
+| 124 | pip | starlette | high | GHSA-82w8-qh3p-5jfq | 1.3.1 | 1.3.1 | uv.lock | patched |
+| 121 | pip | tornado | high | GHSA-mgf9-4vpg-hj56 | 6.5.7 | 6.5.6 | uv.lock | patched |
+| 120 | pip | tornado | high | GHSA-3x9g-8vmp-wqvf | 6.5.7 | 6.5.6 | uv.lock | patched |
+| 119 | pip | starlette | high | GHSA-wqp7-x3pw-xc5r | 1.3.1 | 1.1.0 | uv.lock | patched |
+| 117 | pip | cryptography | high | GHSA-537c-gmf6-5ccf | 49.0.0 | 48.0.1 | uv.lock | patched |
+| 106 | npm | vite | high | GHSA-fx2h-pf6j-xcff | 7.3.5 | 7.3.5 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 104 | pip | python-multipart | high | GHSA-5rvq-cxj2-64vf | 0.0.32 | 0.0.30 | uv.lock | patched |
+| 100 | pip | pyjwt | high | GHSA-xgmm-8j9v-c9wx | 2.13.0 | 2.13.0 | uv.lock | patched |
+| 93 | pip | urllib3 | high | GHSA-38jv-5279-wg99 | 2.7.0 | 2.6.3 | uv.lock | patched |
+| 83 | pip | urllib3 | high | GHSA-2xpw-w6gg-jr37 | 2.7.0 | 2.6.0 | uv.lock | patched |
+| 82 | pip | urllib3 | high | GHSA-gm62-xv2j-4w53 | 2.7.0 | 2.6.0 | uv.lock | patched |
+| 78 | npm | vitest | critical | GHSA-5xrq-8626-4rwp | 4.1.9 | 4.1.0 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 77 | pip | pyarrow | high | GHSA-rgxp-2hwp-jwgg | 24.0.0 | 23.0.1 | uv.lock | patched |
+| 71 | npm | js-cookie | high | GHSA-qjx8-664m-686j | 3.0.8 | 3.0.7 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 69 | pip | urllib3 | high | GHSA-qccp-gfcp-xxvc | 2.7.0 | 2.7.0 | uv.lock | patched |
+| 67 | pip | GitPython | high | GHSA-mv93-w799-cj2w | 3.1.50 | 3.1.50 | uv.lock | patched |
+| 64 | pip | GitPython | high | GHSA-v87r-6q3f-2j67 | 3.1.50 | 3.1.49 | uv.lock | patched |
+| 63 | pip | jupyterlab | high | GHSA-mqcg-5x36-vfcg | 4.6.0 | 4.5.7 | uv.lock | patched |
+| 62 | pip | python-multipart | high | GHSA-pp6c-gr5w-3c5g | 0.0.32 | 0.0.27 | uv.lock | patched |
+| 61 | pip | notebook | high | GHSA-mqcg-5x36-vfcg | 7.6.0 | 7.5.6 | uv.lock | patched |
+| 60 | pip | GitPython | high | GHSA-7545-fcxq-7j24 | 3.1.50 | 3.1.48 | uv.lock | patched |
+| 59 | pip | mistune | high | GHSA-8mp2-v27r-99xp | 3.2.1 | 3.2.1 | uv.lock | patched |
+| 58 | pip | jupyterlab | high | GHSA-37w4-hwhx-4rc4 | 4.6.0 | 4.5.7 | uv.lock | patched |
+| 57 | pip | jupyter-server | high | GHSA-5mrq-x3x5-8v8f | 2.20.0 | 2.18.0 | uv.lock | patched |
+| 56 | pip | jupyter-server | high | GHSA-24qx-w28j-9m6p | 2.20.0 | 2.18.0 | uv.lock | patched |
+| 55 | pip | jupyter-server | high | GHSA-5789-5fc7-67v3 | 2.20.0 | 2.18.0 | uv.lock | patched |
+| 51 | pip | pillow | high | GHSA-pwv6-vv43-88gr | 12.2.0 | 12.2.0 | uv.lock | patched |
+| 49 | pip | jupyterlab | high | GHSA-rch3-82jr-f9w9 | 4.6.0 | 4.5.7 | uv.lock | patched |
+| 48 | pip | notebook | high | GHSA-rch3-82jr-f9w9 | 7.6.0 | 7.5.6 | uv.lock | patched |
+| 47 | pip | GitPython | high | GHSA-x2qx-6953-8485 | 3.1.50 | 3.1.47 | uv.lock | patched |
+| 46 | pip | GitPython | high | GHSA-rpm5-65cw-6hj4 | 3.1.50 | 3.1.47 | uv.lock | patched |
+| 40 | pip | pillow | high | GHSA-whj4-6x5x-4v2j | 12.2.0 | 12.2.0 | uv.lock | patched |
+| 36 | npm | vite | high | GHSA-p9ff-h696-f583 | 7.3.5 | 7.3.2 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 35 | npm | vite | high | GHSA-v2wj-q39q-566r | 7.3.5 | 7.3.2 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 12 | npm | minimatch | high | GHSA-7r86-cg39-jmmj | 9.0.9 | 9.0.7 | src/esper/karn/overwatch/web/package-lock.json | patched |
+
+Verification:
+
+- `uv sync --group dev --extra dashboard --extra wandb` -> resolved 208
+  packages and installed the optional dashboard/wandb packages needed for the
+  verification environment.
+- `uv run python scripts/assert_dependabot_advisories.py --alerts-json /tmp/esper-lite-dependabot-alerts.json`
+  -> `HIGH-CRITICAL-DEPENDABOT-FLOORS-OK`.
+- `uv run python scripts/assert_dependabot_advisories.py --fetch`
+  -> `HIGH-CRITICAL-DEPENDABOT-FLOORS-OK`.
+- `uv run pytest -m "not slow and not stress" -q` -> 5255 passed, 5 skipped,
+  26 deselected.
+- `npm --prefix src/esper/karn/overwatch/web audit --audit-level=high` ->
+  found 0 vulnerabilities.
+- `npm --prefix src/esper/karn/overwatch/web test -- --run` -> 20 test files
+  passed, 300 tests passed.
+- `npm --prefix src/esper/karn/overwatch/web run build` -> passed.
+- `uv run ruff check src/ tests/` -> passed.
+- `uv run ruff check scripts/assert_dependabot_advisories.py` -> passed.
+- `python3 -m py_compile scripts/assert_dependabot_advisories.py` -> passed.
+- `uv run python scripts/lint_leyline_types.py` -> stale whitelist entries 0.
+- `uv run python scripts/lint_defensive_patterns.py` -> violations 0.
+- `uv run python scripts/lint_gpu_sync.py` -> violations 0.
+- `MYPYPATH=src uv run mypy -p esper` -> success, 214 source files.
+- `git diff --check` -> passed.

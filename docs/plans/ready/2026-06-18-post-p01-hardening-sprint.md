@@ -387,6 +387,34 @@ Net effort is still low (two lock refreshes), so there is no reason to defer;
 bundle into the merge window. But the bump plan (§3.4) must verify the **(c)**
 tier (pyarrow) clears, not just assume "all highs are dev/optional."
 
+#### 3.6 Dependency triage closeout (2026-06-20)
+
+Filigree task `esper-lite-d289d208ac` was executed on `0.3.0` after EV
+robustness closed. Live Dependabot data was read from
+`gh api /repos/tachyon-beep/esper-lite/dependabot/alerts --paginate` with the
+`tachyon-beep` account. The API returned 125 total alerts and 36 open
+high/critical alerts.
+
+Closeout changes:
+
+- Prior dependency commit `a42bf5fa` had already bumped the high/critical Python
+  and Overwatch package cluster. The live API still reports alerts because they
+  are open on the default branch until this branch lands.
+- `scripts/assert_dependabot_advisories.py` now turns the live advisory JSON into
+  an executable lock assertion. It reports no vulnerable present packages and
+  prints `HIGH-CRITICAL-DEPENDABOT-FLOORS-OK`.
+- `transformers` was constrained to `>=4.57.3,<4.58.0` and re-locked to
+  `4.57.6`, undoing the earlier unreviewed `5.12.1` resolution. This preserves
+  the locked decision that any Transformers minor/major window requires separate
+  review.
+- No `[tool.uv].override-dependencies` entry was added.
+- npm high/critical audit is clean; `vite`, `vitest`, `js-cookie`, and
+  `minimatch` are at or above the live patched floors.
+
+See the 2026-06-20 dependency triage section in
+`docs/plans/ready/2026-06-18-post-p01-hardening-sprint-defect-report.md` for the
+full advisory disposition table and command results.
+
 ## Sequencing & Dependencies
 
 The three items share one delivery window. Ordering within it is what controls
