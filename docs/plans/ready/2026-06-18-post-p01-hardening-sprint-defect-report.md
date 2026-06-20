@@ -475,9 +475,10 @@ Closeout verification:
 
 Remaining dependency order:
 
-- Dependency triage `esper-lite-d289d208ac` remains before main merge.
-- Main merge `esper-lite-569292a32b` remains blocked until dependency triage is
-  also closed; it was not started during this closeout.
+- Dependency triage `esper-lite-d289d208ac` remained before main merge and is
+  now closed.
+- Main merge `esper-lite-569292a32b` was newly unblocked by the dependency
+  triage close, but it was not started during this closeout.
 
 ## 2026-06-20 Dependency Triage Closeout
 
@@ -573,3 +574,9 @@ Verification:
 - `uv run python scripts/lint_gpu_sync.py` -> violations 0.
 - `MYPYPATH=src uv run mypy -p esper` -> success, 214 source files.
 - `git diff --check` -> passed.
+
+Filigree outcome:
+
+- `esper-lite-d289d208ac` closed.
+- `esper-lite-569292a32b` newly unblocked.
+- `esper-lite-569292a32b` was not started.
