@@ -1045,14 +1045,14 @@ class TinyStoriesDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
         try:
             from datasets import load_dataset
-            from transformers import GPT2TokenizerFast
+            from transformers.models.gpt2 import GPT2Tokenizer
         except ImportError as exc:
             raise ImportError(
                 "TinyStories requires 'datasets' and 'transformers' packages. "
                 "Install with: pip install datasets transformers"
             ) from exc
 
-        self.tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         self.tokenizer.pad_token = self.tokenizer.eos_token
         eos_id = self.tokenizer.eos_token_id
 

@@ -113,6 +113,30 @@ def test_ev_robustness_fields_round_trip():
     assert abs(tamiyo.ev_return_variance - 0.7) < 1e-9
 
 
+def test_missing_value_nrmse_does_not_default_to_healthy_zero():
+    """Missing value_nrmse must surface as unknown/unhealthy, not a fabricated healthy zero."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.5,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+            explained_variance=0.8,
+            value_nrmse=None,
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.value_nrmse == 1.0
+
+
 def test_get_snapshot_returns_isolated_copy() -> None:
     """get_snapshot() must never expose live, mutable aggregator state."""
     agg = SanctumAggregator(num_envs=2)

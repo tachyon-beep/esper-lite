@@ -1,8 +1,5 @@
 """Tests for telemetry payload dataclasses."""
 
-import pytest
-
-
 def test_analytics_snapshot_payload_accepts_reward_components_dataclass():
     """AnalyticsSnapshotPayload should accept RewardComponentsTelemetry."""
     from esper.leyline.telemetry import AnalyticsSnapshotPayload
@@ -538,7 +535,6 @@ def test_head_telemetry_from_dict_fails_fast_on_missing_field():
     missing key means corrupted/partial telemetry.
     """
     import pytest
-
     from esper.leyline.telemetry import HeadTelemetry
 
     partial = _full_head_telemetry_dict()
@@ -551,7 +547,6 @@ def test_head_telemetry_from_dict_fails_fast_on_missing_field():
 def test_head_telemetry_from_dict_empty_fails_fast():
     """TPD-004: an empty head_telemetry dict must raise, not return all-zeros."""
     import pytest
-
     from esper.leyline.telemetry import HeadTelemetry
 
     with pytest.raises(KeyError):

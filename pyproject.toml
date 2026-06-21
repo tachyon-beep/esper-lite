@@ -33,6 +33,11 @@ wandb = [
     "wandb>=0.16.0",
 ]
 
+[tool.uv]
+constraint-dependencies = [
+    "transformers>=4.57.3,<4.58.0",
+]
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"

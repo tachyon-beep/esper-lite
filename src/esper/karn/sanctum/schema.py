@@ -971,7 +971,7 @@ class TamiyoState:
     # value_nrmse is the floor-stabilized value-fit companion; ev_low_return_variance flags a
     # floored EV denominator (denominator ill-conditioned); ev_return_variance is the
     # EV-denominator variance valid_returns.var().
-    value_nrmse: float = 0.0
+    value_nrmse: float = 1.0
     ev_low_return_variance: bool = False
     ev_return_variance: float | None = None
     # Rollback observability (per-rollout aggregates; pure telemetry, never gate inputs).

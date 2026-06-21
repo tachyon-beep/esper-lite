@@ -537,7 +537,7 @@ class AnomalyDetector:
             explained_variance: Explained variance metric (unflagged-only run-level mean)
             current_episode: Current episode for phase-dependent value collapse threshold (required)
             total_episodes: Total configured episodes for phase detection (required)
-            value_collapse_applicable: Whether low EV can be interpreted as critic collapse
+            value_collapse_applicable: Whether value-fit robust signals are in scope
             has_nan: Whether NaN values were detected
             has_inf: Whether Inf values were detected
             entropy: Policy entropy (0-1 normalized). If provided, checks for entropy collapse.

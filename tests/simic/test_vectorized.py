@@ -797,6 +797,7 @@ def test_run_ppo_updates_runs_multiple_updates_and_updates_normalizer_once():
                 "ratio_min": 1.0 - approx,
                 "clip_fraction": 0.1 * call_idx,
                 "explained_variance": 0.05 * call_idx,
+                "ev_low_return_variance": False,
             }
 
     class _StubNormalizer:
@@ -1014,6 +1015,23 @@ def test_ev_aggregation_excludes_flagged_updates():
     # Count == number of flagged updates.
     assert metrics["ev_low_return_variance_count"] == 1
     assert metrics["ev_low_return_variance"] is True
+
+
+def test_ev_aggregation_requires_low_variance_flag_when_ev_present():
+    """Live EV aggregation must fail loudly if the mandatory flag is missing."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    updates = [
+        {
+            "explained_variance": 0.8,
+            "value_nrmse": 0.1,
+            "ev_return_variance": 100.0,
+            "ev_low_return_variance_count": 0,
+        }
+    ]
+
+    with pytest.raises(KeyError, match="ev_low_return_variance"):
+        _aggregate_ppo_metrics(updates)
 
 
 def test_ev_aggregation_all_flagged():

@@ -292,6 +292,20 @@ describe('HealthGauges', () => {
     expect(wrapper.find('[data-testid="ev-low-variance-badge"]').exists()).toBe(true)
   })
 
+  it('does not style flagged low-return-variance EV as critical', () => {
+    const wrapper = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        tamiyo: createTamiyo({ explained_variance: -8.0, ev_low_return_variance: true })
+      }
+    })
+
+    const evGauge = wrapper.find('[data-testid="gauge-explained-variance"]')
+    expect(evGauge.find('[data-testid="gauge-value"]').text()).toBe('-800%')
+    expect(wrapper.find('[data-testid="ev-low-variance-badge"]').exists()).toBe(true)
+    expect(evGauge.classes()).not.toContain('health-critical')
+  })
+
   it('does not render the low-return-variance badge when the flag is clear', () => {
     const wrapper = mount(HealthGauges, {
       props: {

@@ -32,7 +32,6 @@ def main() -> int:
         type=Path,
         default=Path(".weft/loomweave/loomweave.db"),
     )
-    parser.add_argument("--history-count", type=int, default=0)
     parser.add_argument(
         "--fail-on-homegrown-only",
         action="store_true",
@@ -51,21 +50,28 @@ def main() -> int:
     _write_command_output(artifacts_dir / "homegrown-leyline-types.txt", leyline_result)
 
     wardline_output = _wardline_output_path(args.wardline_output, artifacts_dir)
-    if not wardline_output.exists():
-        wardline_output.write_text("")
 
+    head_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     report = build_phase_a_report(
         wardline_output=wardline_output,
         loomweave=inspect_loomweave_db(args.loomweave_db),
+        head_commit=head_commit,
         defensive_findings=parse_defensive_output(
             defensive_result.stdout + defensive_result.stderr
         ),
-        leyline_findings=parse_leyline_output(leyline_result.stdout + leyline_result.stderr),
+        defensive_exit_code=defensive_result.returncode,
+        leyline_findings=parse_leyline_output(
+            leyline_result.stdout + leyline_result.stderr
+        ),
+        leyline_exit_code=leyline_result.returncode,
     )
     report["metadata"] = {
         "schema": "esper-weft-parity-metadata-v1",
-        "history_count_requested": args.history_count,
-        "history_evaluated": False,
         "homegrown_exit_codes": {
             "defensive-patterns": defensive_result.returncode,
             "leyline-types": leyline_result.returncode,

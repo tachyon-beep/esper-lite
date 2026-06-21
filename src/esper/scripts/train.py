@@ -33,6 +33,7 @@ import sys
 import threading
 from collections.abc import Callable
 from textwrap import dedent
+from typing import cast
 
 import torch
 
@@ -112,11 +113,14 @@ def _degraded_requested_backends(
     Raises:
         KeyError: If a requested backend name is missing from ``backend_stats``.
     """
-    backend_stats = health_snapshot["backend_stats"]
+    backend_stats = cast(
+        "dict[str, dict[str, object]]", health_snapshot["backend_stats"]
+    )
     degraded: set[str] = set()
     for name in requested_backend_names:
         # Direct index (not .get): a missing requested backend is a bug, fail loud.
-        if int(backend_stats[name]["dropped_events"]) > 0:
+        dropped_events = cast("int | str", backend_stats[name]["dropped_events"])
+        if int(dropped_events) > 0:
             degraded.add(name)
     return degraded
 
@@ -1169,6 +1173,8 @@ def main() -> None:
             # Sanctum mode: run training in background thread, Sanctum controls terminal
             from esper.karn.sanctum import SanctumApp
 
+            assert shutdown_event is not None
+
             def training_wrapper() -> None:
                 """Wrap training to capture exceptions (see _run_training_capturing_errors)."""
                 _run_training_capturing_errors(run_training, training_error, shutdown_event)
@@ -1183,8 +1189,10 @@ def main() -> None:
             if dataloader_ready_event is not None:
                 print("Waiting for DataLoader workers to initialize...")
                 dataloader_ready_event.wait(timeout=60.0)  # 60s timeout for slow datasets
+                _exit_nonzero_if_training_failed(training_error)
                 if not dataloader_ready_event.is_set():
                     print("WARNING: DataLoader initialization timed out, starting TUI anyway")
+            _exit_nonzero_if_training_failed(training_error)
 
             # Run Sanctum TUI in main thread (blocks until user quits)
             # Pass training_thread and shutdown_event so TUI can signal graceful shutdown

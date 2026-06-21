@@ -20,15 +20,9 @@ Usage:
 
 from __future__ import annotations
 
+import importlib
 import logging
 from typing import Any
-
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-    wandb = None
 
 from esper.nissa.output import OutputBackend
 from esper.leyline import TelemetryEvent, TelemetryEventType
@@ -43,6 +37,13 @@ from esper.leyline.telemetry import (
     TrainingStartedPayload,
     AnomalyDetectedPayload,
 )
+
+try:
+    wandb: Any = importlib.import_module("wandb")
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    wandb = None
 
 _logger = logging.getLogger(__name__)
 
@@ -131,9 +132,9 @@ class WandbBackend(OutputBackend):
         # wandb.init is type-hinted to return Run | RunDisabled | None
         # We check for None and log appropriately
         #
-        # Settings for system metrics: _disable_stats controls GPU/CPU/memory logging
+        # Settings for system metrics: x_disable_stats controls GPU/CPU/memory logging
         # See: https://docs.wandb.ai/support/how_can_i_disable_logging_of_system_metrics_to_wb/
-        settings = wandb.Settings(_disable_stats=not self.log_system)
+        settings = wandb.Settings(x_disable_stats=not self.log_system)
         self._run = wandb.init(
             project=self.project,
             entity=self.entity,

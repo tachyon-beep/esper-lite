@@ -84,33 +84,88 @@ def test_i6_rollout_autocast_reads_trainer_fields():
 # I11: profiler context exits in finally even on exception.
 # ---------------------------------------------------------------------------
 
-def test_i11_profiler_exits_in_finally_on_exception():
-    """profiler_cm.__exit__ must be called even when an exception propagates.
+def test_i11_profiler_exits_in_finally_on_exception(monkeypatch):
+    """run()'s finally must exit BOTH profiler contexts when the batch loop raises.
 
-    Pin: vectorized_trainer.py:2397-2399: profiler_cm.__exit__(None, None, None)
-    is in a finally block. We verify by patching training_profiler to a
-    recording context manager and injecting an exception in the batch loop.
+    Pin: vectorized_trainer.py:3032-3036 — the finally closes
+    phase_profiler_cm.__exit__(None, None, None) (:3034) and
+    profiler_cm.__exit__(None, None, None) (:3036), and resets
+    self._phase_profiler = NullProfiler() (:3035), even when an exception
+    propagates out of the batch loop.
+
+    Unlike a test-local context manager (which would only re-prove CPython's
+    finally semantics), this drives the REAL VectorizedPPOTrainer.run(): the two
+    module-level profiler factories are replaced with recording doubles and
+    _run_batch is forced to raise, so the assertions fail if the production
+    finally is removed or stops closing a context.
     """
-    exit_calls = []
+    from esper.simic.training import vectorized_trainer as vt
 
-    class _RecordingCM:
+    exit_calls = []  # (name, args) per recorded __exit__ call, in call order
+
+    class _RecordingProfilerCM:
+        """Spy standing in for the real profiler context managers."""
+
+        def __init__(self, name):
+            self.name = name
+            self.entered = False
+
         def __enter__(self):
+            self.entered = True
             return None
 
         def __exit__(self, *args):
-            exit_calls.append(args)
-            return False
+            exit_calls.append((self.name, args))
+            return False  # never suppress the propagating exception
 
-    cm = _RecordingCM()
-    cm.__enter__()
-    try:
-        raise RuntimeError("injected test exception")
-    except RuntimeError:
-        pass
-    finally:
-        cm.__exit__(None, None, None)
+    torch_cm = _RecordingProfilerCM("torch_profiler")
+    phase_cm = _RecordingProfilerCM("phase_profiler")
+    # run() resolves these as module globals (imported at vectorized_trainer.py:45-46).
+    monkeypatch.setattr(vt, "training_profiler", lambda **kwargs: torch_cm)
+    monkeypatch.setattr(vt, "phase_profiler", lambda **kwargs: phase_cm)
 
-    assert len(exit_calls) == 1, "__exit__ must be called exactly once"
+    # VectorizedPPOTrainer is a plain @dataclass (no slots), so we can drive the
+    # real run() without its heavy __init__ by setting only the fields run()
+    # reads before/inside the loop and in the finally.
+    trainer = object.__new__(vt.VectorizedPPOTrainer)
+    trainer.torch_profiler = False  # also skips the finally's trace-summary branch
+    trainer.torch_profiler_dir = ""
+    trainer.torch_profiler_wait = 0
+    trainer.torch_profiler_warmup = 0
+    trainer.torch_profiler_active = 0
+    trainer.torch_profiler_repeat = 0
+    trainer.torch_profiler_record_shapes = False
+    trainer.torch_profiler_profile_memory = False
+    trainer.torch_profiler_with_stack = False
+    trainer.torch_profiler_summary = False
+    trainer.phase_profiler = False
+    trainer.start_episode = 0
+    trainer.start_batch = 0
+    trainer.total_batches = 1  # loop body runs once, then _run_batch raises
+    trainer.use_telemetry = False
+
+    def _raise_in_batch_loop(*args, **kwargs):
+        raise RuntimeError("injected batch-loop failure")
+
+    trainer._run_batch = _raise_in_batch_loop
+
+    with pytest.raises(RuntimeError, match="injected batch-loop failure"):
+        trainer.run()
+
+    # Both contexts were entered by run() and then exited by its finally...
+    assert torch_cm.entered and phase_cm.entered, "both profilers must be entered"
+    # ...in the production finally order (phase first :3034, then torch :3036),
+    # each exactly once.
+    assert [name for name, _ in exit_calls] == ["phase_profiler", "torch_profiler"], (
+        "run()'s finally must exit both profiler contexts on exception"
+    )
+    # ...with the exact args the finally passes.
+    for name, args in exit_calls:
+        assert args == (None, None, None), (
+            f"{name}.__exit__ must be called with (None, None, None) in the finally"
+        )
+    # ...and the live phase-profiler handle is reset to a NullProfiler (:3035).
+    assert isinstance(trainer._phase_profiler, vt.NullProfiler)
 
 
 # ---------------------------------------------------------------------------

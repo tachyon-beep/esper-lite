@@ -6,9 +6,11 @@ and validates that key metrics are within expected ranges.
 
 Metrics tracked:
 - Mean batch accuracy (should improve over training)
-- Training stability (no NaN/Inf anywhere)
+- Training stability (no NaN/Inf except flagged low-return-variance EV)
 - Policy convergence (accuracy should be > 0)
 """
+
+import math
 
 import pytest
 import torch
@@ -27,7 +29,7 @@ def test_phase6_regression_baseline(monkeypatch: pytest.MonkeyPatch):
     1. Training completes without errors
     2. Accuracy is finite and bounded
     3. Rolling averages are finite and bounded
-    - All metrics finite
+    4. Metrics are finite, except diagnostic EV may be NaN when low-return variance is flagged
     """
     import esper.runtime as runtime
 
@@ -100,10 +102,20 @@ def test_phase6_regression_baseline(monkeypatch: pytest.MonkeyPatch):
 
     # Check if any metrics exist in history (PPO loss, value, etc.)
     if len(history) > 0 and len(history[0]) > 3:  # More than just batch/episodes/avg_accuracy
-        # All metrics should be finite (no NaN/Inf)
+        # All metrics should be finite, except aggregated explained_variance is
+        # intentionally NaN when every update in the batch is low-return-variance
+        # flagged; value_nrmse and ev_return_variance carry the stable diagnostics.
         for batch in history:
             for key, value in batch.items():
-                if isinstance(value, (int, float)):
+                if type(value) is int or type(value) is float:
+                    if key == "explained_variance" and math.isnan(value):
+                        assert batch["ev_low_return_variance"] is True, (
+                            "NaN explained_variance is allowed only for low-return-variance batches"
+                        )
+                        assert batch["ev_low_return_variance_count"] > 0, (
+                            "NaN explained_variance must report at least one flagged update"
+                        )
+                        continue
                     assert torch.isfinite(torch.tensor(value)), (
                         f"Non-finite metric {key} in batch {batch['batch']}: {value}"
                     )

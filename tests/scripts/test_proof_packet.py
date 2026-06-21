@@ -1367,6 +1367,42 @@ def _baseline_run_events() -> list[dict]:
     ]
 
 
+def test_proof_packet_blocks_value_collapse_even_when_ev_low_variance(tmp_path):
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    events.append(
+        {
+            "event_id": "value-collapse-1",
+            "event_type": "VALUE_COLLAPSE_DETECTED",
+            "timestamp": datetime.now().isoformat(),
+            "epoch": 1,
+            "group_id": "A",
+            "data": {
+                "anomaly_type": "value_collapse",
+                "env_id": 0,
+                "episode": 1,
+                "batch": 1,
+                "detail": "value_loss exceeded proof threshold",
+                "value_loss": 5.1,
+                "bellman_error": 0.2,
+                "explained_variance": -8.0,
+                "ev_low_return_variance": True,
+            },
+            "severity": "error",
+        }
+    )
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_MECHANICS`" in packet
+    assert "BLOCKING `VALUE_COLLAPSE_DETECTED`" in packet
+    assert "value_loss exceeded proof threshold" in packet
+
+
 @pytest.mark.parametrize(
     "event_type, data, marker",
     [

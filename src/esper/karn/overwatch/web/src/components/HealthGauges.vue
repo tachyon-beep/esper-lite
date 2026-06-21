@@ -90,6 +90,7 @@ const explainedVariancePercent = computed(() => {
 })
 
 const explainedVarianceHealth = computed<HealthStatus>(() => {
+  if (props.tamiyo.ev_low_return_variance) return 'warning'
   if (props.tamiyo.explained_variance >= EXPLAINED_VARIANCE_GOOD_THRESHOLD) return 'good'
   if (props.tamiyo.explained_variance >= EXPLAINED_VARIANCE_WARNING_THRESHOLD) return 'warning'
   return 'critical'

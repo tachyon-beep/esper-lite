@@ -54,10 +54,17 @@ findings.
 ## Replacement Readiness
 
 - `lint_defensive_patterns.py`: stays blocking until Wardline emits a mapped
-  defensive-pattern rule family and parity shows zero homegrown-only findings.
-- `lint_leyline_types.py`: stays blocking until Loomweave exposes class contract
-  kind metadata for enum, dataclass, protocol, TypedDict, and NamedTuple
-  placement, including stale-whitelist semantics.
+  defensive-pattern rule family AND a real homegrown-vs-Wardline comparison is
+  implemented that shows zero homegrown-only findings. The pinned Wardline
+  toolchain has no defensive-pattern rule and emits no line-anchored findings, so
+  no comparison is performed today; the parity report marks this check
+  `comparison: "deferred"`, and "zero homegrown-only findings" alone (the
+  homegrown linter merely being quiet) does NOT constitute parity.
+- `lint_leyline_types.py`: stays blocking until Loomweave exposes per-kind
+  class-contract metadata for enum, dataclass, protocol, TypedDict, and NamedTuple
+  placement, including stale-whitelist semantics. Loomweave 1.x exposes none of
+  these, so the parity report marks this check `comparison: "deferred"` and
+  leyline readiness is never signalled until a real Loomweave surface lands.
 - `scripts/test_import_cycle.py`: is not a current CI gate and checks lazy import
   side effects, so it is not counted as retired by a Loomweave module-cycle
   artifact.

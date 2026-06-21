@@ -953,10 +953,15 @@ def execute_actions(
             # new_drip_state is only present when reward_mode == BASIC_PLUS; None otherwise.
             new_drip_state: "FossilizedSeedDripState | None" = None
             if return_components:
-                reward_tuple = cast(tuple[float, Any, ...], reward_result)
-                reward, reward_components = reward_tuple[0], reward_tuple[1]
+                reward_tuple = cast(tuple[Any, ...], reward_result)
+                reward = cast(float, reward_tuple[0])
+                reward_components = cast(
+                    "RewardComponentsTelemetry", reward_tuple[1]
+                )
                 if len(reward_tuple) == 3:
-                    new_drip_state = reward_tuple[2]
+                    new_drip_state = cast(
+                        "FossilizedSeedDripState", reward_tuple[2]
+                    )
                 if target_slot in baseline_accs[env_idx]:
                     reward_components.host_baseline_acc = baseline_accs[env_idx][
                         target_slot

@@ -129,6 +129,51 @@ class TestCheckValueFunctionRobustAnchored:
         assert report.has_anomaly is True
         assert "value_collapse" in report.anomaly_types
 
+    def test_value_collapse_threshold_boundaries_are_strict(self) -> None:
+        """Robust thresholds are locked at 5.0 and fire only above the boundary."""
+        detector = AnomalyDetector()
+        assert detector.value_loss_threshold == 5.0
+        assert detector.bellman_error_threshold == 5.0
+
+        at_boundary = detector.check_value_function(
+            explained_variance=-8.0,
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=5.0,
+            value_loss=5.0,
+            value_nrmse=2.0,
+            v_return_correlation=-0.5,
+            ev_low_return_variance=True,
+        )
+        assert at_boundary.has_anomaly is False
+        assert "value_collapse" not in at_boundary.anomaly_types
+
+        value_loss_over = detector.check_value_function(
+            explained_variance=0.9,
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=5.0,
+            value_loss=5.0001,
+            value_nrmse=0.2,
+            v_return_correlation=0.8,
+            ev_low_return_variance=False,
+        )
+        assert value_loss_over.has_anomaly is True
+        assert "value_collapse" in value_loss_over.anomaly_types
+
+        bellman_over = detector.check_value_function(
+            explained_variance=0.9,
+            current_episode=80,
+            total_episodes=100,
+            bellman_error=5.0001,
+            value_loss=5.0,
+            value_nrmse=0.2,
+            v_return_correlation=0.8,
+            ev_low_return_variance=False,
+        )
+        assert bellman_over.has_anomaly is True
+        assert "value_collapse" in bellman_over.anomaly_types
+
     def test_check_all_threads_robust_signals_artifact_suppressed(self) -> None:
         """check_all must forward the robust signals; artifact stays suppressed end-to-end."""
         detector = AnomalyDetector()

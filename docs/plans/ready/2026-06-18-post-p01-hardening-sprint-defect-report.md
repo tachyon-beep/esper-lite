@@ -254,7 +254,7 @@ These are not committed branch-code defects, but they affect the safety of the n
 
 File:
 
-- `docs/plans/ready/2026-06-18-main-merge-integration-plan.md:428`
+- `docs/plans/completed/2026-06-18-main-merge-integration-plan.md:428`
 
 Evidence:
 
@@ -281,7 +281,7 @@ Generate the floor assertion map from the Dependabot API immediately before the 
 
 Files:
 
-- `docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md:158`
+- `docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md:158`
 - `src/esper/karn/mcp/views.py:122`
 
 Evidence:
@@ -311,7 +311,7 @@ Rewrite the design to keep emitted `VALUE_COLLAPSE_DETECTED` rows proof-blocking
 
 File:
 
-- `docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md:294`
+- `docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md:294`
 
 Evidence:
 
@@ -325,7 +325,7 @@ Make the new parameters required keyword-only, update the coordinator call in th
 
 File:
 
-- `docs/plans/ready/2026-06-18-main-merge-integration-plan.md:385`
+- `docs/plans/completed/2026-06-18-main-merge-integration-plan.md:385`
 
 Evidence:
 
@@ -377,3 +377,235 @@ Auxiliary verification:
 - Filigree `session_context_get` confirmed `esper-lite-6682b3faea` remains ready P1.
 - Filigree searches for the post-P0-1 sprint, EV robustness, main merge, and dependency triage returned no matching open issues.
 - Warpline `reverify` returned `NO_SNAPSHOT`; its output was treated as advisory changed-set coverage, not a complete proof.
+
+## 2026-06-19 Reconciliation
+
+Current branch during reconciliation: `0.3.0` at `a42bf5fa`.
+
+Queue outcomes:
+
+- `esper-lite-6682b3faea` is now closed in Filigree. Focused local recheck:
+  `uv run pytest tests/simic/training/test_batch_bootstrap.py -q` -> 6 passed.
+- Observation `esper-lite-obs-c8de6a4b7b` is no longer pending. Focused local
+  recheck: `uv run pytest tests/telemetry/test_reward_metrics.py -q` -> 25
+  passed.
+- Created sprint umbrella epic `esper-lite-5e6ff9f907`.
+- Created `P-EV-RECAL` preflight task `esper-lite-26e96f0578`.
+- Created EV robustness task `esper-lite-a20b180e26`, blocked by
+  `esper-lite-26e96f0578`.
+- Created dependency triage task `esper-lite-d289d208ac`.
+- Created main merge task `esper-lite-569292a32b`, blocked by
+  `esper-lite-a20b180e26` and `esper-lite-d289d208ac`.
+- Created open Sanctum P1 bug `esper-lite-440748cb34` because existing tests
+  prove captured crashes eventually exit nonzero, but do not prove
+  `SanctumApp.run()` is skipped after a pre-ready training crash.
+
+Finding reconciliation:
+
+- q-aux non-finite PPO gate: fixed on current branch. Evidence:
+  `uv run pytest tests/simic/agent/test_q_finiteness_and_contract.py -q` -> 3
+  passed.
+- Leyline stale whitelist entries: fixed on current branch. Evidence:
+  `uv run python scripts/lint_leyline_types.py` -> stale whitelist entries 0.
+- q-head consumer propagation: fixed on current branch. Evidence:
+  `uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_q_aux_loss tests/karn/sanctum/test_aggregator.py::test_aggregator_wires_q_values tests/karn/sanctum/test_aggregator.py::test_aggregator_coerces_none_q_head_diagnostics -q`
+  -> 3 passed; `uv run pytest tests/nissa/test_wandb_backend.py -k q_head_aux
+  -q` -> 1 passed.
+- EV view and low-return-variance consumer checks are fixed on current branch.
+  Evidence:
+  `uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_robustness_columns tests/karn/mcp/test_views.py::test_run_confounders_view_empty_on_clean_run tests/karn/sanctum/test_reward_health.py -q`
+  -> 12 passed.
+- P-EV-RECAL corrected the remaining EV calibration preflight ambiguity:
+  `ppo_updates` now projects `bellman_error` and `v_return_correlation` directly,
+  and the Step 0 preflight uses a fail-loud `ppo_updates` query instead of a
+  `raw_events` fallback. Regression coverage:
+  `uv run pytest tests/karn/mcp/test_views.py::test_ppo_updates_exposes_ev_calibration_preflight_fields tests/karn/mcp/test_views.py::test_ev_calibration_preflight_raises_when_required_evidence_missing -q`
+  -> 2 passed. Live Karn evidence on `telemetry_2026-06-16_160350`:
+  `preflight_status=ok`, `updates=10`, `missing_required_rows=0`.
+- Robust value-collapse gating checks are fixed on current branch. Evidence:
+  `uv run pytest tests/simic/telemetry/test_anomaly_detector.py tests/simic/training/test_ppo_coordinator.py::test_coordinator_emits_value_collapse_on_low_var_real_collapse tests/simic/training/test_ppo_coordinator.py::test_coordinator_does_not_emit_value_collapse_on_artifact -q`
+  -> 26 passed.
+- Sanctum training crash handling is partially fixed: helper-level tests pass
+  (`uv run pytest tests/nissa/test_p1_1_silent_swallow_fixes.py::TestTrainingWrapperSetsShutdownEventOnException tests/nissa/test_p1_1_silent_swallow_fixes.py::TestSanctumTrainingCrashExitsNonzero -q`
+  -> 4 passed), but the stricter pre-TUI behavior remains tracked by
+  `esper-lite-440748cb34`.
+
+## 2026-06-20 EV Telemetry Robustness Closeout
+
+Current branch during closeout: `0.3.0`.
+
+Filigree task `esper-lite-a20b180e26` is implemented after unblocker
+`esper-lite-26e96f0578` landed in `ddd63e37`. The main EV robustness
+implementation is `97ae84d8`; the final closeout patch adds regression locks
+and documentation reconciliation before closing the task.
+
+Defect reconciliation:
+
+- EV is now honest diagnostic telemetry under the op-marginal `V(s)` critic,
+  not a proof-blocking trigger.
+- Value-collapse proof blocking is robust-only:
+  `VALUE_COLLAPSE_DETECTED` fires from `value_loss > 5.0` or
+  `bellman_error > 5.0`; equality at `5.0` is non-firing.
+- Emitted `VALUE_COLLAPSE_DETECTED` rows remain proof-blocking in Karn
+  `run_confounders` and `scripts/proof_packet.py` even when
+  `ev_low_return_variance=True`; artifact suppression stays upstream in the
+  detector/gate emission path.
+- Cross-update EV aggregation now fails loudly when an update has non-`None`
+  `explained_variance` but lacks mandatory `ev_low_return_variance` evidence.
+- Sanctum no longer renders missing `value_nrmse` as healthy `0.0`; the finite
+  unknown/unhealthy sentinel is `1.0`.
+- Overwatch still displays the true negative EV value and low-return-variance
+  badge, but does not style the gauge as critical solely from that artifact.
+
+Closeout verification:
+
+- `uv run pytest tests/simic/test_ppo_value_metrics.py tests/simic/test_telemetry_fields.py tests/simic/test_vectorized.py -q` -> 102 passed.
+- `uv run pytest tests/simic/telemetry tests/simic/training/test_ppo_coordinator.py -q` -> 130 passed.
+- `uv run pytest tests/karn/mcp/test_views.py tests/karn/sanctum/test_reward_health.py tests/karn/sanctum/test_aggregator.py tests/nissa/test_wandb_backend.py tests/telemetry/test_batch_stats_ev_field.py tests/scripts/test_proof_packet.py -q` -> 140 passed.
+- `uv run pytest tests/simic/test_ppo_update_golden.py tests/simic/test_ppo.py tests/simic/test_ppo_normalization.py -q` -> 27 passed.
+- `npm --prefix src/esper/karn/overwatch/web test -- --run -t "HealthGauges|ExperimentVerdictPanel"` -> 29 passed, 271 skipped.
+- `uv run ruff check src/ tests/` -> passed.
+- `uv run python scripts/lint_leyline_types.py` -> stale whitelist entries 0.
+- `uv run python scripts/lint_defensive_patterns.py` -> violations 0.
+- `uv run python scripts/lint_gpu_sync.py` -> violations 0.
+- `MYPYPATH=src uv run mypy -p esper` -> success, 214 source files.
+- `npm --prefix src/esper/karn/overwatch/web run build` -> passed.
+- `wardline scan . --fail-on ERROR` -> exit 0, 0 active findings.
+- `git diff --check` -> passed.
+
+Remaining dependency order:
+
+- Dependency triage `esper-lite-d289d208ac` remained before main merge and is
+  now closed.
+- Main merge `esper-lite-569292a32b` was newly unblocked by the dependency
+  triage close, but it was not started during this closeout. It was later
+  reconciled on 2026-06-21 as already completed by PR #111.
+
+## 2026-06-20 Dependency Triage Closeout
+
+Current branch during closeout: `0.3.0`.
+
+Live source:
+
+- `gh api /repos/tachyon-beep/esper-lite/dependabot/alerts --paginate`
+  using the `tachyon-beep` GitHub account.
+- The API returned 125 total alerts and 36 open high/critical alerts.
+- The live high/critical cluster is patched in the current Python/npm locks.
+  GitHub may continue to show the alerts as open until this branch reaches the
+  default branch.
+
+Dependency reconciliation:
+
+- `a42bf5fa chore(deps): resolve dependabot alert cluster` had already upgraded
+  the high/critical Python and Overwatch packages, including the newer
+  `jupyter-server` critical floor `2.20.0`.
+- This closeout adds `scripts/assert_dependabot_advisories.py`, which consumes a
+  live Dependabot JSON export or fetches alerts directly with `gh`, then fails if
+  any present high/critical package is below the live patched floor.
+- This closeout also adds a uv constraint for `transformers>=4.57.3,<4.58.0` and
+  re-locks `transformers` from `5.12.1` back to `4.57.6`. There was no reviewed
+  exception for a 5.x Transformers window, and the main-merge plan explicitly
+  requires the `<4.58.0` cap.
+- No `[tool.uv].override-dependencies` entry was used.
+- `npm --prefix src/esper/karn/overwatch/web audit --audit-level=high` reports
+  `found 0 vulnerabilities`.
+
+Live advisory disposition:
+
+| # | ecosystem | package | severity | GHSA | current | first patched | manifest | disposition |
+|---|-----------|---------|----------|------|---------|---------------|----------|-------------|
+| 128 | pip | jupyter-server | critical | GHSA-fcw5-x6j4-ccmp | 2.20.0 | 2.20.0 | uv.lock | patched |
+| 124 | pip | starlette | high | GHSA-82w8-qh3p-5jfq | 1.3.1 | 1.3.1 | uv.lock | patched |
+| 121 | pip | tornado | high | GHSA-mgf9-4vpg-hj56 | 6.5.7 | 6.5.6 | uv.lock | patched |
+| 120 | pip | tornado | high | GHSA-3x9g-8vmp-wqvf | 6.5.7 | 6.5.6 | uv.lock | patched |
+| 119 | pip | starlette | high | GHSA-wqp7-x3pw-xc5r | 1.3.1 | 1.1.0 | uv.lock | patched |
+| 117 | pip | cryptography | high | GHSA-537c-gmf6-5ccf | 49.0.0 | 48.0.1 | uv.lock | patched |
+| 106 | npm | vite | high | GHSA-fx2h-pf6j-xcff | 7.3.5 | 7.3.5 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 104 | pip | python-multipart | high | GHSA-5rvq-cxj2-64vf | 0.0.32 | 0.0.30 | uv.lock | patched |
+| 100 | pip | pyjwt | high | GHSA-xgmm-8j9v-c9wx | 2.13.0 | 2.13.0 | uv.lock | patched |
+| 93 | pip | urllib3 | high | GHSA-38jv-5279-wg99 | 2.7.0 | 2.6.3 | uv.lock | patched |
+| 83 | pip | urllib3 | high | GHSA-2xpw-w6gg-jr37 | 2.7.0 | 2.6.0 | uv.lock | patched |
+| 82 | pip | urllib3 | high | GHSA-gm62-xv2j-4w53 | 2.7.0 | 2.6.0 | uv.lock | patched |
+| 78 | npm | vitest | critical | GHSA-5xrq-8626-4rwp | 4.1.9 | 4.1.0 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 77 | pip | pyarrow | high | GHSA-rgxp-2hwp-jwgg | 24.0.0 | 23.0.1 | uv.lock | patched |
+| 71 | npm | js-cookie | high | GHSA-qjx8-664m-686j | 3.0.8 | 3.0.7 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 69 | pip | urllib3 | high | GHSA-qccp-gfcp-xxvc | 2.7.0 | 2.7.0 | uv.lock | patched |
+| 67 | pip | GitPython | high | GHSA-mv93-w799-cj2w | 3.1.50 | 3.1.50 | uv.lock | patched |
+| 64 | pip | GitPython | high | GHSA-v87r-6q3f-2j67 | 3.1.50 | 3.1.49 | uv.lock | patched |
+| 63 | pip | jupyterlab | high | GHSA-mqcg-5x36-vfcg | 4.6.0 | 4.5.7 | uv.lock | patched |
+| 62 | pip | python-multipart | high | GHSA-pp6c-gr5w-3c5g | 0.0.32 | 0.0.27 | uv.lock | patched |
+| 61 | pip | notebook | high | GHSA-mqcg-5x36-vfcg | 7.6.0 | 7.5.6 | uv.lock | patched |
+| 60 | pip | GitPython | high | GHSA-7545-fcxq-7j24 | 3.1.50 | 3.1.48 | uv.lock | patched |
+| 59 | pip | mistune | high | GHSA-8mp2-v27r-99xp | 3.2.1 | 3.2.1 | uv.lock | patched |
+| 58 | pip | jupyterlab | high | GHSA-37w4-hwhx-4rc4 | 4.6.0 | 4.5.7 | uv.lock | patched |
+| 57 | pip | jupyter-server | high | GHSA-5mrq-x3x5-8v8f | 2.20.0 | 2.18.0 | uv.lock | patched |
+| 56 | pip | jupyter-server | high | GHSA-24qx-w28j-9m6p | 2.20.0 | 2.18.0 | uv.lock | patched |
+| 55 | pip | jupyter-server | high | GHSA-5789-5fc7-67v3 | 2.20.0 | 2.18.0 | uv.lock | patched |
+| 51 | pip | pillow | high | GHSA-pwv6-vv43-88gr | 12.2.0 | 12.2.0 | uv.lock | patched |
+| 49 | pip | jupyterlab | high | GHSA-rch3-82jr-f9w9 | 4.6.0 | 4.5.7 | uv.lock | patched |
+| 48 | pip | notebook | high | GHSA-rch3-82jr-f9w9 | 7.6.0 | 7.5.6 | uv.lock | patched |
+| 47 | pip | GitPython | high | GHSA-x2qx-6953-8485 | 3.1.50 | 3.1.47 | uv.lock | patched |
+| 46 | pip | GitPython | high | GHSA-rpm5-65cw-6hj4 | 3.1.50 | 3.1.47 | uv.lock | patched |
+| 40 | pip | pillow | high | GHSA-whj4-6x5x-4v2j | 12.2.0 | 12.2.0 | uv.lock | patched |
+| 36 | npm | vite | high | GHSA-p9ff-h696-f583 | 7.3.5 | 7.3.2 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 35 | npm | vite | high | GHSA-v2wj-q39q-566r | 7.3.5 | 7.3.2 | src/esper/karn/overwatch/web/package-lock.json | patched |
+| 12 | npm | minimatch | high | GHSA-7r86-cg39-jmmj | 9.0.9 | 9.0.7 | src/esper/karn/overwatch/web/package-lock.json | patched |
+
+Verification:
+
+- `uv sync --group dev --extra dashboard --extra wandb` -> resolved 208
+  packages and installed the optional dashboard/wandb packages needed for the
+  verification environment.
+- `uv run python scripts/assert_dependabot_advisories.py --alerts-json /tmp/esper-lite-dependabot-alerts.json`
+  -> `HIGH-CRITICAL-DEPENDABOT-FLOORS-OK`.
+- `uv run python scripts/assert_dependabot_advisories.py --fetch`
+  -> `HIGH-CRITICAL-DEPENDABOT-FLOORS-OK`.
+- `uv run pytest -m "not slow and not stress" -q` -> 5255 passed, 5 skipped,
+  26 deselected.
+- `npm --prefix src/esper/karn/overwatch/web audit --audit-level=high` ->
+  found 0 vulnerabilities.
+- `npm --prefix src/esper/karn/overwatch/web test -- --run` -> 20 test files
+  passed, 300 tests passed.
+- `npm --prefix src/esper/karn/overwatch/web run build` -> passed.
+- `uv run ruff check src/ tests/` -> passed.
+- `uv run ruff check scripts/assert_dependabot_advisories.py` -> passed.
+- `python3 -m py_compile scripts/assert_dependabot_advisories.py` -> passed.
+- `uv run python scripts/lint_leyline_types.py` -> stale whitelist entries 0.
+- `uv run python scripts/lint_defensive_patterns.py` -> violations 0.
+- `uv run python scripts/lint_gpu_sync.py` -> violations 0.
+- `MYPYPATH=src uv run mypy -p esper` -> success, 214 source files.
+- `git diff --check` -> passed.
+
+Filigree outcome:
+
+- `esper-lite-d289d208ac` closed.
+- `esper-lite-569292a32b` newly unblocked at dependency closeout time; the
+  2026-06-21 reconciliation below later confirmed the original `0.1.1 -> main`
+  integration had already completed through PR #111.
+
+## 2026-06-21 Main-Merge Reconciliation
+
+Filigree task `esper-lite-569292a32b` was reclaimed after dependency triage and
+checked against live Git/GitHub state before any mainline mutation. The original
+`0.1.1 -> main` work had already completed:
+
+- GitHub PR #111, "Release 0.2.0: merge 0.1.1 -> main", is merged.
+- PR #111 merge commit: `d57ecf6577dcaadb75a5013c7b1435b9f6c3110b`.
+- PR #111 merged at: 2026-06-19T03:07:55Z.
+- Current `origin/main`: `f80896771dafbb1db26c07c44bdeee3c4454e246`.
+- Current `origin/main` contains the PR #111 release commit.
+- `origin/0.1.1` is absent.
+- Local `backup/0.1.1-pre-p01` is not a valid source: it is behind `main` and
+  still contains the old `var_returns > 1e-8` EV branch.
+
+Outcome:
+
+- The main-merge plan moved to
+  `docs/plans/completed/2026-06-18-main-merge-integration-plan.md` as historical
+  execution record, with a warning not to replay the stale commands.
+- `esper-lite-569292a32b` is closed as reconciled/completed against PR #111.
+- Follow-up task `esper-lite-224fdba503` tracks the real remaining default-branch
+  risk: landing or deliberately splitting the `0.3.0` post-merge closeout line.
+  At reconciliation time, local `0.3.0` was 9 commits ahead of `origin/main`,
+  and `origin/0.3.0` was at `ddd63e37` without the final four local closeout
+  commits.
