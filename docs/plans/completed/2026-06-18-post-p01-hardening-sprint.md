@@ -4,9 +4,9 @@
 # Plan Metadata
 id: post-p01-hardening-sprint
 title: Post-P0-1 Hardening & Integration Sprint
-type: ready
+type: completed
 created: 2026-06-18
-updated: 2026-06-18
+updated: 2026-06-21
 owner: john
 
 # Prioritization
@@ -38,9 +38,11 @@ blocks: []
 
 # Status
 status_notes: >
-  Umbrella authored 2026-06-18. Child design specs for items (1) and (2) drafted;
-  child TDD plans pending. Dependency triage complete (R3, inlined below).
-percent_complete: 5
+  Completed 2026-06-21. P-EV-RECAL, EV telemetry robustness, dependency
+  triage, the original 0.1.1 main integration, and the follow-up 0.3.0 landing
+  path all closed in Filigree. PR #111 landed the 0.1.1 release to main at
+  d57ecf65; PR #114 landed the 0.3.0 closeout line to main at b1d558fe.
+percent_complete: 100
 
 # Expert Review (REQUIRED before promotion to ready)
 # Child plans carry their own sign-offs (see Child Artifacts). The entries below
@@ -111,8 +113,8 @@ story, and clear the dependency surface — in one coordinated window.
 
 | Item | Spec | Plan |
 |------|------|------|
-| (1) EV-telemetry robustness | [docs/superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md](../../superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md) | [docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md](../completed/2026-06-18-ev-telemetry-robustness-plan.md) |
-| (2) 0.1.1 → main merge | [docs/superpowers/specs/2026-06-18-main-merge-integration-design.md](../../superpowers/specs/2026-06-18-main-merge-integration-design.md) | [docs/plans/completed/2026-06-18-main-merge-integration-plan.md](../completed/2026-06-18-main-merge-integration-plan.md) |
+| (1) EV-telemetry robustness | [docs/superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md](../../superpowers/specs/2026-06-18-ev-telemetry-robustness-design.md) | [docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md](2026-06-18-ev-telemetry-robustness-plan.md) |
+| (2) 0.1.1 → main merge | [docs/superpowers/specs/2026-06-18-main-merge-integration-design.md](../../superpowers/specs/2026-06-18-main-merge-integration-design.md) | [docs/plans/completed/2026-06-18-main-merge-integration-plan.md](2026-06-18-main-merge-integration-plan.md) |
 | (3) Dependency vuln triage | *(inline below — no separate spec/plan)* | *(inline below)* |
 
 **Child sign-offs (for reference; do not cover this umbrella's unique decisions):**
@@ -412,8 +414,8 @@ Closeout changes:
   `minimatch` are at or above the live patched floors.
 
 See the 2026-06-20 dependency triage section in
-`docs/plans/ready/2026-06-18-post-p01-hardening-sprint-defect-report.md` for the
-full advisory disposition table and command results.
+`docs/plans/completed/2026-06-18-post-p01-hardening-sprint-defect-report.md`
+for the full advisory disposition table and command results.
 
 #### 3.7 Main-merge reconciliation (2026-06-21)
 
@@ -424,11 +426,11 @@ reconciliation rather than a pending fast-forward. GitHub PR #111,
 commit. `origin/0.1.1` is gone, and `backup/0.1.1-pre-p01` is explicitly not a
 valid source because it is behind `main` and still carries the old EV branch.
 
-The original 0.1.1 merge plan is now historical/completed. The still-open
-mainline risk is the later `0.3.0` follow-up line: current `0.3.0` is 9 commits
-ahead of `origin/main`, while `origin/0.3.0` is at `ddd63e37` and lacks the final
-local closeout commits. That landing/splitting work is tracked separately by
-Filigree task `esper-lite-224fdba503`.
+The original 0.1.1 merge plan is now historical/completed. The later `0.3.0`
+follow-up line was tracked separately by Filigree task `esper-lite-224fdba503`
+and landed through GitHub PR #114 on 2026-06-21. The PR merged `0.3.0` through
+head `3ad2e897` into `main` at merge commit `b1d558fe`, after GitHub checks
+passed.
 
 ## Sequencing & Dependencies
 

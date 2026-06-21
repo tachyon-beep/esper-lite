@@ -86,9 +86,9 @@ reviewed_by:
 - `docs/plans/planning/2026-06-15-ppo-stability-oracle-sandbox.md`
 - `docs/plans/planning/2026-06-13-morphogenesis-governor-integrity.md`
 - `docs/plans/planning/2026-06-15-proof-baseline-controls.md`
-- `docs/plans/ready/2026-06-18-post-p01-hardening-sprint.md`
-- `docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md`
-- `docs/plans/planning/2026-06-18-main-merge-integration-plan.md`
+- `docs/plans/completed/2026-06-18-post-p01-hardening-sprint.md`
+- `docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md`
+- `docs/plans/completed/2026-06-18-main-merge-integration-plan.md`
 
 ## Live Intake Snapshot
 
@@ -365,7 +365,7 @@ Acceptance:
 - Filigree CLI/MCP
 - `docs/coord/PLAN_TRACKER.md`
 - `docs/plans/README.md`
-- `docs/plans/ready/2026-06-18-post-p01-hardening-sprint-defect-report.md`
+- `docs/plans/completed/2026-06-18-post-p01-hardening-sprint-defect-report.md`
 - `docs/plans/planning/2026-06-19-correctness-defect-burndown-strategy.md`
 
 **Steps:**
@@ -398,13 +398,14 @@ Acceptance:
 **2026-06-19 outcome:** Executed. Live Filigree now has `P-EV-RECAL`
 (`esper-lite-26e96f0578`) and dependency triage (`esper-lite-d289d208ac`) as
 ready P1 work; EV robustness (`esper-lite-a20b180e26`) and main merge
-(`esper-lite-569292a32b`) are correctly dependency-blocked; the remaining
-open Sanctum pre-ready crash behavior is tracked as `esper-lite-440748cb34`.
+(`esper-lite-569292a32b`) are correctly dependency-blocked. The remaining
+Sanctum pre-ready crash behavior was tracked and later closed as
+`esper-lite-440748cb34`.
 
 ### Package B: Make EV Preflight And Consumers Executable
 
 **Files:**
-- `docs/plans/ready/2026-06-18-ev-telemetry-robustness-plan.md`
+- `docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md`
 - `src/esper/karn/mcp/views.py`
 - `src/esper/simic/telemetry/anomaly_detector.py`
 - `src/esper/simic/training/ppo_coordinator.py`

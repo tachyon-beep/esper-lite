@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-21 (Main-merge reconciliation closed `esper-lite-569292a32b`: live GitHub shows PR #111, "Release 0.2.0: merge 0.1.1 -> main", merged on 2026-06-19 at `d57ecf65`, and current `origin/main` is `f8089677` with that release commit in history. The old `origin/0.1.1` source branch no longer exists, and local `backup/0.1.1-pre-p01` is not a valid source because it is behind `main` and still carries the old EV branch. The original 0.1.1 integration plan is therefore historical/completed and moved to `docs/plans/completed/2026-06-18-main-merge-integration-plan.md`. Separate follow-up task `esper-lite-224fdba503` now tracks landing or deliberately splitting the `0.3.0` post-merge closeout line, which remains 9 commits ahead of `origin/main` and contains the dependency-triage, EV-closeout, and Weft parity hardening commits.)
+**Last Updated:** 2026-06-21 (Post-P0-1 Hardening Sprint closeout: PR #111, "Release 0.2.0: merge 0.1.1 -> main", merged on 2026-06-19 at `d57ecf65`; PR #114, "Land 0.3.0 post-merge closeout line", merged on 2026-06-21 at `b1d558fe` after the `0.3.0` head advanced to `3ad2e897`. Filigree children `esper-lite-26e96f0578`, `esper-lite-a20b180e26`, `esper-lite-d289d208ac`, `esper-lite-569292a32b`, and `esper-lite-224fdba503` are closed. The umbrella plan and defect report moved to `docs/plans/completed/`.)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -125,13 +125,13 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | Status | Count | Notes |
 |--------|-------|-------|
 | 🔴 Critical | 0 | New governor-integrity issues are high-priority proof blockers, not active Tier 0 mainline breakage |
-| Completed | 18 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) + green-state-recovery + p1-stability-batch-1 |
-| Ready | 11 | Implementation-ready plans after moving completed recovery/stability plans out of `ready/` and demoting main-merge integration back to planning |
+| Completed | 19 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) + green-state-recovery + p1-stability-batch-1 + post-p01-hardening-sprint |
+| Ready | 10 | Implementation-ready plans after moving completed recovery/stability plans and post-P0-1 closeout plans out of `ready/` |
 | In Progress | 2 | phase3-tinystories (85%); weft-phase-a-ci-migration (Phase A shadow-CI) |
-| Planning | 13 | Active design workspaces, including correctness defect burndown, main-merge integration, correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
+| Planning | 12 | Active design workspaces, including correctness defect burndown, correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
 | Concept | 4 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals, gil-throughput-profiler |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
-| **Total Active** | **34** |
+| **Total Active** | **33** |
 
 ---
 
@@ -163,7 +163,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
 | blueprint-compiler | Blueprint Compiler (Phase 3 only) | ready | high | XL | medium | 0% - Correctly deferred until entropy stable |
 | training-perf-master | Training Pipeline Performance (Simic+Tolaria) | completed | high | L | medium | EXECUTED 2026-06-14 (→ completed/). Phase 0 (allocator/TF32/fragprobe), Phase 1 all 6 incl. CRITICAL-1 BLOCKER (FP32 masked-logit seam + BF16 symmetry, V0 joint_ratio<1e-3 GPU-validated) + sync folds, Phase 2 (FRAGMETRIC telemetry + stream pool + fenced del; CUDA_LAUNCH_BLOCKING clean, bit-identical val_acc), Phase 3 (DYN + pinned SNAP; GATE compile-works-without-sanctum validated). Deliberate calls: P2-RESET NO-GO (retries=0/ooms=0, frag cured), P3-HOST off (gated on RESET), P3-CLONE deferred (esper-lite-472b6477d2). Also deferred: op-sampler (esper-lite-05b4113bc1), carry-clamp (esper-lite-9827eb6bfe). Pending: real-run A/B wall-clock + TUI compile narrowing |
-| post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | sprint-umbrella | high | M | medium | Filigree epic `esper-lite-5e6ff9f907`; children: P-EV-RECAL `esper-lite-26e96f0578` closed, EV robustness `esper-lite-a20b180e26` closed, dependency triage `esper-lite-d289d208ac` closed, original 0.1.1 main merge `esper-lite-569292a32b` reconciled/closed from PR #111, and `0.3.0` follow-up landing now tracked by `esper-lite-224fdba503` |
+| post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | completed | high | M | medium | Filigree epic `esper-lite-5e6ff9f907` closed after all children closed: P-EV-RECAL `esper-lite-26e96f0578`, EV robustness `esper-lite-a20b180e26`, dependency triage `esper-lite-d289d208ac`, original 0.1.1 main merge reconciliation `esper-lite-569292a32b`, and 0.3.0 closeout landing `esper-lite-224fdba503`. PR #111 landed 0.1.1 to main at `d57ecf65`; PR #114 landed 0.3.0 to main at `b1d558fe`. Plan moved to `docs/plans/completed/2026-06-18-post-p01-hardening-sprint.md` |
 | ev-telemetry-robustness | EV-Telemetry Robustness (low-return-variance artifact) | completed | high | M | medium | Filigree task `esper-lite-a20b180e26`; implemented after P-EV-RECAL `esper-lite-26e96f0578` exposed executable preflight fields. Robust-only gate: EV diagnostic-only; value collapse fires from `value_loss > 5.0 OR bellman_error > 5.0`; plan moved to `completed/` |
 | main-merge-integration | 0.1.1 → main Merge & Integration | completed | high | L | high | Live reconciliation found this already completed by GitHub PR #111 (`d57ecf65`, merged 2026-06-19) and present in `origin/main` at `f8089677`; historical plan moved to `docs/plans/completed/2026-06-18-main-merge-integration-plan.md`; post-merge `0.3.0` branch landing is separate task `esper-lite-224fdba503` |
 | weft-phase-a-ci-migration | Weft Phase A CI Migration | in-progress | high | M | medium | Phase A merged to `main` via PR #110 (f8089677): non-blocking `weft-shadow` CI job + `weft_parity.py`/`ci_weft_parity.py` parity report. Post-merge hardening landed: readiness now gates on homegrown linter exit codes + Loomweave index freshness (`runs.analyzed_at_commit` vs HEAD); defensive/leyline checks carry `comparison: "deferred"` (no Wardline/Loomweave equivalent yet). Homegrown gates stay blocking; no gate retires until a real comparison shows zero homegrown-only burn-in evidence |
@@ -207,6 +207,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 |----|-------|------|--------|----------|
 | green-state-recovery-2026-06-12 | Green State Recovery Program | ✅ completed | PRs #52, #72, #78-#88 merged; recovery bugs closed | `docs/plans/completed/2026-06-12-green-state-recovery.md` |
 | p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | ✅ completed | Six high-risk PPO/telemetry correctness bugs closed | `docs/plans/completed/2026-06-12-p1-stability-batch-1.md` |
+| post-p01-hardening-sprint | Post-P0-1 Hardening & Integration Sprint | ✅ completed | P-EV-RECAL, EV robustness, dependency triage, 0.1.1 main integration, and 0.3.0 closeout landing completed through PR #111 and PR #114 | `docs/plans/completed/2026-06-18-post-p01-hardening-sprint.md` |
 | op-entropy-collapse | Op Head Entropy Collapse Fix | ✅ completed | Two-pronged fix: probability floors + entropy floors. Jan 9-11 sprint. | `docs/plans/completed/` |
 | entropy-collapse | Per-Head Entropy Collapse Fix | ✅ completed | All 7 tasks, tests passing | `docs/plans/completed/` |
 | holding-warning | SET_ALPHA_TARGET Turntabling Fix | ✅ completed | Committed 2026-01-08, DRL signed | `docs/plans/completed/` |
