@@ -725,3 +725,146 @@ class TestTrainMainArgumentErrors:
         with pytest.raises(SystemExit) as exc_info:
             train.main()
         assert exc_info.value.code == 2
+
+
+class TestTrainMainSanctumCrashHandling:
+    def test_pre_ready_training_crash_exits_before_sanctum_run(self, monkeypatch):
+        import sys
+
+        import esper.scripts.train as train
+
+        class FakeStdout:
+            def __init__(self) -> None:
+                self.messages: list[str] = []
+
+            def isatty(self) -> bool:
+                return True
+
+            def write(self, value: str) -> int:
+                self.messages.append(value)
+                return len(value)
+
+            def flush(self) -> None:
+                return None
+
+        class FakeHub:
+            def __init__(self) -> None:
+                self.backends: list[object] = []
+                self.closed = False
+
+            def add_backend(self, backend: object) -> None:
+                self.backends.append(backend)
+
+            def close(self) -> None:
+                self.closed = True
+
+            def get_health_snapshot(self) -> dict[str, object]:
+                backend_stats = {
+                    backend.__class__.__name__: {"dropped_events": 0}
+                    for backend in self.backends
+                }
+                return {
+                    "status": "healthy",
+                    "dropped_events": 0,
+                    "hub_dropped_events": 0,
+                    "backend_dropped_events": 0,
+                    "backend_stats": backend_stats,
+                }
+
+        class FakeEvent:
+            def __init__(self) -> None:
+                self._set = False
+
+            def set(self) -> None:
+                self._set = True
+
+            def is_set(self) -> bool:
+                return self._set
+
+            def wait(self, timeout: float | None = None) -> bool:
+                return self._set
+
+        class FakeThread:
+            def __init__(self, *, target, daemon: bool) -> None:
+                self._target = target
+                self.daemon = daemon
+                self._alive = False
+
+            def start(self) -> None:
+                self._alive = True
+                self._target()
+                self._alive = False
+
+            def is_alive(self) -> bool:
+                return self._alive
+
+            def join(self) -> None:
+                return None
+
+        class FakeSanctumBackend:
+            def __init__(self, *, num_envs: int) -> None:
+                self.num_envs = num_envs
+
+        sanctum_init_calls: list[object] = []
+        sanctum_run_calls: list[object] = []
+
+        class FakeSanctumApp:
+            def __init__(self, **kwargs: object) -> None:
+                self.kwargs = kwargs
+                sanctum_init_calls.append(kwargs)
+
+            def run(self) -> None:
+                sanctum_run_calls.append(self.kwargs)
+
+        class FakeKarnCollector:
+            def __init__(self) -> None:
+                self.store = object()
+
+        def crashing_train_ppo_vectorized(**kwargs: object) -> None:
+            assert kwargs["ready_event"] is not None
+            assert kwargs["shutdown_event"] is not None
+            raise RuntimeError("pre-ready training crash")
+
+        hub = FakeHub()
+        monkeypatch.setattr(train, "get_hub", lambda: hub)
+        monkeypatch.setattr(train.threading, "Event", FakeEvent)
+        monkeypatch.setattr(train.threading, "Thread", FakeThread)
+
+        import esper.karn as karn
+        import esper.karn.sanctum as sanctum
+        import esper.simic.training.vectorized as vectorized
+
+        monkeypatch.setattr(karn, "get_collector", lambda: FakeKarnCollector())
+        monkeypatch.setattr(sanctum, "SanctumBackend", FakeSanctumBackend)
+        monkeypatch.setattr(sanctum, "SanctumApp", FakeSanctumApp)
+        monkeypatch.setattr(vectorized, "train_ppo_vectorized", crashing_train_ppo_vectorized)
+        monkeypatch.setattr(sys, "stdout", FakeStdout())
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "esper.scripts.train",
+                "ppo",
+                "--sanctum",
+                "--preset",
+                "cifar_minimal",
+                "--task",
+                "cifar_minimal",
+                "--rounds",
+                "1",
+                "--envs",
+                "1",
+                "--episode-length",
+                "2",
+                "--compile-mode",
+                "off",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            train.main()
+
+        assert exc_info.value.code == 1
+        assert hub.closed is True
+        assert sanctum_init_calls == []
+        assert sanctum_run_calls == []

@@ -1189,8 +1189,10 @@ def main() -> None:
             if dataloader_ready_event is not None:
                 print("Waiting for DataLoader workers to initialize...")
                 dataloader_ready_event.wait(timeout=60.0)  # 60s timeout for slow datasets
+                _exit_nonzero_if_training_failed(training_error)
                 if not dataloader_ready_event.is_set():
                     print("WARNING: DataLoader initialization timed out, starting TUI anyway")
+            _exit_nonzero_if_training_failed(training_error)
 
             # Run Sanctum TUI in main thread (blocks until user quits)
             # Pass training_thread and shutdown_event so TUI can signal graceful shutdown
