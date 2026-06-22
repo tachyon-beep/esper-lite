@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -22,6 +22,7 @@ from esper.leyline import (
     AlphaSpeedAction,
     AlphaTargetAction,
     BlueprintAction,
+    DEFAULT_MIN_BLENDING_EPOCHS,
     FactoredAction,
     GerminationStyle,
     InjectionSpec,
@@ -33,6 +34,17 @@ from esper.leyline import (
     TEMPO_TO_EPOCHS,
     TempoAction,
 )
+from esper.simic.rewards import SeedInfo
+from esper.simic.training.handlers import (
+    AlphaTargetParams,
+    GerminateParams,
+    HandlerContext,
+    PruneParams,
+    get_handler,
+)
+from esper.simic.training.parallel_env_state import ParallelEnvState
+from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
+from esper.tolaria import TolariaGovernor
 
 ORACLE_CI_SLOT_ID = "r0c1"
 ORACLE_CI_FIXTURE_ID = "oracle-ci-cnn-v1"
@@ -47,6 +59,33 @@ class OracleActionResult:
     seed_counter: int
     target_slot: str
     op: LifecycleOp
+
+
+@dataclass(frozen=True, slots=True)
+class OracleStepResult:
+    """Trace row for one oracle schedule step."""
+
+    step_id: str
+    op: LifecycleOp
+    expected_success: bool
+    success: bool
+    stage_before: str
+    stage_after: str
+    mask_checked: bool
+    governor_checked: bool
+    governor_approved: bool | None
+    handler_called: bool
+    blocked_by: str | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class OracleRunResult:
+    """Result for a complete oracle schedule execution."""
+
+    schedule_identity: str
+    success: bool
+    steps: tuple[OracleStepResult, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +227,11 @@ class OracleSandboxHost(nn.Module):
         raise ValueError(f"Unknown segment: {segment}")
 
 
+class _OracleSignalTracker:
+    def reset(self) -> None:
+        return
+
+
 def _oracle_action(
     *,
     op: LifecycleOp,
@@ -292,6 +336,408 @@ def build_oracle_ci_fixture(
     )
 
 
+def _slot_for(model: SlottedHostProtocol, slot_id: str) -> SeedSlotProtocol:
+    return cast(SeedSlotProtocol, model.seed_slots[slot_id])
+
+
+def _slot_stage_name(model: SlottedHostProtocol, slot_id: str) -> str:
+    slot = _slot_for(model, slot_id)
+    state = slot.state
+    if state is None:
+        return "DORMANT"
+    return state.stage.name
+
+
+def _prepare_oracle_step_evidence(
+    *,
+    fixture: OracleSandboxFixture,
+    action: FactoredAction,
+    val_accuracy: float,
+    max_epochs: int,
+) -> None:
+    target_slot, slot_is_enabled = _resolve_oracle_target_slot(
+        action.slot_idx,
+        enabled_slots=list(fixture.enabled_slots),
+        slot_config=fixture.slot_config,
+    )
+    if not slot_is_enabled:
+        return
+
+    slot = _slot_for(fixture.model, target_slot)
+    state = slot.state
+    if state is None:
+        return
+
+    if action.op == LifecycleOp.ADVANCE and state.stage == SeedStage.TRAINING:
+        state.metrics.record_accuracy(val_accuracy - 1.0)
+        for _ in range(DEFAULT_MIN_BLENDING_EPOCHS - 1):
+            state.metrics.record_accuracy(val_accuracy)
+        state.metrics.seed_gradient_norm_ratio = 1.0
+        state.metrics.counterfactual_contribution = max(
+            state.metrics.counterfactual_contribution or 0.0,
+            2.0,
+        )
+        state.sync_telemetry(
+            gradient_norm=1.0,
+            gradient_health=1.0,
+            has_vanishing=False,
+            has_exploding=False,
+            epoch=state.metrics.epochs_total,
+            max_epochs=max_epochs,
+        )
+
+    if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.ADVANCE):
+        while (
+            state.stage == SeedStage.BLENDING
+            and state.alpha_controller.alpha_mode != AlphaMode.HOLD
+        ):
+            state.metrics.record_accuracy(val_accuracy)
+            state.sync_telemetry(
+                gradient_norm=1.0,
+                gradient_health=1.0,
+                has_vanishing=False,
+                has_exploding=False,
+                epoch=state.metrics.epochs_total,
+                max_epochs=max_epochs,
+            )
+            slot.step_epoch()
+
+    if action.op == LifecycleOp.ADVANCE and state.stage == SeedStage.BLENDING:
+        while state.metrics.epochs_in_current_stage < DEFAULT_MIN_BLENDING_EPOCHS:
+            state.metrics.record_accuracy(val_accuracy)
+            state.sync_telemetry(
+                gradient_norm=1.0,
+                gradient_health=1.0,
+                has_vanishing=False,
+                has_exploding=False,
+                epoch=state.metrics.epochs_total,
+                max_epochs=max_epochs,
+            )
+
+    if action.op == LifecycleOp.FOSSILIZE and state.stage == SeedStage.HOLDING:
+        state.metrics.counterfactual_contribution = 2.0
+        state.metrics.record_accuracy(val_accuracy)
+        state.sync_telemetry(
+            gradient_norm=1.0,
+            gradient_health=1.0,
+            has_vanishing=False,
+            has_exploding=False,
+            epoch=state.metrics.epochs_total,
+            max_epochs=max_epochs,
+        )
+
+
+def _action_allowed_by_masks(
+    *,
+    action: FactoredAction,
+    masks: dict[str, torch.Tensor],
+) -> bool:
+    if not bool(masks["slot"][action.slot_idx]):
+        return False
+    if not bool(masks["op"][action.op.value]):
+        return False
+    if not bool(masks["slot_by_op"][action.op.value, action.slot_idx]):
+        return False
+    if action.op == LifecycleOp.GERMINATE:
+        return (
+            bool(masks["blueprint"][action.blueprint.value])
+            and bool(masks["style"][action.style.value])
+            and bool(masks["tempo"][action.tempo.value])
+        )
+    if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE):
+        return (
+            bool(masks["style"][action.style.value])
+            and bool(masks["alpha_target"][action.alpha_target.value])
+            and bool(masks["alpha_speed"][action.alpha_speed.value])
+            and bool(masks["alpha_curve"][action.alpha_curve.value])
+        )
+    return True
+
+
+def _build_oracle_env_state(
+    *,
+    fixture: OracleSandboxFixture,
+    val_loss: float,
+    val_accuracy: float,
+) -> ParallelEnvState:
+    host_optimizer = torch.optim.SGD(fixture.model.parameters(), lr=0.0)
+    governor = TolariaGovernor(
+        model=fixture.model,
+        min_panics_before_rollback=1,
+    )
+    env_state = ParallelEnvState(
+        model=fixture.model,
+        host_optimizer=host_optimizer,
+        signal_tracker=cast(Any, _OracleSignalTracker()),
+        governor=governor,
+        env_device=fixture.inputs.device.type,
+    )
+    env_state.val_loss = val_loss
+    env_state.val_acc = val_accuracy
+    env_state.committed_val_acc = val_accuracy
+    env_state.escrow_credit = {slot_id: 0.0 for slot_id in fixture.enabled_slots}
+    env_state.prev_slot_alphas = {slot_id: 0.0 for slot_id in fixture.enabled_slots}
+    env_state.prev_slot_params = {slot_id: 0 for slot_id in fixture.enabled_slots}
+    return env_state
+
+
+def _oracle_seed_info(
+    *,
+    slot: SeedSlotProtocol,
+) -> SeedInfo | None:
+    seed_state = slot.state
+    contribution = (
+        seed_state.metrics.counterfactual_contribution
+        if seed_state is not None
+        else None
+    )
+    return SeedInfo.from_seed_state(
+        seed_state,
+        slot.active_seed_params,
+        counterfactual_total_improvement=contribution,
+    )
+
+
+def _oracle_fossilize_active_seed(model: SlottedHostProtocol, slot_id: str) -> bool:
+    if not model.has_active_seed_in_slot(slot_id):
+        return False
+    slot = _slot_for(model, slot_id)
+    seed_state = slot.state
+    if seed_state is None:
+        return False
+    if seed_state.stage != SeedStage.HOLDING:
+        return False
+    gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
+    if gate_result.passed:
+        slot.set_alpha(1.0)
+        return True
+    return False
+
+
+def _execute_oracle_handler(
+    *,
+    action: FactoredAction,
+    env_state: ParallelEnvState,
+    slot: SeedSlotProtocol,
+    target_slot: str,
+    epoch: int,
+    max_epochs: int,
+) -> bool:
+    handler_ctx = HandlerContext(
+        env_idx=0,
+        slot_id=target_slot,
+        env_state=env_state,
+        model=env_state.model,
+        slot=slot,
+        seed_state=slot.state,
+        epoch=epoch,
+        max_epochs=max_epochs,
+        episodes_completed=0,
+    )
+    handler = get_handler(action.op.value)
+    if action.op == LifecycleOp.GERMINATE:
+        result = handler(
+            handler_ctx,
+            GerminateParams(
+                blueprint_idx=action.blueprint.value,
+                style_idx=action.style.value,
+                tempo_idx=action.tempo.value,
+                alpha_target=action.alpha_target_value,
+            ),
+        )
+        return bool(result.success)
+    if action.op == LifecycleOp.FOSSILIZE:
+        result = handler(
+            handler_ctx,
+            _oracle_seed_info(slot=slot),
+            _oracle_fossilize_active_seed,
+        )
+        return bool(result.success)
+    if action.op == LifecycleOp.PRUNE:
+        result = handler(
+            handler_ctx,
+            PruneParams(
+                alpha_speed_idx=action.alpha_speed.value,
+                alpha_curve_idx=action.alpha_curve.value,
+            ),
+            _oracle_seed_info(slot=slot),
+        )
+        return bool(result.success)
+    if action.op == LifecycleOp.SET_ALPHA_TARGET:
+        result = handler(
+            handler_ctx,
+            AlphaTargetParams(
+                alpha_target_idx=action.alpha_target.value,
+                alpha_speed_idx=action.alpha_speed.value,
+                alpha_curve_idx=action.alpha_curve.value,
+                style_idx=action.style.value,
+            ),
+        )
+        return bool(result.success)
+    result = handler(handler_ctx)
+    return bool(result.success)
+
+
+def run_oracle_schedule(
+    *,
+    schedule: OracleSchedule,
+    fixture: OracleSandboxFixture,
+    val_loss: float = 0.5,
+    val_accuracy: float = 2.0,
+    max_epochs: int = 32,
+) -> OracleRunResult:
+    """Run an oracle schedule through masks, governor preflight, and handlers."""
+    env_state = _build_oracle_env_state(
+        fixture=fixture,
+        val_loss=val_loss,
+        val_accuracy=val_accuracy,
+    )
+    step_results: list[OracleStepResult] = []
+
+    for epoch, schedule_step in enumerate(schedule.steps, start=1):
+        action = schedule_step.action
+        target_slot, slot_is_enabled = _resolve_oracle_target_slot(
+            action.slot_idx,
+            enabled_slots=list(fixture.enabled_slots),
+            slot_config=fixture.slot_config,
+        )
+        if not slot_is_enabled:
+            stage_before = "DORMANT"
+        else:
+            stage_before = _slot_stage_name(fixture.model, target_slot)
+
+        _prepare_oracle_step_evidence(
+            fixture=fixture,
+            action=action,
+            val_accuracy=val_accuracy,
+            max_epochs=max_epochs,
+        )
+        if slot_is_enabled:
+            stage_before = _slot_stage_name(fixture.model, target_slot)
+
+        slot_reports = fixture.model.get_slot_reports()
+        slot_states = build_slot_states(slot_reports, list(fixture.enabled_slots))
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=list(fixture.enabled_slots),
+            slot_config=fixture.slot_config,
+        )
+        mask_allowed = _action_allowed_by_masks(action=action, masks=masks)
+        if not mask_allowed:
+            step_results.append(OracleStepResult(
+                step_id=schedule_step.step_id,
+                op=action.op,
+                expected_success=schedule_step.expect_success,
+                success=False,
+                stage_before=stage_before,
+                stage_after=(
+                    _slot_stage_name(fixture.model, target_slot)
+                    if slot_is_enabled
+                    else "DORMANT"
+                ),
+                mask_checked=True,
+                governor_checked=False,
+                governor_approved=None,
+                handler_called=False,
+                blocked_by="mask",
+                detail="action masked",
+            ))
+            if schedule_step.expect_success:
+                break
+            continue
+
+        governor_checked = action.op != LifecycleOp.WAIT
+        governor_approved: bool | None = None
+        if governor_checked:
+            slot = _slot_for(fixture.model, target_slot)
+            seed_state = slot.state
+            preflight = env_state.governor.preflight_lifecycle_mutation(
+                operation=action.op,
+                slot_id=target_slot,
+                blueprint_id=(
+                    action.blueprint.to_blueprint_id()
+                    if action.op == LifecycleOp.GERMINATE
+                    else None
+                ),
+                alpha_target=(
+                    action.alpha_target_value
+                    if action.op == LifecycleOp.SET_ALPHA_TARGET
+                    else None
+                ),
+                alpha_speed_steps=(
+                    action.alpha_speed_steps
+                    if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE)
+                    else None
+                ),
+                alpha_curve=(
+                    action.alpha_curve.name
+                    if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE)
+                    else None
+                ),
+                val_loss=val_loss,
+                val_accuracy=val_accuracy,
+                seed_stage=seed_state.stage if seed_state is not None else None,
+                total_params=fixture.model.total_params,
+                effective_seed_params=float(slot.active_seed_params),
+                max_seeds=1,
+                active_seed_count=fixture.model.total_seeds(),
+                cooldown_epochs_remaining=0,
+                event_id=f"{schedule.identity}:{schedule_step.step_id}",
+            )
+            governor_approved = preflight.approved
+            if not preflight.approved:
+                step_results.append(OracleStepResult(
+                    step_id=schedule_step.step_id,
+                    op=action.op,
+                    expected_success=schedule_step.expect_success,
+                    success=False,
+                    stage_before=stage_before,
+                    stage_after=_slot_stage_name(fixture.model, target_slot),
+                    mask_checked=True,
+                    governor_checked=True,
+                    governor_approved=False,
+                    handler_called=False,
+                    blocked_by="governor",
+                    detail=preflight.reason,
+                ))
+                if schedule_step.expect_success:
+                    break
+                continue
+
+        slot = _slot_for(fixture.model, target_slot)
+        handler_success = _execute_oracle_handler(
+            action=action,
+            env_state=env_state,
+            slot=slot,
+            target_slot=target_slot,
+            epoch=epoch,
+            max_epochs=max_epochs,
+        )
+        stage_after = _slot_stage_name(fixture.model, target_slot)
+        step_results.append(OracleStepResult(
+            step_id=schedule_step.step_id,
+            op=action.op,
+            expected_success=schedule_step.expect_success,
+            success=handler_success,
+            stage_before=stage_before,
+            stage_after=stage_after,
+            mask_checked=True,
+            governor_checked=governor_checked,
+            governor_approved=governor_approved,
+            handler_called=True,
+            blocked_by=None if handler_success else "handler",
+        ))
+        if handler_success != schedule_step.expect_success:
+            break
+
+    run_success = all(step.success == step.expected_success for step in step_results)
+    return OracleRunResult(
+        schedule_identity=schedule.identity,
+        success=run_success and len(step_results) == len(schedule.steps),
+        steps=tuple(step_results),
+    )
+
+
 def _resolve_oracle_target_slot(
     slot_idx: int,
     *,
@@ -382,11 +828,14 @@ __all__ = [
     "ORACLE_CI_SLOT_ID",
     "ORACLE_PROOF_PROFILE",
     "OracleActionResult",
+    "OracleRunResult",
     "OracleSandboxFixture",
     "OracleSandboxHost",
     "OracleSchedule",
     "OracleScheduleStep",
+    "OracleStepResult",
     "apply_oracle_factored_action",
     "build_default_oracle_schedule",
     "build_oracle_ci_fixture",
+    "run_oracle_schedule",
 ]
