@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import torch
@@ -23,17 +24,24 @@ from esper.leyline import (
     AlphaTargetAction,
     BlueprintAction,
     DEFAULT_MIN_BLENDING_EPOCHS,
+    EpisodeOutcomePayload,
     FactoredAction,
     GerminationStyle,
     InjectionSpec,
     LifecycleOp,
+    MorphologyCausalLogPayload,
+    MorphologyCausalLogPhase,
     SeedSlotProtocol,
     SeedStage,
     SlottedHostProtocol,
     SlotConfig,
     TEMPO_TO_EPOCHS,
+    TelemetryEvent,
+    TelemetryEventType,
     TempoAction,
+    TrainingStartedPayload,
 )
+from esper.nissa.output import DirectoryOutput
 from esper.simic.rewards import SeedInfo
 from esper.simic.training.handlers import (
     AlphaTargetParams,
@@ -86,6 +94,7 @@ class OracleRunResult:
     schedule_identity: str
     success: bool
     steps: tuple[OracleStepResult, ...]
+    telemetry_dir: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +239,333 @@ class OracleSandboxHost(nn.Module):
 class _OracleSignalTracker:
     def reset(self) -> None:
         return
+
+
+def _oracle_schedule_hash(schedule: OracleSchedule) -> str:
+    return schedule.identity[-16:]
+
+
+def _oracle_action_id(
+    *,
+    schedule_step: OracleScheduleStep,
+    target_slot: str,
+    epoch: int,
+) -> str:
+    return (
+        f"oracle-b0-e{epoch}-env0-{target_slot}-op"
+        f"{schedule_step.action.op.value}-{schedule_step.step_id}"
+    )
+
+
+def _oracle_observation_hash(schedule_step: OracleScheduleStep) -> str:
+    payload = json.dumps(
+        schedule_step.to_manifest(),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"obs-{digest}"
+
+
+def _oracle_rng_seed(action_id: str) -> int:
+    return int(hashlib.sha256(action_id.encode("utf-8")).hexdigest()[:16], 16)
+
+
+def _emit_oracle_training_started(
+    *,
+    telemetry_output: DirectoryOutput,
+    schedule: OracleSchedule,
+    fixture: OracleSandboxFixture,
+    host_params: int,
+    max_epochs: int,
+) -> None:
+    device = fixture.inputs.device.type
+    telemetry_output.emit(TelemetryEvent(
+        event_id=f"{schedule.identity}:training-start",
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        group_id=ORACLE_PROOF_PROFILE,
+        message="Oracle sandbox training started",
+        data=TrainingStartedPayload(
+            n_envs=1,
+            max_epochs=max_epochs,
+            max_batches=1,
+            task=fixture.fixture_id,
+            host_params=host_params,
+            slot_ids=fixture.enabled_slots,
+            seed=0,
+            n_episodes=1,
+            lr=0.0,
+            clip_ratio=0.0,
+            entropy_coef=0.0,
+            param_budget=host_params,
+            policy_device=device,
+            env_devices=(device,),
+            reward_mode="oracle",
+            episode_id=schedule.identity,
+            proof_profile=ORACLE_PROOF_PROFILE,
+            proof_baseline_mode=ORACLE_PROOF_PROFILE,
+            proof_baseline_pair_id=schedule.identity,
+            proof_baseline_lifecycle_policy="oracle_schedule",
+            proof_baseline_schedule_id=schedule.identity,
+            proof_baseline_schedule_hash=_oracle_schedule_hash(schedule),
+            proof_baseline_schedule_version=1,
+            proof_baseline_schedule_action_count=len(schedule.steps),
+        ),
+    ))
+
+
+def _emit_oracle_causal_event(
+    *,
+    telemetry_output: DirectoryOutput,
+    schedule_step: OracleScheduleStep,
+    step_result: OracleStepResult,
+    target_slot: str,
+    epoch: int,
+    phase: MorphologyCausalLogPhase,
+    governor_approved: bool | None,
+    governor_reason: str | None,
+    governor_blocked_factor: str | None,
+    linked_event_id: str | None,
+    message: str,
+) -> None:
+    action = schedule_step.action
+    action_id = _oracle_action_id(
+        schedule_step=schedule_step,
+        target_slot=target_slot,
+        epoch=epoch,
+    )
+    mutation_id = f"{action_id}-mutation"
+    blueprint_id = (
+        action.blueprint.to_blueprint_id()
+        if action.op == LifecycleOp.GERMINATE
+        else None
+    )
+    telemetry_output.emit(TelemetryEvent(
+        event_id=f"{action_id}:{phase}",
+        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+        slot_id=target_slot,
+        epoch=epoch,
+        group_id=ORACLE_PROOF_PROFILE,
+        message=message,
+        severity="debug",
+        data=MorphologyCausalLogPayload(
+            phase=phase,
+            env_id=0,
+            slot_id=target_slot,
+            operation=action.op.name,
+            action_id=action_id,
+            proposal_id=f"{action_id}-proposal",
+            verdict_id=f"{action_id}-verdict",
+            mutation_id=mutation_id,
+            observation_hash=_oracle_observation_hash(schedule_step),
+            rng_stream="oracle_sandbox.schedule",
+            rng_seed=_oracle_rng_seed(action_id),
+            topology="cnn",
+            blueprint_id=blueprint_id,
+            governor_approved=governor_approved,
+            governor_reason=governor_reason,
+            governor_blocked_factor=governor_blocked_factor,
+            watch_window_evidence=None,
+            linked_event_id=linked_event_id,
+        ),
+    ))
+
+
+def _emit_oracle_step_telemetry(
+    *,
+    telemetry_output: DirectoryOutput,
+    schedule_step: OracleScheduleStep,
+    step_result: OracleStepResult,
+    target_slot: str,
+    epoch: int,
+) -> None:
+    action_id = _oracle_action_id(
+        schedule_step=schedule_step,
+        target_slot=target_slot,
+        epoch=epoch,
+    )
+    mutation_id = f"{action_id}-mutation"
+    blocked_factor = step_result.blocked_by
+    governor_approved = step_result.governor_approved
+    governor_reason = (
+        "approved"
+        if governor_approved is True
+        else step_result.detail or blocked_factor
+    )
+    if blocked_factor == "mask":
+        governor_approved = False
+        governor_reason = "action masked"
+
+    _emit_oracle_causal_event(
+        telemetry_output=telemetry_output,
+        schedule_step=schedule_step,
+        step_result=step_result,
+        target_slot=target_slot,
+        epoch=epoch,
+        phase="proposal",
+        governor_approved=None,
+        governor_reason=None,
+        governor_blocked_factor=None,
+        linked_event_id=None,
+        message="Oracle morphology proposal",
+    )
+    _emit_oracle_causal_event(
+        telemetry_output=telemetry_output,
+        schedule_step=schedule_step,
+        step_result=step_result,
+        target_slot=target_slot,
+        epoch=epoch,
+        phase="verdict",
+        governor_approved=governor_approved,
+        governor_reason=governor_reason,
+        governor_blocked_factor=blocked_factor,
+        linked_event_id=f"{action_id}-verdict",
+        message="Oracle morphology verdict",
+    )
+    if not step_result.handler_called:
+        _emit_oracle_causal_event(
+            telemetry_output=telemetry_output,
+            schedule_step=schedule_step,
+            step_result=step_result,
+            target_slot=target_slot,
+            epoch=epoch,
+            phase="audit",
+            governor_approved=governor_approved,
+            governor_reason=governor_reason,
+            governor_blocked_factor=blocked_factor,
+            linked_event_id=f"{action_id}-verdict",
+            message="Oracle morphology audit",
+        )
+        return
+
+    _emit_oracle_causal_event(
+        telemetry_output=telemetry_output,
+        schedule_step=schedule_step,
+        step_result=step_result,
+        target_slot=target_slot,
+        epoch=epoch,
+        phase="mutation",
+        governor_approved=True,
+        governor_reason="approved",
+        governor_blocked_factor=None,
+        linked_event_id=mutation_id,
+        message="Oracle morphology mutation dispatch",
+    )
+    _emit_oracle_causal_event(
+        telemetry_output=telemetry_output,
+        schedule_step=schedule_step,
+        step_result=step_result,
+        target_slot=target_slot,
+        epoch=epoch,
+        phase="dispatch",
+        governor_approved=True,
+        governor_reason="approved",
+        governor_blocked_factor=None,
+        linked_event_id=mutation_id,
+        message="Oracle morphology mutation dispatched",
+    )
+    if step_result.success:
+        terminal_phase: MorphologyCausalLogPhase = (
+            "fossilization"
+            if schedule_step.action.op == LifecycleOp.FOSSILIZE
+            else "commit"
+        )
+        _emit_oracle_causal_event(
+            telemetry_output=telemetry_output,
+            schedule_step=schedule_step,
+            step_result=step_result,
+            target_slot=target_slot,
+            epoch=epoch,
+            phase=terminal_phase,
+            governor_approved=True,
+            governor_reason="approved",
+            governor_blocked_factor=None,
+            linked_event_id=mutation_id,
+            message="Oracle morphology dispatch committed",
+        )
+
+
+def _emit_oracle_policy_evidence(
+    *,
+    telemetry_output: DirectoryOutput,
+    schedule: OracleSchedule,
+) -> None:
+    action_id = f"oracle-policy-{_oracle_schedule_hash(schedule)}"
+    telemetry_output.emit(TelemetryEvent(
+        event_id=f"{action_id}:audit",
+        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+        slot_id=ORACLE_CI_SLOT_ID,
+        epoch=0,
+        group_id=ORACLE_PROOF_PROFILE,
+        message="Oracle policy evidence",
+        severity="debug",
+        data=MorphologyCausalLogPayload(
+            phase="audit",
+            env_id=0,
+            slot_id=ORACLE_CI_SLOT_ID,
+            operation="ORACLE_POLICY",
+            action_id=action_id,
+            proposal_id=f"{action_id}-proposal",
+            verdict_id=f"{action_id}-verdict",
+            mutation_id=f"{action_id}-mutation",
+            observation_hash=f"obs-{_oracle_schedule_hash(schedule)}",
+            rng_stream="oracle_sandbox.policy",
+            rng_seed=_oracle_rng_seed(action_id),
+            topology="cnn",
+            blueprint_id=None,
+            governor_approved=True,
+            governor_reason="schedule_declared",
+            governor_blocked_factor=None,
+            watch_window_evidence=None,
+            linked_event_id=schedule.identity,
+        ),
+    ))
+
+
+def _emit_oracle_episode_outcome(
+    *,
+    telemetry_output: DirectoryOutput,
+    schedule: OracleSchedule,
+    fixture: OracleSandboxFixture,
+    step_results: tuple[OracleStepResult, ...],
+    host_params: int,
+    val_accuracy: float,
+    run_success: bool,
+) -> None:
+    successful_steps = tuple(step for step in step_results if step.success)
+    telemetry_output.emit(TelemetryEvent(
+        event_id=f"{schedule.identity}:episode-outcome",
+        event_type=TelemetryEventType.EPISODE_OUTCOME,
+        epoch=len(step_results),
+        group_id=ORACLE_PROOF_PROFILE,
+        message="Oracle sandbox episode outcome",
+        data=EpisodeOutcomePayload(
+            env_id=0,
+            episode_idx=0,
+            final_accuracy=val_accuracy,
+            param_ratio=fixture.model.total_params / host_params,
+            num_fossilized=sum(
+                1 for step in successful_steps if step.op == LifecycleOp.FOSSILIZE
+            ),
+            num_contributing_fossilized=sum(
+                1 for step in successful_steps if step.op == LifecycleOp.FOSSILIZE
+            ),
+            episode_reward=float(len(successful_steps)),
+            stability_score=1.0 if run_success else 0.0,
+            reward_mode="oracle",
+            episode_length=len(step_results),
+            outcome_type="success" if run_success else "blocked",
+            germinate_count=sum(
+                1 for step in successful_steps if step.op == LifecycleOp.GERMINATE
+            ),
+            prune_count=sum(
+                1 for step in successful_steps if step.op == LifecycleOp.PRUNE
+            ),
+            fossilize_count=sum(
+                1 for step in successful_steps if step.op == LifecycleOp.FOSSILIZE
+            ),
+        ),
+    ))
 
 
 def _oracle_action(
@@ -585,157 +921,222 @@ def run_oracle_schedule(
     val_loss: float = 0.5,
     val_accuracy: float = 2.0,
     max_epochs: int = 32,
+    telemetry_dir: Path | str | None = None,
 ) -> OracleRunResult:
     """Run an oracle schedule through masks, governor preflight, and handlers."""
+    telemetry_output = (
+        DirectoryOutput(telemetry_dir, buffer_size=1)
+        if telemetry_dir is not None
+        else None
+    )
+    output_dir = str(telemetry_output.output_dir) if telemetry_output is not None else None
+    host_params = fixture.model.total_params - fixture.model.active_seed_params
     env_state = _build_oracle_env_state(
         fixture=fixture,
         val_loss=val_loss,
         val_accuracy=val_accuracy,
     )
     step_results: list[OracleStepResult] = []
-
-    for epoch, schedule_step in enumerate(schedule.steps, start=1):
-        action = schedule_step.action
-        target_slot, slot_is_enabled = _resolve_oracle_target_slot(
-            action.slot_idx,
-            enabled_slots=list(fixture.enabled_slots),
-            slot_config=fixture.slot_config,
-        )
-        if not slot_is_enabled:
-            stage_before = "DORMANT"
-        else:
-            stage_before = _slot_stage_name(fixture.model, target_slot)
-
-        _prepare_oracle_step_evidence(
+    if telemetry_output is not None:
+        _emit_oracle_training_started(
+            telemetry_output=telemetry_output,
+            schedule=schedule,
             fixture=fixture,
-            action=action,
-            val_accuracy=val_accuracy,
+            host_params=host_params,
             max_epochs=max_epochs,
         )
-        if slot_is_enabled:
-            stage_before = _slot_stage_name(fixture.model, target_slot)
 
-        slot_reports = fixture.model.get_slot_reports()
-        slot_states = build_slot_states(slot_reports, list(fixture.enabled_slots))
-        masks = compute_action_masks(
-            slot_states=slot_states,
-            enabled_slots=list(fixture.enabled_slots),
-            slot_config=fixture.slot_config,
-        )
-        mask_allowed = _action_allowed_by_masks(action=action, masks=masks)
-        if not mask_allowed:
-            step_results.append(OracleStepResult(
-                step_id=schedule_step.step_id,
-                op=action.op,
-                expected_success=schedule_step.expect_success,
-                success=False,
-                stage_before=stage_before,
-                stage_after=(
-                    _slot_stage_name(fixture.model, target_slot)
-                    if slot_is_enabled
-                    else "DORMANT"
-                ),
-                mask_checked=True,
-                governor_checked=False,
-                governor_approved=None,
-                handler_called=False,
-                blocked_by="mask",
-                detail="action masked",
-            ))
-            if schedule_step.expect_success:
-                break
-            continue
-
-        governor_checked = action.op != LifecycleOp.WAIT
-        governor_approved: bool | None = None
-        if governor_checked:
-            slot = _slot_for(fixture.model, target_slot)
-            seed_state = slot.state
-            preflight = env_state.governor.preflight_lifecycle_mutation(
-                operation=action.op,
-                slot_id=target_slot,
-                blueprint_id=(
-                    action.blueprint.to_blueprint_id()
-                    if action.op == LifecycleOp.GERMINATE
-                    else None
-                ),
-                alpha_target=(
-                    action.alpha_target_value
-                    if action.op == LifecycleOp.SET_ALPHA_TARGET
-                    else None
-                ),
-                alpha_speed_steps=(
-                    action.alpha_speed_steps
-                    if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE)
-                    else None
-                ),
-                alpha_curve=(
-                    action.alpha_curve.name
-                    if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE)
-                    else None
-                ),
-                val_loss=val_loss,
-                val_accuracy=val_accuracy,
-                seed_stage=seed_state.stage if seed_state is not None else None,
-                total_params=fixture.model.total_params,
-                effective_seed_params=float(slot.active_seed_params),
-                max_seeds=1,
-                active_seed_count=fixture.model.total_seeds(),
-                cooldown_epochs_remaining=0,
-                event_id=f"{schedule.identity}:{schedule_step.step_id}",
+    try:
+        for epoch, schedule_step in enumerate(schedule.steps, start=1):
+            action = schedule_step.action
+            target_slot, slot_is_enabled = _resolve_oracle_target_slot(
+                action.slot_idx,
+                enabled_slots=list(fixture.enabled_slots),
+                slot_config=fixture.slot_config,
             )
-            governor_approved = preflight.approved
-            if not preflight.approved:
-                step_results.append(OracleStepResult(
+            if not slot_is_enabled:
+                stage_before = "DORMANT"
+            else:
+                stage_before = _slot_stage_name(fixture.model, target_slot)
+
+            _prepare_oracle_step_evidence(
+                fixture=fixture,
+                action=action,
+                val_accuracy=val_accuracy,
+                max_epochs=max_epochs,
+            )
+            if slot_is_enabled:
+                stage_before = _slot_stage_name(fixture.model, target_slot)
+
+            slot_reports = fixture.model.get_slot_reports()
+            slot_states = build_slot_states(slot_reports, list(fixture.enabled_slots))
+            masks = compute_action_masks(
+                slot_states=slot_states,
+                enabled_slots=list(fixture.enabled_slots),
+                slot_config=fixture.slot_config,
+            )
+            mask_allowed = _action_allowed_by_masks(action=action, masks=masks)
+            if not mask_allowed:
+                step_result = OracleStepResult(
                     step_id=schedule_step.step_id,
                     op=action.op,
                     expected_success=schedule_step.expect_success,
                     success=False,
                     stage_before=stage_before,
-                    stage_after=_slot_stage_name(fixture.model, target_slot),
+                    stage_after=(
+                        _slot_stage_name(fixture.model, target_slot)
+                        if slot_is_enabled
+                        else "DORMANT"
+                    ),
                     mask_checked=True,
-                    governor_checked=True,
-                    governor_approved=False,
+                    governor_checked=False,
+                    governor_approved=None,
                     handler_called=False,
-                    blocked_by="governor",
-                    detail=preflight.reason,
-                ))
+                    blocked_by="mask",
+                    detail="action masked",
+                )
+                step_results.append(step_result)
+                if telemetry_output is not None:
+                    _emit_oracle_step_telemetry(
+                        telemetry_output=telemetry_output,
+                        schedule_step=schedule_step,
+                        step_result=step_result,
+                        target_slot=target_slot,
+                        epoch=epoch,
+                    )
                 if schedule_step.expect_success:
                     break
                 continue
 
-        slot = _slot_for(fixture.model, target_slot)
-        handler_success = _execute_oracle_handler(
-            action=action,
-            env_state=env_state,
-            slot=slot,
-            target_slot=target_slot,
-            epoch=epoch,
-            max_epochs=max_epochs,
-        )
-        stage_after = _slot_stage_name(fixture.model, target_slot)
-        step_results.append(OracleStepResult(
-            step_id=schedule_step.step_id,
-            op=action.op,
-            expected_success=schedule_step.expect_success,
-            success=handler_success,
-            stage_before=stage_before,
-            stage_after=stage_after,
-            mask_checked=True,
-            governor_checked=governor_checked,
-            governor_approved=governor_approved,
-            handler_called=True,
-            blocked_by=None if handler_success else "handler",
-        ))
-        if handler_success != schedule_step.expect_success:
-            break
+            governor_checked = action.op != LifecycleOp.WAIT
+            governor_approved: bool | None = None
+            if governor_checked:
+                slot = _slot_for(fixture.model, target_slot)
+                seed_state = slot.state
+                preflight = env_state.governor.preflight_lifecycle_mutation(
+                    operation=action.op,
+                    slot_id=target_slot,
+                    blueprint_id=(
+                        action.blueprint.to_blueprint_id()
+                        if action.op == LifecycleOp.GERMINATE
+                        else None
+                    ),
+                    alpha_target=(
+                        action.alpha_target_value
+                        if action.op == LifecycleOp.SET_ALPHA_TARGET
+                        else None
+                    ),
+                    alpha_speed_steps=(
+                        action.alpha_speed_steps
+                        if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE)
+                        else None
+                    ),
+                    alpha_curve=(
+                        action.alpha_curve.name
+                        if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE)
+                        else None
+                    ),
+                    val_loss=val_loss,
+                    val_accuracy=val_accuracy,
+                    seed_stage=seed_state.stage if seed_state is not None else None,
+                    total_params=fixture.model.total_params,
+                    effective_seed_params=float(slot.active_seed_params),
+                    max_seeds=1,
+                    active_seed_count=fixture.model.total_seeds(),
+                    cooldown_epochs_remaining=0,
+                    event_id=f"{schedule.identity}:{schedule_step.step_id}",
+                )
+                governor_approved = preflight.approved
+                if not preflight.approved:
+                    step_result = OracleStepResult(
+                        step_id=schedule_step.step_id,
+                        op=action.op,
+                        expected_success=schedule_step.expect_success,
+                        success=False,
+                        stage_before=stage_before,
+                        stage_after=_slot_stage_name(fixture.model, target_slot),
+                        mask_checked=True,
+                        governor_checked=True,
+                        governor_approved=False,
+                        handler_called=False,
+                        blocked_by="governor",
+                        detail=preflight.reason,
+                    )
+                    step_results.append(step_result)
+                    if telemetry_output is not None:
+                        _emit_oracle_step_telemetry(
+                            telemetry_output=telemetry_output,
+                            schedule_step=schedule_step,
+                            step_result=step_result,
+                            target_slot=target_slot,
+                            epoch=epoch,
+                        )
+                    if schedule_step.expect_success:
+                        break
+                    continue
 
-    run_success = all(step.success == step.expected_success for step in step_results)
-    return OracleRunResult(
-        schedule_identity=schedule.identity,
-        success=run_success and len(step_results) == len(schedule.steps),
-        steps=tuple(step_results),
-    )
+            slot = _slot_for(fixture.model, target_slot)
+            handler_success = _execute_oracle_handler(
+                action=action,
+                env_state=env_state,
+                slot=slot,
+                target_slot=target_slot,
+                epoch=epoch,
+                max_epochs=max_epochs,
+            )
+            stage_after = _slot_stage_name(fixture.model, target_slot)
+            step_result = OracleStepResult(
+                step_id=schedule_step.step_id,
+                op=action.op,
+                expected_success=schedule_step.expect_success,
+                success=handler_success,
+                stage_before=stage_before,
+                stage_after=stage_after,
+                mask_checked=True,
+                governor_checked=governor_checked,
+                governor_approved=governor_approved,
+                handler_called=True,
+                blocked_by=None if handler_success else "handler",
+            )
+            step_results.append(step_result)
+            if telemetry_output is not None:
+                _emit_oracle_step_telemetry(
+                    telemetry_output=telemetry_output,
+                    schedule_step=schedule_step,
+                    step_result=step_result,
+                    target_slot=target_slot,
+                    epoch=epoch,
+                )
+            if handler_success != schedule_step.expect_success:
+                break
+
+        step_results_tuple = tuple(step_results)
+        run_success = all(
+            step.success == step.expected_success for step in step_results_tuple
+        ) and len(step_results_tuple) == len(schedule.steps)
+        if telemetry_output is not None:
+            _emit_oracle_policy_evidence(
+                telemetry_output=telemetry_output,
+                schedule=schedule,
+            )
+            _emit_oracle_episode_outcome(
+                telemetry_output=telemetry_output,
+                schedule=schedule,
+                fixture=fixture,
+                step_results=step_results_tuple,
+                host_params=host_params,
+                val_accuracy=val_accuracy,
+                run_success=run_success,
+            )
+        return OracleRunResult(
+            schedule_identity=schedule.identity,
+            success=run_success,
+            steps=step_results_tuple,
+            telemetry_dir=output_dir,
+        )
+    finally:
+        if telemetry_output is not None:
+            telemetry_output.close()
 
 
 def _resolve_oracle_target_slot(

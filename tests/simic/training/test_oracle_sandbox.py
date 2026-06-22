@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import duckdb
 import pytest
 import torch
 
+from esper.karn.mcp.views import create_views, scan_ingestion_integrity
 from esper.leyline import (
     AlphaCurveAction,
     AlphaSpeedAction,
@@ -17,6 +21,7 @@ from esper.leyline import (
 from esper.simic.training.oracle_sandbox import (
     ORACLE_CI_FIXTURE_ID,
     ORACLE_CI_SLOT_ID,
+    ORACLE_PROOF_PROFILE,
     OracleSchedule,
     OracleScheduleStep,
     build_default_oracle_schedule,
@@ -175,3 +180,112 @@ def test_oracle_schedule_runner_blocks_governor_veto_before_handler() -> None:
     assert step.blocked_by == "governor"
     assert step.handler_called is False
     assert fixture.model.total_seeds() == 0
+
+
+def test_oracle_schedule_writes_karn_ingestable_proof_telemetry(
+    tmp_path: Path,
+) -> None:
+    fixture = build_oracle_ci_fixture()
+    schedule = build_default_oracle_schedule()
+
+    result = run_oracle_schedule(
+        schedule=schedule,
+        fixture=fixture,
+        telemetry_dir=tmp_path,
+    )
+
+    assert result.success is True
+    assert result.telemetry_dir is not None
+    assert Path(result.telemetry_dir).is_dir()
+    assert scan_ingestion_integrity(str(tmp_path)).is_clean
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    run_row = conn.execute(
+        """
+        SELECT
+            proof_profile,
+            proof_baseline_mode,
+            proof_baseline_lifecycle_policy,
+            proof_baseline_schedule_id,
+            proof_baseline_schedule_hash,
+            proof_baseline_schedule_action_count,
+            policy_device,
+            amp_enabled,
+            compile_enabled,
+            host_params,
+            n_envs
+        FROM runs
+        """
+    ).fetchone()
+    assert run_row == (
+        ORACLE_PROOF_PROFILE,
+        ORACLE_PROOF_PROFILE,
+        "oracle_schedule",
+        schedule.identity,
+        schedule.identity[-16:],
+        len(schedule.steps),
+        "cpu",
+        False,
+        False,
+        fixture.model.total_params - fixture.model.active_seed_params,
+        1,
+    )
+
+    terminal_rows = conn.execute(
+        """
+        SELECT phase, operation, slot_id, governor_approved
+        FROM morphology_causal_log
+        WHERE phase IN ('commit', 'fossilization')
+        ORDER BY epoch
+        """
+    ).fetchall()
+    assert terminal_rows == [
+        ("commit", "GERMINATE", ORACLE_CI_SLOT_ID, True),
+        ("commit", "ADVANCE", ORACLE_CI_SLOT_ID, True),
+        ("commit", "ADVANCE", ORACLE_CI_SLOT_ID, True),
+        ("commit", "SET_ALPHA_TARGET", ORACLE_CI_SLOT_ID, True),
+        ("commit", "ADVANCE", ORACLE_CI_SLOT_ID, True),
+        ("fossilization", "FOSSILIZE", ORACLE_CI_SLOT_ID, True),
+    ]
+
+    (oracle_policy_evidence_count,) = conn.execute(
+        """
+        SELECT count(*)
+        FROM morphology_causal_log
+        WHERE phase = 'audit'
+          AND operation = 'ORACLE_POLICY'
+          AND message = 'Oracle policy evidence'
+        """
+    ).fetchone()
+    assert oracle_policy_evidence_count == 1
+
+    outcome_row = conn.execute(
+        """
+        SELECT
+            final_accuracy,
+            param_ratio,
+            num_fossilized,
+            num_contributing_fossilized,
+            reward_mode,
+            outcome_type,
+            episode_length,
+            germinate_count,
+            prune_count,
+            fossilize_count
+        FROM episode_outcomes
+        """
+    ).fetchone()
+    assert outcome_row == (
+        2.0,
+        pytest.approx(fixture.model.total_params / run_row[9]),
+        1,
+        1,
+        "oracle",
+        "success",
+        len(schedule.steps),
+        1,
+        0,
+        1,
+    )

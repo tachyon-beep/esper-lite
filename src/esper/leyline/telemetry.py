@@ -464,6 +464,7 @@ class TrainingStartedPayload:
     compile_mode: str | None = None
 
     # Proof-control identity for blueprint-health baseline cohorts.
+    proof_profile: str | None = None
     proof_baseline_mode: str | None = None
     proof_baseline_pair_id: str | None = None
     proof_baseline_lifecycle_policy: str | None = None
@@ -509,6 +510,9 @@ class TrainingStartedPayload:
             compile_enabled=data.get("compile_enabled", False),
             compile_backend=data.get("compile_backend"),
             compile_mode=data.get("compile_mode"),
+            proof_profile=data["proof_profile"]
+            if "proof_profile" in data
+            else None,
             proof_baseline_mode=data["proof_baseline_mode"]
             if "proof_baseline_mode" in data
             else None,
