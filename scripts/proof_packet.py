@@ -88,12 +88,14 @@ REVISE_ALGORITHM = "REVISE_ALGORITHM"
 STOP_THEORY = "STOP_THEORY"
 CONTINUE = "CONTINUE"
 
-ProofProfile = Literal["generic", "reward-efficiency"]
+ProofProfile = Literal["generic", "reward-efficiency", "oracle-sandbox"]
 GENERIC_PROOF_PROFILE: ProofProfile = "generic"
 REWARD_EFFICIENCY_PROOF_PROFILE: ProofProfile = "reward-efficiency"
+ORACLE_SANDBOX_PROOF_PROFILE: ProofProfile = "oracle-sandbox"
 PROOF_PROFILES: tuple[ProofProfile, ...] = (
     GENERIC_PROOF_PROFILE,
     REWARD_EFFICIENCY_PROOF_PROFILE,
+    ORACLE_SANDBOX_PROOF_PROFILE,
 )
 BLUEPRINT_ECONOMY_REWARD_MODES: frozenset[str] = frozenset(
     mode.value
@@ -1054,6 +1056,119 @@ def _static_final_replay_blockers_query() -> str:
     """
 
 
+def _oracle_policy_blockers_query() -> str:
+    return f"""
+        WITH oracle_runs AS (
+            SELECT run_dir, group_id
+            FROM runs
+            WHERE proof_profile = '{ORACLE_SANDBOX_PROOF_PROFILE}'
+        )
+        SELECT
+            run_dir,
+            group_id,
+            'missing oracle-policy evidence' AS violations
+        FROM oracle_runs
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM morphology_causal_log
+            WHERE morphology_causal_log.run_dir = oracle_runs.run_dir
+              AND COALESCE(morphology_causal_log.group_id, '') = COALESCE(oracle_runs.group_id, '')
+              AND morphology_causal_log.phase = 'audit'
+              AND morphology_causal_log.operation = 'ORACLE_POLICY'
+        )
+        ORDER BY run_dir, group_id
+    """
+
+
+def _oracle_outcome_blockers_query() -> str:
+    return f"""
+        WITH oracle_runs AS (
+            SELECT run_dir, group_id, reward_mode
+            FROM runs
+            WHERE proof_profile = '{ORACLE_SANDBOX_PROOF_PROFILE}'
+        )
+        SELECT
+            run_dir,
+            group_id,
+            'missing valid oracle EPISODE_OUTCOME' AS violations
+        FROM oracle_runs
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM episode_outcomes
+            WHERE episode_outcomes.run_dir = oracle_runs.run_dir
+              AND COALESCE(episode_outcomes.group_id, '') = COALESCE(oracle_runs.group_id, '')
+              AND episode_outcomes.reward_mode = oracle_runs.reward_mode
+              AND {VALID_OUTCOME_PREDICATE}
+        )
+        ORDER BY run_dir, group_id
+    """
+
+
+def _oracle_trace_blockers_query() -> str:
+    return f"""
+        WITH oracle_runs AS (
+            SELECT run_dir, group_id
+            FROM runs
+            WHERE proof_profile = '{ORACLE_SANDBOX_PROOF_PROFILE}'
+        ),
+        expected_terminal(epoch, phase, operation) AS (
+            VALUES
+                (1, 'commit', 'GERMINATE'),
+                (2, 'commit', 'ADVANCE'),
+                (3, 'commit', 'ADVANCE'),
+                (4, 'commit', 'SET_ALPHA_TARGET'),
+                (5, 'commit', 'ADVANCE'),
+                (6, 'fossilization', 'FOSSILIZE')
+        ),
+        missing_terminal AS (
+            SELECT
+                oracle_runs.run_dir,
+                oracle_runs.group_id,
+                expected_terminal.epoch AS expected_epoch,
+                expected_terminal.phase AS expected_phase,
+                expected_terminal.operation AS expected_operation,
+                'missing oracle lifecycle terminal trace' AS violations
+            FROM oracle_runs
+            CROSS JOIN expected_terminal
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM morphology_causal_log
+                WHERE morphology_causal_log.run_dir = oracle_runs.run_dir
+                  AND COALESCE(morphology_causal_log.group_id, '') = COALESCE(oracle_runs.group_id, '')
+                  AND morphology_causal_log.epoch = expected_terminal.epoch
+                  AND morphology_causal_log.phase = expected_terminal.phase
+                  AND morphology_causal_log.operation = expected_terminal.operation
+                  AND morphology_causal_log.governor_approved IS TRUE
+            )
+        ),
+        missing_masked_prune AS (
+            SELECT
+                oracle_runs.run_dir,
+                oracle_runs.group_id,
+                7 AS expected_epoch,
+                'audit' AS expected_phase,
+                'PRUNE' AS expected_operation,
+                'missing oracle masked-prune audit trace' AS violations
+            FROM oracle_runs
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM morphology_causal_log
+                WHERE morphology_causal_log.run_dir = oracle_runs.run_dir
+                  AND COALESCE(morphology_causal_log.group_id, '') = COALESCE(oracle_runs.group_id, '')
+                  AND morphology_causal_log.epoch = 7
+                  AND morphology_causal_log.phase = 'audit'
+                  AND morphology_causal_log.operation = 'PRUNE'
+                  AND morphology_causal_log.governor_approved IS FALSE
+                  AND morphology_causal_log.governor_blocked_factor = 'mask'
+            )
+        )
+        SELECT * FROM missing_terminal
+        UNION ALL
+        SELECT * FROM missing_masked_prune
+        ORDER BY run_dir, group_id, expected_epoch
+    """
+
+
 def _classify_verdict(
     *,
     blocking_confounders: list[dict[str, Any]],
@@ -1067,13 +1182,21 @@ def _classify_verdict(
     static_final_replay_blockers: list[dict[str, Any]],
     precision_blockers: list[dict[str, Any]],
     economy_evidence_blocking: bool,
+    oracle_instrumentation_blockers: list[dict[str, Any]],
+    oracle_trace_blockers: list[dict[str, Any]],
     ingestion_blocking: bool,
     missing_runs: bool,
     missing_outcomes: bool,
     roi_rows: list[dict[str, Any]],
     min_mean_accuracy_roi: float,
 ) -> str:
-    if ingestion_blocking or missing_runs or missing_outcomes or missing_learnability:
+    if (
+        ingestion_blocking
+        or missing_runs
+        or missing_outcomes
+        or missing_learnability
+        or oracle_instrumentation_blockers
+    ):
         return BLOCKED_INSTRUMENTATION
     if precision_blockers:
         return BLOCKED_PRECISION
@@ -1086,6 +1209,7 @@ def _classify_verdict(
         or fixed_schedule_trace_blockers
         or static_final_replay_blockers
         or economy_evidence_blocking
+        or oracle_trace_blockers
     ):
         return BLOCKED_MATH
     if blocking_confounders:
@@ -1129,6 +1253,13 @@ def build_proof_packet(
             )
         resolved_require_blueprint_health_baselines = True
         resolved_require_precision_provenance = True
+    elif proof_profile == ORACLE_SANDBOX_PROOF_PROFILE:
+        resolved_require_blueprint_health_baselines = False
+        resolved_require_precision_provenance = (
+            True
+            if require_precision_provenance is None
+            else require_precision_provenance
+        )
     else:
         resolved_require_blueprint_health_baselines = (
             False
@@ -1165,6 +1296,8 @@ def build_proof_packet(
                 max_batches,
                 amp_enabled,
                 amp_dtype,
+                compile_enabled,
+                proof_profile,
                 proof_baseline_mode,
                 proof_baseline_pair_id,
                 proof_baseline_lifecycle_policy,
@@ -1199,6 +1332,44 @@ def build_proof_packet(
             if resolved_require_precision_provenance
             else []
         )
+        oracle_runs = (
+            _rows(
+                conn,
+                f"""
+                SELECT
+                    run_dir,
+                    group_id,
+                    reward_mode,
+                    proof_baseline_schedule_id,
+                    proof_baseline_schedule_hash,
+                    proof_baseline_schedule_action_count
+                FROM runs
+                WHERE proof_profile = '{ORACLE_SANDBOX_PROOF_PROFILE}'
+                ORDER BY started_at, run_dir, group_id
+                """,
+            )
+            if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE
+            else []
+        )
+        oracle_instrumentation_blockers = []
+        oracle_trace_blockers = []
+        if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE:
+            if not oracle_runs:
+                oracle_instrumentation_blockers.append({
+                    "run_dir": "",
+                    "group_id": "",
+                    "violations": (
+                        "missing oracle-sandbox TRAINING_STARTED proof_profile"
+                    ),
+                })
+            else:
+                oracle_instrumentation_blockers.extend(
+                    _rows(conn, _oracle_policy_blockers_query())
+                )
+                oracle_instrumentation_blockers.extend(
+                    _rows(conn, _oracle_outcome_blockers_query())
+                )
+                oracle_trace_blockers = _rows(conn, _oracle_trace_blockers_query())
         baseline_rows = _rows(
             conn,
             """
@@ -1243,9 +1414,12 @@ def build_proof_packet(
             conn,
             _static_final_replay_blockers_query(),
         )
-        baseline_provenance_blockers = _rows(
-            conn,
-            f"""
+        baseline_provenance_blockers = (
+            []
+            if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE
+            else _rows(
+                conn,
+                f"""
             WITH checked AS (
                 SELECT
                     run_dir,
@@ -1421,6 +1595,7 @@ def build_proof_packet(
             WHERE violations <> ''
             ORDER BY run_dir, group_id
             """,
+            )
         )
         lifecycle_rows = _rows(
             conn,
@@ -1458,7 +1633,11 @@ def build_proof_packet(
             ORDER BY timestamp, run_dir, group_id, env_id
             """,
         )
-        missing_learnability = _rows(conn, _missing_learnability_query())
+        missing_learnability = (
+            []
+            if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE
+            else _rows(conn, _missing_learnability_query())
+        )
         invalid_outcomes = _rows(conn, _invalid_outcomes_query())
         outcome_count_rows = _rows(
             conn,
@@ -1466,6 +1645,11 @@ def build_proof_packet(
             SELECT COUNT(*) AS outcome_count
             FROM episode_outcomes
             """,
+        )
+        roi_profile_filter = (
+            f"AND runs.proof_profile = '{ORACLE_SANDBOX_PROOF_PROFILE}'"
+            if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE
+            else ""
         )
         roi_rows = _rows(
             conn,
@@ -1492,6 +1676,7 @@ def build_proof_packet(
                 runs.proof_baseline_mode IS NULL
                 OR runs.proof_baseline_mode <> '{STATIC_FINAL_SOURCE_MODE}'
               )
+              {roi_profile_filter}
             GROUP BY
                 valid_episode_outcomes.run_dir,
                 valid_episode_outcomes.group_id,
@@ -1519,8 +1704,15 @@ def build_proof_packet(
     # ambiguous, control-invalid, or mechanically unstable.
     outcome_count = int(outcome_count_rows[0]["outcome_count"])
     has_event_files = bool(runs) or outcome_count > 0 or not ingestion.is_clean
-    missing_runs = not runs
-    missing_outcomes = outcome_count == 0
+    if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE:
+        missing_runs = not oracle_runs
+        missing_outcomes = any(
+            row["violations"] == "missing valid oracle EPISODE_OUTCOME"
+            for row in oracle_instrumentation_blockers
+        )
+    else:
+        missing_runs = not runs
+        missing_outcomes = outcome_count == 0
     ingestion_blocking = not ingestion.is_clean
     if proof_profile == REWARD_EFFICIENCY_PROOF_PROFILE:
         roi_rows_for_verdict = _blueprint_economy_roi_rows(roi_rows)
@@ -1548,14 +1740,21 @@ def build_proof_packet(
         static_final_replay_blockers=static_final_replay_blockers,
         precision_blockers=precision_blockers,
         economy_evidence_blocking=economy_evidence_blocking,
+        oracle_instrumentation_blockers=oracle_instrumentation_blockers,
+        oracle_trace_blockers=oracle_trace_blockers,
         ingestion_blocking=ingestion_blocking,
         missing_runs=missing_runs,
         missing_outcomes=missing_outcomes,
         roi_rows=roi_rows_for_verdict,
         min_mean_accuracy_roi=min_mean_accuracy_roi,
     )
+    packet_title = (
+        "# Oracle-Sandbox Proof Packet"
+        if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE
+        else "# Reward-Efficiency Proof Packet"
+    )
     lines = [
-        "# Reward-Efficiency Proof Packet",
+        packet_title,
         "",
         f"- Telemetry dir: `{telemetry_dir}`",
         f"- Proof profile: `{proof_profile}`",
@@ -1629,7 +1828,14 @@ def build_proof_packet(
         lines.append("- Precision provenance gate was not requested.")
 
     lines.extend(["", "## Reproduction Commands", ""])
-    if runs:
+    if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE and oracle_runs:
+        for row in oracle_runs:
+            lines.append(
+                "- Oracle telemetry producer "
+                f"for `{row['run_dir']}` group `{row['group_id']}`: "
+                "`run_oracle_schedule(schedule=..., fixture=..., telemetry_dir=...)`"
+            )
+    elif runs:
         reward_modes = {row["reward_mode"] for row in runs}
         representative = runs[0]
         rounds = representative["max_batches"]
@@ -1745,8 +1951,50 @@ def build_proof_packet(
             "`reward-efficiency` profile."
         )
 
+    lines.extend(["", "## Oracle Sandbox Evidence", ""])
+    if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE:
+        if oracle_runs:
+            for row in oracle_runs:
+                lines.append(
+                    "- "
+                    f"`{row['run_dir']}` group `{row['group_id']}`: "
+                    f"schedule_id=`{row['proof_baseline_schedule_id']}`, "
+                    f"schedule_hash=`{row['proof_baseline_schedule_hash']}`, "
+                    f"schedule_actions={row['proof_baseline_schedule_action_count']}"
+                )
+        if oracle_instrumentation_blockers:
+            for row in oracle_instrumentation_blockers:
+                lines.append(
+                    "- BLOCKING oracle instrumentation "
+                    f"run `{row['run_dir']}` group `{row['group_id']}`: "
+                    f"{row['violations']}"
+                )
+        else:
+            lines.append("- Oracle policy evidence is present.")
+        if oracle_trace_blockers:
+            for row in oracle_trace_blockers:
+                lines.append(
+                    "- BLOCKING oracle lifecycle trace "
+                    f"run `{row['run_dir']}` group `{row['group_id']}`: "
+                    f"expected epoch={row['expected_epoch']} "
+                    f"phase=`{row['expected_phase']}` "
+                    f"operation=`{row['expected_operation']}`: "
+                    f"{row['violations']}"
+                )
+        else:
+            lines.append("- Oracle sandbox lifecycle trace is proof-grade.")
+    else:
+        lines.append(
+            "- Oracle sandbox evidence gate applies only to "
+            "`oracle-sandbox` profile."
+        )
+
     lines.extend(["", "## Learnability Gate", ""])
-    if missing_learnability:
+    if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE:
+        lines.append(
+            "- PPO learnability telemetry is not required for oracle-sandbox profile."
+        )
+    elif missing_learnability:
         for row in missing_learnability:
             lines.append(
                 "- BLOCKING missing learnability telemetry "
@@ -1970,7 +2218,8 @@ def main() -> None:
         default=REWARD_EFFICIENCY_PROOF_PROFILE,
         help=(
             "Proof gate profile. Defaults to `reward-efficiency`, which automatically requires "
-            "precision provenance and blueprint-health baseline controls."
+            "precision provenance and blueprint-health baseline controls. Use `oracle-sandbox` "
+            "for deterministic lifecycle-mechanics proof telemetry."
         ),
     )
     parser.add_argument(

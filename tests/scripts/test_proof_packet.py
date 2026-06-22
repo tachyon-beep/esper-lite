@@ -21,6 +21,11 @@ from esper.leyline.proof_baselines import (
     STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
     STATIC_FINAL_SOURCE_TOPOLOGY_V1,
 )
+from esper.simic.training.oracle_sandbox import (
+    build_default_oracle_schedule,
+    build_oracle_ci_fixture,
+    run_oracle_schedule,
+)
 
 
 _PROOF_PACKET_PATH = Path(__file__).parents[2] / "scripts" / "proof_packet.py"
@@ -31,6 +36,37 @@ _PROOF_PACKET = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_PROOF_PACKET)
 build_proof_packet = _PROOF_PACKET.build_proof_packet
 proof_packet_main = _PROOF_PACKET.main
+
+
+def _write_oracle_sandbox_archive(tmp_path: Path) -> None:
+    result = run_oracle_schedule(
+        schedule=build_default_oracle_schedule(),
+        fixture=build_oracle_ci_fixture(),
+        telemetry_dir=tmp_path,
+    )
+    assert result.success is True
+    assert result.telemetry_dir is not None
+
+
+def _rewrite_oracle_events_without(
+    tmp_path: Path,
+    *,
+    operation: str,
+    phase: str | None = None,
+) -> None:
+    events_file = next(tmp_path.glob("*/events.jsonl"))
+    retained: list[dict] = []
+    for raw in events_file.read_text().splitlines():
+        event = json.loads(raw)
+        data = event["data"]
+        keep = event["event_type"] != "MORPHOLOGY_CAUSAL_LOG"
+        if not keep:
+            keep = data["operation"] != operation
+        if not keep and phase is not None:
+            keep = data["phase"] != phase
+        if keep:
+            retained.append(event)
+    events_file.write_text("\n".join(json.dumps(event) for event in retained) + "\n")
 
 
 def _training_started_event(
@@ -1334,6 +1370,56 @@ def test_proof_packet_revises_positive_but_weak_roi(tmp_path):
 
     assert "Verdict: `REVISE_ALGORITHM`" in packet
     assert "measurable signal" in packet
+
+
+def test_oracle_sandbox_profile_accepts_clean_oracle_archive(tmp_path):
+    _write_oracle_sandbox_archive(tmp_path)
+
+    packet = build_proof_packet(
+        str(tmp_path),
+        proof_profile="oracle-sandbox",
+        min_mean_accuracy_roi=0.1,
+    )
+
+    assert "# Oracle-Sandbox Proof Packet" in packet
+    assert "Proof profile: `oracle-sandbox`" in packet
+    assert "Verdict: `CONTINUE`" in packet
+    assert "Oracle sandbox lifecycle trace is proof-grade." in packet
+    assert "Oracle policy evidence is present." in packet
+    assert "PPO learnability telemetry is not required for oracle-sandbox profile." in packet
+    assert "--proof-profile oracle-sandbox" in packet
+
+
+def test_oracle_sandbox_profile_blocks_missing_oracle_policy_evidence(tmp_path):
+    _write_oracle_sandbox_archive(tmp_path)
+    _rewrite_oracle_events_without(tmp_path, operation="ORACLE_POLICY")
+
+    packet = build_proof_packet(
+        str(tmp_path),
+        proof_profile="oracle-sandbox",
+        min_mean_accuracy_roi=0.1,
+    )
+
+    assert "Verdict: `BLOCKED_INSTRUMENTATION`" in packet
+    assert "missing oracle-policy evidence" in packet
+
+
+def test_oracle_sandbox_profile_blocks_invalid_lifecycle_trace(tmp_path):
+    _write_oracle_sandbox_archive(tmp_path)
+    _rewrite_oracle_events_without(
+        tmp_path,
+        operation="FOSSILIZE",
+        phase="fossilization",
+    )
+
+    packet = build_proof_packet(
+        str(tmp_path),
+        proof_profile="oracle-sandbox",
+        min_mean_accuracy_roi=0.1,
+    )
+
+    assert "Verdict: `BLOCKED_MATH`" in packet
+    assert "missing oracle lifecycle terminal trace" in packet
 
 
 # ---------------------------------------------------------------------------
