@@ -18,10 +18,12 @@ from esper.leyline import (
     MIN_PRUNE_AGE,
     SeedStage,
     SlotConfig,
-    TEMPO_TO_EPOCHS,
     TempoAction,
 )
-from esper.simic.training.vectorized import _resolve_target_slot
+from esper.simic.training.oracle_sandbox import (
+    OracleActionResult,
+    apply_oracle_factored_action,
+)
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 
 
@@ -84,78 +86,6 @@ class ScriptedHost(nn.Module):
             x = x.view(x.size(0), -1)
             return self.fc(x)
         raise ValueError(f"Unknown segment: {segment}")
-
-
-def _apply_factored_action(
-    model: MorphogeneticModel,
-    action: FactoredAction,
-    *,
-    slot_config: SlotConfig,
-    enabled_slots: list[str],
-    seed_counter: int,
-) -> tuple[bool, int]:
-    target_slot, slot_is_enabled = _resolve_target_slot(
-        action.slot_idx,
-        enabled_slots=enabled_slots,
-        slot_config=slot_config,
-    )
-    if not slot_is_enabled:
-        return False, seed_counter
-
-    if action.op == LifecycleOp.GERMINATE:
-        tempo_epochs = TEMPO_TO_EPOCHS[action.tempo]
-        seed_id = f"scripted_seed_{seed_counter}"
-        model.germinate_seed(
-            action.blueprint_id or "norm",
-            seed_id,
-            slot=target_slot,
-            blend_algorithm_id=action.blend_algorithm_id,
-            blend_tempo_epochs=tempo_epochs,
-            alpha_algorithm=action.alpha_algorithm_value,
-            alpha_target=action.alpha_target_value,
-        )
-        return True, seed_counter + 1
-
-    if action.op == LifecycleOp.FOSSILIZE:
-        gate = model.seed_slots[target_slot].advance_stage(SeedStage.FOSSILIZED)
-        return gate.passed, seed_counter
-
-    if action.op == LifecycleOp.PRUNE:
-        if model.has_active_seed_in_slot(target_slot):
-            slot = model.seed_slots[target_slot]
-            slot_state = slot.state
-            if (
-                slot_state is None
-                or slot_state.alpha_controller.alpha_mode != AlphaMode.HOLD
-                or not slot_state.can_transition_to(SeedStage.PRUNED)
-            ):
-                return False, seed_counter
-            speed_steps = action.alpha_speed_steps
-            curve = action.alpha_curve_value
-            if speed_steps <= 0:
-                pruned = slot.prune(reason="policy_prune", initiator="scripted")
-                return pruned, seed_counter
-            scheduled = slot.schedule_prune(
-                steps=speed_steps,
-                curve=curve,
-                initiator="scripted",
-            )
-            return scheduled, seed_counter
-        return False, seed_counter
-
-    if action.op == LifecycleOp.SET_ALPHA_TARGET:
-        if model.has_active_seed_in_slot(target_slot):
-            updated = model.seed_slots[target_slot].set_alpha_target(
-                alpha_target=action.alpha_target_value,
-                steps=action.alpha_speed_steps,
-                curve=action.alpha_curve_value,
-                alpha_algorithm=action.alpha_algorithm_value,
-                initiator="scripted",
-            )
-            return updated, seed_counter
-        return False, seed_counter
-
-    return True, seed_counter
 
 
 def test_scripted_policy_runner_smoke() -> None:
@@ -227,14 +157,16 @@ def test_scripted_policy_runner_smoke() -> None:
             assert masks["alpha_speed"][action.alpha_speed.value].item() is True
             assert masks["alpha_curve"][action.alpha_curve.value].item() is True
 
-        success, seed_counter = _apply_factored_action(
+        result = apply_oracle_factored_action(
             model,
             action,
             slot_config=slot_config,
             enabled_slots=enabled_slots,
             seed_counter=seed_counter,
         )
-        assert success
+        assert isinstance(result, OracleActionResult)
+        assert result.success
+        seed_counter = result.seed_counter
 
         if action.op == LifecycleOp.GERMINATE:
             slot = model.seed_slots["r0c1"]
