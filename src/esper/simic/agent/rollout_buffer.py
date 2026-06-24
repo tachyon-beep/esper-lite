@@ -770,6 +770,12 @@ class TamiyoRolloutBuffer:
             "rewards": self.rewards.to(device, non_blocking=nb),
             "advantages": self.advantages.to(device, non_blocking=nb),
             "returns": self.returns.to(device, non_blocking=nb),
+            # EV-stab Stage 2: per-stream returns + V_cf. On the OFF leg these are all
+            # zero (compute_advantages_and_returns leaves returns_main/returns_cf untouched
+            # and cf_values is never populated), so consumers gate on hra_value_decomposition.
+            "returns_main": self.returns_main.to(device, non_blocking=nb),
+            "returns_cf": self.returns_cf.to(device, non_blocking=nb),
+            "cf_values": self.cf_values.to(device, non_blocking=nb),
             "td_errors": self.td_errors.to(device, non_blocking=nb),
             "slot_masks": self.slot_masks.to(device, non_blocking=nb),
             "blueprint_masks": self.blueprint_masks.to(device, non_blocking=nb),

@@ -43,6 +43,9 @@ class LossMetrics:
     # trains the q_head's own params) so the op_q_values/q_variance/q_spread telemetry
     # stays meaningful instead of emitting untrained init noise.
     q_aux_loss: torch.Tensor
+    # EV-stab Stage 2: head-only V_cf regression loss (unconditional MSE, no value-clip).
+    # 0.0 on the OFF leg, where it is NOT added to total_loss (gated on cf inputs).
+    cf_value_loss: torch.Tensor
     total_loss: torch.Tensor
 
 
@@ -252,6 +255,12 @@ def compute_losses(
     values: torch.Tensor,
     normalized_returns: torch.Tensor,
     old_values: torch.Tensor,
+    # EV-stab Stage 2 (HRA): per-stream targets + V_cf prediction. All None on the OFF
+    # leg, which leaves value_loss regressing on normalized_returns (total) and adds NO
+    # cf_value_loss to total_loss -- byte-identical to the single-head path.
+    normalized_returns_main: torch.Tensor | None = None,
+    normalized_returns_cf: torch.Tensor | None = None,
+    cf_values: torch.Tensor | None = None,
     entropy: dict[str, torch.Tensor],
     entropy_coef_per_head: dict[str, float],
     entropy_coef: float,
@@ -344,14 +353,19 @@ def compute_losses(
         head_loss = -(clipped_surr * effective_mask).sum() / n_valid
         policy_loss = policy_loss + head_loss
 
-    # Value loss with per-timestep weighting
+    # Value loss with per-timestep weighting.
+    # EV-stab Stage 2: on the ON leg `values` is V_main and its target retargets from the
+    # total return to the de-shaped main return. On the OFF leg normalized_returns_main is
+    # None, so value_target IS the same tensor object as normalized_returns (the total) --
+    # the computation below is character-identical to the single-head path.
+    value_target = normalized_returns_main if normalized_returns_main is not None else normalized_returns
     if clip_value:
         values_clipped = old_values + torch.clamp(values - old_values, -value_clip, value_clip)
-        value_loss_unclipped = (values - normalized_returns) ** 2
-        value_loss_clipped = (values_clipped - normalized_returns) ** 2
+        value_loss_unclipped = (values - value_target) ** 2
+        value_loss_clipped = (values_clipped - value_target) ** 2
         per_step_value_loss = torch.max(value_loss_unclipped, value_loss_clipped)
     else:
-        per_step_value_loss = (values - normalized_returns) ** 2
+        per_step_value_loss = (values - value_target) ** 2
 
     # D1: Weighted mean for value loss (0.2 weight for forced steps)
     if value_weight is not None:
@@ -369,6 +383,20 @@ def compute_losses(
         q_aux_loss = 0.5 * (per_step_q_loss * value_weight).sum() / value_weight.sum().clamp(min=1)
     else:
         q_aux_loss = 0.5 * per_step_q_loss.mean()
+
+    # EV-stab Stage 2: head-only V_cf regression. UNCONDITIONAL MSE only -- no
+    # old_cf_values / no value-clip (clip_value is False by default and raises under
+    # recurrent_n_epochs>1, ppo_agent.py; the cf head has no anchored old value). Masked
+    # exactly like value_loss (same forced-step value_weight). On the OFF leg cf_values /
+    # normalized_returns_cf are None: cf_value_loss is 0.0 and is NOT added to total_loss.
+    if cf_values is not None and normalized_returns_cf is not None:
+        per_step_cf_loss = (cf_values - normalized_returns_cf) ** 2
+        if value_weight is not None:
+            cf_value_loss = 0.5 * (per_step_cf_loss * value_weight).sum() / value_weight.sum().clamp(min=1)
+        else:
+            cf_value_loss = 0.5 * per_step_cf_loss.mean()
+    else:
+        cf_value_loss = torch.tensor(0.0, device=values.device)
 
     # D1: Entropy loss - also exclude forced steps (entropy is meaningless when no choice)
     # ChatGPT Pro review 2025-01-08: Entropy over a single-valid-action distribution is
@@ -428,6 +456,12 @@ def compute_losses(
         + entropy_floor_penalty
         + q_aux_coef * q_aux_loss  # P0-1: small detached Q telemetry regression
     )
+    # EV-stab Stage 2: add the head-only V_cf loss ONLY on the ON leg. Gating on the cf
+    # inputs (not `+ value_coef * 0.0`) keeps the OFF-leg total_loss the exact same graph
+    # as the single-head path (OFF-leg golden byte-identity). Same value_coef as V_main:
+    # both are unit-scale head MSEs and the cf head is detached from the trunk.
+    if cf_values is not None and normalized_returns_cf is not None:
+        total_loss = total_loss + value_coef * cf_value_loss
 
     return LossMetrics(
         policy_loss=policy_loss,
@@ -435,6 +469,7 @@ def compute_losses(
         entropy_loss=entropy_loss,
         entropy_floor_penalty=entropy_floor_penalty,
         q_aux_loss=q_aux_loss,
+        cf_value_loss=cf_value_loss,
         total_loss=total_loss,
     )
 

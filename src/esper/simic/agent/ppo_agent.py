@@ -64,7 +64,10 @@ logger = logging.getLogger(__name__)
 # Checkpoint format version for forward compatibility
 # Increment when checkpoint structure changes in backwards-incompatible ways
 # Version 2: value_normalizer_state_dict and compile_mode are now required fields
-CHECKPOINT_VERSION = 2
+# Version 3 (EV-stab Stage 2): hra_value_decomposition is recorded; on the ON leg the
+# value_main_normalizer + cf_value_normalizer state dicts are serialized alongside
+# value_normalizer (three-head value topology: V_main + V_cf + the q-aux total).
+CHECKPOINT_VERSION = 3
 
 # Sparse heads need higher entropy coefficients to maintain exploration
 # when they receive fewer training signals due to causal masking
@@ -380,7 +383,20 @@ class PPOAgent:
         # The critic is trained on normalized returns (std~1), but GAE needs
         # denormalized values to compute δ = r + γV(s') - V(s) correctly.
         # ValueNormalizer tracks running stats and provides denormalize() for GAE.
+        # value_normalizer is the TOTAL normalizer: fed returns_total, it is the q-aux
+        # regression target AND the ev_sum total normalizer. UNCHANGED by HRA -- on the
+        # OFF leg V_total == V_main == today's self.returns, so this is byte-identical.
         self.value_normalizer = ValueNormalizer(device=device)
+        # EV-stab Stage 2 (HRA, §4.5): two NEW per-stream value normalizers built ONLY on
+        # the ON leg. value_main_normalizer is the V_main target + GAE denorm for V_main;
+        # cf_value_normalizer is the V_cf target + GAE denorm for V_cf. None on the OFF leg
+        # (no dead state, and every cf branch gates on these being non-None).
+        if self.hra_value_decomposition:
+            self.value_main_normalizer: ValueNormalizer | None = ValueNormalizer(device=device)
+            self.cf_value_normalizer: ValueNormalizer | None = ValueNormalizer(device=device)
+        else:
+            self.value_main_normalizer = None
+            self.cf_value_normalizer = None
 
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
         use_cuda = device.startswith("cuda")
@@ -423,6 +439,16 @@ class PPOAgent:
                 list(base_net.state_value_head.parameters()) +
                 list(base_net.q_head.parameters())
             )
+            # EV-stab Stage 2: the head-only cf_value_head is also a critic. Add it to the
+            # critic group ONLY on the ON leg (it is None when OFF, so this never runs and
+            # the optimizer groups are byte-identical to the single-head path). Its loss
+            # backprops only into its own params (trunk detached in _compute_cf_value).
+            if self.hra_value_decomposition:
+                assert base_net.cf_value_head is not None, (
+                    "hra_value_decomposition is on but cf_value_head was not built; "
+                    "the network ctor must construct it under the same flag."
+                )
+                critic_params = critic_params + list(base_net.cf_value_head.parameters())
             shared_params = (
                 list(base_net.feature_net.parameters()) +
                 list(base_net.lstm.parameters()) +
@@ -601,11 +627,23 @@ class PPOAgent:
         # The critic learns normalized values (std~1), but GAE needs raw scale values
         # to compute delta = r + γV' - V correctly. Without this, scale mismatch
         # corrupts advantages and breaks training.
-        self.buffer.compute_advantages_and_returns(
-            gamma=self.gamma,
-            gae_lambda=self.gae_lambda,
-            value_normalizer=self.value_normalizer,
-        )
+        # EV-stab Stage 2 (§4.4): on the ON leg self.buffer.values holds V_main, so GAE must
+        # denorm it with value_main_normalizer (NOT the total normalizer -- that is the
+        # scale-mismatch trap); cf_value_normalizer denorms self.buffer.cf_values (= V_cf).
+        # On the OFF leg this is EXACTLY today: value_normalizer denorms V_total, no cf arg.
+        if self.hra_value_decomposition:
+            self.buffer.compute_advantages_and_returns(
+                gamma=self.gamma,
+                gae_lambda=self.gae_lambda,
+                value_normalizer=self.value_main_normalizer,
+                cf_value_normalizer=self.cf_value_normalizer,
+            )
+        else:
+            self.buffer.compute_advantages_and_returns(
+                gamma=self.gamma,
+                gae_lambda=self.gae_lambda,
+                value_normalizer=self.value_normalizer,
+            )
         pre_norm_adv_mean, pre_norm_adv_std, std_floored = self.buffer.normalize_advantages()
 
         # D5: Compute forced step ratio from buffer data
@@ -662,7 +700,23 @@ class PPOAgent:
         # returns), but returns are on raw scale. Denormalize values to match returns scale.
         valid_values = data["values"][valid_mask]
         valid_returns = data["returns"][valid_mask]
-        raw_values = self.value_normalizer.denormalize(valid_values)
+        # EV-stab Stage 2 (§4.5 EV path): on the ON leg data["values"] is V_main (in
+        # value_main_normalizer space) and data["returns"] is returns_total. raw_values is
+        # the V_total reconstruction denorm_main(V_main)+denorm_cf(V_cf) -- so the existing
+        # `explained_variance` becomes ev_sum = EV(V_total, returns_total). Denorming V_main
+        # with the TOTAL normalizer here would be the scale-mismatch trap. OFF leg: verbatim.
+        if self.hra_value_decomposition:
+            assert self.value_main_normalizer is not None and self.cf_value_normalizer is not None
+            valid_returns_main = data["returns_main"][valid_mask]
+            valid_returns_cf = data["returns_cf"][valid_mask]
+            valid_cf_values = data["cf_values"][valid_mask]
+            raw_v_main = self.value_main_normalizer.denormalize(valid_values)
+            raw_v_cf = self.cf_value_normalizer.denormalize(valid_cf_values)
+            raw_values = raw_v_main + raw_v_cf
+        else:
+            valid_returns_main = None
+            valid_returns_cf = None
+            raw_values = self.value_normalizer.denormalize(valid_values)
         # W7 helper seam: variance-floored EV + floor-stabilized value_nrmse companion + flag.
         # Single path (no dual 1e-8/0.0 branch). Degenerate (numel<=1) masks are NOT handled
         # here -- they produce NaN var()/std() and fall through to the non-finite return-stat
@@ -682,6 +736,22 @@ class PPOAgent:
         metrics["value_nrmse"] = [value_nrmse]
         metrics["ev_low_return_variance"] = [ev_low_return_variance]
         metrics["ev_low_return_variance_count"] = [1 if ev_low_return_variance else 0]
+
+        # EV-stab Stage 2 (§4.5 EV path): per-stream EV. On the ON leg `explained_variance`
+        # above already IS ev_sum = EV(V_total, returns_total); compute ev_main / ev_cf from
+        # the per-stream raws denormed by their own normalizers. (Stage 0 surfaces these on
+        # Karn; here we compute + store them.) [0] picks the EV scalar from the 4-tuple.
+        if self.hra_value_decomposition:
+            assert valid_returns_main is not None and valid_returns_cf is not None
+            ev_main = compute_floored_explained_variance(
+                raw_v_main, valid_returns_main, self.ev_return_variance_floor
+            )[0]
+            ev_cf = compute_floored_explained_variance(
+                raw_v_cf, valid_returns_cf, self.ev_return_variance_floor
+            )[0]
+            metrics["ev_main"] = [ev_main]
+            metrics["ev_cf"] = [ev_cf]
+            metrics["ev_sum"] = [explained_variance]
 
         # Return statistics for diagnosing value loss scale
         return_mean = valid_returns.mean()
@@ -705,6 +775,26 @@ class PPOAgent:
         normalized_returns = self.value_normalizer.normalize(valid_returns).detach()
         value_target_scale = torch.tensor(self.value_normalizer.get_scale(), device=valid_returns.device)
         metrics["value_target_scale"] = [value_target_scale]
+
+        # EV-stab Stage 2 (§4.5 per-stream targets): the total normalizer above stays the
+        # q-aux target (returns_total -- §6 fidelity pin). On the ON leg ALSO update + build
+        # the per-stream targets: value_main_normalizer regresses V_main on returns_main,
+        # cf_value_normalizer regresses V_cf on returns_cf. update() must run AFTER the GAE
+        # denorm + EV path (both need pre-update stats), matching the total normalizer above.
+        if self.hra_value_decomposition:
+            assert self.value_main_normalizer is not None and self.cf_value_normalizer is not None
+            assert valid_returns_main is not None and valid_returns_cf is not None
+            self.value_main_normalizer.update(valid_returns_main)
+            self.cf_value_normalizer.update(valid_returns_cf)
+            normalized_returns_main: torch.Tensor | None = (
+                self.value_main_normalizer.normalize(valid_returns_main).detach()
+            )
+            normalized_returns_cf: torch.Tensor | None = (
+                self.cf_value_normalizer.normalize(valid_returns_cf).detach()
+            )
+        else:
+            normalized_returns_main = None
+            normalized_returns_cf = None
 
         # Pre-normalization advantage stats for diagnosing advantage collapse
         # If pre_norm_adv_std is tiny but pre_clip_grad_norm is huge, it indicates
@@ -1055,6 +1145,17 @@ class PPOAgent:
                 "(P0-1: PPO-trained policies always expose an op-conditioned q_head)."
             )
             q_values = result.q_value  # Q(s, stored_op): detached telemetry/aux
+            # EV-stab Stage 2: head-only V_cf(s) for the current epoch. Present iff ON
+            # (mirror the q_value hard assert). On the OFF leg it stays None and the cf
+            # value loss is never computed.
+            if self.hra_value_decomposition:
+                assert result.cf_value is not None, (
+                    "hra_value_decomposition is on but EvalResult.cf_value is None; the "
+                    "policy must populate the head-only V_cf (cf_value_head built under flag)."
+                )
+                cf_values = result.cf_value
+            else:
+                cf_values = None
             entropy = result.entropy
 
             # Track LSTM hidden state health (TELE-340)
@@ -1077,6 +1178,9 @@ class PPOAgent:
                 log_probs[key] = log_probs[key][valid_mask]
             values = values[valid_mask]
             q_values = q_values[valid_mask]  # P0-1: filter Q-aux like the value path
+            # EV-stab Stage 2: filter V_cf like the value path (ON leg only).
+            if cf_values is not None:
+                cf_values = cf_values[valid_mask]
             for key in entropy:
                 entropy[key] = entropy[key][valid_mask]
 
@@ -1293,6 +1397,11 @@ class PPOAgent:
                 values=values,
                 normalized_returns=normalized_returns,
                 old_values=valid_old_values,
+                # EV-stab Stage 2: per-stream targets + V_cf (all None on the OFF leg, where
+                # value_loss stays on normalized_returns (total) and no cf_value_loss is added).
+                normalized_returns_main=normalized_returns_main,
+                normalized_returns_cf=normalized_returns_cf,
+                cf_values=cf_values,
                 entropy=entropy,
                 entropy_coef_per_head=self.entropy_coef_per_head,
                 entropy_coef=entropy_coef,
@@ -1554,6 +1663,12 @@ class PPOAgent:
             metrics["value_max"].append(logging_tensors[10])
             metrics["entropy_floor_penalty"].append(logging_tensors[11])
             metrics["q_aux_loss"].append(logging_tensors[12])
+            # EV-stab Stage 2: emit cf_value_loss ON-leg ONLY. Gating here (not appending it
+            # to the shared logging_tensors stack) keeps the OFF-leg returned metrics dict --
+            # a contract site -- byte-identical to today (no new keys). The builder's generic
+            # stack().mean().item() path reduces the 0-dim tensor like any scalar metric.
+            if self.hra_value_decomposition:
+                metrics["cf_value_loss"].append(losses.cf_value_loss)
             # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]
@@ -1651,6 +1766,18 @@ class PPOAgent:
             'network_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'value_normalizer_state_dict': self.value_normalizer.state_dict(),
+            # EV-stab Stage 2 (CHECKPOINT_VERSION 3): the two per-stream value normalizers.
+            # Always-present keys defaulting to None on the OFF leg (no cf head/normalizers
+            # built); on the ON leg they carry the V_main / V_cf normalizer stats. The load
+            # path restores them iff present and asserts the build flag matches.
+            'value_main_normalizer_state_dict': (
+                self.value_main_normalizer.state_dict()
+                if self.value_main_normalizer is not None else None
+            ),
+            'cf_value_normalizer_state_dict': (
+                self.cf_value_normalizer.state_dict()
+                if self.cf_value_normalizer is not None else None
+            ),
             'train_steps': self.train_steps,
             'aux_training_step': self._aux_training_step,
             'config': {
@@ -1691,6 +1818,9 @@ class PPOAgent:
                 'aux_stop_gradient': self.aux_stop_gradient,
                 'contribution_loss_clip': self.contribution_loss_clip,
                 'enable_contribution_aux': self.enable_contribution_aux,
+                # EV-stab Stage 2: recorded so load can rebuild the matching value topology
+                # (cf head + per-stream normalizers) and assert the build flag agrees.
+                'hra_value_decomposition': self.hra_value_decomposition,
             },
             # Architecture info for load-time reconstruction
             'architecture': {
@@ -1777,19 +1907,20 @@ class PPOAgent:
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
 
-        # P0-1 CHECKPOINT BREAK (intended, No-Legacy): the value-head topology changed.
-        # The PPO baseline is now an op-INDEPENDENT state_value_head (V(s)); the old
-        # op-conditioned value_head was renamed q_head (telemetry/aux). There is NO
-        # remap/shim -- a pre-v2 checkpoint has value_head.* (no state_value_head.* /
-        # q_head.*) and would fail strict load anyway; this assert names the break first.
+        # CHECKPOINT BREAK (intended, No-Legacy): the value-head topology version is a single
+        # source of truth (leyline VALUE_HEAD_SCHEMA_VERSION). v2 = op-INDEPENDENT
+        # state_value_head V(s) + q_head (telemetry/aux). v3 (EV-stab Stage 2) ADDS an
+        # OPTIONAL head-only cf_value_head (V_cf) under hra_value_decomposition, i.e. a
+        # three-head topology (V_main + V_cf + q-aux total) on the ON leg. There is NO
+        # remap/shim across versions; this assert names the break first.
         if value_head_schema_version != VALUE_HEAD_SCHEMA_VERSION:
             raise RuntimeError(
                 f"Value-head schema mismatch: checkpoint has "
                 f"value_head_schema_version={value_head_schema_version}, but this build "
-                f"expects {VALUE_HEAD_SCHEMA_VERSION}. The value head was split into an "
-                f"op-INDEPENDENT state_value_head (PPO baseline V(s)) plus an op-conditioned "
-                f"q_head (telemetry/aux). Old checkpoints (single op-conditioned value_head) "
-                f"are incompatible by design -- there is no remap. Please retrain."
+                f"expects {VALUE_HEAD_SCHEMA_VERSION}. The current topology is "
+                f"state_value_head (PPO baseline V_main) + an OPTIONAL trunk-detached "
+                f"cf_value_head (V_cf, EV-stab Stage 2 HRA) + q_head (telemetry/aux total). "
+                f"Older checkpoints are incompatible by design -- there is no remap. Please retrain."
             )
 
         # Extract value_normalizer state (required since CHECKPOINT_VERSION 2)
@@ -1799,6 +1930,18 @@ class PPOAgent:
             raise RuntimeError(
                 f"Incompatible checkpoint format: missing required field {e}. "
                 f"This checkpoint was saved with an older version (before v2). "
+                f"Please retrain the model to create a compatible checkpoint."
+            ) from e
+
+        # EV-stab Stage 2 (CHECKPOINT_VERSION 3): the two per-stream value normalizer states.
+        # Always-present keys (None on the OFF leg); must be read before `del checkpoint`.
+        try:
+            value_main_normalizer_state = checkpoint['value_main_normalizer_state_dict']
+            cf_value_normalizer_state = checkpoint['cf_value_normalizer_state_dict']
+        except KeyError as e:
+            raise RuntimeError(
+                f"Incompatible checkpoint format: missing required field {e}. "
+                f"This checkpoint was saved before CHECKPOINT_VERSION 3 (EV-stab Stage 2). "
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
 
@@ -1865,6 +2008,17 @@ class PPOAgent:
         effective_compile_mode = compile_mode if compile_mode is not None else checkpoint_compile_mode
 
         # === Create PolicyBundle (uncompiled - compile AFTER loading weights) ===
+        # EV-stab Stage 2: rebuild the SAME value topology the checkpoint was trained with.
+        # Without threading the flag here, an ON checkpoint (which has cf_value_head.* keys)
+        # would fail the strict load_state_dict below; an OFF checkpoint must NOT build the
+        # cf head. Recorded in config since CHECKPOINT_VERSION 3 (no back-compat).
+        try:
+            hra_value_decomposition = config['hra_value_decomposition']
+        except KeyError as e:
+            raise RuntimeError(
+                f"Incompatible checkpoint: config.hra_value_decomposition is required "
+                f"(CHECKPOINT_VERSION 3, EV-stab Stage 2). Missing field {e}. Please retrain."
+            ) from e
         from esper.tamiyo.policy.factory import create_policy
         policy = create_policy(
             policy_type="lstm",
@@ -1873,6 +2027,7 @@ class PPOAgent:
             lstm_hidden_dim=config['lstm_hidden_dim'],
             device=device,
             compile_mode="off",  # Defer compilation until weights loaded
+            hra_value_decomposition=hra_value_decomposition,
         )
 
         # === Create agent with restored config ===
@@ -1890,6 +2045,18 @@ class PPOAgent:
             **agent_config
         )
 
+        # EV-stab Stage 2: the rebuilt agent's value topology must match the checkpoint's
+        # HRA flag. `**agent_config` already fed the flag into cls(), so a mismatch here
+        # means the build did not propagate -- fail loud rather than load an ON checkpoint
+        # into an OFF graph (or vice versa). Names the break first (No-Legacy, descriptive).
+        if agent.hra_value_decomposition != hra_value_decomposition:
+            raise RuntimeError(
+                f"HRA value-decomposition flag mismatch: checkpoint was trained with "
+                f"hra_value_decomposition={hra_value_decomposition} but the rebuilt agent has "
+                f"{agent.hra_value_decomposition}. The three-head value topology (V_main + V_cf "
+                f"+ q-aux total) must match the checkpoint exactly -- there is no remap."
+            )
+
         # === Load weights ===
         agent.policy.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(optimizer_state_dict)
@@ -1900,6 +2067,16 @@ class PPOAgent:
         # This ensures consistent normalization scale across training resumption
         if value_normalizer_state is not None:
             agent.value_normalizer.load_state_dict(value_normalizer_state)
+
+        # EV-stab Stage 2: restore the per-stream normalizers. Present iff the checkpoint was
+        # ON; their agent counterparts were built iff agent.hra_value_decomposition is on, so
+        # presence and target are consistent by the flag-match assert above.
+        if value_main_normalizer_state is not None:
+            assert agent.value_main_normalizer is not None
+            agent.value_main_normalizer.load_state_dict(value_main_normalizer_state)
+        if cf_value_normalizer_state is not None:
+            assert agent.cf_value_normalizer is not None
+            agent.cf_value_normalizer.load_state_dict(cf_value_normalizer_state)
 
         # === Apply torch.compile AFTER loading weights ===
         # Critical: Compile must happen after state_dict to ensure graph traces

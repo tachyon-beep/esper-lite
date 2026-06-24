@@ -121,8 +121,14 @@ DEFAULT_LSTM_HIDDEN_DIM = 512
 # pre-v2 checkpoints (with value_head.* but no state_value_head.* / q_head.*)
 # fail strict load BY DESIGN (No-Legacy policy).
 #
+# Version 3 (EV-stab Stage 2) adds an OPTIONAL head-only cf_value_head (V_cf) under
+# the hra_value_decomposition flag, giving a three-head value topology on the ON leg:
+# state_value_head (V_main) + cf_value_head (V_cf, trunk-detached) + q_head (telemetry/
+# aux total). The OFF leg keeps the v2 two-head topology, but the schema id still bumps
+# so v2 and v3 checkpoints are not silently cross-loaded.
+#
 # Used by: simic/agent/ppo_agent.py (checkpoint save/load).
-VALUE_HEAD_SCHEMA_VERSION = 2
+VALUE_HEAD_SCHEMA_VERSION = 3
 
 # Number of LSTM layers in the host model.
 # Used by: Karn TUI widgets (gradient health display), telemetry dashboards.

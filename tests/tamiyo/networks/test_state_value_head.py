@@ -227,9 +227,14 @@ class TestCheckpointBreak:
         with pytest.raises(RuntimeError):
             fresh.load_state_dict(old_sd, strict=True)
 
-    def test_value_head_schema_version_is_two(self):
-        """VALUE_HEAD_SCHEMA_VERSION is the leyline single source of truth (== 2)."""
-        assert VALUE_HEAD_SCHEMA_VERSION == 2
+    def test_value_head_schema_version_is_three(self):
+        """VALUE_HEAD_SCHEMA_VERSION is the leyline single source of truth (== 3).
+
+        Bumped 2->3 by EV-stab Stage 2: the topology gained an OPTIONAL trunk-detached
+        cf_value_head (V_cf) under hra_value_decomposition (three-head value topology on
+        the ON leg).
+        """
+        assert VALUE_HEAD_SCHEMA_VERSION == 3
 
 
 class TestAmpCastCacheValueGrad:

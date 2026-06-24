@@ -188,6 +188,14 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     "policy_loss",
     "value_loss",
     "q_aux_loss",  # P0-1: detached aux q_head regression loss (mean across updates, like value_loss)
+    # EV-stab Stage 2 (HRA): head-only V_cf loss + per-stream EV. ON-leg-only keys (the agent
+    # gates their emission on hra_value_decomposition), each a plain scalar mean over updates,
+    # like value_loss / explained_variance. The strict whitelist below requires a declared
+    # reducer for every emitted key, so these MUST be declared even though they are optional.
+    "cf_value_loss",
+    "ev_main",
+    "ev_cf",
+    "ev_sum",
     "entropy_floor_penalty",
     "approx_kl",
     "clip_fraction",
