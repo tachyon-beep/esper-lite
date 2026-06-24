@@ -325,6 +325,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
         lstm_layers: int = 1,
         slot_config: SlotConfig | None = None,
+        hra_value_decomposition: bool = False,
     ):
         super().__init__()
 
@@ -345,6 +346,9 @@ class FactoredRecurrentActorCritic(nn.Module):
         self.num_ops = head_sizes["op"]
         self.lstm_hidden_dim = lstm_hidden_dim
         self.lstm_layers = lstm_layers
+        # EV-stab Stage 2: build the head-only cf value head only when enabled
+        # (true bypass — no dead weights on the default-OFF leg).
+        self.hra_value_decomposition = hra_value_decomposition
 
         # Feature extraction before LSTM (reduces dimensionality)
         # M7: Pre-LSTM LayerNorm stabilizes input distribution to LSTM
@@ -493,6 +497,29 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.Linear(head_hidden // 4, 1),  # 64 -> 1
         )
 
+        # cf_value_head (EV-stab Stage 2): head-only counterfactual value V_cf(s).
+        # Built ONLY when hra_value_decomposition is enabled (true bypass — no dead
+        # weights on the default-OFF leg, where it stays None). Mirrors
+        # state_value_head's architecture; trained head-only (its _compute_cf_value
+        # detaches the LSTM trunk, exactly like _compute_q). Declared AFTER q_head and
+        # BEFORE contribution_predictor so OFF-leg / existing-value-head init RNG is
+        # unchanged (only the cf head + the downstream contribution_predictor draws
+        # shift on the ON leg).
+        if hra_value_decomposition:
+            self.cf_value_head: nn.Sequential | None = nn.Sequential(
+                nn.Linear(lstm_hidden_dim, head_hidden),  # 512 -> 256
+                nn.LayerNorm(head_hidden),
+                nn.ReLU(),
+                nn.Linear(head_hidden, head_hidden // 2),  # 256 -> 128
+                nn.LayerNorm(head_hidden // 2),
+                nn.ReLU(),
+                nn.Linear(head_hidden // 2, head_hidden // 4),  # 128 -> 64
+                nn.ReLU(),
+                nn.Linear(head_hidden // 4, 1),  # 64 -> 1
+            )
+        else:
+            self.cf_value_head = None
+
         # Auxiliary contribution predictor head
         # Predicts per-slot counterfactual contributions for auxiliary supervision.
         # Input: lstm_out (lstm_hidden_dim)
@@ -546,7 +573,14 @@ class FactoredRecurrentActorCritic(nn.Module):
         # the contribution predictor (a regression head over similar target scales) makes.
         # This applies identically to the op-INDEPENDENT V(s) baseline (state_value_head)
         # and the retained op-conditioned q_head (telemetry/aux).
-        for value_like_head in (self.state_value_head, self.q_head):
+        # EV-stab Stage 2: include cf_value_head (when built) LAST so the existing
+        # value heads' gain=0.1 init draws are unchanged vs the OFF leg. Conditional
+        # local list (not a tuple literal) so the OFF leg, where cf_value_head is None,
+        # never references a missing head.
+        value_like_heads = [self.state_value_head, self.q_head]
+        if self.cf_value_head is not None:
+            value_like_heads.append(self.cf_value_head)
+        for value_like_head in value_like_heads:
             last_value_layer = value_like_head[-1]
             if isinstance(last_value_layer, nn.Linear):
                 nn.init.orthogonal_(last_value_layer.weight.data, gain=0.1)
