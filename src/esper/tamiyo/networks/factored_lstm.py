@@ -523,10 +523,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         # Built ONLY when hra_value_decomposition is enabled (true bypass — no dead
         # weights on the default-OFF leg, where it stays None). Mirrors
         # state_value_head's architecture; trained head-only (its _compute_cf_value
-        # detaches the LSTM trunk, exactly like _compute_q). Declared AFTER q_head and
-        # BEFORE contribution_predictor so OFF-leg / existing-value-head init RNG is
-        # unchanged (only the cf head + the downstream contribution_predictor draws
-        # shift on the ON leg).
+        # detaches the LSTM trunk, exactly like _compute_q). The load-bearing invariant
+        # is OFF-leg byte-identity: when OFF this branch is never entered, so zero extra
+        # RNG is consumed and every existing head's init is unchanged vs today. On the
+        # ON leg, building cf_value_head consumes RNG (its own Linear init + an extra
+        # entry in the _init_weights self.modules() loop) BEFORE _init_weights runs, so
+        # ALL downstream heads' init draws shift — this is fine: ON is a fresh-init
+        # paired-A/B path by design (plan §6); only OFF is pinned byte-identical.
         if hra_value_decomposition:
             self.cf_value_head: nn.Sequential | None = nn.Sequential(
                 nn.Linear(lstm_hidden_dim, head_hidden),  # 512 -> 256
@@ -595,10 +598,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         # the contribution predictor (a regression head over similar target scales) makes.
         # This applies identically to the op-INDEPENDENT V(s) baseline (state_value_head)
         # and the retained op-conditioned q_head (telemetry/aux).
-        # EV-stab Stage 2: include cf_value_head (when built) LAST so the existing
-        # value heads' gain=0.1 init draws are unchanged vs the OFF leg. Conditional
-        # local list (not a tuple literal) so the OFF leg, where cf_value_head is None,
-        # never references a missing head.
+        # EV-stab Stage 2: append cf_value_head (when built) LAST in the gain=0.1 group.
+        # On the OFF leg cf_value_head is None so this list is exactly the original
+        # (state_value_head, q_head) and the gain=0.1 draws are byte-identical to today.
+        # (On the ON leg the cf head's earlier construction already reshuffled the
+        # upstream draws — see the cf_value_head construction note; ON is fresh-init by
+        # design.) Conditional local list (not a tuple literal) so the OFF leg, where
+        # cf_value_head is None, never references a missing head.
         value_like_heads = [self.state_value_head, self.q_head]
         if self.cf_value_head is not None:
             value_like_heads.append(self.cf_value_head)
