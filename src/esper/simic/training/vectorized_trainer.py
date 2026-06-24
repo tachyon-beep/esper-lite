@@ -583,6 +583,7 @@ class ActionInputBundle:
     masks_batch: dict[str, torch.Tensor]
     actions_np: np.ndarray
     values: list[float]
+    cf_values: list[float] | None
     head_confidences_cpu: np.ndarray | None
     head_entropies_cpu: np.ndarray | None
     op_probs_cpu: np.ndarray | None
@@ -728,6 +729,8 @@ class VectorizedPPOTrainer:
             fossilize_active_seed=self.fossilize_active_seed,
             resolve_target_slot=self.resolve_target_slot,
             host_params_baseline=self.host_params_baseline,
+            # EV-stab Stage 2: construction-time constant; gates the cf reward split.
+            hra_value_decomposition=self.agent.hra_value_decomposition,
         )
 
         # Create PPO coordinator for update phase
@@ -2080,6 +2083,18 @@ class VectorizedPPOTrainer:
             values_tensor.cpu().tolist()
         )  # .tolist() on CPU tensor is free
 
+        # EV-stab Stage 2: per-step head-only V_cf(s). Pulled from the SAME get_action
+        # result as values (shared mask/hidden), only on the ON leg (explicit flag gate);
+        # None on the OFF leg so execute_actions stays byte-identical to today.
+        cf_values: list[float] | None = None
+        if agent.hra_value_decomposition:
+            cf_value_tensor = action_result.cf_value
+            if cf_value_tensor is None:
+                raise RuntimeError(
+                    "hra_value_decomposition=True but get_action returned cf_value=None"
+                )
+            cf_values = cf_value_tensor.cpu().tolist()
+
         # Batch compute mask stats for telemetry
         masked_np: np.ndarray | None = None  # [num_heads, num_envs]
         if ops_telemetry_enabled:
@@ -2160,6 +2175,7 @@ class VectorizedPPOTrainer:
             masks_batch=masks_batch,
             actions_np=actions_np,
             values=values,
+            cf_values=cf_values,
             head_confidences_cpu=head_confidences_cpu,
             head_entropies_cpu=head_entropies_cpu,
             op_probs_cpu=op_probs_cpu,
@@ -2216,6 +2232,7 @@ class VectorizedPPOTrainer:
             step_records=step_records,
             actions_np=aib.actions_np,
             values=aib.values,
+            cf_values=aib.cf_values,
             all_signals=aib.all_signals,
             all_slot_reports=aib.all_slot_reports,
             states_batch_normalized=aib.states_batch_normalized,
@@ -2264,6 +2281,9 @@ class VectorizedPPOTrainer:
 
         # PHASE 2: Compute all bootstrap values in single batched forward pass
         bootstrap_values: list[float] = []
+        # EV-stab Stage 2: cf bootstrap mirrors the main bootstrap (same get_action,
+        # same shared mask); populated only on the ON leg.
+        cf_bootstrap_values: list[float] = []
         if all_post_action_signals:
             # Unpack Obs V3 tuple (obs, blueprint_indices)
             post_action_features_batch, post_action_bp_indices = (
@@ -2317,6 +2337,17 @@ class VectorizedPPOTrainer:
             # PERF: Move to CPU before .tolist() to avoid per-value GPU sync
             bootstrap_values = bootstrap_result.value.cpu().tolist()
 
+            # EV-stab Stage 2: read the cf bootstrap from the SAME get_action result
+            # (shared mask) so returns_cf's truncation bootstrap matches the main one.
+            if agent.hra_value_decomposition:
+                cf_bootstrap_tensor = bootstrap_result.cf_value
+                if cf_bootstrap_tensor is None:
+                    raise RuntimeError(
+                        "hra_value_decomposition=True but bootstrap get_action "
+                        "returned cf_value=None"
+                    )
+                cf_bootstrap_values = cf_bootstrap_tensor.cpu().tolist()
+
         if truncated_bootstrap_targets:
             if not bootstrap_values:
                 raise RuntimeError(
@@ -2326,6 +2357,20 @@ class VectorizedPPOTrainer:
                 truncated_bootstrap_targets, bootstrap_values, strict=True
             ):
                 agent.buffer.bootstrap_values[env_id, step_idx] = bootstrap_val
+
+            # EV-stab Stage 2: write the cf bootstrap with the SAME indices/handling
+            # as the main bootstrap above (ON leg only).
+            if agent.hra_value_decomposition:
+                if not cf_bootstrap_values:
+                    raise RuntimeError(
+                        "Missing cf bootstrap values for truncated transitions."
+                    )
+                for (env_id, step_idx), cf_bootstrap_val in zip(
+                    truncated_bootstrap_targets, cf_bootstrap_values, strict=True
+                ):
+                    agent.buffer.cf_bootstrap_values[env_id, step_idx] = (
+                        cf_bootstrap_val
+                    )
 
         return ActionTransactionResult(
             truncated_bootstrap_targets=truncated_bootstrap_targets,
