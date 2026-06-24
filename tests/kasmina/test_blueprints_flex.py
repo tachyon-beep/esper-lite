@@ -30,12 +30,13 @@ class TestFlexAttentionBlueprint:
         not HAS_FLEX_ATTENTION,
         reason="FlexAttention requires PyTorch 2.5+"
     )
-    def test_flex_attention_forward(self):
-        """FlexAttention seed should process input correctly."""
+    def test_flex_attention_cpu_inference_forward(self):
+        """FlexAttention seed should process CPU inference input correctly."""
         seed = BlueprintRegistry.create("transformer", "flex_attention", 64)
 
         x = torch.randn(2, 16, 64)
-        result = seed(x)
+        with torch.no_grad():
+            result = seed(x)
 
         assert result.shape == x.shape
 
@@ -59,15 +60,12 @@ class TestFlexAttentionBlueprint:
         assert result.shape == x.shape
         assert not torch.isnan(result).any()
 
-    @pytest.mark.skipif(
-        not HAS_FLEX_ATTENTION,
-        reason="FlexAttention requires PyTorch 2.5+"
-    )
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_flex_attention_gradient_flow(self):
-        """FlexAttention should support gradient flow."""
-        seed = BlueprintRegistry.create("transformer", "flex_attention", 64)
+        """FlexAttention should support gradient flow on its supported training device."""
+        seed = BlueprintRegistry.create("transformer", "flex_attention", 64).cuda()
 
-        x = torch.randn(2, 16, 64, requires_grad=True)
+        x = torch.randn(2, 16, 64, device="cuda", requires_grad=True)
         result = seed(x)
         loss = result.sum()
         loss.backward()
@@ -75,3 +73,16 @@ class TestFlexAttentionBlueprint:
         # Gradients should flow back
         assert x.grad is not None
         assert not torch.isnan(x.grad).any()
+
+    @pytest.mark.skipif(
+        not HAS_FLEX_ATTENTION,
+        reason="FlexAttention requires PyTorch 2.5+"
+    )
+    def test_cpu_backward_surfaces_flex_attention_platform_limit(self):
+        """CPU backward must expose FlexAttention's platform limit, not use SDPA."""
+        seed = BlueprintRegistry.create("transformer", "flex_attention", 64)
+
+        x = torch.randn(1, 8, 64, requires_grad=True)
+
+        with pytest.raises(NotImplementedError, match="backward on CPU"):
+            seed(x).sum().backward()

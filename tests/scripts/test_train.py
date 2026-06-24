@@ -726,6 +726,41 @@ class TestTrainMainArgumentErrors:
             train.main()
         assert exc_info.value.code == 2
 
+    def test_gpu_preload_gather_shrink_flag_parses(self):
+        import esper.scripts.train as train
+
+        args = train.build_parser().parse_args(
+            [
+                "ppo",
+                "--gpu-preload",
+                "--experimental-gpu-preload-gather",
+                "--gpu-preload-gather-shrink",
+            ]
+        )
+        assert args.gpu_preload_gather_shrink is True
+
+    def test_gpu_preload_gather_shrink_defaults_false(self):
+        import esper.scripts.train as train
+
+        args = train.build_parser().parse_args(["ppo"])
+        assert args.gpu_preload_gather_shrink is False
+
+    def test_gpu_preload_gather_shrink_requires_gather(self, monkeypatch):
+        import sys
+
+        import esper.scripts.train as train
+
+        # shrink only affects the gather iterator; without --experimental-gpu-preload-gather
+        # it is meaningless and must be rejected.
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["esper.scripts.train", "ppo", "--gpu-preload", "--gpu-preload-gather-shrink"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            train.main()
+        assert exc_info.value.code == 2
+
 
 class TestTrainMainSanctumCrashHandling:
     def test_pre_ready_training_crash_exits_before_sanctum_run(self, monkeypatch):
@@ -868,3 +903,93 @@ class TestTrainMainSanctumCrashHandling:
         assert hub.closed is True
         assert sanctum_init_calls == []
         assert sanctum_run_calls == []
+
+
+class TestWaitForDataloaderOrCrash:
+    """The pre-ready wait must watch BOTH the ready event and the shutdown event.
+
+    A pre-ready training crash sets ``shutdown_event`` (see
+    _run_training_capturing_errors) but never sets ``dataloader_ready_event``.
+    Waiting only on the ready event blocks the full timeout on an already-dead
+    run; the wait must bail as soon as shutdown is signalled.
+    """
+
+    def test_returns_true_immediately_when_ready_already_set(self):
+        import threading
+
+        import esper.scripts.train as train
+
+        ready = threading.Event()
+        shutdown = threading.Event()
+        ready.set()
+
+        assert (
+            train._wait_for_dataloader_or_crash(
+                ready, shutdown, timeout=60.0, poll_interval=0.01
+            )
+            is True
+        )
+
+    def test_returns_false_promptly_when_shutdown_set_without_ready(self):
+        """A crashed run (shutdown set, ready never set) must NOT block the timeout."""
+        import threading
+        import time
+
+        import esper.scripts.train as train
+
+        ready = threading.Event()
+        shutdown = threading.Event()
+        shutdown.set()  # crash already recorded, ready never signalled
+
+        start = time.monotonic()
+        result = train._wait_for_dataloader_or_crash(
+            ready, shutdown, timeout=60.0, poll_interval=0.01
+        )
+        elapsed = time.monotonic() - start
+
+        assert result is False
+        assert elapsed < 1.0, f"wait blocked {elapsed:.1f}s instead of bailing on shutdown"
+
+    def test_returns_false_on_timeout_when_neither_set(self):
+        """Genuine slow-dataloader timeout: neither event set, return False after timeout."""
+        import threading
+
+        import esper.scripts.train as train
+
+        ready = threading.Event()
+        shutdown = threading.Event()
+
+        assert (
+            train._wait_for_dataloader_or_crash(
+                ready, shutdown, timeout=0.05, poll_interval=0.01
+            )
+            is False
+        )
+
+    def test_unblocks_when_ready_set_concurrently(self):
+        """Returns True as soon as ready is set from another thread, before timeout."""
+        import threading
+        import time
+
+        import esper.scripts.train as train
+
+        ready = threading.Event()
+        shutdown = threading.Event()
+
+        def _set_ready_soon() -> None:
+            time.sleep(0.05)
+            ready.set()
+
+        setter = threading.Thread(target=_set_ready_soon)
+        setter.start()
+        try:
+            start = time.monotonic()
+            result = train._wait_for_dataloader_or_crash(
+                ready, shutdown, timeout=60.0, poll_interval=0.01
+            )
+            elapsed = time.monotonic() - start
+        finally:
+            setter.join()
+
+        assert result is True
+        assert elapsed < 1.0

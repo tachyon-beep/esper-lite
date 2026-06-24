@@ -49,6 +49,8 @@ class ActionResult:
     hidden: tuple[torch.Tensor, torch.Tensor] | None
     op_logits: torch.Tensor | None = None
     head_entropies: dict[str, torch.Tensor] | None = None
+    # EV-stab Stage 2: head-only V_cf(s), or None on the OFF leg / non-HRA policies.
+    cf_value: torch.Tensor | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,9 @@ class EvalResult:
     hidden: tuple[torch.Tensor, torch.Tensor] | None
     pred_contributions: torch.Tensor | None = None
     q_value: torch.Tensor | None = None
+    # EV-stab Stage 2: head-only V_cf(s) [batch, seq_len], or None on the OFF leg.
+    # PPO HRA path asserts non-None when hra_value_decomposition is on (like q_value).
+    cf_value: torch.Tensor | None = None
 
 
 @dataclass(frozen=True, slots=True)

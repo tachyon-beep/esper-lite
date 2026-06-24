@@ -463,3 +463,87 @@ def test_shared_gpu_gather_iterator_non_shuffle_avoids_epoch_permutation(
     ]
     assert len(set(input_storage_ptrs)) == 3
     assert clear_gpu_dataset_cache() == 1
+
+
+def test_gather_iterator_raises_when_total_batch_exceeds_dataset(monkeypatch) -> None:
+    """Disjoint mode: batch_size_per_env * n_envs > dataset_len yields zero batches.
+
+    This is the n_envs=128 production crash in miniature. It must raise at construction
+    with a message naming the ceiling and pointing at the higher-ceiling --gpu-preload
+    path, NOT silently produce a zero-length iterator that fails confusingly downstream.
+    """
+    clear_gpu_dataset_cache()
+    _cached_cpu_cifar()  # train has 12 samples
+    monkeypatch.setattr(data, "_ensure_cifar10_cached", lambda *args, **kwargs: None)
+
+    try:
+        with pytest.raises(ValueError) as exc_info:
+            SharedGPUGatherBatchIterator(
+                batch_size_per_env=4,
+                n_envs=4,  # total_batch = 16 > 12 -> 0 disjoint batches
+                env_devices=["cpu", "cpu", "cpu", "cpu"],
+                shuffle=False,
+                is_train=True,
+                seed=11,
+            )
+        msg = str(exc_info.value)
+        assert "batch_size_per_env" in msg
+        assert "n_envs" in msg
+        # Names the exact ceiling (12 // 4 = 3) and routes to the non-experimental path.
+        assert "3" in msg
+        assert "gpu-preload" in msg
+    finally:
+        clear_gpu_dataset_cache()
+
+
+def test_gather_iterator_shrink_mode_supports_large_n_envs(monkeypatch) -> None:
+    """allow_batch_shrink opt-in keeps the gather path working at large n_envs.
+
+    Per-env batch shrinks to dataset_len // n_envs so the disjoint-per-env invariant
+    is preserved (no sample reuse across envs); it does not wrap or duplicate.
+    """
+    clear_gpu_dataset_cache()
+    _cached_cpu_cifar()  # train has 12 samples
+    monkeypatch.setattr(data, "_ensure_cifar10_cached", lambda *args, **kwargs: None)
+
+    try:
+        iterator = SharedGPUGatherBatchIterator(
+            batch_size_per_env=4,
+            n_envs=4,  # 16 > 12 -> would crash without shrink
+            env_devices=["cpu", "cpu", "cpu", "cpu"],
+            shuffle=False,
+            is_train=True,
+            seed=11,
+            allow_batch_shrink=True,
+        )
+        # Effective per-env batch shrunk to 12 // 4 = 3; one disjoint batch/epoch.
+        assert iterator.batch_size_per_env == 3
+        assert len(iterator) == 1
+        batches = next(iter(iterator))
+        assert len(batches) == 4  # one tensor per env
+        assert all(inputs.shape[0] == 3 for inputs, _ in batches)
+    finally:
+        clear_gpu_dataset_cache()
+
+
+def test_gather_iterator_raises_when_n_envs_exceeds_dataset(monkeypatch) -> None:
+    """n_envs > dataset_len cannot give each env even one distinct sample -> always raise,
+    even with shrink enabled (shrink would compute batch_size_per_env = 0)."""
+    clear_gpu_dataset_cache()
+    _cached_cpu_cifar()  # train has 12 samples
+    monkeypatch.setattr(data, "_ensure_cifar10_cached", lambda *args, **kwargs: None)
+
+    try:
+        with pytest.raises(ValueError) as exc_info:
+            SharedGPUGatherBatchIterator(
+                batch_size_per_env=1,
+                n_envs=13,  # > 12 train samples
+                env_devices=["cpu"] * 13,
+                shuffle=False,
+                is_train=True,
+                seed=11,
+                allow_batch_shrink=True,
+            )
+        assert "n_envs" in str(exc_info.value)
+    finally:
+        clear_gpu_dataset_cache()

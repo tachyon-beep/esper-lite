@@ -481,6 +481,17 @@ def test_resolve_target_slot_out_of_range_is_invalid():
     assert enabled_flag is False
 
 
+def test_resolve_target_slot_empty_enabled_slots_does_not_crash():
+    # The IndexError fallback must source its deterministic logging slot from the
+    # slot_config (guaranteed non-empty by SlotConfig.__post_init__), not from
+    # enabled_slots — otherwise an empty enabled_slots raises a second IndexError.
+    slot_config = SlotConfig.default()
+
+    slot_id, enabled_flag = _resolve_target_slot(99, enabled_slots=[], slot_config=slot_config)
+    assert slot_id == slot_config.slot_id_for_index(0)
+    assert enabled_flag is False
+
+
 # =============================================================================
 # Seed Advancement Tests
 # =============================================================================

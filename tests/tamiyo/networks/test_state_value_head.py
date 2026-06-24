@@ -142,7 +142,7 @@ class TestGradientFlow:
         masks = {k: v.unsqueeze(1).expand(batch, seq, v.shape[-1]) for k, v in masks.items()}
         actions = {k: torch.zeros(batch, seq, dtype=torch.long) for k in HEAD_NAMES}
 
-        log_probs, value, entropy, hidden, contrib, q_value = net.evaluate_actions(
+        log_probs, value, entropy, hidden, contrib, q_value, _ = net.evaluate_actions(
             state, bp, actions,
             slot_mask=masks["slot"], blueprint_mask=masks["blueprint"],
             style_mask=masks["style"], tempo_mask=masks["tempo"],
@@ -258,7 +258,7 @@ class TestAmpCastCacheValueGrad:
                 _ = net._compute_q(tel["lstm_out"], torch.zeros(batch, seq, dtype=torch.long))
             torch.clear_autocast_cache()
 
-            log_probs, value, entropy, hidden, contrib, q_value = net.evaluate_actions(
+            log_probs, value, entropy, hidden, contrib, q_value, _ = net.evaluate_actions(
                 state, bp, actions,
                 slot_mask=masks["slot"], blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"], tempo_mask=masks["tempo"],

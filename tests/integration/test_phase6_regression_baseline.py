@@ -11,6 +11,7 @@ Metrics tracked:
 """
 
 import math
+import numbers
 
 import pytest
 import torch
@@ -18,6 +19,40 @@ from dataclasses import replace
 
 from esper.simic.training.vectorized import train_ppo_vectorized
 from esper.simic.rewards import RewardMode
+
+
+def _is_numeric_metric(value: object) -> bool:
+    """True for real numeric scalars whose finiteness must be validated.
+
+    Uses numbers.Real (rather than ``type(value) is int/float``) so numpy/torch
+    scalar metrics are covered, not silently skipped. Booleans are excluded:
+    Python ``bool`` is a numbers.Real subtype, and flag metrics like
+    ``ev_low_return_variance`` are not finiteness-checked. ``numpy.bool_`` is
+    already excluded (it is not a numbers.Real).
+    """
+    return isinstance(value, numbers.Real) and not isinstance(value, bool)
+
+
+def test_is_numeric_metric_covers_numpy_and_excludes_bool() -> None:
+    """The finiteness gate must check numpy/torch scalars, not just native int/float.
+
+    Regression for the brittle ``type(value) is int or type(value) is float`` gate,
+    which skips any numpy/torch scalar metric and so silently bypasses the
+    finiteness assertion for it.
+    """
+    import numpy as np
+
+    nan = float("nan")
+
+    # Numeric scalars that MUST be finiteness-checked (incl. a NaN that must be caught).
+    for value in (1, 1.0, np.float32(1.0), np.float64(nan), np.int64(3), torch.tensor(2.0).item()):
+        assert _is_numeric_metric(value), f"{value!r} ({type(value)}) should be checked"
+        # The old exact-type gate would have skipped every non-native scalar.
+    assert not (type(np.float64(nan)) is int or type(np.float64(nan)) is float)
+
+    # Non-numeric / boolean values must NOT be finiteness-checked.
+    for value in (True, False, np.bool_(True), "metric", (1, 2), [1, 2], None):
+        assert not _is_numeric_metric(value), f"{value!r} ({type(value)}) should be skipped"
 
 
 @pytest.mark.slow
@@ -107,7 +142,7 @@ def test_phase6_regression_baseline(monkeypatch: pytest.MonkeyPatch):
         # flagged; value_nrmse and ev_return_variance carry the stable diagnostics.
         for batch in history:
             for key, value in batch.items():
-                if type(value) is int or type(value) is float:
+                if _is_numeric_metric(value):
                     if key == "explained_variance" and math.isnan(value):
                         assert batch["ev_low_return_variance"] is True, (
                             "NaN explained_variance is allowed only for low-return-variance batches"

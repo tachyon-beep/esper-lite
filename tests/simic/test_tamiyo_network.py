@@ -124,7 +124,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        log_probs, values, entropy, hidden, pred_contributions, _ = net.evaluate_actions(state, bp_idx, actions)
+        log_probs, values, entropy, hidden, pred_contributions, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
         # Per-head log probs
         assert "slot" in log_probs
@@ -190,7 +190,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        _, _, entropy, _, _, _ = net.evaluate_actions(state, bp_idx, actions)
+        _, _, entropy, _, _, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
         # Normalized entropy should be between 0 and 1
         for key in [
@@ -488,7 +488,7 @@ def test_entropy_normalization_with_single_action():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, hidden, _, _ = net.evaluate_actions(state, bp_idx, actions)
+    log_probs, values, entropy, hidden, _, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy for single-action head should be 0 (no uncertainty), not inf/nan
     assert not torch.isnan(entropy["slot"]).any(), "Entropy should not be NaN"
@@ -516,7 +516,7 @@ def test_entropy_normalization_in_loss():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, _, _, _ = net.evaluate_actions(state, bp_idx, actions)
+    log_probs, values, entropy, _, _, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy loss should be bounded
     entropy_loss = sum(-ent.mean() for ent in entropy.values())
@@ -551,7 +551,7 @@ def test_entropy_respects_valid_actions_only():
         "op": torch.zeros(1, 2, dtype=torch.long),
     }
 
-    _, _, entropy, _, _, _ = net.evaluate_actions(
+    _, _, entropy, _, _, _, _ = net.evaluate_actions(
         states=state,
         blueprint_indices=bp_idx,
         actions=actions,
@@ -719,7 +719,7 @@ def test_state_value_matches_forward_and_evaluate():
         "alpha_curve": torch.randint(0, NUM_ALPHA_CURVES, (2, 5)),
     }
 
-    eval_log_probs, eval_value, eval_entropy, _, _, eval_q = net.evaluate_actions(
+    eval_log_probs, eval_value, eval_entropy, _, _, eval_q, _ = net.evaluate_actions(
         state, bp_idx, actions
     )
 

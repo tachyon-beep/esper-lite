@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import NotRequired, TypedDict, cast
+from typing import NamedTuple, NotRequired, TypedDict, cast
 
 import torch
 import torch.nn as nn
@@ -112,6 +112,22 @@ class _ForwardOutput(TypedDict):
     lstm_out: torch.Tensor  # [batch, seq, hidden_dim] for value recomputation
     sampled_op: torch.Tensor  # Op driving the action + Q telemetry
     hidden: tuple[torch.Tensor, torch.Tensor]
+
+
+class _EvalOutput(NamedTuple):
+    """Typed return for evaluate_actions() — attribute access for the new cf_value
+    field without a positional 7-tuple footgun (EV-stab Stage 2). Field ORDER matches
+    the historical 6-tuple (log_probs, value, entropy, hidden, pred_contributions,
+    q_value) so any remaining positional unpack stays correct, with cf_value appended.
+    """
+
+    log_probs: dict[str, torch.Tensor]
+    value: torch.Tensor
+    entropy: dict[str, torch.Tensor]
+    hidden: tuple[torch.Tensor, torch.Tensor]
+    pred_contributions: torch.Tensor | None
+    q_value: torch.Tensor | None
+    cf_value: torch.Tensor | None  # head-only V_cf(s); None on the OFF leg
 
 
 class BlueprintEmbedding(nn.Module):
@@ -1296,14 +1312,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         probability_floor: dict[str, float] | None = None,
         aux_stop_gradient: bool = True,
-    ) -> tuple[
-        dict[str, torch.Tensor],
-        torch.Tensor,
-        dict[str, torch.Tensor],
-        tuple[torch.Tensor, torch.Tensor],
-        torch.Tensor,
-        torch.Tensor,
-    ]:
+    ) -> _EvalOutput:
         """Evaluate actions for PPO update.
 
         Computes the op-INDEPENDENT PPO baseline V(s) (full gradient into the LSTM) and,
@@ -1387,6 +1396,10 @@ class FactoredRecurrentActorCritic(nn.Module):
         # _compute_q. Uses the STORED op (consistent with rollout collection).
         stored_op = actions["op"]
         q_value = self._compute_q(lstm_out, stored_op)
+        # EV-stab Stage 2: head-only V_cf(s) on the gradient path; None on the OFF leg.
+        cf_value = (
+            self._compute_cf_value(lstm_out) if self.cf_value_head is not None else None
+        )
 
         log_probs: dict[str, torch.Tensor] = {}
         entropy: dict[str, torch.Tensor] = {}
@@ -1533,7 +1546,15 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "Likely a Kasmina state-machine bug producing an all-masked head."
             )
 
-        return log_probs, value, entropy, new_hidden, pred_contributions, q_value
+        return _EvalOutput(
+            log_probs=log_probs,
+            value=value,
+            entropy=entropy,
+            hidden=new_hidden,
+            pred_contributions=pred_contributions,
+            q_value=q_value,
+            cf_value=cf_value,
+        )
 
 
 __all__ = ["BlueprintEmbedding", "FactoredRecurrentActorCritic", "GetActionResult"]
