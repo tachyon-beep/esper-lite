@@ -125,6 +125,13 @@ class PPOAgent:
         # Blueprint/style heads may warrant different entropy weighting since they
         # are only active during GERMINATE actions (less frequent than slot/op).
         entropy_coef_per_head: dict[str, float] | None = None,
+        # Per-head advantage normalization (default OFF). When enabled, each head's
+        # advantage is re-standardized over its OWN causally-active subset instead of
+        # inheriting one global mean/std (op-dominated under a shared critic). This is
+        # a policy-gradient SCALE change; gate it as an ablation and accept it on
+        # EV-liftoff with no regression vs the global-norm baseline. Per-head std
+        # telemetry is emitted regardless of this flag so the effect is observable.
+        per_head_advantage_norm: bool = False,
         value_coef: float = DEFAULT_VALUE_COEF,
         # Value coefficient warmup: start low, ramp up to value_coef over warmup_steps.
         # This prevents critic collapse when early returns have low variance (before
@@ -250,6 +257,8 @@ class PPOAgent:
         self.entropy_coef_per_head = dict(ENTROPY_COEF_PER_HEAD)
         if entropy_coef_per_head is not None:
             self.entropy_coef_per_head.update(entropy_coef_per_head)
+        # Per-head advantage normalization ablation flag (see __init__ docstring).
+        self.per_head_advantage_norm = per_head_advantage_norm
         # Per-head entropy floor penalty (prevents sparse head collapse)
         # Uses ENTROPY_FLOOR_PER_HEAD from leyline as defaults
         self.entropy_floor = entropy_floor if entropy_floor is not None else dict(ENTROPY_FLOOR_PER_HEAD)
@@ -875,6 +884,11 @@ class PPOAgent:
             # No valid data - use NaN
             metrics.update(_init_q_metrics_nan(self.device))
 
+        # Per-head advantage normalization stats (pre/post-norm std, active count,
+        # low-count fallback) — invariant across inner epochs; latest snapshot wins.
+        # Empty until the first epoch reaches the advantage split (early-stop safe).
+        latest_per_head_adv_stats: dict[str, dict[str, float]] = {}
+
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
         # Initialize conditional entropy tracking (P3-2: entropy only when head is causally relevant)
@@ -1165,10 +1179,16 @@ class PPOAgent:
             valid_op_actions = data["op_actions"][valid_mask]
             # Use effective op (action_for_reward) for causal masks to avoid crediting invalid ops.
             valid_effective_op_actions = data["effective_op_actions"][valid_mask]
-            per_head_advantages, head_masks = compute_per_head_advantages(
-                valid_advantages, valid_effective_op_actions
+            per_head_advantages, head_masks, per_head_adv_stats = compute_per_head_advantages(
+                valid_advantages,
+                valid_effective_op_actions,
+                per_head_normalize=self.per_head_advantage_norm,
             )
             # B4-DRL-01: Masks from leyline.causal_masks (single source of truth)
+            # Per-head advantage std telemetry is invariant across inner epochs (the
+            # advantages are fixed for the whole update), so we capture the latest
+            # snapshot and emit it once after the epoch loop.
+            latest_per_head_adv_stats = per_head_adv_stats
 
             # DRL Expert (2026-01): Compute AVAILABILITY masks for entropy regularization
             # These track which heads COULD HAVE mattered (action was VALID), not which
@@ -1556,6 +1576,12 @@ class PPOAgent:
 
         if clear_buffer:
             self.buffer.reset()
+
+        # Per-head advantage normalization telemetry (structured dict, invariant across
+        # inner epochs). Emitted whenever the advantage split was reached at least once;
+        # the builder forwards it verbatim (v[0]) like ratio_diagnostic.
+        if latest_per_head_adv_stats:
+            metrics["head_advantage_norm_stats"].append(latest_per_head_adv_stats)
 
         # Aggregate into typed result dict (metrics aggregation owns list->scalar logic)
         finiteness_failures = metrics["finiteness_gate_failures"]

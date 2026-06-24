@@ -188,6 +188,11 @@ class PPOUpdateMetrics(TypedDict, total=False):
     usable_actor_timesteps: int  # Count of timesteps where agent had real choice
     advantage_std_floored: bool  # True if advantage std was clamped to floor (degenerate batch)
     d5_pre_norm_advantage_std: float  # Raw std before normalization for slot saturation diagnostics
+    # Per-head advantage normalization stats (head -> {pre_norm_std, post_norm_std,
+    # n_active, fellback, normalized}). Always populated when the advantage split is
+    # reached, even with per-head normalization OFF, so the exploration→return-variance
+    # loop (sparse head normalized into oblivion by op's variance) is observable.
+    head_advantage_norm_stats: dict[str, dict[str, float]]
 
     # Auxiliary contribution supervision metrics (Phase 4.1)
     # DRL Expert: Monitor for prediction collapse and quality

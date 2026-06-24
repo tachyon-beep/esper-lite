@@ -168,6 +168,14 @@ DEFAULT_GAE_LAMBDA = 0.98
 # Typical healthy std: 0.5-2.0; below 0.1 indicates a degenerate batch.
 ADVANTAGE_STD_FLOOR: float = 0.1
 
+# Per-head advantage normalization: minimum number of causally-active timesteps a
+# head must have in a batch before we standardize that head's advantages over its
+# OWN active subset. Below this count the per-head std estimate is too noisy to
+# trust (unit-variance over a handful of samples is pure noise), so we fall back to
+# the global mean/std for that head. Guards the sparse heads (blueprint/tempo ~18%
+# active, style/alpha_* ~22%) on short rollouts and forced-WAIT corridors.
+MIN_HEAD_NORM_COUNT: int = 32
+
 # Value function loss coefficient in combined PPO loss.
 # 1.0 gives critic equal weight with policy, important when value head
 # is underfitting (negative explained variance from batch 1).
@@ -883,6 +891,7 @@ __all__ = [
     "DEFAULT_CLIP_RATIO",
     "DEFAULT_GAE_LAMBDA",
     "ADVANTAGE_STD_FLOOR",
+    "MIN_HEAD_NORM_COUNT",
     "DEFAULT_VALUE_COEF",
     "DEFAULT_MAX_GRAD_NORM",
     "DEFAULT_TRAINING_MAX_GRAD_NORM",

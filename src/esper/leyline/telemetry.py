@@ -964,6 +964,18 @@ class PPOUpdatePayload:
     advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
     d5_pre_norm_advantage_std: float | None = None  # Raw std before normalization
 
+    # === Per-head advantage normalization observability ===
+    # advantage_per_head_normalized: per-head advantage standardization was active.
+    # advantage_norm_fellback_count: heads sent back to the global scale by the
+    #   low-count guard (MIN_HEAD_NORM_COUNT) — sparse heads starved of active steps.
+    # min_sparse_head_advantage_std: smallest PRE-norm advantage std across non-op
+    #   heads; op rides the global ~1 scale, so a sparse head << 1 is the
+    #   "normalized into oblivion by op's variance" signal (observable even when the
+    #   per-head ablation is OFF).
+    advantage_per_head_normalized: bool = False
+    advantage_norm_fellback_count: int = 0
+    min_sparse_head_advantage_std: float = 0.0
+
     # === Rollback observability (per-rollout aggregates; pure telemetry) ===
     # rollback_count: governor rollbacks ATTRIBUTED to an executed transition this rollout.
     # rollback_steps_zeroed: intermediate prefix steps forfeited to ROLLBACK_FORFEIT_REWARD.
@@ -1180,6 +1192,11 @@ class PPOUpdatePayload:
             decision_density=data.get("decision_density", 1.0),
             advantage_std_floored=data.get("advantage_std_floored", False),
             d5_pre_norm_advantage_std=data.get("d5_pre_norm_advantage_std"),
+            # OPTIONAL: Per-head advantage normalization observability (defaults for
+            # events predating the per-head normalization work).
+            advantage_per_head_normalized=data.get("advantage_per_head_normalized", False),
+            advantage_norm_fellback_count=data.get("advantage_norm_fellback_count", 0),
+            min_sparse_head_advantage_std=data.get("min_sparse_head_advantage_std", 0.0),
             # OPTIONAL: Rollback observability. Persisted-event boundary -> .get(default)
             # per schema evolution (a missing key means an OLD event predating this field).
             rollback_count=data.get("rollback_count", 0),

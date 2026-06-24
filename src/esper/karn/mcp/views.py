@@ -175,6 +175,10 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.decision_density')::DOUBLE as decision_density,
             json_extract(data, '$.advantage_std_floored')::BOOLEAN as advantage_std_floored,
             json_extract(data, '$.d5_pre_norm_advantage_std')::DOUBLE as d5_pre_norm_advantage_std,
+            -- Per-head advantage normalization observability
+            json_extract(data, '$.advantage_per_head_normalized')::BOOLEAN as advantage_per_head_normalized,
+            json_extract(data, '$.advantage_norm_fellback_count')::INTEGER as advantage_norm_fellback_count,
+            json_extract(data, '$.min_sparse_head_advantage_std')::DOUBLE as min_sparse_head_advantage_std,
             -- Rollback observability (per-rollout aggregates; pure telemetry)
             json_extract(data, '$.rollback_count')::INTEGER as rollback_count,
             json_extract(data, '$.rollback_steps_zeroed')::INTEGER as rollback_steps_zeroed,

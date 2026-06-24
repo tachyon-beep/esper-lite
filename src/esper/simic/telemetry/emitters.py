@@ -969,6 +969,26 @@ def emit_ppo_update_event(
     for head, states in metrics["head_gradient_states"].items():
         head_gradient_states[f"head_{head}_gradient_state"] = _aggregate_head_gradient_state(states)
 
+    # Per-head advantage normalization diagnostics. Reduced to compact scalars so the
+    # exploration→return-variance loop is queryable without 8x5 per-head columns:
+    #   - advantage_per_head_normalized: was the per-head ablation active this update.
+    #   - advantage_norm_fellback_count: heads sent back to the global scale by the
+    #     low-count guard (sparse heads starved of active steps -> watch this rise).
+    #   - min_sparse_head_advantage_std: smallest PRE-norm advantage std across non-op
+    #     heads. op sits at ~1 (global scale); a sparse head << 1 is the "normalized
+    #     into oblivion" signal — measurable even with the ablation OFF.
+    adv_norm_stats = metrics.get("head_advantage_norm_stats", {})
+    advantage_per_head_normalized = any(
+        s["normalized"] > 0.5 for s in adv_norm_stats.values()
+    )
+    advantage_norm_fellback_count = int(
+        sum(s["fellback"] for s in adv_norm_stats.values())
+    )
+    min_sparse_head_advantage_std = min(
+        (s["pre_norm_std"] for head, s in adv_norm_stats.items() if head != "op"),
+        default=0.0,
+    )
+
     step_time_ms_sum = metrics["throughput_step_time_ms_sum"]
     dataloader_wait_ms_sum = metrics["throughput_dataloader_wait_ms_sum"]
     # When updates are skipped (empty buffer / finiteness gate), step time can be 0.
@@ -1158,6 +1178,10 @@ def emit_ppo_update_event(
             decision_density=1.0 - metrics.get("forced_step_ratio", 0.0),  # Higher = more agency
             advantage_std_floored=metrics.get("advantage_std_floored", False),
             d5_pre_norm_advantage_std=metrics.get("d5_pre_norm_advantage_std"),
+            # Per-head advantage normalization observability (compact scalars).
+            advantage_per_head_normalized=advantage_per_head_normalized,
+            advantage_norm_fellback_count=advantage_norm_fellback_count,
+            min_sparse_head_advantage_std=min_sparse_head_advantage_std,
             inner_epoch=epoch,
             batch=batch_idx + 1,
             # BUG FIX: Track actual PPO update count (inner_epoch was misleading)

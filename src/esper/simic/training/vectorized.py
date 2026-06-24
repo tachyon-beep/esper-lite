@@ -143,8 +143,11 @@ def _resolve_target_slot(
         slot_id = slot_config.slot_id_for_index(slot_idx)
     except IndexError:
         # Out-of-range should be impossible (network head size == slot_config.num_slots),
-        # but return a deterministic slot for logging and mark it invalid.
-        return enabled_slots[0], False
+        # but return a deterministic slot for logging and mark it invalid. Source the
+        # fallback from slot_config (guaranteed non-empty by SlotConfig.__post_init__)
+        # rather than enabled_slots, which may be empty (pre-ready) and would raise a
+        # second IndexError.
+        return slot_config.slot_id_for_index(0), False
     return slot_id, slot_id in enabled_slots
 
 
@@ -289,6 +292,9 @@ _PPO_FIRST_REDUCED_METRICS = frozenset({
     "ratio_diagnostic",
     "layer_gradient_health",
     "conditional_head_entropies",
+    # Per-head advantage normalization stats: structured dict, invariant across the
+    # update; take the first update's snapshot like the other structured diagnostics.
+    "head_advantage_norm_stats",
 })
 
 _PPO_APPEND_REDUCED_METRICS = frozenset({
@@ -683,6 +689,7 @@ def train_ppo_vectorized(
     entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN,  # From leyline
     entropy_anneal_episodes: int = 0,
     entropy_coef_per_head: dict[str, float] | None = None,  # Per-head multipliers
+    per_head_advantage_norm: bool = False,  # Per-head advantage standardization ablation (default OFF)
     value_coef: float = 0.5,  # Value loss coefficient (lower reduces critic dominance)
     value_warmup_batches: int = 0,  # Batches to ramp up value_coef (0 = no warmup)
     value_coef_start: float | None = None,  # Starting value_coef (default: 0.1 * value_coef)
@@ -700,6 +707,7 @@ def train_ppo_vectorized(
     experimental_gpu_preload_gather: bool = False,
     gpu_preload_augment: bool = False,
     gpu_preload_precompute_augment: bool = False,
+    gpu_preload_gather_shrink: bool = False,
     amp: bool = False,
     amp_dtype: str = "auto",  # "auto", "float16", "bfloat16", or "off"
     max_grad_norm: float | None = None,  # Gradient clipping max norm (None disables)
@@ -1147,6 +1155,7 @@ def train_ppo_vectorized(
             entropy_coef_min=entropy_coef_min,
             entropy_anneal_steps=entropy_anneal_steps,
             entropy_coef_per_head=entropy_coef_per_head,
+            per_head_advantage_norm=per_head_advantage_norm,
             value_coef=value_coef,
             value_coef_start=value_coef_start,
             value_warmup_steps=value_warmup_steps,
@@ -1264,6 +1273,7 @@ def train_ppo_vectorized(
                 is_train=True,
                 seed=seed,
                 cifar_precompute_aug=gpu_preload_precompute_augment,
+                allow_batch_shrink=gpu_preload_gather_shrink,
             )
             shared_test_iter = SharedGPUGatherBatchIterator(
                 batch_size_per_env=effective_batch_size_per_env,
@@ -1274,6 +1284,7 @@ def train_ppo_vectorized(
                 is_train=False,
                 seed=seed,
                 cifar_precompute_aug=gpu_preload_precompute_augment,
+                allow_batch_shrink=gpu_preload_gather_shrink,
             )
         else:
             from esper.utils.data import SharedGPUBatchIterator
