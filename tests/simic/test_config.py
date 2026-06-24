@@ -351,6 +351,46 @@ class TestBasicAccDeltaWeight:
         assert kwargs["basic_acc_delta_weight"] == 8.0
 
 
+class TestHraValueDecomposition:
+    """Tests for hra_value_decomposition flag wiring (EV-stab Stage 2)."""
+
+    def test_default_value(self):
+        """hra_value_decomposition should default to False."""
+        config = TrainingConfig()
+        assert config.hra_value_decomposition is False
+
+    def test_configurable_from_constructor(self):
+        """hra_value_decomposition should be configurable via constructor."""
+        config = TrainingConfig(hra_value_decomposition=True)
+        assert config.hra_value_decomposition is True
+
+    def test_from_dict_parses_correctly(self):
+        """hra_value_decomposition should be parsed from dict/JSON."""
+        config = TrainingConfig.from_dict({"hra_value_decomposition": True})
+        assert config.hra_value_decomposition is True
+
+    def test_flows_to_train_kwargs(self):
+        """hra_value_decomposition should be included in to_train_kwargs()."""
+        config = TrainingConfig(hra_value_decomposition=True)
+        kwargs = config.to_train_kwargs()
+        assert "hra_value_decomposition" in kwargs
+        assert kwargs["hra_value_decomposition"] is True
+
+    def test_roundtrip_serialization(self):
+        """hra_value_decomposition should survive to_dict/from_dict roundtrip."""
+        original = TrainingConfig(hra_value_decomposition=True)
+        loaded = TrainingConfig.from_dict(original.to_dict())
+        assert loaded.hra_value_decomposition is True
+
+    def test_in_train_kwargs_signature_subset(self):
+        """hra_value_decomposition key must exist on train_ppo_vectorized signature."""
+        signature = inspect.signature(train_ppo_vectorized)
+        config = TrainingConfig(hra_value_decomposition=True)
+        kwargs = set(config.to_train_kwargs())
+        assert "hra_value_decomposition" in kwargs
+        assert "hra_value_decomposition" in set(signature.parameters)
+
+
 def test_basic_plus_reward_mode_exists() -> None:
     """BASIC_PLUS reward mode is available."""
     from esper.simic.rewards.contribution import RewardMode

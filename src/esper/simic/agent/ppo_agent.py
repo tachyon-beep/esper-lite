@@ -132,6 +132,7 @@ class PPOAgent:
         # EV-liftoff with no regression vs the global-norm baseline. Per-head std
         # telemetry is emitted regardless of this flag so the effect is observable.
         per_head_advantage_norm: bool = False,
+        hra_value_decomposition: bool = False,
         value_coef: float = DEFAULT_VALUE_COEF,
         # Value coefficient warmup: start low, ramp up to value_coef over warmup_steps.
         # This prevents critic collapse when early returns have low variance (before
@@ -259,6 +260,9 @@ class PPOAgent:
             self.entropy_coef_per_head.update(entropy_coef_per_head)
         # Per-head advantage normalization ablation flag (see __init__ docstring).
         self.per_head_advantage_norm = per_head_advantage_norm
+        # EV-stab Stage 2: HRA cf-value-decomposition flag. Read by the GAE call,
+        # per-stream targets, EV path, optimizer, and checkpoint (later increments).
+        self.hra_value_decomposition = hra_value_decomposition
         # Per-head entropy floor penalty (prevents sparse head collapse)
         # Uses ENTROPY_FLOOR_PER_HEAD from leyline as defaults
         self.entropy_floor = entropy_floor if entropy_floor is not None else dict(ENTROPY_FLOOR_PER_HEAD)

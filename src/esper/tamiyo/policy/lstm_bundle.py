@@ -37,6 +37,7 @@ class LSTMPolicyBundle:
         num_lstm_layers: int = 1,
         slot_config: SlotConfig | None = None,
         dropout: float = 0.0,
+        hra_value_decomposition: bool = False,
     ):
         """Initialize LSTM policy bundle.
 
@@ -71,6 +72,7 @@ class LSTMPolicyBundle:
             slot_config=self.slot_config,
             lstm_hidden_dim=hidden_dim,
             lstm_layers=num_lstm_layers,
+            hra_value_decomposition=hra_value_decomposition,  # EV-stab Stage 2 (builds cf head when ON)
         )
 
     # === Action Selection ===

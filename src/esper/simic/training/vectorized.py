@@ -690,6 +690,7 @@ def train_ppo_vectorized(
     entropy_anneal_episodes: int = 0,
     entropy_coef_per_head: dict[str, float] | None = None,  # Per-head multipliers
     per_head_advantage_norm: bool = False,  # Per-head advantage standardization ablation (default OFF)
+    hra_value_decomposition: bool = False,  # EV-stab Stage 2 HRA cf value head (default OFF)
     value_coef: float = 0.5,  # Value loss coefficient (lower reduces critic dominance)
     value_warmup_batches: int = 0,  # Batches to ramp up value_coef (0 = no warmup)
     value_coef_start: float | None = None,  # Starting value_coef (default: 0.1 * value_coef)
@@ -1139,6 +1140,7 @@ def train_ppo_vectorized(
             device=device,
             compile_mode=effective_compile_mode,
             lstm_hidden_dim=lstm_hidden_dim,
+            hra_value_decomposition=hra_value_decomposition,  # EV-stab Stage 2 (builds cf head when ON)
         )
 
         # Create agent with injected policy
@@ -1156,6 +1158,7 @@ def train_ppo_vectorized(
             entropy_anneal_steps=entropy_anneal_steps,
             entropy_coef_per_head=entropy_coef_per_head,
             per_head_advantage_norm=per_head_advantage_norm,
+            hra_value_decomposition=hra_value_decomposition,
             value_coef=value_coef,
             value_coef_start=value_coef_start,
             value_warmup_steps=value_warmup_steps,

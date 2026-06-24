@@ -101,6 +101,15 @@ class TrainingConfig:
     # emitted regardless of this flag so the effect is observable before enabling it.
     per_head_advantage_norm: bool = False
 
+    # === Value-target decomposition (EV-stab Stage 2) ===
+    # HRA sum-of-heads value decomposition ablation (default OFF). When True, a
+    # head-only counterfactual value head (V_cf) is built alongside V_main so the
+    # noisy counterfactual contribution stream is routed out of the single critic's
+    # value fit. OFF leg is byte-identical to today's single-head path (no cf head
+    # constructed). Gate it as a fresh-init paired A/B and accept it on EV_main
+    # liftoff/stabilization with no regression vs the single-head baseline.
+    hra_value_decomposition: bool = False
+
     # === Value function ===
     # Coefficient for value loss in combined PPO loss. Lower values reduce critic
     # dominance when using shared backbone (LSTM shared between actor/critic).
@@ -335,6 +344,7 @@ class TrainingConfig:
             "entropy_anneal_steps": entropy_steps,
             "entropy_coef_per_head": self.entropy_coef_per_head,
             "per_head_advantage_norm": self.per_head_advantage_norm,
+            "hra_value_decomposition": self.hra_value_decomposition,
             "value_coef": self.value_coef,
             "value_coef_start": self.value_coef_start,
             "value_warmup_steps": value_warmup_steps,
@@ -365,6 +375,7 @@ class TrainingConfig:
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "entropy_coef_per_head": self.entropy_coef_per_head,
             "per_head_advantage_norm": self.per_head_advantage_norm,
+            "hra_value_decomposition": self.hra_value_decomposition,
             "value_coef": self.value_coef,
             "value_warmup_batches": self.value_warmup_batches,
             "value_coef_start": self.value_coef_start,
