@@ -53,6 +53,7 @@ from esper.simic.rewards import (
     SeedInfo,
     STAGE_POTENTIALS,
 )
+from esper.simic.rewards.partition import split_reward_streams
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 
 from .helpers import compute_rent_and_shock_inputs
@@ -319,6 +320,10 @@ class ActionExecutionContext:
     fossilize_active_seed: Callable[[Any, str], bool]
     resolve_target_slot: ResolveTargetSlot
     host_params_baseline: int
+    # EV-stab Stage 2: construction-time constant mirroring PPOAgent.hra_value_decomposition.
+    # Defaulted so existing context constructions (and unit-test fakes) stay valid on the
+    # OFF leg; the trainer sets it from self.agent.hra_value_decomposition.
+    hra_value_decomposition: bool = False
 
 
 @dataclass
@@ -458,6 +463,7 @@ def execute_actions(
     step_records: list[EnvStepRecord],
     actions_np: np.ndarray,
     values: list[float],
+    cf_values: list[float] | None = None,
     all_signals: list[TrainingSignals],
     all_slot_reports: list[dict[str, SeedStateReport]],
     states_batch_normalized: torch.Tensor,
@@ -501,6 +507,17 @@ def execute_actions(
     num_train_batches = context.num_train_batches
     host_params_baseline = context.host_params_baseline
 
+    # EV-stab Stage 2 (§3.1/§3.3): the HRA value decomposition routes the dense
+    # counterfactual stream (R_cf = bounded_attribution) to its own value head. The
+    # split is only well-defined for the CONTRIBUTION family (the only family that
+    # emits reward_components with bounded_attribution); reject the flag otherwise.
+    hra_value_decomposition = context.hra_value_decomposition
+    if hra_value_decomposition and reward_family_enum != RewardFamily.CONTRIBUTION:
+        raise ValueError(
+            "hra_value_decomposition=True requires the CONTRIBUTION reward family "
+            f"(R_cf = bounded_attribution is only defined there); got {reward_family_enum}."
+        )
+
     truncated_bootstrap_targets: list[tuple[int, int]] = []
     all_post_action_signals: list[TrainingSignals] = []
     all_post_action_slot_reports: list[dict[str, SeedStateReport]] = []
@@ -538,6 +555,8 @@ def execute_actions(
         model = env_state.model
         signals = all_signals[env_idx]
         value = values[env_idx]
+        # EV-stab Stage 2: per-step head-only V_cf(s) for this env (None list when OFF).
+        cf_value = cf_values[env_idx] if cf_values is not None else 0.0
 
         # Parse sampled action indices and derive values (Deduplication)
         slot_action = int(actions_np[_HEAD_SLOT_IDX, env_idx])
@@ -903,6 +922,9 @@ def execute_actions(
                 emit_reward_components_event
                 or collect_reward_summary
                 or force_reward_components
+                # EV-stab Stage 2 (§3.3): the cf split reads components.bounded_attribution,
+                # so components MUST be populated whenever the HRA flag is ON (incl. SHAPED).
+                or hra_value_decomposition
             )
             reward_inputs = record.contribution_reward_inputs
             reward_inputs.action = action_for_reward
@@ -1072,6 +1094,24 @@ def execute_actions(
         # Normalize reward for PPO stability (P1-6 fix)
         normalized_reward = reward_normalizer.update_and_normalize(reward)
         action_outcome.reward_normalized = normalized_reward
+
+        # EV-stab Stage 2 (§3.1/§5): split the finalized reward into (R_main, R_cf)
+        # and normalize R_cf by the SAME per-step std the total just used (no clip),
+        # so r_main_norm := reward_norm_total - r_cf_norm is exact. Computed right
+        # after update_and_normalize() so divide_by_std() reads the just-updated std.
+        # The buffer keeps storing the CLIPPED normalized TOTAL (normalized_reward);
+        # r_cf_norm is the unclipped cf stream threaded into buffer.add below.
+        r_cf_norm = 0.0
+        if hra_value_decomposition:
+            # return_components is forced True under the flag (§3.3), so components
+            # is guaranteed populated for the CONTRIBUTION family here.
+            assert reward_components is not None, (
+                "hra_value_decomposition=True requires reward_components "
+                "(return_components must be forced on)"
+            )
+            _r_main_raw, r_cf_raw = split_reward_streams(reward, reward_components)
+            r_cf_norm = reward_normalizer.divide_by_std(r_cf_raw)
+
         # B11-CR-03 fix: Store RAW rewards for telemetry interpretability
         # PPO buffer uses normalized_reward (for training stability)
         # Telemetry uses raw reward (for cross-run comparability)
@@ -1397,6 +1437,14 @@ def execute_actions(
         contribution_mask_tensor = fresh_contribution.contribution_mask
 
         step_idx = agent.buffer.step_counts[env_idx]
+        # EV-stab Stage 2: thread the per-step cf value head output and the cf reward
+        # stream into the buffer ONLY on the ON leg (explicit flag gate). On the OFF
+        # leg these kwargs are omitted entirely, so buffer.add uses its 0.0 defaults
+        # and the OFF path is byte-identical to today.
+        cf_buffer_kwargs: dict[str, float] = {}
+        if hra_value_decomposition:
+            cf_buffer_kwargs["cf_value"] = cf_value
+            cf_buffer_kwargs["r_cf_norm"] = r_cf_norm
         agent.buffer.add(
             env_id=env_idx,
             state=states_batch_normalized[env_idx].detach(),
@@ -1439,6 +1487,7 @@ def execute_actions(
             contribution_targets=contribution_targets_tensor,
             contribution_mask=contribution_mask_tensor,
             has_fresh_contribution=has_fresh_contribution,
+            **cf_buffer_kwargs,
         )
         if truncated:
             truncated_bootstrap_targets.append((env_idx, step_idx))

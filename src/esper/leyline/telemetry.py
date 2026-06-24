@@ -898,6 +898,18 @@ class PPOUpdatePayload:
     # divergence means the aux head is not converging.
     q_aux_loss: float | None = None
 
+    # EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics. ON-leg-only (emitted
+    # only when hra_value_decomposition is on), hence Optional[float] defaulting to None:
+    # None on the OFF leg / on events predating this plan. ev_sum == explained_variance on
+    # the ON leg. cov_rcf_return_share = Cov(returns_cf, returns_total)/Var(returns_total)
+    # (epic gate >0.40); r_main_cov = std(returns_main)/(|mean(returns_main)|+eps).
+    cf_value_loss: float | None = None
+    ev_main: float | None = None
+    ev_cf: float | None = None
+    ev_sum: float | None = None
+    cov_rcf_return_share: float | None = None
+    r_main_cov: float | None = None
+
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
     clip_fraction_positive: float = 0.0  # r > 1+ε (probability increases capped)
@@ -959,6 +971,18 @@ class PPOUpdatePayload:
     decision_density: float = 1.0  # Fraction with agency (1 - forced_step_ratio), higher = healthier
     advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
     d5_pre_norm_advantage_std: float | None = None  # Raw std before normalization
+
+    # === Per-head advantage normalization observability ===
+    # advantage_per_head_normalized: per-head advantage standardization was active.
+    # advantage_norm_fellback_count: heads sent back to the global scale by the
+    #   low-count guard (MIN_HEAD_NORM_COUNT) — sparse heads starved of active steps.
+    # min_sparse_head_advantage_std: smallest PRE-norm advantage std across non-op
+    #   heads; op rides the global ~1 scale, so a sparse head << 1 is the
+    #   "normalized into oblivion by op's variance" signal (observable even when the
+    #   per-head ablation is OFF).
+    advantage_per_head_normalized: bool = False
+    advantage_norm_fellback_count: int = 0
+    min_sparse_head_advantage_std: float = 0.0
 
     # === Rollback observability (per-rollout aggregates; pure telemetry) ===
     # rollback_count: governor rollbacks ATTRIBUTED to an executed transition this rollout.
@@ -1107,6 +1131,16 @@ class PPOUpdatePayload:
             q_variance=data["q_variance"],
             q_spread=data["q_spread"],
             q_aux_loss=data.get("q_aux_loss"),
+            # OPTIONAL: EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics.
+            # ON-leg-only / persisted-event boundary -> .get(None): a missing key means the
+            # OFF leg or an event predating this plan, NOT a current-code bug (matches the
+            # explained_variance / q_aux_loss .get pattern above).
+            cf_value_loss=data.get("cf_value_loss"),
+            ev_main=data.get("ev_main"),
+            ev_cf=data.get("ev_cf"),
+            ev_sum=data.get("ev_sum"),
+            cov_rcf_return_share=data.get("cov_rcf_return_share"),
+            r_main_cov=data.get("r_main_cov"),
             # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],
@@ -1176,6 +1210,11 @@ class PPOUpdatePayload:
             decision_density=data.get("decision_density", 1.0),
             advantage_std_floored=data.get("advantage_std_floored", False),
             d5_pre_norm_advantage_std=data.get("d5_pre_norm_advantage_std"),
+            # OPTIONAL: Per-head advantage normalization observability (defaults for
+            # events predating the per-head normalization work).
+            advantage_per_head_normalized=data.get("advantage_per_head_normalized", False),
+            advantage_norm_fellback_count=data.get("advantage_norm_fellback_count", 0),
+            min_sparse_head_advantage_std=data.get("min_sparse_head_advantage_std", 0.0),
             # OPTIONAL: Rollback observability. Persisted-event boundary -> .get(default)
             # per schema evolution (a missing key means an OLD event predating this field).
             rollback_count=data.get("rollback_count", 0),

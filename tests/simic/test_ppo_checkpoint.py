@@ -155,6 +155,10 @@ class TestPPOCheckpointValidation:
             "network_state_dict": {},
             "optimizer_state_dict": {},
             "value_normalizer_state_dict": {},
+            # EV-stab Stage 2 (CHECKPOINT_VERSION 3): per-stream normalizer states are
+            # always-present keys (None on the OFF leg). Required for a well-formed v3 dict.
+            "value_main_normalizer_state_dict": None,
+            "cf_value_normalizer_state_dict": None,
             "train_steps": 0,
             "aux_training_step": 0,
             "config": {

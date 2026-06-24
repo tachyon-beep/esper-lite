@@ -238,6 +238,24 @@ class RewardNormalizer:
         normalized = reward / std
         return float(max(-self.clip, min(self.clip, normalized)))
 
+    def divide_by_std(self, reward: float) -> float:
+        """Divide by the current running std with NO stat update and NO clip.
+
+        EV-stabilization Stage 2 (§5): the counterfactual reward stream must be
+        normalized by the SAME per-step std as the total reward, but WITHOUT the
+        clip — the clip stays a total-only property so that
+        ``r_main_norm := reward_norm_total - r_cf_norm`` is exact (the clip residual
+        lands in R_main). This deliberately differs from ``normalize_only`` (which
+        clips); do not substitute one for the other.
+
+        With <2 samples there is no variance yet, so the raw value is returned
+        unclipped (the std-undefined case, without imposing the clip).
+        """
+        if self.count < 2:
+            return float(reward)
+        std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
+        return float(reward / std)
+
     def state_dict(self) -> dict[str, float | int]:
         """Return state dictionary for checkpointing."""
         return {

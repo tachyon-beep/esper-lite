@@ -92,6 +92,24 @@ class TrainingConfig:
     # Example: {"blueprint": 2.0, "tempo": 2.0} to boost sparse heads.
     entropy_coef_per_head: dict[str, float] | None = None
 
+    # === Advantage normalization ===
+    # Per-head advantage standardization ablation (default OFF). When True, each head's
+    # advantage is re-standardized over its OWN causally-active subset instead of one
+    # global op-dominated mean/std (shared-critic scale coupling). This is a
+    # policy-gradient scale change: run it as an A/B and accept on EV-liftoff with no
+    # regression vs the global-norm baseline. Per-head advantage-std telemetry is
+    # emitted regardless of this flag so the effect is observable before enabling it.
+    per_head_advantage_norm: bool = False
+
+    # === Value-target decomposition (EV-stab Stage 2) ===
+    # HRA sum-of-heads value decomposition ablation (default OFF). When True, a
+    # head-only counterfactual value head (V_cf) is built alongside V_main so the
+    # noisy counterfactual contribution stream is routed out of the single critic's
+    # value fit. OFF leg is byte-identical to today's single-head path (no cf head
+    # constructed). Gate it as a fresh-init paired A/B and accept it on EV_main
+    # liftoff/stabilization with no regression vs the single-head baseline.
+    hra_value_decomposition: bool = False
+
     # === Value function ===
     # Coefficient for value loss in combined PPO loss. Lower values reduce critic
     # dominance when using shared backbone (LSTM shared between actor/critic).
@@ -325,6 +343,8 @@ class TrainingConfig:
             "entropy_coef_min": self.entropy_coef_min,
             "entropy_anneal_steps": entropy_steps,
             "entropy_coef_per_head": self.entropy_coef_per_head,
+            "per_head_advantage_norm": self.per_head_advantage_norm,
+            "hra_value_decomposition": self.hra_value_decomposition,
             "value_coef": self.value_coef,
             "value_coef_start": self.value_coef_start,
             "value_warmup_steps": value_warmup_steps,
@@ -354,6 +374,8 @@ class TrainingConfig:
             "entropy_coef_min": self.entropy_coef_min,
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "entropy_coef_per_head": self.entropy_coef_per_head,
+            "per_head_advantage_norm": self.per_head_advantage_norm,
+            "hra_value_decomposition": self.hra_value_decomposition,
             "value_coef": self.value_coef,
             "value_warmup_batches": self.value_warmup_batches,
             "value_coef_start": self.value_coef_start,
@@ -516,7 +538,8 @@ class TrainingConfig:
             f"  Rounds: {self.n_episodes} (env episodes={self.n_episodes * self.n_envs}), "
             f"envs={self.n_envs}, max_epochs={self.max_epochs}",
             f"  Entropy: {entropy_start}" + (f" -> {entropy_end}" if entropy_end != entropy_start else ""),
-            f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
+            f"  Updates/batch: {self.ppo_updates_per_batch}, recurrent_epochs={self.recurrent_n_epochs}, "
+            f"amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
             f"  Slots: {','.join(self.slots)} | reward_family={self.reward_family.value} mode={self.reward_mode.value}",
             f"  Telemetry: {'enabled' if self.use_telemetry else 'disabled'}, gates={'permissive' if self.permissive_gates else 'strict'}",

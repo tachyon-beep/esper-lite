@@ -190,7 +190,7 @@ def test_network_evaluate_actions_accepts_tuple():
     }
 
     # Should NOT raise
-    log_probs, values, entropy, hidden, pred_contributions, q_values = network.evaluate_actions(obs, blueprint_indices, actions)
+    log_probs, values, entropy, hidden, pred_contributions, q_values, _ = network.evaluate_actions(obs, blueprint_indices, actions)
 
     # Check outputs
     assert values.shape == (2, 10)  # V(s): op-INDEPENDENT baseline

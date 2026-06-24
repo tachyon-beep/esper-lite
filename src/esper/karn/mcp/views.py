@@ -167,12 +167,26 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.q_variance')::DOUBLE as q_variance,
             json_extract(data, '$.q_spread')::DOUBLE as q_spread,
             json_extract(data, '$.q_aux_loss')::DOUBLE as q_aux_loss,
+            -- EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics (ON-leg-only;
+            -- NULL on the OFF/HRA-off leg). ev_sum == explained_variance on the ON leg.
+            -- cov_rcf_return_share is the epic gate (>0.40 => cf stream dominates Var[return]);
+            -- r_main_cov is the "is R_main smoother" gate. Pure telemetry, never gate inputs.
+            json_extract(data, '$.cf_value_loss')::DOUBLE as cf_value_loss,
+            json_extract(data, '$.ev_main')::DOUBLE as ev_main,
+            json_extract(data, '$.ev_cf')::DOUBLE as ev_cf,
+            json_extract(data, '$.ev_sum')::DOUBLE as ev_sum,
+            json_extract(data, '$.cov_rcf_return_share')::DOUBLE as cov_rcf_return_share,
+            json_extract(data, '$.r_main_cov')::DOUBLE as r_main_cov,
             -- D5 slot-saturation / actor-agency diagnostics
             json_extract(data, '$.forced_step_ratio')::DOUBLE as forced_step_ratio,
             json_extract(data, '$.usable_actor_timesteps')::INTEGER as usable_actor_timesteps,
             json_extract(data, '$.decision_density')::DOUBLE as decision_density,
             json_extract(data, '$.advantage_std_floored')::BOOLEAN as advantage_std_floored,
             json_extract(data, '$.d5_pre_norm_advantage_std')::DOUBLE as d5_pre_norm_advantage_std,
+            -- Per-head advantage normalization observability
+            json_extract(data, '$.advantage_per_head_normalized')::BOOLEAN as advantage_per_head_normalized,
+            json_extract(data, '$.advantage_norm_fellback_count')::INTEGER as advantage_norm_fellback_count,
+            json_extract(data, '$.min_sparse_head_advantage_std')::DOUBLE as min_sparse_head_advantage_std,
             -- Rollback observability (per-rollout aggregates; pure telemetry)
             json_extract(data, '$.rollback_count')::INTEGER as rollback_count,
             json_extract(data, '$.rollback_steps_zeroed')::INTEGER as rollback_steps_zeroed,

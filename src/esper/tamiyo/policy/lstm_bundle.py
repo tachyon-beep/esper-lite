@@ -37,6 +37,7 @@ class LSTMPolicyBundle:
         num_lstm_layers: int = 1,
         slot_config: SlotConfig | None = None,
         dropout: float = 0.0,
+        hra_value_decomposition: bool = False,
     ):
         """Initialize LSTM policy bundle.
 
@@ -71,6 +72,7 @@ class LSTMPolicyBundle:
             slot_config=self.slot_config,
             lstm_hidden_dim=hidden_dim,
             lstm_layers=num_lstm_layers,
+            hra_value_decomposition=hra_value_decomposition,  # EV-stab Stage 2 (builds cf head when ON)
         )
 
     # === Action Selection ===
@@ -130,6 +132,7 @@ class LSTMPolicyBundle:
             hidden=result.hidden,
             op_logits=result.op_logits,
             head_entropies=result.head_entropies,
+            cf_value=result.cf_value,  # EV-stab Stage 2: head-only V_cf(s) (None when OFF)
         )
 
     def forward(
@@ -240,7 +243,9 @@ class LSTMPolicyBundle:
         Returns:
             EvalResult with log_probs, value, entropy, hidden, and pred_contributions
         """
-        log_probs, values, entropies, new_hidden, pred_contributions, q_values = self._network.evaluate_actions(
+        # EV-stab Stage 2: the network returns a typed _EvalOutput (NamedTuple) so the
+        # new cf_value field is reached by attribute, not a fragile positional unpack.
+        eval_out = self._network.evaluate_actions(
             features,
             blueprint_indices,
             actions,
@@ -259,12 +264,13 @@ class LSTMPolicyBundle:
         )
 
         return EvalResult(
-            log_prob=log_probs,
-            value=values,  # V(s): op-INDEPENDENT PPO baseline (full grad into LSTM)
-            entropy=entropies,
-            hidden=new_hidden,
-            pred_contributions=pred_contributions,
-            q_value=q_values,  # Q(s, stored_op): detached telemetry/aux head
+            log_prob=eval_out.log_probs,
+            value=eval_out.value,  # V(s): op-INDEPENDENT PPO baseline (full grad into LSTM)
+            entropy=eval_out.entropy,
+            hidden=eval_out.hidden,
+            pred_contributions=eval_out.pred_contributions,
+            q_value=eval_out.q_value,  # Q(s, stored_op): detached telemetry/aux head
+            cf_value=eval_out.cf_value,  # EV-stab Stage 2: head-only V_cf(s) (None when OFF)
         )
 
     # === Off-Policy (not supported for LSTM) ===

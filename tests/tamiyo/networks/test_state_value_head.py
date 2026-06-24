@@ -142,7 +142,7 @@ class TestGradientFlow:
         masks = {k: v.unsqueeze(1).expand(batch, seq, v.shape[-1]) for k, v in masks.items()}
         actions = {k: torch.zeros(batch, seq, dtype=torch.long) for k in HEAD_NAMES}
 
-        log_probs, value, entropy, hidden, contrib, q_value = net.evaluate_actions(
+        log_probs, value, entropy, hidden, contrib, q_value, _ = net.evaluate_actions(
             state, bp, actions,
             slot_mask=masks["slot"], blueprint_mask=masks["blueprint"],
             style_mask=masks["style"], tempo_mask=masks["tempo"],
@@ -227,9 +227,14 @@ class TestCheckpointBreak:
         with pytest.raises(RuntimeError):
             fresh.load_state_dict(old_sd, strict=True)
 
-    def test_value_head_schema_version_is_two(self):
-        """VALUE_HEAD_SCHEMA_VERSION is the leyline single source of truth (== 2)."""
-        assert VALUE_HEAD_SCHEMA_VERSION == 2
+    def test_value_head_schema_version_is_three(self):
+        """VALUE_HEAD_SCHEMA_VERSION is the leyline single source of truth (== 3).
+
+        Bumped 2->3 by EV-stab Stage 2: the topology gained an OPTIONAL trunk-detached
+        cf_value_head (V_cf) under hra_value_decomposition (three-head value topology on
+        the ON leg).
+        """
+        assert VALUE_HEAD_SCHEMA_VERSION == 3
 
 
 class TestAmpCastCacheValueGrad:
@@ -258,7 +263,7 @@ class TestAmpCastCacheValueGrad:
                 _ = net._compute_q(tel["lstm_out"], torch.zeros(batch, seq, dtype=torch.long))
             torch.clear_autocast_cache()
 
-            log_probs, value, entropy, hidden, contrib, q_value = net.evaluate_actions(
+            log_probs, value, entropy, hidden, contrib, q_value, _ = net.evaluate_actions(
                 state, bp, actions,
                 slot_mask=masks["slot"], blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"], tempo_mask=masks["tempo"],

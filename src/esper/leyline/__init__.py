@@ -121,8 +121,14 @@ DEFAULT_LSTM_HIDDEN_DIM = 512
 # pre-v2 checkpoints (with value_head.* but no state_value_head.* / q_head.*)
 # fail strict load BY DESIGN (No-Legacy policy).
 #
+# Version 3 (EV-stab Stage 2) adds an OPTIONAL head-only cf_value_head (V_cf) under
+# the hra_value_decomposition flag, giving a three-head value topology on the ON leg:
+# state_value_head (V_main) + cf_value_head (V_cf, trunk-detached) + q_head (telemetry/
+# aux total). The OFF leg keeps the v2 two-head topology, but the schema id still bumps
+# so v2 and v3 checkpoints are not silently cross-loaded.
+#
 # Used by: simic/agent/ppo_agent.py (checkpoint save/load).
-VALUE_HEAD_SCHEMA_VERSION = 2
+VALUE_HEAD_SCHEMA_VERSION = 3
 
 # Number of LSTM layers in the host model.
 # Used by: Karn TUI widgets (gradient health display), telemetry dashboards.
@@ -167,6 +173,14 @@ DEFAULT_GAE_LAMBDA = 0.98
 # we clamp it to prevent normalization from amplifying noise into huge gradients.
 # Typical healthy std: 0.5-2.0; below 0.1 indicates a degenerate batch.
 ADVANTAGE_STD_FLOOR: float = 0.1
+
+# Per-head advantage normalization: minimum number of causally-active timesteps a
+# head must have in a batch before we standardize that head's advantages over its
+# OWN active subset. Below this count the per-head std estimate is too noisy to
+# trust (unit-variance over a handful of samples is pure noise), so we fall back to
+# the global mean/std for that head. Guards the sparse heads (blueprint/tempo ~18%
+# active, style/alpha_* ~22%) on short rollouts and forced-WAIT corridors.
+MIN_HEAD_NORM_COUNT: int = 32
 
 # Value function loss coefficient in combined PPO loss.
 # 1.0 gives critic equal weight with policy, important when value head
@@ -883,6 +897,7 @@ __all__ = [
     "DEFAULT_CLIP_RATIO",
     "DEFAULT_GAE_LAMBDA",
     "ADVANTAGE_STD_FLOOR",
+    "MIN_HEAD_NORM_COUNT",
     "DEFAULT_VALUE_COEF",
     "DEFAULT_MAX_GRAD_NORM",
     "DEFAULT_TRAINING_MAX_GRAD_NORM",
