@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
 import torch
 import torch.nn as nn
@@ -83,6 +83,8 @@ class GetActionResult:
     sampled_op: torch.Tensor
     op_logits: torch.Tensor | None = None
     head_entropies: dict[str, torch.Tensor] | None = None
+    # EV-stab Stage 2: head-only V_cf(s) [batch], or None on the OFF leg.
+    cf_value: torch.Tensor | None = None
 
 
 class _ForwardOutput(TypedDict):
@@ -103,6 +105,10 @@ class _ForwardOutput(TypedDict):
     op_logits: torch.Tensor
     state_value: torch.Tensor  # V(s): op-INDEPENDENT PPO baseline
     q_value: torch.Tensor  # Q(s, sampled_op): op-conditioned telemetry/aux
+    # EV-stab Stage 2: head-only V_cf(s). None when hra_value_decomposition is off
+    # (NotRequired keeps OTHER would-be construction sites type-valid; forward()
+    # always supplies it explicitly).
+    cf_value: NotRequired[torch.Tensor | None]
     lstm_out: torch.Tensor  # [batch, seq, hidden_dim] for value recomputation
     sampled_op: torch.Tensor  # Op driving the action + Q telemetry
     hidden: tuple[torch.Tensor, torch.Tensor]
@@ -883,6 +889,11 @@ class FactoredRecurrentActorCritic(nn.Module):
         # Op-conditioned Q(s, sampled_op): telemetry/aux only (NOT the baseline).
         q_value = self._compute_q(lstm_out, sampled_op)
 
+        # EV-stab Stage 2: head-only counterfactual value V_cf(s); None on the OFF leg.
+        cf_value = (
+            self._compute_cf_value(lstm_out) if self.cf_value_head is not None else None
+        )
+
         return {
             "slot_logits": slot_logits,
             "blueprint_logits": blueprint_logits,
@@ -894,6 +905,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             "op_logits": op_logits,
             "state_value": state_value,
             "q_value": q_value,
+            "cf_value": cf_value,  # EV-stab Stage 2: V_cf(s) or None (OFF leg)
             "lstm_out": lstm_out,  # Expose for value recomputation in get_action()
             "sampled_op": sampled_op,
             "hidden": new_hidden,
@@ -1132,6 +1144,9 @@ class FactoredRecurrentActorCritic(nn.Module):
             # needs no per-op recompute. This is the value stored in the rollout buffer
             # and the truncation bootstrap (get_action(deterministic=True)).
             value = output["state_value"][:, 0]
+            # EV-stab Stage 2: carry V_cf(s) alongside V(s) (None on the OFF leg).
+            cf_value_out = output["cf_value"]
+            cf_value = cf_value_out[:, 0] if cf_value_out is not None else None
 
             actions["op"] = selected_op
             # FP32 log_prob via the shared seam (no Categorical -> no GPU syncs).
@@ -1262,6 +1277,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 sampled_op=sampled_op,
                 op_logits=op_logits_out,
                 head_entropies=ordered_head_entropies,
+                cf_value=cf_value,
             )
 
     def evaluate_actions(

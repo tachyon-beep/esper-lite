@@ -74,6 +74,23 @@ def test_compute_cf_value_is_head_only_and_correct_shape() -> None:
     ), "cf_value_head received no gradient"
 
 
+def test_get_action_threads_cf_value() -> None:
+    batch = 2
+    state = torch.randn(batch, 126)
+    bp_idx = torch.randint(0, 13, (batch, 3))
+
+    net_off = FactoredRecurrentActorCritic(state_dim=126)
+    res_off = net_off.get_action(state, bp_idx, hidden=None, deterministic=True)
+    assert res_off.cf_value is None  # OFF leg: no cf value
+
+    net_on = FactoredRecurrentActorCritic(state_dim=126, hra_value_decomposition=True)
+    res_on = net_on.get_action(state, bp_idx, hidden=None, deterministic=True)
+    assert res_on.cf_value is not None  # ON leg: cf value present
+    assert res_on.cf_value.shape == (batch,)
+    # Same per-batch value shape as the V(s) baseline.
+    assert res_on.cf_value.shape == res_on.values.shape
+
+
 def test_off_leg_construction_is_deterministic() -> None:
     torch.manual_seed(7)
     a = _net(hra=False)
