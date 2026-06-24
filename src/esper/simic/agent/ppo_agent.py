@@ -753,6 +753,30 @@ class PPOAgent:
             metrics["ev_cf"] = [ev_cf]
             metrics["ev_sum"] = [explained_variance]
 
+            # EV-stab Stage 0 GATE metrics (telemetry-only; ON-leg only so the OFF-leg
+            # metrics dict stays byte-identical). Population (correction=0) moments to match
+            # the covariance-share decomposition (share_i = Cov(R_i, R)/Var(R) sums to 1
+            # exactly only with a consistent correction) and the v_return_correlation /
+            # return_variance siblings; the EV family above deliberately stays correction=1.
+            #   cov_rcf_return_share = Cov(returns_cf, returns_total)/Var(returns_total):
+            #     the epic gate (>0.40 ⇒ the cf stream dominates return variance).
+            #   r_main_cov = std(returns_main)/(|mean(returns_main)|+eps): the "is R_main the
+            #     smoother stream" gate (coefficient of variation of the subtractive R_main).
+            # Zero-variance / zero-mean degenerate batches return 0.0 (no signal, not a bug:
+            # numel>=2 finiteness is already enforced by the return-stat raise below).
+            total_var = valid_returns.var(unbiased=False)
+            if bool(total_var > 0):
+                cf_centered = valid_returns_cf - valid_returns_cf.mean()
+                total_centered = valid_returns - valid_returns.mean()
+                cov_rcf_return = (cf_centered * total_centered).mean()
+                cov_rcf_return_share = cov_rcf_return / total_var
+            else:
+                cov_rcf_return_share = torch.zeros((), device=valid_returns.device)
+            main_mean_abs = valid_returns_main.mean().abs()
+            r_main_cov = valid_returns_main.std(unbiased=False) / (main_mean_abs + 1e-8)
+            metrics["cov_rcf_return_share"] = [cov_rcf_return_share]
+            metrics["r_main_cov"] = [r_main_cov]
+
         # Return statistics for diagnosing value loss scale
         return_mean = valid_returns.mean()
         return_std = valid_returns.std()

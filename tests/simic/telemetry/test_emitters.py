@@ -325,6 +325,79 @@ def test_emit_ppo_update_event_surfaces_q_head_telemetry() -> None:
     assert payload.head_q_gradient_state == "finite"
 
 
+def test_emit_ppo_update_event_surfaces_ev_stream_gate_metrics() -> None:
+    """EV-stab Stage 0/2: per-stream EV, cf-head loss, and the GATE metrics
+    (cov_rcf_return_share, r_main_cov) must reach the PPOUpdatePayload from the
+    metrics dict on the ON (HRA) leg, and survive a serialize/deserialize round trip
+    onto the persisted contract the Karn ppo_updates view reads."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            cf_value_loss=0.11,
+            ev_main=0.42,
+            ev_cf=-0.05,
+            ev_sum=0.31,
+            cov_rcf_return_share=0.55,
+            r_main_cov=0.9,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.cf_value_loss == pytest.approx(0.11)
+    assert payload.ev_main == pytest.approx(0.42)
+    assert payload.ev_cf == pytest.approx(-0.05)
+    assert payload.ev_sum == pytest.approx(0.31)
+    assert payload.cov_rcf_return_share == pytest.approx(0.55)
+    assert payload.r_main_cov == pytest.approx(0.9)
+
+    # Contract round trip: the keys must be carried through the persisted dict the
+    # Karn ppo_updates view extracts (json_extract(data,'$.<key>')).
+    from dataclasses import asdict
+
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    restored = PPOUpdatePayload.from_dict(asdict(payload))
+    assert restored.cf_value_loss == pytest.approx(0.11)
+    assert restored.ev_main == pytest.approx(0.42)
+    assert restored.ev_cf == pytest.approx(-0.05)
+    assert restored.ev_sum == pytest.approx(0.31)
+    assert restored.cov_rcf_return_share == pytest.approx(0.55)
+    assert restored.r_main_cov == pytest.approx(0.9)
+
+
+def test_emit_ppo_update_event_omits_ev_stream_metrics_on_off_leg() -> None:
+    """OFF (HRA-off) leg: the per-stream EV + GATE keys are absent from the metrics
+    dict, so the payload carries None (byte-identical to pre-Stage-0 behaviour)."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(),  # no EV-stream keys
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.cf_value_loss is None
+    assert payload.ev_main is None
+    assert payload.ev_cf is None
+    assert payload.ev_sum is None
+    assert payload.cov_rcf_return_share is None
+    assert payload.r_main_cov is None
+
+
 def test_emit_ppo_update_event_requires_q_head_gradient_norm() -> None:
     """Live q-head telemetry must fail loudly if the q grad norm is missing."""
     hub = MagicMock()

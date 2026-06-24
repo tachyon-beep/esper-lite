@@ -169,6 +169,16 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.q_variance')::DOUBLE as q_variance,
             json_extract(data, '$.q_spread')::DOUBLE as q_spread,
             json_extract(data, '$.q_aux_loss')::DOUBLE as q_aux_loss,
+            -- EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics (ON-leg-only;
+            -- NULL on the OFF/HRA-off leg). ev_sum == explained_variance on the ON leg.
+            -- cov_rcf_return_share is the epic gate (>0.40 => cf stream dominates Var[return]);
+            -- r_main_cov is the "is R_main smoother" gate. Pure telemetry, never gate inputs.
+            json_extract(data, '$.cf_value_loss')::DOUBLE as cf_value_loss,
+            json_extract(data, '$.ev_main')::DOUBLE as ev_main,
+            json_extract(data, '$.ev_cf')::DOUBLE as ev_cf,
+            json_extract(data, '$.ev_sum')::DOUBLE as ev_sum,
+            json_extract(data, '$.cov_rcf_return_share')::DOUBLE as cov_rcf_return_share,
+            json_extract(data, '$.r_main_cov')::DOUBLE as r_main_cov,
             -- D5 slot-saturation / actor-agency diagnostics
             json_extract(data, '$.forced_step_ratio')::DOUBLE as forced_step_ratio,
             json_extract(data, '$.usable_actor_timesteps')::INTEGER as usable_actor_timesteps,

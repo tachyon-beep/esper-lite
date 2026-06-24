@@ -1057,6 +1057,17 @@ def emit_ppo_update_event(
             q_variance=metrics["q_variance"],
             q_spread=metrics["q_spread"],
             q_aux_loss=metrics["q_aux_loss"],
+            # EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics. ON-leg-only:
+            # the agent omits these from the metrics dict on the OFF (HRA-off) leg, so .get()
+            # returns None and the OFF-leg payload is byte-identical -- this is the same
+            # legitimate optional-numeric pattern as explained_variance above, NOT a
+            # bug-hiding default for a key that should always be present.
+            cf_value_loss=metrics.get("cf_value_loss"),
+            ev_main=metrics.get("ev_main"),
+            ev_cf=metrics.get("ev_cf"),
+            ev_sum=metrics.get("ev_sum"),
+            cov_rcf_return_share=metrics.get("cov_rcf_return_share"),
+            r_main_cov=metrics.get("r_main_cov"),
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=metrics.get("inf_grad_count", 0),

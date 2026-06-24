@@ -196,6 +196,11 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     "ev_main",
     "ev_cf",
     "ev_sum",
+    # EV-stab Stage 0 GATE metrics (ON-leg-only, like ev_main/ev_cf above). Each is a single
+    # scalar per update (covariance-share / coefficient-of-variation), mean-reduced over
+    # updates like explained_variance; the strict whitelist requires a declared reducer.
+    "cov_rcf_return_share",
+    "r_main_cov",
     "entropy_floor_penalty",
     "approx_kl",
     "clip_fraction",

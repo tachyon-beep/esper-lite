@@ -902,6 +902,18 @@ class PPOUpdatePayload:
     # divergence means the aux head is not converging.
     q_aux_loss: float | None = None
 
+    # EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics. ON-leg-only (emitted
+    # only when hra_value_decomposition is on), hence Optional[float] defaulting to None:
+    # None on the OFF leg / on events predating this plan. ev_sum == explained_variance on
+    # the ON leg. cov_rcf_return_share = Cov(returns_cf, returns_total)/Var(returns_total)
+    # (epic gate >0.40); r_main_cov = std(returns_main)/(|mean(returns_main)|+eps).
+    cf_value_loss: float | None = None
+    ev_main: float | None = None
+    ev_cf: float | None = None
+    ev_sum: float | None = None
+    cov_rcf_return_share: float | None = None
+    r_main_cov: float | None = None
+
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
     clip_fraction_positive: float = 0.0  # r > 1+ε (probability increases capped)
@@ -1123,6 +1135,16 @@ class PPOUpdatePayload:
             q_variance=data["q_variance"],
             q_spread=data["q_spread"],
             q_aux_loss=data.get("q_aux_loss"),
+            # OPTIONAL: EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics.
+            # ON-leg-only / persisted-event boundary -> .get(None): a missing key means the
+            # OFF leg or an event predating this plan, NOT a current-code bug (matches the
+            # explained_variance / q_aux_loss .get pattern above).
+            cf_value_loss=data.get("cf_value_loss"),
+            ev_main=data.get("ev_main"),
+            ev_cf=data.get("ev_cf"),
+            ev_sum=data.get("ev_sum"),
+            cov_rcf_return_share=data.get("cov_rcf_return_share"),
+            r_main_cov=data.get("r_main_cov"),
             # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],

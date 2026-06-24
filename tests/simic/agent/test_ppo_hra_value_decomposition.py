@@ -252,8 +252,8 @@ def test_on_leg_update_emits_cf_loss_and_per_stream_ev() -> None:
     assert metrics["ppo_update_performed"] is True
     assert metrics["finiteness_gate_skip_count"] == 0
     assert metrics["cf_value_loss"] > 0.0
-    # Per-stream EV keys present on the ON leg.
-    for key in ("ev_main", "ev_cf", "ev_sum"):
+    # Per-stream EV keys + EV-stab Stage 0 GATE metrics present and finite on the ON leg.
+    for key in ("ev_main", "ev_cf", "ev_sum", "cov_rcf_return_share", "r_main_cov"):
         assert key in metrics
         assert torch.isfinite(torch.tensor(metrics[key]))
     # The cf head moved (its loss backprops into its own params).
@@ -272,7 +272,14 @@ def test_off_leg_update_emits_no_cf_or_ev_keys() -> None:
     metrics = agent.update(clear_buffer=True)
 
     assert metrics["ppo_update_performed"] is True
-    for key in ("cf_value_loss", "ev_main", "ev_cf", "ev_sum"):
+    for key in (
+        "cf_value_loss",
+        "ev_main",
+        "ev_cf",
+        "ev_sum",
+        "cov_rcf_return_share",
+        "r_main_cov",
+    ):
         assert key not in metrics
 
 
@@ -382,11 +389,27 @@ def test_aggregator_reduces_on_leg_metric_keys() -> None:
     from esper.simic.training.vectorized import _aggregate_ppo_metrics
 
     update_metrics = [
-        {"cf_value_loss": 0.2, "ev_main": 0.4, "ev_cf": 0.1, "ev_sum": 0.3},
-        {"cf_value_loss": 0.4, "ev_main": 0.6, "ev_cf": 0.3, "ev_sum": 0.5},
+        {
+            "cf_value_loss": 0.2,
+            "ev_main": 0.4,
+            "ev_cf": 0.1,
+            "ev_sum": 0.3,
+            "cov_rcf_return_share": 0.5,
+            "r_main_cov": 0.8,
+        },
+        {
+            "cf_value_loss": 0.4,
+            "ev_main": 0.6,
+            "ev_cf": 0.3,
+            "ev_sum": 0.5,
+            "cov_rcf_return_share": 0.7,
+            "r_main_cov": 1.0,
+        },
     ]
     aggregated = _aggregate_ppo_metrics(update_metrics)
     assert aggregated["cf_value_loss"] == pytest.approx(0.3)
     assert aggregated["ev_main"] == pytest.approx(0.5)
     assert aggregated["ev_cf"] == pytest.approx(0.2)
     assert aggregated["ev_sum"] == pytest.approx(0.4)
+    assert aggregated["cov_rcf_return_share"] == pytest.approx(0.6)
+    assert aggregated["r_main_cov"] == pytest.approx(0.9)
