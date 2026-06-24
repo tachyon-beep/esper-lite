@@ -415,6 +415,11 @@ class TamiyoRolloutBuffer:
         bootstrap_value: float | torch.Tensor = 0.0,
         forced_step: bool = False,
         action_id: str = "",
+        # EV-stab Stage 2: per-stream cf data (only meaningful when HRA is on; default
+        # 0.0 leaves the OFF leg untouched).
+        cf_value: float | torch.Tensor = 0.0,
+        cf_bootstrap_value: float | torch.Tensor = 0.0,
+        r_cf_norm: float = 0.0,
         # Phase 2.1: Auxiliary supervision for contribution prediction
         contribution_targets: torch.Tensor | None = None,  # [num_slots] ground truth per slot
         contribution_mask: torch.Tensor | None = None,  # [num_slots] bool - which slots active
@@ -475,6 +480,10 @@ class TamiyoRolloutBuffer:
         self.dones[env_id, step_idx] = done
         self.truncated[env_id, step_idx] = truncated
         self.bootstrap_values[env_id, step_idx] = _detach(bootstrap_value)
+        # EV-stab Stage 2: per-stream cf data (zeros on the OFF leg).
+        self.cf_values[env_id, step_idx] = _detach(cf_value)
+        self.cf_bootstrap_values[env_id, step_idx] = _detach(cf_bootstrap_value)
+        self.r_cf_norm[env_id, step_idx] = r_cf_norm
         self.slot_masks[env_id, step_idx] = slot_mask.detach().bool()
         self.blueprint_masks[env_id, step_idx] = blueprint_mask.detach().bool()
         self.style_masks[env_id, step_idx] = style_mask.detach().bool()
