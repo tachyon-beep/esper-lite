@@ -58,6 +58,22 @@ def test_off_leg_is_byte_identical_to_default_ctor() -> None:
     assert not any("cf_value_head" in name for name, _ in net_off.named_parameters())
 
 
+def test_compute_cf_value_is_head_only_and_correct_shape() -> None:
+    net = _net(hra=True)
+    lstm_out = torch.randn(2, 3, net.lstm_hidden_dim, requires_grad=True)
+
+    v_cf = net._compute_cf_value(lstm_out)
+    assert v_cf.shape == (2, 3)
+
+    # Head-only: gradient must NOT flow into the LSTM trunk (lstm_out), but the cf
+    # head's own params must receive gradient.
+    v_cf.sum().backward()
+    assert lstm_out.grad is None, "cf value leaked gradient into the LSTM trunk"
+    assert any(
+        p.grad is not None and torch.any(p.grad != 0) for p in net.cf_value_head.parameters()
+    ), "cf_value_head received no gradient"
+
+
 def test_off_leg_construction_is_deterministic() -> None:
     torch.manual_seed(7)
     a = _net(hra=False)

@@ -676,6 +676,28 @@ class FactoredRecurrentActorCritic(nn.Module):
         q_value = cast(torch.Tensor, self.q_head(q_input))
         return q_value.squeeze(-1)
 
+    def _compute_cf_value(self, lstm_out: torch.Tensor) -> torch.Tensor:
+        """Compute the head-only counterfactual value V_cf(s) (EV-stab Stage 2).
+
+        DETACH the LSTM trunk (exactly like _compute_q) so the cf value objective
+        trains only cf_value_head's own parameters and never reshapes the shared LSTM
+        features — the trunk is shaped by V_main + the policy, as it is today. Only
+        valid when hra_value_decomposition is enabled (cf_value_head built).
+
+        Args:
+            lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim], any dtype
+
+        Returns:
+            Counterfactual value estimates [batch, seq_len], same dtype as lstm_out
+        """
+        assert self.cf_value_head is not None, (
+            "_compute_cf_value called but cf_value_head is not built "
+            "(hra_value_decomposition is off)"
+        )
+        lstm_out = lstm_out.detach()
+        value = cast(torch.Tensor, self.cf_value_head(lstm_out))
+        return value.squeeze(-1)
+
     def predict_contributions(
         self,
         state: torch.Tensor,
