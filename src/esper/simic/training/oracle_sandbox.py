@@ -35,7 +35,6 @@ from esper.leyline import (
     SeedStage,
     SlottedHostProtocol,
     SlotConfig,
-    TEMPO_TO_EPOCHS,
     TelemetryEvent,
     TelemetryEventType,
     TempoAction,
@@ -51,22 +50,13 @@ from esper.simic.training.handlers import (
     get_handler,
 )
 from esper.simic.training.parallel_env_state import ParallelEnvState
+from esper.simic.training.vectorized import _resolve_target_slot
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 from esper.tolaria import TolariaGovernor
 
 ORACLE_CI_SLOT_ID = "r0c1"
 ORACLE_CI_FIXTURE_ID = "oracle-ci-cnn-v1"
 ORACLE_PROOF_PROFILE = "oracle-sandbox"
-
-
-@dataclass(frozen=True, slots=True)
-class OracleActionResult:
-    """Outcome from applying one oracle-selected factored action."""
-
-    success: bool
-    seed_counter: int
-    target_slot: str
-    op: LifecycleOp
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,8 +162,7 @@ class OracleSandboxFixture:
     model: MorphogeneticModel
     slot_config: SlotConfig
     enabled_slots: tuple[str, ...]
-    inputs: torch.Tensor
-    targets: torch.Tensor
+    device: torch.device
 
 
 class OracleSandboxHost(nn.Module):
@@ -184,13 +173,12 @@ class OracleSandboxHost(nn.Module):
         self.conv1 = nn.Conv2d(in_channels, 16, kernel_size=3, padding=1)
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Linear(16, num_classes)
-        self._slots: dict[str, nn.Module] = {}
         self.segment_channels = {ORACLE_CI_SLOT_ID: 16}
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Backbone only: the MorphogeneticModel applies seeds via seed_slots, the host never
+        # does (matching CNNHost, whose forward is "no slot application").
         x = torch.relu(self.conv1(x))
-        if ORACLE_CI_SLOT_ID in self._slots and self._slots[ORACLE_CI_SLOT_ID] is not None:
-            x = cast(torch.Tensor, self._slots[ORACLE_CI_SLOT_ID](x))
         x = self.pool(x)
         x = x.view(x.size(0), -1)
         return cast(torch.Tensor, self.fc(x))
@@ -227,9 +215,8 @@ class OracleSandboxHost(nn.Module):
         raise ValueError(f"Unknown segment: {segment}")
 
     def forward_from_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
+        # Tail only: the seed has already been applied by the model at the segment boundary.
         if segment == ORACLE_CI_SLOT_ID:
-            if ORACLE_CI_SLOT_ID in self._slots and self._slots[ORACLE_CI_SLOT_ID] is not None:
-                x = cast(torch.Tensor, self._slots[ORACLE_CI_SLOT_ID](x))
             x = self.pool(x)
             x = x.view(x.size(0), -1)
             return cast(torch.Tensor, self.fc(x))
@@ -279,7 +266,7 @@ def _emit_oracle_training_started(
     host_params: int,
     max_epochs: int,
 ) -> None:
-    device = fixture.inputs.device.type
+    device = fixture.device.type
     telemetry_output.emit(TelemetryEvent(
         event_id=f"{schedule.identity}:training-start",
         event_type=TelemetryEventType.TRAINING_STARTED,
@@ -318,7 +305,6 @@ def _emit_oracle_causal_event(
     *,
     telemetry_output: DirectoryOutput,
     schedule_step: OracleScheduleStep,
-    step_result: OracleStepResult,
     target_slot: str,
     epoch: int,
     phase: MorphologyCausalLogPhase,
@@ -399,7 +385,6 @@ def _emit_oracle_step_telemetry(
     _emit_oracle_causal_event(
         telemetry_output=telemetry_output,
         schedule_step=schedule_step,
-        step_result=step_result,
         target_slot=target_slot,
         epoch=epoch,
         phase="proposal",
@@ -412,7 +397,6 @@ def _emit_oracle_step_telemetry(
     _emit_oracle_causal_event(
         telemetry_output=telemetry_output,
         schedule_step=schedule_step,
-        step_result=step_result,
         target_slot=target_slot,
         epoch=epoch,
         phase="verdict",
@@ -426,7 +410,6 @@ def _emit_oracle_step_telemetry(
         _emit_oracle_causal_event(
             telemetry_output=telemetry_output,
             schedule_step=schedule_step,
-            step_result=step_result,
             target_slot=target_slot,
             epoch=epoch,
             phase="audit",
@@ -441,7 +424,6 @@ def _emit_oracle_step_telemetry(
     _emit_oracle_causal_event(
         telemetry_output=telemetry_output,
         schedule_step=schedule_step,
-        step_result=step_result,
         target_slot=target_slot,
         epoch=epoch,
         phase="mutation",
@@ -454,7 +436,6 @@ def _emit_oracle_step_telemetry(
     _emit_oracle_causal_event(
         telemetry_output=telemetry_output,
         schedule_step=schedule_step,
-        step_result=step_result,
         target_slot=target_slot,
         epoch=epoch,
         phase="dispatch",
@@ -473,7 +454,6 @@ def _emit_oracle_step_telemetry(
         _emit_oracle_causal_event(
             telemetry_output=telemetry_output,
             schedule_step=schedule_step,
-            step_result=step_result,
             target_slot=target_slot,
             epoch=epoch,
             phase=terminal_phase,
@@ -531,6 +511,8 @@ def _emit_oracle_episode_outcome(
     host_params: int,
     val_accuracy: float,
     run_success: bool,
+    num_fossilized: int,
+    num_contributing_fossilized: int,
 ) -> None:
     successful_steps = tuple(step for step in step_results if step.success)
     telemetry_output.emit(TelemetryEvent(
@@ -543,13 +525,9 @@ def _emit_oracle_episode_outcome(
             env_id=0,
             episode_idx=0,
             final_accuracy=val_accuracy,
-            param_ratio=fixture.model.total_params / host_params,
-            num_fossilized=sum(
-                1 for step in successful_steps if step.op == LifecycleOp.FOSSILIZE
-            ),
-            num_contributing_fossilized=sum(
-                1 for step in successful_steps if step.op == LifecycleOp.FOSSILIZE
-            ),
+            param_ratio=fixture.model.total_params / max(1, host_params),
+            num_fossilized=num_fossilized,
+            num_contributing_fossilized=num_contributing_fossilized,
             episode_reward=float(len(successful_steps)),
             stability_score=1.0 if run_success else 0.0,
             reward_mode="oracle",
@@ -655,20 +633,12 @@ def build_oracle_ci_fixture(
         slots=[ORACLE_CI_SLOT_ID],
         device=str(device_obj),
     )
-    inputs = torch.linspace(
-        0.0,
-        1.0,
-        steps=2 * 3 * 8 * 8,
-        device=device_obj,
-    ).reshape(2, 3, 8, 8)
-    targets = torch.tensor([0, 1], device=device_obj)
     return OracleSandboxFixture(
         fixture_id=ORACLE_CI_FIXTURE_ID,
         model=model,
         slot_config=SlotConfig(slot_ids=(ORACLE_CI_SLOT_ID,)),
         enabled_slots=(ORACLE_CI_SLOT_ID,),
-        inputs=inputs,
-        targets=targets,
+        device=device_obj,
     )
 
 
@@ -684,27 +654,19 @@ def _slot_stage_name(model: SlottedHostProtocol, slot_id: str) -> str:
     return state.stage.name
 
 
-def _prepare_oracle_step_evidence(
+def _settle_oracle_step_evidence(
     *,
     fixture: OracleSandboxFixture,
-    action: FactoredAction,
+    target_slot: str,
     val_accuracy: float,
     max_epochs: int,
 ) -> None:
-    target_slot, slot_is_enabled = _resolve_oracle_target_slot(
-        action.slot_idx,
-        enabled_slots=list(fixture.enabled_slots),
-        slot_config=fixture.slot_config,
-    )
-    if not slot_is_enabled:
-        return
-
     slot = _slot_for(fixture.model, target_slot)
     state = slot.state
     if state is None:
         return
 
-    if action.op == LifecycleOp.ADVANCE and state.stage == SeedStage.TRAINING:
+    if state.stage == SeedStage.TRAINING:
         state.metrics.record_accuracy(val_accuracy - 1.0)
         for _ in range(DEFAULT_MIN_BLENDING_EPOCHS - 1):
             state.metrics.record_accuracy(val_accuracy)
@@ -722,7 +684,7 @@ def _prepare_oracle_step_evidence(
             max_epochs=max_epochs,
         )
 
-    if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.ADVANCE):
+    if state.stage == SeedStage.BLENDING:
         while (
             state.stage == SeedStage.BLENDING
             and state.alpha_controller.alpha_mode != AlphaMode.HOLD
@@ -738,7 +700,7 @@ def _prepare_oracle_step_evidence(
             )
             slot.step_epoch()
 
-    if action.op == LifecycleOp.ADVANCE and state.stage == SeedStage.BLENDING:
+    if state.stage == SeedStage.BLENDING:
         while state.metrics.epochs_in_current_stage < DEFAULT_MIN_BLENDING_EPOCHS:
             state.metrics.record_accuracy(val_accuracy)
             state.sync_telemetry(
@@ -750,7 +712,7 @@ def _prepare_oracle_step_evidence(
                 max_epochs=max_epochs,
             )
 
-    if action.op == LifecycleOp.FOSSILIZE and state.stage == SeedStage.HOLDING:
+    if state.stage == SeedStage.HOLDING:
         state.metrics.counterfactual_contribution = 2.0
         state.metrics.record_accuracy(val_accuracy)
         state.sync_telemetry(
@@ -767,7 +729,10 @@ def _action_allowed_by_masks(
     *,
     action: FactoredAction,
     masks: dict[str, torch.Tensor],
+    slot_is_enabled: bool,
 ) -> bool:
+    if not slot_is_enabled:
+        return False
     if not bool(masks["slot"][action.slot_idx]):
         return False
     if not bool(masks["op"][action.op.value]):
@@ -806,7 +771,7 @@ def _build_oracle_env_state(
         host_optimizer=host_optimizer,
         signal_tracker=cast(Any, _OracleSignalTracker()),
         governor=governor,
-        env_device=fixture.inputs.device.type,
+        env_device=fixture.device.type,
     )
     env_state.val_loss = val_loss
     env_state.val_acc = val_accuracy
@@ -949,7 +914,7 @@ def run_oracle_schedule(
     try:
         for epoch, schedule_step in enumerate(schedule.steps, start=1):
             action = schedule_step.action
-            target_slot, slot_is_enabled = _resolve_oracle_target_slot(
+            target_slot, slot_is_enabled = _resolve_target_slot(
                 action.slot_idx,
                 enabled_slots=list(fixture.enabled_slots),
                 slot_config=fixture.slot_config,
@@ -959,15 +924,6 @@ def run_oracle_schedule(
             else:
                 stage_before = _slot_stage_name(fixture.model, target_slot)
 
-            _prepare_oracle_step_evidence(
-                fixture=fixture,
-                action=action,
-                val_accuracy=val_accuracy,
-                max_epochs=max_epochs,
-            )
-            if slot_is_enabled:
-                stage_before = _slot_stage_name(fixture.model, target_slot)
-
             slot_reports = fixture.model.get_slot_reports()
             slot_states = build_slot_states(slot_reports, list(fixture.enabled_slots))
             masks = compute_action_masks(
@@ -975,7 +931,11 @@ def run_oracle_schedule(
                 enabled_slots=list(fixture.enabled_slots),
                 slot_config=fixture.slot_config,
             )
-            mask_allowed = _action_allowed_by_masks(action=action, masks=masks)
+            mask_allowed = _action_allowed_by_masks(
+                action=action,
+                masks=masks,
+                slot_is_enabled=slot_is_enabled,
+            )
             if not mask_allowed:
                 step_result = OracleStepResult(
                     step_id=schedule_step.step_id,
@@ -1099,6 +1059,13 @@ def run_oracle_schedule(
                 blocked_by=None if handler_success else "handler",
             )
             step_results.append(step_result)
+            if handler_success:
+                _settle_oracle_step_evidence(
+                    fixture=fixture,
+                    target_slot=target_slot,
+                    val_accuracy=val_accuracy,
+                    max_epochs=max_epochs,
+                )
             if telemetry_output is not None:
                 _emit_oracle_step_telemetry(
                     telemetry_output=telemetry_output,
@@ -1127,6 +1094,8 @@ def run_oracle_schedule(
                 host_params=host_params,
                 val_accuracy=val_accuracy,
                 run_success=run_success,
+                num_fossilized=env_state.seeds_fossilized,
+                num_contributing_fossilized=env_state.contributing_fossilized,
             )
         return OracleRunResult(
             schedule_identity=schedule.identity,
@@ -1139,103 +1108,16 @@ def run_oracle_schedule(
             telemetry_output.close()
 
 
-def _resolve_oracle_target_slot(
-    slot_idx: int,
-    *,
-    enabled_slots: list[str],
-    slot_config: SlotConfig,
-) -> tuple[str, bool]:
-    try:
-        slot_id = slot_config.slot_id_for_index(slot_idx)
-    except IndexError:
-        return enabled_slots[0], False
-    return slot_id, slot_id in enabled_slots
-
-
-def apply_oracle_factored_action(
-    model: SlottedHostProtocol,
-    action: FactoredAction,
-    *,
-    slot_config: SlotConfig,
-    enabled_slots: list[str],
-    seed_counter: int,
-) -> OracleActionResult:
-    """Apply one oracle-selected factored action through lifecycle APIs."""
-    target_slot, slot_is_enabled = _resolve_oracle_target_slot(
-        action.slot_idx,
-        enabled_slots=enabled_slots,
-        slot_config=slot_config,
-    )
-    if not slot_is_enabled:
-        return OracleActionResult(False, seed_counter, target_slot, action.op)
-
-    if action.op == LifecycleOp.GERMINATE:
-        tempo_epochs = TEMPO_TO_EPOCHS[action.tempo]
-        seed_id = f"oracle_seed_{seed_counter}"
-        model.germinate_seed(
-            action.blueprint.to_blueprint_id(),
-            seed_id,
-            slot=target_slot,
-            blend_algorithm_id=action.blend_algorithm_id,
-            blend_tempo_epochs=tempo_epochs,
-            alpha_algorithm=action.alpha_algorithm_value,
-            alpha_target=action.alpha_target_value,
-        )
-        return OracleActionResult(True, seed_counter + 1, target_slot, action.op)
-
-    if action.op == LifecycleOp.FOSSILIZE:
-        slot = cast(SeedSlotProtocol, model.seed_slots[target_slot])
-        gate = slot.advance_stage(SeedStage.FOSSILIZED)
-        return OracleActionResult(gate.passed, seed_counter, target_slot, action.op)
-
-    if action.op == LifecycleOp.PRUNE:
-        if model.has_active_seed_in_slot(target_slot):
-            slot = cast(SeedSlotProtocol, model.seed_slots[target_slot])
-            slot_state = slot.state
-            if (
-                slot_state is None
-                or slot_state.alpha_controller.alpha_mode != AlphaMode.HOLD
-                or not slot_state.can_transition_to(SeedStage.PRUNED)
-            ):
-                return OracleActionResult(False, seed_counter, target_slot, action.op)
-            speed_steps = action.alpha_speed_steps
-            curve = action.alpha_curve_value
-            scheduled = slot.schedule_prune(
-                steps=speed_steps,
-                curve=curve,
-                initiator="oracle",
-            )
-            return OracleActionResult(scheduled, seed_counter, target_slot, action.op)
-        return OracleActionResult(False, seed_counter, target_slot, action.op)
-
-    if action.op == LifecycleOp.SET_ALPHA_TARGET:
-        if model.has_active_seed_in_slot(target_slot):
-            slot = cast(SeedSlotProtocol, model.seed_slots[target_slot])
-            updated = slot.set_alpha_target(
-                alpha_target=action.alpha_target_value,
-                steps=action.alpha_speed_steps,
-                curve=action.alpha_curve_value,
-                alpha_algorithm=action.alpha_algorithm_value,
-                initiator="oracle",
-            )
-            return OracleActionResult(updated, seed_counter, target_slot, action.op)
-        return OracleActionResult(False, seed_counter, target_slot, action.op)
-
-    return OracleActionResult(True, seed_counter, target_slot, action.op)
-
-
 __all__ = [
     "ORACLE_CI_FIXTURE_ID",
     "ORACLE_CI_SLOT_ID",
     "ORACLE_PROOF_PROFILE",
-    "OracleActionResult",
     "OracleRunResult",
     "OracleSandboxFixture",
     "OracleSandboxHost",
     "OracleSchedule",
     "OracleScheduleStep",
     "OracleStepResult",
-    "apply_oracle_factored_action",
     "build_default_oracle_schedule",
     "build_oracle_ci_fixture",
     "run_oracle_schedule",

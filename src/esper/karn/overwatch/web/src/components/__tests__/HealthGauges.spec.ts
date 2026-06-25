@@ -147,11 +147,11 @@ describe('HealthGauges', () => {
     expect(clipGauge.classes()).toContain('health-critical')
   })
 
-  it('colors explained variance gauge correctly for good values', () => {
+  it('colors value-fit gauge as good when value_nrmse is healthy', () => {
     const wrapper = mount(HealthGauges, {
       props: {
         vitals: createVitals(),
-        tamiyo: createTamiyo({ explained_variance: 0.9 })
+        tamiyo: createTamiyo({ value_nrmse: 0.4 })
       }
     })
 
@@ -159,16 +159,40 @@ describe('HealthGauges', () => {
     expect(evGauge.classes()).toContain('health-good')
   })
 
-  it('colors explained variance gauge with warning for low values', () => {
+  it('colors value-fit gauge as warning when value_nrmse is above threshold', () => {
     const wrapper = mount(HealthGauges, {
       props: {
         vitals: createVitals(),
-        tamiyo: createTamiyo({ explained_variance: 0.3 })
+        tamiyo: createTamiyo({ value_nrmse: 1.5 })
       }
     })
 
     const evGauge = wrapper.find('[data-testid="gauge-explained-variance"]')
     expect(evGauge.classes()).toContain('health-warning')
+  })
+
+  it('keys value-fit health on value_nrmse, not explained_variance (EV-telemetry-robustness)', () => {
+    // Mirrors Sanctum reward_health.is_ev_healthy: a low-return-variance batch can
+    // crater explained_variance while the value head is fitting fine (low value_nrmse).
+    // The gauge health verdict must follow the robust value_nrmse, NOT the EV.
+
+    // Artifact: blown-out negative EV but healthy value_nrmse -> value-fit is good.
+    const healthy = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        tamiyo: createTamiyo({ explained_variance: -8.0, value_nrmse: 0.4 })
+      }
+    })
+    expect(healthy.find('[data-testid="gauge-explained-variance"]').classes()).toContain('health-good')
+
+    // Genuinely poor fit: strong EV but value_nrmse above threshold -> warning.
+    const unhealthy = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        tamiyo: createTamiyo({ explained_variance: 0.95, value_nrmse: 2.0 })
+      }
+    })
+    expect(unhealthy.find('[data-testid="gauge-explained-variance"]').classes()).toContain('health-warning')
   })
 
   it('displays labels for each gauge', () => {
@@ -258,9 +282,11 @@ describe('HealthGauges', () => {
     const valueText = evGauge.find('[data-testid="gauge-value"]').text()
     // Must NOT be masked to 0%.
     expect(valueText).not.toBe('0%')
-    // True value surfaced (rounded -800%), and the status is honestly critical.
+    // True EV value surfaced (rounded -800%). The value-fit health verdict follows the
+    // robust value_nrmse (healthy here), NOT the artifact-prone EV: the displayed number is
+    // honest about the EV collapse while the verdict reflects that the value head still fits.
     expect(valueText).toBe('-800%')
-    expect(evGauge.classes()).toContain('health-critical')
+    expect(evGauge.classes()).toContain('health-good')
   })
 
   it('clamps only the EV progress arc geometry (never negative), keeping SVG valid', () => {

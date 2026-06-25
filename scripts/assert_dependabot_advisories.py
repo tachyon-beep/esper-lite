@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -15,6 +16,17 @@ from packaging.version import Version
 
 
 SEVERITIES = {"critical", "high"}
+
+# SemVer 2.0.0 core with optional pre-release and build metadata. npm lockfile
+# versions follow this grammar, whose pre-release identifiers are arbitrary
+# dot-separated alphanumerics (e.g. ``7.0.0-next.1``) that PEP 440 rejects.
+_SEMVER_RE = re.compile(
+    r"^v?(?P<major>0|[1-9]\d*)"
+    r"(?:\.(?P<minor>0|[1-9]\d*))?"
+    r"(?:\.(?P<patch>0|[1-9]\d*))?"
+    r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?"
+    r"(?:\+[0-9A-Za-z.-]+)?$"
+)
 
 
 @dataclass(frozen=True)
@@ -71,8 +83,44 @@ def _load_npm_versions(package_lock_path: Path) -> dict[str, tuple[str, ...]]:
     return {name: tuple(values) for name, values in versions.items()}
 
 
-def _dedupe_versions(versions: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(sorted(set(versions), key=Version))
+def _semver_key(version: str) -> tuple[Any, ...]:
+    """Return a SemVer 2.0.0 precedence key for an npm version string.
+
+    Precedence follows the spec, section 11: numeric core fields compare
+    numerically; a pre-release ranks below the corresponding release; pre-release
+    identifiers compare dot-by-dot with numeric identifiers ordered below
+    alphanumeric ones; build metadata is ignored.
+    """
+    match = _SEMVER_RE.match(version)
+    if match is None:
+        raise ValueError(f"Not a SemVer version: {version!r}")
+    major = int(match["major"])
+    minor = int(match["minor"] or 0)
+    patch = int(match["patch"] or 0)
+    prerelease = match["prerelease"]
+    if prerelease is None:
+        # A release outranks every pre-release sharing the same core version.
+        return (major, minor, patch, 1, ())
+    identifiers: list[tuple[int, Any]] = []
+    for identifier in prerelease.split("."):
+        if identifier.isdigit():
+            identifiers.append((0, int(identifier)))
+        else:
+            identifiers.append((1, identifier))
+    return (major, minor, patch, 0, tuple(identifiers))
+
+
+def _version_key(ecosystem: str, version: str) -> Any:
+    """Return a sortable key using the ecosystem's native version algebra."""
+    if ecosystem == "pip":
+        return Version(version)
+    if ecosystem == "npm":
+        return _semver_key(version)
+    raise ValueError(f"Unsupported ecosystem: {ecosystem}")
+
+
+def _dedupe_versions(ecosystem: str, versions: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(sorted(set(versions), key=lambda version: _version_key(ecosystem, version)))
 
 
 def _current_versions(
@@ -82,9 +130,9 @@ def _current_versions(
     npm_versions: dict[str, tuple[str, ...]],
 ) -> tuple[str, ...]:
     if ecosystem == "pip":
-        return _dedupe_versions(python_versions[package.lower()])
+        return _dedupe_versions(ecosystem, python_versions[package.lower()])
     if ecosystem == "npm":
-        return _dedupe_versions(npm_versions[package])
+        return _dedupe_versions(ecosystem, npm_versions[package])
     raise ValueError(f"Unsupported ecosystem: {ecosystem}")
 
 
@@ -127,8 +175,11 @@ def _row_for_alert(
         current_versions = _current_versions(
             ecosystem, package, python_versions, npm_versions
         )
+        patched_key = _version_key(ecosystem, patched_version)
         vulnerable_versions = [
-            version for version in current_versions if Version(version) < Version(patched_version)
+            version
+            for version in current_versions
+            if _version_key(ecosystem, version) < patched_key
         ]
         if vulnerable_versions:
             disposition = "vulnerable present"

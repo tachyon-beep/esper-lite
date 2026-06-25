@@ -8,6 +8,7 @@
   "clip_ratio": 0.2,
   "gamma": 0.995,
   "ppo_updates_per_batch": 1,
+  "recurrent_n_epochs": 4,
   "entropy_coef_min": 0.01,
   "entropy_coef_start": 0.05,
   "entropy_coef_end": 0.03,

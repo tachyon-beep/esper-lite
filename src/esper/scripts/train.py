@@ -31,6 +31,7 @@ import argparse
 import logging
 import sys
 import threading
+import time
 from collections.abc import Callable
 from textwrap import dedent
 from typing import cast
@@ -80,6 +81,37 @@ def _exit_nonzero_if_training_failed(training_error: list[str | None]) -> None:
     """
     if training_error[0] is not None:
         sys.exit(1)
+
+
+def _wait_for_dataloader_or_crash(
+    ready_event: threading.Event,
+    shutdown_event: threading.Event,
+    timeout: float,
+    poll_interval: float = 0.1,
+) -> bool:
+    """Block until the DataLoader is ready, training crashes, or ``timeout`` elapses.
+
+    Returns ``True`` only if ``ready_event`` was set (workers spawned, safe to start
+    the TUI). Returns ``False`` on a crash/shutdown signal or a genuine timeout.
+
+    A pre-ready training crash sets ``shutdown_event`` (see
+    ``_run_training_capturing_errors``) but never sets ``ready_event``. Waiting on
+    ``ready_event`` alone would therefore block the full ``timeout`` on a run that has
+    already died. Watching both events lets the caller bail immediately and surface the
+    crash via ``_exit_nonzero_if_training_failed`` instead of stalling.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if ready_event.is_set():
+            return True
+        if shutdown_event.is_set():
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return ready_event.is_set()
+        # Event.wait returns as soon as ready_event is set; otherwise it sleeps at most
+        # poll_interval before we re-check shutdown_event. No busy loop.
+        ready_event.wait(timeout=min(poll_interval, remaining))
 
 
 def _degraded_requested_backends(
@@ -467,6 +499,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Precompute deterministic CIFAR-10 random crop/flip on GPU (requires --gpu-preload).",
     )
     ppo_parser.add_argument(
+        "--gpu-preload-gather-shrink",
+        action="store_true",
+        help=(
+            "Allow the gather iterator to shrink the per-env batch when "
+            "batch_size_per_env * n_envs exceeds the dataset, instead of erroring "
+            "(requires --experimental-gpu-preload-gather). Preserves disjoint per-env "
+            "batches but changes the host training batch size; logged as a warning."
+        ),
+    )
+    ppo_parser.add_argument(
         "--amp",
         action="store_true",
         help="Enable automatic mixed precision (CUDA only)",
@@ -669,6 +711,14 @@ def main() -> None:
         parser.error("--gpu-preload-augment requires --gpu-preload")
     if args.algorithm == "ppo" and args.gpu_preload_precompute_augment and not args.gpu_preload:
         parser.error("--gpu-preload-precompute-augment requires --gpu-preload")
+    if (
+        args.algorithm == "ppo"
+        and args.gpu_preload_gather_shrink
+        and not args.experimental_gpu_preload_gather
+    ):
+        parser.error(
+            "--gpu-preload-gather-shrink requires --experimental-gpu-preload-gather"
+        )
 
     # Create TelemetryConfig from CLI argument
     from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
@@ -1013,6 +1063,7 @@ def main() -> None:
                             "experimental_gpu_preload_gather": args.experimental_gpu_preload_gather,
                             "gpu_preload_augment": args.gpu_preload_augment,
                             "gpu_preload_precompute_augment": args.gpu_preload_precompute_augment,
+                            "gpu_preload_gather_shrink": args.gpu_preload_gather_shrink,
                             "telemetry_config": telemetry_config,
                             "telemetry_lifecycle_only": args.telemetry_lifecycle_only,
                             "quiet_analytics": use_sanctum,
@@ -1089,6 +1140,7 @@ def main() -> None:
                             "experimental_gpu_preload_gather": args.experimental_gpu_preload_gather,
                             "gpu_preload_augment": args.gpu_preload_augment,
                             "gpu_preload_precompute_augment": args.gpu_preload_precompute_augment,
+                            "gpu_preload_gather_shrink": args.gpu_preload_gather_shrink,
                             "telemetry_config": telemetry_config,
                             "telemetry_lifecycle_only": args.telemetry_lifecycle_only,
                             "quiet_analytics": use_sanctum,
@@ -1142,6 +1194,7 @@ def main() -> None:
                         experimental_gpu_preload_gather=args.experimental_gpu_preload_gather,
                         gpu_preload_augment=args.gpu_preload_augment,
                         gpu_preload_precompute_augment=args.gpu_preload_precompute_augment,
+                        gpu_preload_gather_shrink=args.gpu_preload_gather_shrink,
                         telemetry_config=telemetry_config,
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                         quiet_analytics=use_sanctum,
@@ -1188,9 +1241,13 @@ def main() -> None:
             # By waiting here, workers spawn while FDs are still valid.
             if dataloader_ready_event is not None:
                 print("Waiting for DataLoader workers to initialize...")
-                dataloader_ready_event.wait(timeout=60.0)  # 60s timeout for slow datasets
+                # Watch shutdown_event too: a pre-ready crash signals shutdown (not ready),
+                # so waiting on ready alone would stall the full 60s on an already-dead run.
+                ready = _wait_for_dataloader_or_crash(
+                    dataloader_ready_event, shutdown_event, timeout=60.0
+                )
                 _exit_nonzero_if_training_failed(training_error)
-                if not dataloader_ready_event.is_set():
+                if not ready:
                     print("WARNING: DataLoader initialization timed out, starting TUI anyway")
             _exit_nonzero_if_training_failed(training_error)
 

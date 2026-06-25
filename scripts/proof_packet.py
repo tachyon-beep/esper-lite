@@ -1107,64 +1107,112 @@ def _oracle_outcome_blockers_query() -> str:
 def _oracle_trace_blockers_query() -> str:
     return f"""
         WITH oracle_runs AS (
-            SELECT run_dir, group_id
+            SELECT
+                run_dir,
+                group_id,
+                proof_baseline_schedule_action_count
             FROM runs
             WHERE proof_profile = '{ORACLE_SANDBOX_PROOF_PROFILE}'
         ),
-        expected_terminal(epoch, phase, operation) AS (
-            VALUES
-                (1, 'commit', 'GERMINATE'),
-                (2, 'commit', 'ADVANCE'),
-                (3, 'commit', 'ADVANCE'),
-                (4, 'commit', 'SET_ALPHA_TARGET'),
-                (5, 'commit', 'ADVANCE'),
-                (6, 'fossilization', 'FOSSILIZE')
+        oracle_verdicts AS (
+            SELECT
+                oracle_runs.run_dir,
+                oracle_runs.group_id,
+                oracle_runs.proof_baseline_schedule_action_count,
+                morphology_causal_log.epoch,
+                morphology_causal_log.operation,
+                morphology_causal_log.action_id,
+                morphology_causal_log.governor_approved,
+                morphology_causal_log.governor_blocked_factor,
+                CASE
+                    WHEN morphology_causal_log.operation = 'FOSSILIZE'
+                    THEN 'fossilization'
+                    ELSE 'commit'
+                END AS expected_terminal_phase
+            FROM oracle_runs
+            JOIN morphology_causal_log
+              ON morphology_causal_log.run_dir = oracle_runs.run_dir
+             AND COALESCE(morphology_causal_log.group_id, '') = COALESCE(oracle_runs.group_id, '')
+            WHERE morphology_causal_log.phase = 'verdict'
+              AND morphology_causal_log.operation <> 'ORACLE_POLICY'
+        ),
+        verdict_counts AS (
+            SELECT
+                oracle_runs.run_dir,
+                oracle_runs.group_id,
+                oracle_runs.proof_baseline_schedule_action_count,
+                COUNT(oracle_verdicts.action_id) AS observed_action_count
+            FROM oracle_runs
+            LEFT JOIN oracle_verdicts
+              ON oracle_verdicts.run_dir = oracle_runs.run_dir
+             AND COALESCE(oracle_verdicts.group_id, '') = COALESCE(oracle_runs.group_id, '')
+            GROUP BY
+                oracle_runs.run_dir,
+                oracle_runs.group_id,
+                oracle_runs.proof_baseline_schedule_action_count
+        ),
+        action_count_mismatch AS (
+            SELECT
+                run_dir,
+                group_id,
+                proof_baseline_schedule_action_count AS expected_epoch,
+                'verdict' AS expected_phase,
+                'ORACLE_SCHEDULE_ACTION_COUNT' AS expected_operation,
+                'oracle schedule action-count mismatch' AS violations
+            FROM verdict_counts
+            WHERE proof_baseline_schedule_action_count IS NULL
+               OR observed_action_count <> proof_baseline_schedule_action_count
         ),
         missing_terminal AS (
             SELECT
-                oracle_runs.run_dir,
-                oracle_runs.group_id,
-                expected_terminal.epoch AS expected_epoch,
-                expected_terminal.phase AS expected_phase,
-                expected_terminal.operation AS expected_operation,
+                oracle_verdicts.run_dir,
+                oracle_verdicts.group_id,
+                oracle_verdicts.epoch AS expected_epoch,
+                oracle_verdicts.expected_terminal_phase AS expected_phase,
+                oracle_verdicts.operation AS expected_operation,
                 'missing oracle lifecycle terminal trace' AS violations
-            FROM oracle_runs
-            CROSS JOIN expected_terminal
-            WHERE NOT EXISTS (
+            FROM oracle_verdicts
+            WHERE COALESCE(oracle_verdicts.governor_approved, TRUE) = TRUE
+              AND NOT EXISTS (
                 SELECT 1
                 FROM morphology_causal_log
-                WHERE morphology_causal_log.run_dir = oracle_runs.run_dir
-                  AND COALESCE(morphology_causal_log.group_id, '') = COALESCE(oracle_runs.group_id, '')
-                  AND morphology_causal_log.epoch = expected_terminal.epoch
-                  AND morphology_causal_log.phase = expected_terminal.phase
-                  AND morphology_causal_log.operation = expected_terminal.operation
+                WHERE morphology_causal_log.run_dir = oracle_verdicts.run_dir
+                  AND COALESCE(morphology_causal_log.group_id, '') = COALESCE(oracle_verdicts.group_id, '')
+                  AND morphology_causal_log.action_id = oracle_verdicts.action_id
+                  AND morphology_causal_log.epoch = oracle_verdicts.epoch
+                  AND morphology_causal_log.phase = oracle_verdicts.expected_terminal_phase
+                  AND morphology_causal_log.operation = oracle_verdicts.operation
                   AND morphology_causal_log.governor_approved IS TRUE
             )
         ),
-        missing_masked_prune AS (
+        missing_blocked_audit AS (
             SELECT
-                oracle_runs.run_dir,
-                oracle_runs.group_id,
-                7 AS expected_epoch,
+                oracle_verdicts.run_dir,
+                oracle_verdicts.group_id,
+                oracle_verdicts.epoch AS expected_epoch,
                 'audit' AS expected_phase,
-                'PRUNE' AS expected_operation,
-                'missing oracle masked-prune audit trace' AS violations
-            FROM oracle_runs
-            WHERE NOT EXISTS (
+                oracle_verdicts.operation AS expected_operation,
+                'missing oracle blocked-action audit trace' AS violations
+            FROM oracle_verdicts
+            WHERE oracle_verdicts.governor_approved IS FALSE
+              AND NOT EXISTS (
                 SELECT 1
                 FROM morphology_causal_log
-                WHERE morphology_causal_log.run_dir = oracle_runs.run_dir
-                  AND COALESCE(morphology_causal_log.group_id, '') = COALESCE(oracle_runs.group_id, '')
-                  AND morphology_causal_log.epoch = 7
+                WHERE morphology_causal_log.run_dir = oracle_verdicts.run_dir
+                  AND COALESCE(morphology_causal_log.group_id, '') = COALESCE(oracle_verdicts.group_id, '')
+                  AND morphology_causal_log.action_id = oracle_verdicts.action_id
+                  AND morphology_causal_log.epoch = oracle_verdicts.epoch
                   AND morphology_causal_log.phase = 'audit'
-                  AND morphology_causal_log.operation = 'PRUNE'
+                  AND morphology_causal_log.operation = oracle_verdicts.operation
                   AND morphology_causal_log.governor_approved IS FALSE
-                  AND morphology_causal_log.governor_blocked_factor = 'mask'
+                  AND morphology_causal_log.governor_blocked_factor IS NOT DISTINCT FROM oracle_verdicts.governor_blocked_factor
             )
         )
+        SELECT * FROM action_count_mismatch
+        UNION ALL
         SELECT * FROM missing_terminal
         UNION ALL
-        SELECT * FROM missing_masked_prune
+        SELECT * FROM missing_blocked_audit
         ORDER BY run_dir, group_id, expected_epoch
     """
 

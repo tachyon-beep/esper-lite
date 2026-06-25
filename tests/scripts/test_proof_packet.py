@@ -21,7 +21,19 @@ from esper.leyline.proof_baselines import (
     STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
     STATIC_FINAL_SOURCE_TOPOLOGY_V1,
 )
+from esper.leyline import (
+    AlphaCurveAction,
+    AlphaSpeedAction,
+    AlphaTargetAction,
+    BlueprintAction,
+    FactoredAction,
+    GerminationStyle,
+    LifecycleOp,
+    TempoAction,
+)
 from esper.simic.training.oracle_sandbox import (
+    OracleSchedule,
+    OracleScheduleStep,
     build_default_oracle_schedule,
     build_oracle_ci_fixture,
     run_oracle_schedule,
@@ -41,6 +53,34 @@ proof_packet_main = _PROOF_PACKET.main
 def _write_oracle_sandbox_archive(tmp_path: Path) -> None:
     result = run_oracle_schedule(
         schedule=build_default_oracle_schedule(),
+        fixture=build_oracle_ci_fixture(),
+        telemetry_dir=tmp_path,
+    )
+    assert result.success is True
+    assert result.telemetry_dir is not None
+
+
+def _write_custom_oracle_sandbox_archive(tmp_path: Path) -> None:
+    schedule = OracleSchedule(
+        name="oracle-ci-wait-only-v1",
+        steps=(
+            OracleScheduleStep(
+                step_id="wait_only",
+                action=FactoredAction(
+                    slot_idx=0,
+                    blueprint=BlueprintAction.NOOP,
+                    style=GerminationStyle.SIGMOID_ADD,
+                    tempo=TempoAction.STANDARD,
+                    alpha_target=AlphaTargetAction.FULL,
+                    alpha_speed=AlphaSpeedAction.INSTANT,
+                    alpha_curve=AlphaCurveAction.LINEAR,
+                    op=LifecycleOp.WAIT,
+                ),
+            ),
+        ),
+    )
+    result = run_oracle_schedule(
+        schedule=schedule,
         fixture=build_oracle_ci_fixture(),
         telemetry_dir=tmp_path,
     )
@@ -1388,6 +1428,21 @@ def test_oracle_sandbox_profile_accepts_clean_oracle_archive(tmp_path):
     assert "Oracle policy evidence is present." in packet
     assert "PPO learnability telemetry is not required for oracle-sandbox profile." in packet
     assert "--proof-profile oracle-sandbox" in packet
+
+
+def test_oracle_sandbox_profile_accepts_custom_oracle_schedule(tmp_path):
+    _write_custom_oracle_sandbox_archive(tmp_path)
+
+    packet = build_proof_packet(
+        str(tmp_path),
+        proof_profile="oracle-sandbox",
+        min_mean_accuracy_roi=0.1,
+    )
+
+    assert "Verdict: `CONTINUE`" in packet
+    assert "Oracle sandbox lifecycle trace is proof-grade." in packet
+    assert "missing oracle lifecycle terminal trace" not in packet
+    assert "missing oracle masked-prune audit trace" not in packet
 
 
 def test_oracle_sandbox_profile_blocks_missing_oracle_policy_evidence(tmp_path):

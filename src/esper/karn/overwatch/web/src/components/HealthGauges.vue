@@ -18,8 +18,10 @@ const SIZE = (RADIUS + STROKE_WIDTH) * 2
 const TEMP_WARNING_THRESHOLD = 80 // Celsius
 const ENTROPY_WARNING_THRESHOLD = 0.1 // Entropy collapse warning
 const CLIP_FRACTION_WARNING_THRESHOLD = 0.2 // High clip fraction warning
-const EXPLAINED_VARIANCE_GOOD_THRESHOLD = 0.5 // Good explained variance
-const EXPLAINED_VARIANCE_WARNING_THRESHOLD = 0.3 // Warning threshold
+// Value-fit health threshold. Mirrors Sanctum reward_health.EV_VALUE_NRMSE_HEALTHY_THRESHOLD:
+// value_nrmse = RMSE(residual) / std(returns); below 1.0 the value head's residual RMSE is
+// smaller than the return spread, i.e. it explains some variance.
+const VALUE_NRMSE_HEALTHY_THRESHOLD = 1.0
 
 type HealthStatus = 'good' | 'warning' | 'critical'
 
@@ -90,10 +92,12 @@ const explainedVariancePercent = computed(() => {
 })
 
 const explainedVarianceHealth = computed<HealthStatus>(() => {
-  if (props.tamiyo.ev_low_return_variance) return 'warning'
-  if (props.tamiyo.explained_variance >= EXPLAINED_VARIANCE_GOOD_THRESHOLD) return 'good'
-  if (props.tamiyo.explained_variance >= EXPLAINED_VARIANCE_WARNING_THRESHOLD) return 'warning'
-  return 'critical'
+  // EV-telemetry-robustness: the value-fit health VERDICT keys on the robust value_nrmse
+  // (mirroring Sanctum reward_health.is_ev_healthy), NOT the artifact-prone explained_variance.
+  // A low-return-variance batch can crater EV while the value head fits fine (low NRMSE); the
+  // displayed EV percentage above stays honest, and the low-return-variance badge surfaces the
+  // diagnostic flag separately.
+  return props.tamiyo.value_nrmse < VALUE_NRMSE_HEALTHY_THRESHOLD ? 'good' : 'warning'
 })
 
 // All gauge configurations. When the relevant data group has not been measured

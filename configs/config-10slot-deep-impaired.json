@@ -9,6 +9,7 @@
   "gamma": 0.995,
   "gae_lambda": 0.95,
   "ppo_updates_per_batch": 1,
+  "recurrent_n_epochs": 4,
   "max_grad_norm": 0.5,
   "value_coef": 0.25,
   "entropy_coef_min": 0.03,

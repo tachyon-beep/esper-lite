@@ -6,6 +6,7 @@ with room to grow for ImageNet, synthetic datasets, etc.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,8 @@ import torch
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 import torchvision
 import torchvision.transforms as transforms
+
+_logger = logging.getLogger(__name__)
 
 # CIFAR-10 normalization constants (match CPU pipeline).
 _CIFAR10_MEAN = torch.tensor((0.4914, 0.4822, 0.4465), dtype=torch.float32)
@@ -653,6 +656,7 @@ class SharedGPUGatherBatchIterator:
         is_train: bool = True,
         seed: int,
         cifar_precompute_aug: bool = False,
+        allow_batch_shrink: bool = False,
     ):
         if batch_size_per_env < 1:
             raise ValueError(
@@ -736,6 +740,51 @@ class SharedGPUGatherBatchIterator:
         if dataset_len is None:
             raise ValueError("No devices available for SharedGPUGatherBatchIterator")
         self._dataset_len = dataset_len
+
+        # The gather iterator draws DISJOINT per-env windows from a single global
+        # permutation, so each env needs at least one distinct sample. This is impossible
+        # to satisfy once n_envs exceeds the dataset size, in any mode (shrinking would give
+        # a per-env batch of 0). Note the test split (10k for CIFAR) is the tighter ceiling.
+        if n_envs > dataset_len:
+            raise ValueError(
+                f"SharedGPUGatherBatchIterator: n_envs ({n_envs}) exceeds dataset size "
+                f"({dataset_len}); cannot give each env a distinct sample. "
+                f"Reduce n_envs to <= {dataset_len}."
+            )
+
+        # Disjoint batching consumes batch_size_per_env * n_envs distinct samples per step;
+        # when that exceeds the dataset a drop_last pass yields ZERO batches. Rather than
+        # emit a zero-length iterator that fails confusingly downstream (the n_envs=128
+        # production crash), either shrink the per-env batch (explicit opt-in) or raise with
+        # the exact ceiling and a pointer to the higher-ceiling --gpu-preload path.
+        if self.drop_last and self._total_batch > dataset_len:
+            if allow_batch_shrink:
+                shrunk = dataset_len // n_envs
+                _logger.warning(
+                    "SharedGPUGatherBatchIterator: requested batch_size_per_env=%d * "
+                    "n_envs=%d = %d exceeds dataset size %d; shrinking effective "
+                    "batch_size_per_env to %d to preserve disjoint per-env batches. This "
+                    "changes the host training regime from the configured batch size.",
+                    self.batch_size_per_env,
+                    n_envs,
+                    self._total_batch,
+                    dataset_len,
+                    shrunk,
+                )
+                self.batch_size_per_env = shrunk
+                self._total_batch = shrunk * n_envs
+            else:
+                max_n_envs = dataset_len // self.batch_size_per_env
+                raise ValueError(
+                    "SharedGPUGatherBatchIterator: batch_size_per_env * n_envs "
+                    f"({self.batch_size_per_env} * {n_envs} = {self._total_batch}) exceeds "
+                    f"dataset size ({dataset_len}); disjoint per-env batching yields zero "
+                    f"batches. Max n_envs at this batch size is {max_n_envs}. Reduce n_envs "
+                    "or batch_size_per_env, pass allow_batch_shrink=True "
+                    "(--gpu-preload-gather-shrink) to auto-reduce the per-env batch, or use "
+                    "--gpu-preload (per-device batching has a higher env ceiling)."
+                )
+
         if self.drop_last:
             self._len = dataset_len // self._total_batch
         else:
