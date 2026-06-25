@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-21 (Main-merge reconciliation closed `esper-lite-569292a32b`: live GitHub shows PR #111, "Release 0.2.0: merge 0.1.1 -> main", merged on 2026-06-19 at `d57ecf65`, and current `origin/main` is `f8089677` with that release commit in history. The old `origin/0.1.1` source branch no longer exists, and local `backup/0.1.1-pre-p01` is not a valid source because it is behind `main` and still carries the old EV branch. The original 0.1.1 integration plan is therefore historical/completed and moved to `docs/plans/completed/2026-06-18-main-merge-integration-plan.md`. Separate follow-up task `esper-lite-224fdba503` now tracks landing or deliberately splitting the `0.3.0` post-merge closeout line, which remains 9 commits ahead of `origin/main` and contains the dependency-triage, EV-closeout, and Weft parity hardening commits.)
+**Last Updated:** 2026-06-22 (Correctness track reconciliation: `ppo-stability-oracle-sandbox` is delivered in Filigree as work package `esper-lite-53fda89665` with all six children closed. The next P1 package is promoted as `ppo-learning-gate-reward-efficiency-statistics`, Filigree work package `esper-lite-a2abff5ec5`, with first startable child `esper-lite-441fbc6810` and ready plan `docs/plans/ready/2026-06-22-ppo-learning-gate-reward-efficiency-statistics.md`.)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -52,16 +52,18 @@ recomputes Q(s,argmax op) in deterministic bootstrap mode, and focused regressio
 4. **Proof Confounder Drain** - ✅ Implemented; ledger, learnability, freshness, reward-accounting closure, proof packet, and blocked rehearsal packet verified
 5. **Correctness Proof Strategy** - Drafted 2026-06-15; proof packet now emits typed machine verdicts (`BLOCKED_*`, `CONTINUE`, `REVISE_ALGORITHM`, `STOP_THEORY`) and CLI/API defaults to the reward-efficiency proof profile for control/precision gates, outcome-bearing baseline evidence, fixed-schedule provenance/hash-pin, fixed-schedule realized-trace validation, joined static-final source/replay topology-manifest validation, static-final freeze validation, and lockstep reward A/B pair validation; static-final topology replay now has a runtime primitive, trainer source/replay evidence emission, runner handoff, and live baseline rehearsal; current packet advances past math/control and blocks on mechanics (`BLOCKED_MECHANICS`)
 6. **Morphogenesis Governor Integrity** - Drafted from the Kasmina/Tolaria/Blueprint health report; next P1 correctness and evidence-hygiene package
-7. **PPO Stability / Oracle Sandbox** - Planning artifact created 2026-06-15; needed after governor-integrity to isolate value-collapse and gradient-anomaly proof blockers
+7. **PPO Stability / Oracle Sandbox** - ✅ Delivered in Filigree work package `esper-lite-53fda89665`; all six child tasks are closed and the oracle-sandbox proof path is now lower-gate evidence, not active work
 8. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
 9. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
 10. **Op/Value Mismatch** - ✅ Resolved; focused regression tests cover rollout and bootstrap consistency
-11. **Reward Efficiency Experiment** - Deferred; reward-efficiency-default proof rehearsal has complete control evidence but is blocked by value-collapse and numerical-instability mechanics confounders
-12. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
-13. **Drip Reward Implementation** - ~70% done, needs integration completion
-14. **Telemetry Domain Separation** - ~30% done
-15. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
-16. **Correctness Defect Burndown Strategy** - Drafted 2026-06-19; Package A tracker/ready-folder/defect-report reconciliation executed on 2026-06-19 with Filigree IDs recorded for the next sprint work
+11. **PPO Learning Gate / Reward-Efficiency Statistics** - Promoted 2026-06-22 as Filigree work package `esper-lite-a2abff5ec5`; first child `esper-lite-441fbc6810` fixes PPO precision/provenance and missing-evidence blockers before statistics or long-run evidence
+12. **Reward Efficiency Experiment** - Deferred behind `esper-lite-a2abff5ec5`; ordinary `--dual-ab` remains smoke-only until proof-grade PPO learnability, same-seed statistics, and packet verdict semantics close
+13. **Reward-Redesign Methodology** - Concept drafted 2026-06-24 (`docs/plans/concepts/2026-06-24-reward-redesign-methodology.md`) via multi-agent workflow + adversarial critic; **independently RE-VERIFIED + REVISED 2026-06-24** (2nd 6-lens workflow + Karn re-measurement + code adjudication; verdict `revise-first`, four blockers now resolved in-doc). Evidence-gated methodology for a NEW reward targeting the *unbounded-farmable-dense-credit* defect (17/180 fossilizations; corrected `reward↔fossilize=+0.21` — the earlier −0.43 was a mislabeled prune correlation), distinct from and on top of the EV-epic's critic-variance work. Objective `J` = committed counterfactual gain per param (commitment unit re-grounded as alpha-weighted residency, not fossilize-only; rate/hazard metric). Now gated behind **Phase −1 cheap falsifiers** (contribution gate + clip/ESCROW/scale A/B + `max_seeds≥2` re-measure) feeding GATE 1. **4th independent review 2026-06-24 (`wf_90a109d8-63b`: 6 adversarial lenses + per-finding skeptic + synthesis) → `GO_WITH_CONDITIONS`** (all 11 blocking findings refuted; +0.214 crux reproduced twice). Owner RATIFIED both design decisions: commitment unit = **counterfactual-weighted residency**; §9 fossilize-rate = **diagnostic, not a gate** (re-open at `max_seeds≥2`). Sign-offs recorded for drl-expert/reward-function-reviewer/morphogenesis-reviewer/plan-review-reality; pytorch-expert + axiom-python-engineering pending. Depends on EV Stage-0 instrumentation + correctness PR `esper-lite-3defe42928`; not implementation-ready until Phase −1 falsifiers run and GATE 1 fires. Full record: `docs/analysis/2026-06-24-reward-methodology-gonogo-review.md`.
+13. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+14. **Drip Reward Implementation** - ~70% done, needs integration completion
+15. **Telemetry Domain Separation** - ~30% done
+16. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
+17. **Correctness Defect Burndown Strategy** - Drafted 2026-06-19; Package A tracker/ready-folder/defect-report reconciliation executed on 2026-06-19 with Filigree IDs recorded for the next sprint work
 
 ### P-EV-RECAL Execution Note (2026-06-19)
 
@@ -114,21 +116,20 @@ Closeout verification:
 
 ### Critical Path (Updated)
 ```
-correctness-proof-strategy ──► morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──► reward-efficiency verdict ──► counterfactual-oracle ──► emrakul-phase1
-                 │                                     │                         │
-                 │                                     │                         └──► blueprint-compiler ──► kasmina2-phase0
-                 └──► proof-baseline-controls ◄────────┘
-                                                       └──► phase3-tinystories validation
+correctness-proof-strategy ──► morphogenesis-governor-integrity ──► ppo-stability-oracle-sandbox ──► ppo-learning-gate-reward-efficiency-statistics ──► reward-efficiency verdict ──► counterfactual-oracle ──► emrakul-phase1
+                 │                                     │                         │                                                     │
+                 │                                     │                         │                                                     └──► blueprint-compiler ──► kasmina2-phase0
+                 └──► proof-baseline-controls ◄────────┘                         └──► phase3-tinystories validation
 ```
 
 ### Health Summary
 | Status | Count | Notes |
 |--------|-------|-------|
 | 🔴 Critical | 0 | New governor-integrity issues are high-priority proof blockers, not active Tier 0 mainline breakage |
-| Completed | 18 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) + green-state-recovery + p1-stability-batch-1 |
-| Ready | 11 | Implementation-ready plans after moving completed recovery/stability plans out of `ready/` and demoting main-merge integration back to planning |
+| Completed | 19 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) + green-state-recovery + p1-stability-batch-1 + PPO stability/oracle-sandbox |
+| Ready | 12 | Implementation-ready plans after moving completed recovery/stability plans out of `ready/`, plus the promoted `ppo-learning-gate-reward-efficiency-statistics` package |
 | In Progress | 2 | phase3-tinystories (85%); weft-phase-a-ci-migration (Phase A shadow-CI) |
-| Planning | 13 | Active design workspaces, including correctness defect burndown, main-merge integration, correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
+| Planning | 12 | Active design workspaces, including correctness defect burndown, main-merge integration, correctness proof strategy, governor-integrity, and proof baseline controls |
 | Concept | 4 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals, gil-throughput-profiler |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
 | **Total Active** | **34** |
@@ -153,8 +154,9 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | correctness-defect-burndown | Correctness Defect Burndown Strategy | planning | high | XL | high | Drafted 2026-06-19; Package A executed 2026-06-19: stale P1 closed, observation queue empty, June 18 defect report reconciled, and sprint work bound to Filigree IDs |
 | morphogenesis-governor-integrity | Morphogenesis Governor Integrity | planning | high | L | high | Drafted 2026-06-13 from the Kasmina/Tolaria/Blueprint health report; owns rollback ordering, observation truthfulness, blueprint contracts, minimal Tolaria pre-flight, and causal morphology event identity |
 | correctness-proof-strategy | Correctness Proof Strategy | planning | high | L | high | Drafted 2026-06-15; owns the evidence ladder and typed proof-packet verdict taxonomy for instrumentation, precision, mechanics, math, algorithm revision, and theory stop decisions; packet now blocks outcome-empty baseline controls, missing/mismatched fixed-schedule provenance, misplaced schedule metadata, missing/mismatched fixed-schedule realized traces, missing/malformed/mismatched static-final source/replay manifests, static-final lifecycle mutations, and malformed lockstep pairs; runner-side static-final source handoff and live full-baseline rehearsal implemented; current blocker is mechanics, not proof math |
-| ppo-stability-oracle-sandbox | PPO Stability / Oracle Sandbox | planning | high | M | high | Artifact created 2026-06-15; current smoke test proves scripted lifecycle mechanics only, missing proof-grade oracle telemetry and packet profile |
-| reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment deferred until governor-integrity, PPO oracle sandbox, and a mechanics-clean proof rehearsal packet |
+| ppo-stability-oracle-sandbox | PPO Stability / Oracle Sandbox | work-package | high | M | high | Delivered in Filigree as `esper-lite-53fda89665`; children closed: runner extraction `esper-lite-be5b1cb60d`, schedule/fixture `esper-lite-542618e08c`, mechanics execution `esper-lite-ad094c304a`, proof telemetry `esper-lite-9ca785d759`, oracle-sandbox packet profile `esper-lite-d8d0f29926`, acceptance suite `esper-lite-50809196d6` |
+| ppo-learning-gate-reward-efficiency-statistics | PPO Learning Gate / Reward-Efficiency Statistics | ready/work-package | high | L | high | Promoted as Filigree work package `esper-lite-a2abff5ec5`; first child `esper-lite-441fbc6810` is startable, followed by Karn traceability `esper-lite-570d98c451`, ROI semantics `esper-lite-9678c6d05a`, multi-seed statistics `esper-lite-e70a09590e`, proof lane `esper-lite-c3cb5338c4`, CUDA/manual contract `esper-lite-9f30f62993`, and final rehearsal `esper-lite-2b077204e9` |
+| reward-efficiency | Phase 1 Final Exam (A/B Testing) | gated | high | L | high | Deferred behind `esper-lite-a2abff5ec5`; `--dual-ab` is smoke-only until PPO learnability, same-seed lockstep statistics, Karn proof traceability, and reward-efficiency packet semantics are fail-closed |
 | karn-telemetry-quality-arc | Karn Telemetry Quality Strategic Arc | planning | high | L | medium | Drafted 2026-06-13; establishes Karn as the next quality-upgrade package |
 | karn-telemetry-sprint-1 | Karn Telemetry Quality Sprint 1 | planning | high | M | medium | Drafted 2026-06-13; dependency drain, Sanctum CI determinism, branch hygiene, Overwatch contract inventory |
 | proof-confounder-drain | Proof Confounder Drain | completed | high | L | high | Implemented on `confounder-drain`; proof packet correctly blocks the rehearsal on value-collapse and gradient-anomaly confounders |
@@ -325,59 +327,131 @@ percent_complete: 100
 
 ---
 
+### ppo-learning-gate-reward-efficiency-statistics: PPO Learning Gate / Reward-Efficiency Statistics
+
+```yaml
+id: ppo-learning-gate-reward-efficiency-statistics
+title: PPO Learning Gate / Reward-Efficiency Statistics
+type: ready/work-package
+created: 2026-06-22
+updated: 2026-06-22
+
+urgency: high
+value: |
+  Make reward-efficiency evidence decision-grade before the Phase 1 verdict.
+  Missing PPO rows, missing precision provenance, sequential A/B bias, and
+  single-seed variance must block or revise the packet instead of being treated
+  as reward-theory evidence.
+
+complexity: L
+risk: high
+risk_notes: |
+  Crosses Simic PPO training, Leyline telemetry contracts, Karn proof views,
+  proof-packet verdict logic, proof-lane tests, and CUDA/manual validation.
+
+depends_on:
+  - correctness-proof-strategy
+  - morphogenesis-governor-integrity
+  - ppo-stability-oracle-sandbox
+  - proof-baseline-controls
+blocks:
+  - reward-efficiency verdict
+  - counterfactual-oracle
+  - emrakul-phase1
+
+filigree:
+  package: esper-lite-a2abff5ec5
+  children:
+    - esper-lite-441fbc6810  # PPO precision/provenance and missing-evidence blockers
+    - esper-lite-570d98c451  # Karn PPO traceability evidence section
+    - esper-lite-9678c6d05a  # reward-efficiency ROI verdict semantics
+    - esper-lite-e70a09590e  # multi-seed lockstep statistics contract
+    - esper-lite-c3cb5338c4  # CI-safe PPO learnability proof lane
+    - esper-lite-9f30f62993  # CUDA and manual validation contract
+    - esper-lite-2b077204e9  # reward-efficiency rehearsal and verdict packet
+
+status_notes: |
+  Promoted 2026-06-22 with specialist review from deep-RL, training
+  optimization, telemetry/proof, and quality-engineering reviewers. First
+  startable child is esper-lite-441fbc6810. Do not run the long reward-
+  efficiency exam until the final child is startable.
+percent_complete: 0
+```
+
+**Commentary:**
+> This package is the next correctness-track blocker after the delivered oracle
+> sandbox. It deliberately starts with fail-closed evidence surfaces: resolved
+> AMP provenance, PPO update rows, Karn proof traceability, reward-efficiency
+> ROI semantics, same-seed multi-run statistics, a named proof lane, and an
+> explicit CUDA/manual lane. The long reward-efficiency run is last.
+
+---
+
 ### reward-efficiency: Phase 1 Final Exam
 
 ```yaml
 id: reward-efficiency
 title: Phase 1 Final Exam - Reward A/B Testing
-type: ready
+type: gated
 created: 2025-12-19
-updated: 2026-01-10
+updated: 2026-06-22
 
 urgency: high
 value: |
   Determine the optimal reward signal for Phase 3 (Transformers).
-  Currently 7-component SHAPED reward may be "unlearnable landscape".
+  Current evidence still needs PPO learnability, same-seed multi-run
+  statistics, and proof-packet verdict semantics before the result can be used
+  as reward-theory evidence.
 
-complexity: S  # REVISED: Infrastructure is 100% complete
-risk: low
+complexity: L
+risk: high
 risk_notes: |
   - All reward modes implemented (SHAPED, SIMPLIFIED, SPARSE, ESCROW)
-  - dual_ab.py training infrastructure complete
+  - dual_ab.py training infrastructure exists but is sequential and smoke-only
   - --dual-ab CLI flag wired
   - Test configs exist in configs/ablations/
-  - Risk is only wasted compute if wrong hypothesis
+  - Current proof risk is overclaiming from missing PPO evidence, missing
+    precision provenance, single-seed variance, or non-lockstep comparisons
 
 depends_on:
   - morphogenesis-governor-integrity
   - ppo-stability-oracle-sandbox
+  - ppo-learning-gate-reward-efficiency-statistics
   - proof-baseline-controls  # Required before using results as final blueprint-health evidence
 blocks:
   - counterfactual-oracle (explicitly gated on this)
 
 status_notes: |
-  SPOT CHECK 2026-01-10: Infrastructure is 100% complete!
+  UPDATED 2026-06-22: Experiment remains deferred behind
+  ppo-learning-gate-reward-efficiency-statistics (`esper-lite-a2abff5ec5`).
+
+  Historical infrastructure spot check:
   - RewardMode.SIMPLIFIED implemented (contribution.py:747-836)
   - RewardMode.SPARSE implemented (contribution.py:670-702)
   - dual_ab.py exists with train_dual_policy_ab()
   - CLI: --dual-ab shaped-vs-simplified ready
   - Configs: configs/ablations/{shaped,simplified,sparse}_baseline.json
 
-  NEVER EXECUTED. Do not run the long exam until morphogenesis-governor-integrity and PPO stability / oracle sandbox clear the rollback/truthfulness, value-collapse, and gradient-anomaly blockers. Add proof-baseline-controls before using results as final blueprint-health evidence.
-  Current CLI uses --rounds for PPO update rounds:
-  PYTHONPATH=src uv run python -m esper.scripts.train ppo --task cifar_impaired --dual-ab shaped-vs-simplified --rounds 100 --envs 8 --episode-length 150
-percent_complete: 100 (infra) / 0 (experiment)
+  NEVER EXECUTED AS FINAL PROOF. Do not run the long exam until the new package
+  closes instrumentation/provenance, Karn traceability, ROI semantics,
+  multi-seed statistics, proof-lane, and CUDA/manual validation contracts.
+  Ordinary --dual-ab remains useful as smoke evidence only; proof evidence must
+  use same-seed lockstep controls or an explicit multi-seed exam manifest.
+percent_complete: 100 (legacy infra) / 0 (proof-grade experiment)
 ```
 
 **Commentary:**
 > **MAJOR FINDING:** All the experiment code exists, but weaker-than-expected
-> prior signal means this should now run behind morphogenesis-governor-integrity
-> and the PPO stability / oracle-sandbox package rather than as a raw
+> prior signal and proof-review findings mean this should now run behind
+> morphogenesis-governor-integrity, PPO stability / oracle-sandbox, and
+> `ppo-learning-gate-reward-efficiency-statistics` rather than as a raw
 > "press the button" experiment.
 >
 > The dual-policy A/B system trains separate PPO agents per reward mode with
-> isolated environments, policies, and optimizers. Results would directly
-> unblock counterfactual-oracle.
+> isolated environments, policies, and optimizers, but its sequential ordering
+> and group seed offsets make it smoke-only for final proof. Decision-grade
+> evidence now requires same-seed lockstep comparisons and multi-seed packet
+> statistics before it can unblock counterfactual-oracle.
 >
 > **Action:** Keep the infrastructure idle until the rehearsal packet is valid.
 > Complexity remains S once the upstream blockers are cleared.

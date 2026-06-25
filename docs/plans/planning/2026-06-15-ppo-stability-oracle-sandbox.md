@@ -14,7 +14,7 @@ id: ppo-stability-oracle-sandbox
 title: PPO Stability / Oracle Sandbox
 type: planning
 created: 2026-06-15
-updated: 2026-06-15
+updated: 2026-06-22
 owner: Codex
 
 urgency: high
@@ -33,7 +33,7 @@ blocks:
   - reward-efficiency
   - counterfactual-oracle
 
-status_notes: Planning artifact created. Current repo has `tests/integration/test_scripted_policy_runner.py`, but it is a smoke test only: it does not emit proof telemetry or produce a packet. `scripts/proof_packet.py` is also still PPO-update-learnability oriented, so an oracle proof profile or oracle telemetry bridge is required.
+status_notes: Promoted to Filigree work package `esper-lite-53fda89665` on 2026-06-22 after tracker reconciliation found no existing open/WIP oracle-sandbox issue and no observations to promote. Current repo has `tests/integration/test_scripted_policy_runner.py`, but it is a smoke test only: it does not emit proof telemetry or produce a packet. `scripts/proof_packet.py` is also still PPO-update-learnability oriented, so an oracle proof profile or oracle telemetry bridge is required.
 percent_complete: 20
 
 reviewed_by:
@@ -56,6 +56,20 @@ reviewed_by:
 - `tests/integration/test_scripted_policy_runner.py` proves a hand-authored factored action sequence can pass masks and lifecycle gates on a minimal host.
 - `apply_proof_baseline_action_controls()` can force WAIT-only controls, and refuses fake unsupported controls.
 - `scripts/proof_packet.py --proof-profile reward-efficiency` now makes final-exam packet generation require precision provenance and blueprint-health baselines.
+
+## Filigree Promotion
+
+Promoted 2026-06-22 from planning artifact into Filigree package
+`esper-lite-53fda89665`.
+
+Child issues:
+
+1. `esper-lite-be5b1cb60d` — Extract oracle sandbox runner skeleton from scripted policy smoke test.
+2. `esper-lite-542618e08c` — Define deterministic oracle schedule and CI fixture.
+3. `esper-lite-ad094c304a` — Execute oracle schedules through masks, gates, governor, and action handlers.
+4. `esper-lite-9ca785d759` — Emit proof-grade oracle sandbox telemetry.
+5. `esper-lite-d8d0f29926` — Add oracle-sandbox proof packet profile.
+6. `esper-lite-50809196d6` — Add end-to-end oracle sandbox acceptance suite.
 
 ## Missing Executable Machinery
 
