@@ -74,8 +74,10 @@ All arms use `max_seeds = 3` (≥ 2 mandatory: under `max_seeds=1`, committing *
 | **C — ESCROW** | `config-3slot-3seed-baseline-escrow.json` | `reward_mode=escrow` (clips at 2.0) | `1ed5f1c3ad3b` |
 
 **Arm A (clip)** and **Arm B (/100)** are NOT two dials on one mechanism:
-- **Arm B is a LINEAR, optimum-preserving rescale** — a B-only fix means *pure mean-scale* was the cause
-  (the cleanest STOP; no optimum change).
+- **Arm B is a linear rescale, optimum-preserving for the attribution term IN ISOLATION** — but it
+  down-weights attribution *relative to* the unscaled rent / terminal / action-shaping terms, so it
+  re-weights the composite objective (a milder optimum shift than Arm A's nonlinearity, **not** a pure
+  null). A B-only fix means the *mean-scale of the dense channel* was the dominant driver.
 - **Arm A is the optimum-changing NONLINEARITY** — an A-only fix means the *farmable tail / nonlinearity*
   matters, not mean scale.
 - **Arm C (ESCROW) is a DIRECTIONAL sanity arm only.** ESCROW uses `sqrt`/geometric mean vs SHAPED's
@@ -105,7 +107,7 @@ if config.shaped_attribution_clip > 0.0:
 |---|---|---|---|
 | **D1** | Both levers cover the **proxy** channel (the block acts on the *unified* `bounded_attribution`, covering clean-counterfactual AND `proxy_contribution_weight·improvement_since_stage_start`). | The proxy path is "churn fuel" (§8); leaving it uncapped would confound a SURVIVE with an open farming channel (biases toward MORE work). | **CONFIRMED correct** (code-verified, both lenses) |
 | **D2** | Arm A clip is **positive-only** (`min(clip,x)`), not symmetric. | Caps the farmable positive tail; leaves the negative-contribution penalty intact (symmetric would cheapen holding harmful seeds — see §1). | **CONFIRMED correct** (code-verified, both lenses) |
-| **D3** | Arm B `/100` applies to **both signs**. | Dimensional consistency; avoids a 100:1 penalty:credit asymmetry. Pure linear rescale. | **CONFIRMED correct** (code-verified, both lenses) |
+| **D3** | Arm B `/100` applies to **both signs**. | Dimensional consistency; avoids a 100:1 penalty:credit asymmetry. Linear rescale — optimum-preserving for the attribution term *in isolation* (re-weights it vs the unscaled rent/terminal terms; see §2). | **CONFIRMED correct** (code-verified, both lenses) |
 
 **HARD CONSTRAINTS verified respected** (by both reviewing lenses): no new `RewardMode`; no critic/
 value-path edit (reward-scalar only); flags default-OFF ⇒ byte-identical status quo; the clip is an
@@ -143,10 +145,23 @@ Workflow `wf_8fd217c5-c07` (`phase-minus1-design-review`), 3 lenses + synthesis.
   correct; stats sound.
 - **yzmir-deep-rl:reward-function-reviewer** — `ENDORSE_WITH_CHANGES`. D1/D2/D3 correct; HARD CONSTRAINTS
   verified; one blocking finding (bootstrap unit — see §5).
-- **yzmir-morphogenetic-rl:morphogenesis-reviewer** — **lens errored mid-stream (API stall); re-run
-  pending** (coverage gap; non-prompt-mandated reviewer; closed by the follow-up review workflow).
+- **yzmir-morphogenetic-rl:morphogenesis-reviewer** — lens errored mid-stream in the first panel; **re-run
+  in the closing review (below) → `ENDORSE_WITH_CHANGES`.**
 
 The prompt-mandated reviewers (drl-expert + reward-function-reviewer) both endorsed.
+
+**Closing review** (workflow `wf_7c34f4d3-f4a`, morphogenesis re-run + packet audit + synthesis): **final
+verdict `SIGN_OFF_WITH_CHANGES`, blocking = none.** D1/D2/D3, single-knob isolation, `max_seeds=3`, and —
+newly verified — **governor independence** (the clip/normalize touches no governor/safety-gate path; the
+governor keys on `current_loss` only, and the sole governor↔reward edge runs the safe direction) all
+code-confirmed. All six prior required changes are incorporated and code-accurate. The two non-blocking
+packet edits it owed (PRUNE-flip per-arm logging in §5.3; the Arm-B optimum-preserving qualifier in §2/D3)
+are **applied**.
+
+**Load-bearing follow-up (enforcement, not a design defect):** the seed-level block-bootstrap scorer does
+**not yet exist** in-repo. GATE −1 validity is enforceable ONLY if the eventual scorer resamples the 5–10
+RNG **seeds** (aggregating the 12 vec-envs *within* a seed), never the envs. This is pre-registered in §5.4
+and must be honored when the A/B is scored.
 
 ---
 
@@ -184,6 +199,17 @@ dwelling ramp (germinate-side PBRS has a PRUNE clawback, so germinate→prune is
 the per-step dwelling additive survives all arms). All are O(0.1)/step — tiny vs the O(6–16) tail, and all
 **SURVIVE-biased**. Report `synergy_bonus` and `pbrs_bonus` per-arm so a SURVIVE cannot be silently
 attributed to synergy/PBRS farming rather than residual attribution.
+
+**Also log per-arm PRUNE-reward magnitude (post-flip positive on PRUNE steps) — a live Arm-A-vs-Arm-B
+discriminator (closing-review finding).** The positive-only clip acts PRE-flip on a prune-of-harmful-seed's
+*negative* pre-flip `bounded_attribution` (`min(clip, x)` leaves a negative untouched); the PRUNE
+sign-inversion then flips e.g. −15 → **+15, UNCAPPED under Arm A**. Arm B's sign-agnostic `/100` (pre-flip)
+scales the same value to +0.15. So Arm A leaves a residual prune-farming channel that Arm B caps. This is
+**SURVIVE-biased** for Arm A (prune-farming keeps churn UP, working *against* Arm A's own STOP), so it
+cannot manufacture a false STOP — but it is a genuine discriminator: a **B-STOP-without-A-STOP** is
+partially explained by "residual prune-farming that B caps and A does not." Report per-arm post-flip PRUNE
+reward (`rewards` view, `action_name='PRUNE'`, positive `bounded_attribution`) so any Arm-A churn-drop is
+attributed to genuine commitment, not an uncapped prune channel.
 
 ### 5.4 Statistics — the SOLE GATE −1 invalidator (blocking finding, now pinned)
 - **Unit of analysis = per-seed paired delta** (arm − control on the *same* seed).
@@ -270,6 +296,7 @@ build the reward.
 - Branch `feat/phase-minus1-scale-falsifier` off `0.3.0`; code commit `f1f2551f`.
 - Arm config sha256: see §2.
 - Cited diagnostic run: `telemetry_2026-06-24_033049`.
-- Design review: workflow `wf_8fd217c5-c07` (drl-expert + reward-function-reviewer = GO_WITH_CHANGES;
-  morphogenesis lens re-run pending).
+- Design review: workflow `wf_8fd217c5-c07` (drl-expert + reward-function-reviewer = GO_WITH_CHANGES) +
+  closing review `wf_7c34f4d3-f4a` (morphogenesis + packet audit = SIGN_OFF_WITH_CHANGES, blocking none).
+- Tracker: filigree `esper-lite-a221da47ea`.
 - Seeds: `41–45` (target `41–50`), `max_seeds=3`, 12 vec-envs, 200 episodes, capable host (cifar_baseline).
