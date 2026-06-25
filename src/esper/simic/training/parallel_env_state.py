@@ -17,6 +17,7 @@ import torch
 
 from esper.leyline import LifecycleOp, SeedSlotProtocol
 from esper.simic.rewards import FossilizedSeedDripState
+from esper.simic.rewards.residency import SeedResidencyAccumulator
 
 if TYPE_CHECKING:
     from torch.amp.grad_scaler import GradScaler
@@ -92,6 +93,11 @@ class ParallelEnvState:
     # Pair counterfactual accumulators for 3-4 seeds (key: tuple of slot indices)
     cf_pair_accums: dict[tuple[int, int], torch.Tensor] = field(default_factory=dict)
     cf_pair_totals: dict[tuple[int, int], int] = field(default_factory=dict)
+    # Phase 0 (reward-redesign): per-seed alpha-weighted counterfactual residency = the J
+    # integrand. Keyed by seed_id; accumulated PRE-action each epoch (from the fused-val
+    # baseline_accs); emitted per seed at episode end; reset per episode. TELEMETRY-ONLY —
+    # J is computed offline as a yardstick and does NOT enter the reward.
+    residency_accumulators: dict[str, SeedResidencyAccumulator] = field(default_factory=dict)
     telemetry_cb: "TelemetryCallback | None" = None  # Callback wired when telemetry is enabled
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
@@ -250,6 +256,8 @@ class ParallelEnvState:
         self.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
         self.scaffold_boost_ledger.clear()
         self.pending_hindsight_credit = 0.0
+        # Phase 0: fresh per-seed residency integral each episode.
+        self.residency_accumulators.clear()
         # Clear drip states on episode reset (BASIC_PLUS mode accountability)
         self.fossilized_drip_states.clear()
 

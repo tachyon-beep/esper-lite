@@ -16,6 +16,7 @@ from esper.leyline import (
     AlphaCurveAction,
     AlphaMode,
     AlphaSpeedAction,
+    AnalyticsSnapshotPayload,
     BLUEPRINT_IDS,
     EPISODE_SUCCESS_THRESHOLD,
     EpisodeOutcome,
@@ -1633,6 +1634,29 @@ def execute_actions(
                         ),
                     )
                 )
+
+                # Phase 0 (reward-redesign): emit per-seed alpha-weighted counterfactual
+                # residency (the J integrand) — one ANALYTICS_SNAPSHOT per seed so the Karn
+                # view stays flat and offline J = SUM(j_per_param) GROUP BY run_dir, episode.
+                # Telemetry-only; J never enters the reward.
+                for seed_id, residency_acc in env_state.residency_accumulators.items():
+                    env_state.telemetry_cb(
+                        TelemetryEvent(
+                            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+                            epoch=episodes_completed + env_idx,
+                            data=AnalyticsSnapshotPayload(
+                                kind="seed_residency",
+                                env_id=env_idx,
+                                episode_idx=episode_outcome.episode_idx,
+                                seed_id=seed_id,
+                                seed_residency=residency_acc.to_telemetry(
+                                    env_id=env_idx,
+                                    episode_idx=episode_outcome.episode_idx,
+                                    seed_id=seed_id,
+                                ),
+                            ),
+                        )
+                    )
 
             # Shapley contributions at episode end
             if env_state.counterfactual_helper is not None and baseline_accs[env_idx]:

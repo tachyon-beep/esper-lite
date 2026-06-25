@@ -516,6 +516,11 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.reward_components.alpha_shock')::DOUBLE as alpha_shock,
             json_extract(data, '$.reward_components.blending_warning')::DOUBLE as blending_warning,
             json_extract(data, '$.reward_components.holding_warning')::DOUBLE as holding_warning,
+            -- D2 capacity rents: stored as POSITIVE magnitudes the reward SUBTRACTS, so a
+            -- Σ(additends)==total_reward reconciliation must apply them as (-occupancy_rent
+            -- -fossilized_rent). Required for multi-seed additend reconciliation (Phase 0 §4).
+            json_extract(data, '$.reward_components.occupancy_rent')::DOUBLE as occupancy_rent,
+            json_extract(data, '$.reward_components.fossilized_rent')::DOUBLE as fossilized_rent,
             -- Bonuses
             json_extract(data, '$.reward_components.stage_bonus')::DOUBLE as stage_bonus,
             json_extract(data, '$.reward_components.pbrs_bonus')::DOUBLE as pbrs_bonus,
@@ -538,6 +543,30 @@ VIEW_DEFINITIONS: dict[str, str] = {
         WHERE
             event_type = 'ANALYTICS_SNAPSHOT'
             AND json_extract_string(data, '$.kind') = 'last_action'
+    """,
+    "seed_residency": """
+        CREATE OR REPLACE VIEW seed_residency AS
+        SELECT
+            event_id,
+            timestamp,
+            run_dir,
+            group_id,
+            json_extract(data, '$.seed_residency.env_id')::INTEGER as env_id,
+            json_extract(data, '$.seed_residency.episode_idx')::INTEGER as episode_idx,
+            json_extract_string(data, '$.seed_residency.seed_id') as seed_id,
+            json_extract(data, '$.seed_residency.params')::INTEGER as params,
+            -- J integrand (Phase 0): J = SUM(j_per_param) GROUP BY run_dir, episode_idx
+            json_extract(data, '$.seed_residency.cf_weighted_integral')::DOUBLE as cf_weighted_integral,
+            json_extract(data, '$.seed_residency.cf_weighted_integral_committed')::DOUBLE as cf_weighted_integral_committed,
+            json_extract(data, '$.seed_residency.cf_weighted_integral_uncommitted')::DOUBLE as cf_weighted_integral_uncommitted,
+            json_extract(data, '$.seed_residency.raw_alpha_integral')::DOUBLE as raw_alpha_integral,
+            json_extract(data, '$.seed_residency.n_on_path_steps')::INTEGER as n_on_path_steps,
+            json_extract(data, '$.seed_residency.n_none_steps')::INTEGER as n_none_steps,
+            json_extract(data, '$.seed_residency.j_per_param')::DOUBLE as j_per_param
+        FROM raw_events
+        WHERE
+            event_type = 'ANALYTICS_SNAPSHOT'
+            AND json_extract_string(data, '$.kind') = 'seed_residency'
     """,
     "batch_stats": """
         CREATE OR REPLACE VIEW batch_stats AS

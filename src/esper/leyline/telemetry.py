@@ -18,7 +18,11 @@ from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any, Callable, Literal, cast
 
-from esper.leyline.telemetry_contracts import ObservationStatsTelemetry, RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import (
+    ObservationStatsTelemetry,
+    RewardComponentsTelemetry,
+    SeedResidencyTelemetry,
+)
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -1787,6 +1791,9 @@ class AnalyticsSnapshotPayload:
     alpha_shock: float | None = None  # Convex penalty on alpha deltas
     # Full reward components dataclass (replaces individual fields)
     reward_components: "RewardComponentsTelemetry | None" = None
+    # For kind="seed_residency": per-seed alpha-weighted counterfactual residency (J integrand)
+    seed_id: str | None = None
+    seed_residency: "SeedResidencyTelemetry | None" = None
     # Observation space health (for early NaN detection)
     observation_stats: "ObservationStatsTelemetry | None" = None
     # Decision context for TamiyoBrain Decision Cards
@@ -1974,8 +1981,11 @@ class AnalyticsSnapshotPayload:
             # kind="shapley_computed": Shapley values
             shapley_values=data.get("shapley_values"),
             num_slots=data.get("num_slots"),
+            # kind="seed_residency": per-seed residency J integrand
+            seed_id=data.get("seed_id"),
             # Nested dataclasses (kind-dependent)
             reward_components=cls._parse_reward_components(data.get("reward_components")),
+            seed_residency=cls._parse_seed_residency(data.get("seed_residency")),
             observation_stats=cls._parse_observation_stats(data.get("observation_stats")),
             head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
@@ -1993,6 +2003,8 @@ class AnalyticsSnapshotPayload:
                 payload[dc_field.name] = value.to_dict() if value is not None else None
             elif dc_field.name == "reward_components":
                 payload[dc_field.name] = value.to_dict() if value is not None else None
+            elif dc_field.name == "seed_residency":
+                payload[dc_field.name] = value.to_dict() if value is not None else None
             elif dc_field.name == "observation_stats":
                 payload[dc_field.name] = value.to_dict() if value is not None else None
             else:
@@ -2007,6 +2019,15 @@ class AnalyticsSnapshotPayload:
         if data is None:
             return None
         return RewardComponentsTelemetry.from_dict(data)
+
+    @staticmethod
+    def _parse_seed_residency(
+        data: dict[str, Any] | None,
+    ) -> SeedResidencyTelemetry | None:
+        """Parse seed_residency from dict if present."""
+        if data is None:
+            return None
+        return SeedResidencyTelemetry.from_dict(data)
 
     @staticmethod
     def _parse_head_telemetry(data: dict[str, Any] | None) -> HeadTelemetry | None:

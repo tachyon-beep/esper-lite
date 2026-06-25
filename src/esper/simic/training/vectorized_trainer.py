@@ -48,6 +48,10 @@ from esper.simic.telemetry import (
 from esper.simic.telemetry.phase_profiler import NullProfiler, PhaseProfiler
 from esper.simic.telemetry.emitters import check_performance_degradation
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
+from esper.simic.rewards.residency import (
+    SlotResidencySample,
+    accumulate_residency_for_env,
+)
 from esper.tamiyo.policy.action_masks import (
     MaskedCategorical,
     build_slot_states,
@@ -1101,6 +1105,48 @@ class VectorizedPPOTrainer:
             val_batch_counts,
             env_cfg_correct_accums,
         )
+    def _accumulate_residency(
+        self,
+        env_states: list[ParallelEnvState],
+        baseline_accs: list[dict[str, Any]],
+    ) -> None:
+        """Phase 0: fold one epoch of PRE-action per-slot state into each env's per-seed
+        residency accumulators (the J integrand).
+
+        Builds a SlotResidencySample per slot from the live model (CPU scalars — no GPU sync)
+        and delegates the per-seed LOO computation + on-output-path gate to
+        ``accumulate_residency_for_env``. Dormant slots (state is None) yield seed_id=None and
+        are skipped. Telemetry-only; J is computed offline and never enters the reward.
+        """
+        for env_idx, env_state in enumerate(env_states):
+            model = env_state.model
+            slot_samples: list[SlotResidencySample] = []
+            for slot_id in self.slots:
+                slot = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                state = slot.state
+                if state is None:
+                    slot_samples.append(
+                        SlotResidencySample(
+                            slot_id=slot_id, seed_id=None, stage=0, alpha=0.0, params=0
+                        )
+                    )
+                else:
+                    slot_samples.append(
+                        SlotResidencySample(
+                            slot_id=slot_id,
+                            seed_id=state.seed_id,
+                            stage=state.stage.value,
+                            alpha=slot.alpha,
+                            params=slot.active_seed_params,
+                        )
+                    )
+            accumulate_residency_for_env(
+                env_state.residency_accumulators,
+                val_acc=env_state.val_acc,
+                baseline_accs_env=baseline_accs[env_idx],
+                slot_samples=slot_samples,
+            )
+
     def _run_fused_val_pass(
         self,
         *,
@@ -2485,6 +2531,13 @@ class VectorizedPPOTrainer:
         baseline_accs = fused_result.baseline_accs
         val_corrects = fused_result.val_corrects
         val_totals = fused_result.val_totals
+
+        # Phase 0 (reward-redesign): fold this epoch's PRE-action per-slot state into each
+        # env's per-seed residency integral (the J integrand). Placed here — after the fused
+        # val pass (so baseline_accs + env_state.val_acc are fresh) and BEFORE action
+        # execution (so stage/alpha are pre-action, aligned with the LOO they multiply).
+        # Telemetry-only; emitted per seed at episode end.
+        self._accumulate_residency(env_states, baseline_accs)
 
         # ===== Compute epoch metrics and get BATCHED actions =====
         # Extracted to _build_action_inputs(): collects per-env signals/slot
