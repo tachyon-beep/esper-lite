@@ -78,6 +78,42 @@ def test_ablation_flags_in_to_dict():
 
 
 # =============================================================================
+# Phase −1 cheap-lever scale-falsifier flags
+# (shaped_attribution_clip / attribution_unit_normalize) — config plumbing.
+# See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5.
+# =============================================================================
+
+
+def test_phase_minus1_flags_exist_with_off_defaults():
+    """The falsifier flags default to OFF (status quo)."""
+    config = TrainingConfig()
+    assert config.shaped_attribution_clip == 0.0
+    assert config.attribution_unit_normalize is False
+
+
+def test_phase_minus1_flags_settable_and_in_to_train_kwargs():
+    """The falsifier flags thread through to train_ppo_vectorized kwargs."""
+    config = TrainingConfig(shaped_attribution_clip=2.0, attribution_unit_normalize=True)
+    kwargs = config.to_train_kwargs()
+    assert kwargs["shaped_attribution_clip"] == 2.0
+    assert kwargs["attribution_unit_normalize"] is True
+
+
+def test_phase_minus1_flags_from_dict_round_trip():
+    """The falsifier flags load from a config dict and reach to_train_kwargs / to_dict."""
+    config = TrainingConfig.from_dict(
+        {"shaped_attribution_clip": 5.0, "attribution_unit_normalize": True}
+    )
+    assert config.shaped_attribution_clip == 5.0
+    assert config.attribution_unit_normalize is True
+    kwargs = config.to_train_kwargs()
+    assert kwargs["shaped_attribution_clip"] == 5.0
+    assert kwargs["attribution_unit_normalize"] is True
+    assert config.to_dict()["shaped_attribution_clip"] == 5.0
+    assert config.to_dict()["attribution_unit_normalize"] is True
+
+
+# =============================================================================
 # Reward Computation Tests - Verify flags affect behavior
 # =============================================================================
 

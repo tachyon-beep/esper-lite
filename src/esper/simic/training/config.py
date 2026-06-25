@@ -152,6 +152,15 @@ class TrainingConfig:
     # reward = basic_acc_delta_weight * (acc_delta / 100) - param_penalty_weight * (params / budget)
     basic_acc_delta_weight: float = 5.0
 
+    # === Phase −1 cheap-lever scale-falsifier flags (experiment, default OFF) ===
+    # See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5 (Phase −1).
+    # Both OFF => the SHAPED dense-attribution path is byte-identical to status quo.
+    # shaped_attribution_clip: per-step positive-only cap on the SHAPED dense
+    #   bounded_attribution (0.0 = OFF). attribution_unit_normalize: divide the SHAPED
+    #   dense counterfactual term by 100 (accuracy points -> fraction).
+    shaped_attribution_clip: float = 0.0
+    attribution_unit_normalize: bool = False
+
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
     improvement_threshold: float = 2.0
@@ -398,6 +407,8 @@ class TrainingConfig:
             "param_budget": self.param_budget,
             "param_penalty_weight": self.param_penalty_weight,
             "sparse_reward_scale": self.sparse_reward_scale,
+            "shaped_attribution_clip": self.shaped_attribution_clip,
+            "attribution_unit_normalize": self.attribution_unit_normalize,
             "rent_host_params_floor": self.rent_host_params_floor,
             "basic_acc_delta_weight": self.basic_acc_delta_weight,
             "plateau_threshold": self.plateau_threshold,

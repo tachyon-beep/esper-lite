@@ -741,6 +741,10 @@ def train_ppo_vectorized(
     sparse_reward_scale: float = 1.0,
     rent_host_params_floor: int = 200,
     basic_acc_delta_weight: float = 5.0,
+    # Phase −1 cheap-lever scale-falsifier flags (default OFF => status quo).
+    # See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5.
+    shaped_attribution_clip: float = 0.0,
+    attribution_unit_normalize: bool = False,
     reward_family: str = "contribution",
     permissive_gates: bool = True,
     auto_forward_g1: bool = False,
@@ -959,6 +963,8 @@ def train_ppo_vectorized(
         sparse_reward_scale=sparse_reward_scale,
         rent_host_params_floor=rent_host_params_floor,
         basic_acc_delta_weight=basic_acc_delta_weight,
+        shaped_attribution_clip=shaped_attribution_clip,
+        attribution_unit_normalize=attribution_unit_normalize,
         disable_pbrs=disable_pbrs,
         disable_terminal_reward=disable_terminal_reward,
         disable_anti_gaming=disable_anti_gaming,

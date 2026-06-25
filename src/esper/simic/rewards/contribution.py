@@ -303,6 +303,30 @@ class ContributionRewardConfig:
     # - "minimum": min(progress, contribution) - very conservative
     attribution_formula: Literal["harmonic", "minimum"] = "harmonic"
 
+    # === Phase −1 cheap-lever scale-falsifier knobs (experiment flags, default OFF) ===
+    # See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5 (Phase −1).
+    # These are EXPERIMENT knobs (analogous to disable_timing_discount / attribution_formula),
+    # NOT backwards-compat shims: with both OFF the SHAPED dense-attribution path is
+    # byte-identical to status quo (there is no old behaviour to preserve a flag for). They
+    # falsify whether the verified per-step SCALE pathology (un-clipped bounded_attribution over
+    # a 0–100-point counterfactual) is the root cause of the farmable-tail + churn behaviour.
+    # NOTE: a clip is itself an optimum-changing nonlinearity — an experimental arm, never the
+    # default. If the verdict is STOP→adopt, the follow-up is to make the chosen behaviour the
+    # single code path and delete the un-clipped branch + this flag (no-legacy policy).
+    #
+    # shaped_attribution_clip: per-step UPPER cap on the SHAPED dense bounded_attribution
+    #   (clean-counterfactual + proxy positive channels), applied after all discounts and
+    #   before the FOSSILIZE/PRUNE/ratio post-processing. 0.0 = OFF. Mirrors the ESCROW
+    #   escrow_delta_clip magnitude (2.0) but is POSITIVE-ONLY: it caps the farmable positive
+    #   tail and leaves the negative-contribution penalty intact (on the cited run negatives
+    #   reach −15.3, so a symmetric clamp would confound the arm).
+    shaped_attribution_clip: float = 0.0
+    # attribution_unit_normalize: express the SHAPED dense counterfactual term in accuracy-
+    #   FRACTION units (divide by 100) so it lives in ~[0,1] instead of 0–100 points. Applied
+    #   to the unified bounded_attribution (clean-counterfactual + proxy, both signs) for
+    #   dimensional consistency. False = OFF.
+    attribution_unit_normalize: bool = False
+
     # === Drip Reward Configuration (BASIC_PLUS mode) ===
     # Post-fossilization accountability: drip reward paid over remaining epochs
     # based on continued seed contribution. DRL Expert review 2026-01-12.
@@ -610,6 +634,23 @@ def compute_contribution_reward(
                 and stage_improvement > 0
             ):
                 bounded_attribution = config.proxy_contribution_weight * stage_improvement
+
+        # Phase −1 cheap-lever experiment knobs (default OFF => byte-identical status quo).
+        # Applied to the unified SHAPED dense attribution term (clean-counterfactual OR proxy
+        # sub-branch) AFTER all discounts and BEFORE the FOSSILIZE-suppression / PRUNE
+        # sign-inversion / ratio_penalty post-processing below, so they bound/normalize BOTH
+        # farmable positive channels without altering prune/fossilize/ratio economics. The
+        # ESCROW branch is excluded (this is inside the non-escrow `else`; ESCROW has its own
+        # escrow_delta_clip). See reward-redesign-methodology.md §5 (Phase −1) / GATE −1.
+        if config.attribution_unit_normalize:
+            # Express the counterfactual in accuracy-FRACTION units (0–100 points -> ~[0,1]).
+            # Both signs scale identically (no penalty:credit asymmetry).
+            bounded_attribution /= 100.0
+        if config.shaped_attribution_clip > 0.0:
+            # POSITIVE-ONLY cap: bound the farmable positive tail; leave the negative-
+            # contribution penalty intact (a symmetric clamp would be a confound orthogonal
+            # to the scale hypothesis — the cited run has negatives reaching −15.3).
+            bounded_attribution = min(config.shaped_attribution_clip, bounded_attribution)
 
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         # Suppress attribution only when the seed's CLEAN counterfactual is

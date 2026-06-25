@@ -14,6 +14,7 @@ from esper.simic.rewards import (
     compute_loss_reward,
     compute_reward,
 )
+from esper.simic.rewards.contribution import compute_contribution_reward
 
 
 def test_contribution_reward_golden_simplified_pbrs() -> None:
@@ -593,3 +594,242 @@ def test_basic_mode_drip_asymmetric_clipping() -> None:
     )
     _, _, _, _, _, _, drip_neg = result_neg
     assert drip_neg == pytest.approx(-0.05, abs=0.001), "Negative clipped to -0.05 (asymmetric)"
+
+
+# ===========================================================================
+# Phase −1 cheap-lever scale-falsifier flags
+# (shaped_attribution_clip / attribution_unit_normalize)
+#
+# See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5 (Phase −1).
+# Both flags default OFF => the SHAPED dense-attribution path is byte-identical
+# to status quo. These tests drive the new flag behaviour and lock the OFF path.
+#
+# Design decisions encoded here (validated by the Phase −1 design-review panel):
+#   D1 PROXY channel is covered by both levers (clamp/normalize the UNIFIED
+#      bounded_attribution, not just the clean-counterfactual path).
+#   D2 The clip is POSITIVE-ONLY (min(clip, x)) — it caps the farmable positive
+#      tail and leaves the negative-contribution penalty intact (a symmetric
+#      clamp would be a confound; cited-run negatives reach -15.3).
+#   D3 The unit-normalize divides BOTH signs by exactly 100 (dimensional
+#      consistency; no 100:1 penalty:credit asymmetry).
+# ===========================================================================
+
+
+def _shaped_clean_components(config: ContributionRewardConfig):
+    """SHAPED clean-counterfactual positive path, WAIT step.
+
+    progress = val_acc - acc_at_germination = 70 - 50 = 20; seed_contribution = 20;
+    harmonic(20, 20) = 20; attribution_discount = 1.0 (no regression); timing = 1.0
+    (germination epoch 30-10=20 >= warmup 10); ratio_penalty = 0 (ratio 1.0 < 5.0).
+    => raw bounded_attribution = 20.0, well above the 2.0 clip so the lever can bite.
+    """
+    seed_info = SeedInfo(
+        stage=SeedStage.BLENDING.value,
+        improvement_since_stage_start=5.0,
+        total_improvement=20.0,
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.TRAINING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=10,
+        counterfactual_total_improvement=20.0,
+    )
+    _, components = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=20.0,
+        val_acc=70.0,
+        seed_info=seed_info,
+        epoch=30,
+        max_epochs=150,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        acc_at_germination=50.0,
+        acc_delta=2.0,
+        return_components=True,
+    )
+    return components
+
+
+def _shaped_negative_components(config: ContributionRewardConfig):
+    """SHAPED negative-contribution branch, WAIT step.
+
+    seed_contribution = -10 => bounded_attribution = contribution_weight * -10 = -10.0
+    (the negative branch applies no discounts; ratio_penalty = 0 since contribution < 1.0).
+    """
+    seed_info = SeedInfo(
+        stage=SeedStage.BLENDING.value,
+        improvement_since_stage_start=-1.0,
+        total_improvement=-5.0,
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.TRAINING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=10,
+        counterfactual_total_improvement=-5.0,
+    )
+    _, components = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=-10.0,
+        val_acc=60.0,
+        seed_info=seed_info,
+        epoch=30,
+        max_epochs=150,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        acc_at_germination=65.0,
+        acc_delta=-1.0,
+        return_components=True,
+    )
+    return components
+
+
+def _shaped_proxy_components(config: ContributionRewardConfig):
+    """SHAPED proxy path (seed_contribution is None, seed on the output path).
+
+    proxy_contribution_weight = contribution_weight * 0.3 = 0.3;
+    improvement_since_stage_start = 30 => bounded_attribution = 0.3 * 30 = 9.0.
+    """
+    seed_info = SeedInfo(
+        stage=SeedStage.BLENDING.value,
+        improvement_since_stage_start=30.0,
+        total_improvement=30.0,
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.TRAINING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=10,
+        counterfactual_total_improvement=None,
+    )
+    _, components = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        val_acc=80.0,
+        seed_info=seed_info,
+        epoch=30,
+        max_epochs=150,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        acc_at_germination=50.0,
+        acc_delta=2.0,
+        return_components=True,
+    )
+    return components
+
+
+def test_shaped_flags_off_byte_identical_golden() -> None:
+    """OFF path (default flags) is the un-clipped status quo: locks the raw values."""
+    base = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
+    assert _shaped_clean_components(base).bounded_attribution == pytest.approx(20.0, abs=1e-6)
+    assert _shaped_negative_components(base).bounded_attribution == pytest.approx(-10.0, abs=1e-6)
+    assert _shaped_proxy_components(base).bounded_attribution == pytest.approx(9.0, abs=1e-6)
+
+
+def test_shaped_attribution_clip_caps_positive_tail_at_bound() -> None:
+    """Arm A: clip=2.0 caps the farmable clean-counterfactual tail at exactly 2.0."""
+    off = _shaped_clean_components(ContributionRewardConfig(reward_mode=RewardMode.SHAPED))
+    clipped = _shaped_clean_components(
+        ContributionRewardConfig(reward_mode=RewardMode.SHAPED, shaped_attribution_clip=2.0)
+    )
+    assert off.bounded_attribution > 2.0  # precondition: the tail exists
+    assert clipped.bounded_attribution == pytest.approx(2.0, abs=1e-9)
+
+
+def test_shaped_attribution_clip_sweep_5() -> None:
+    """Arm A sweep: clip=5.0 caps at exactly 5.0."""
+    clip5 = _shaped_clean_components(
+        ContributionRewardConfig(reward_mode=RewardMode.SHAPED, shaped_attribution_clip=5.0)
+    )
+    assert clip5.bounded_attribution == pytest.approx(5.0, abs=1e-9)
+
+
+def test_shaped_attribution_clip_covers_proxy_channel() -> None:
+    """D1: the clip also bounds the PROXY dense channel (else it stays farmable)."""
+    off = _shaped_proxy_components(ContributionRewardConfig(reward_mode=RewardMode.SHAPED))
+    clipped = _shaped_proxy_components(
+        ContributionRewardConfig(reward_mode=RewardMode.SHAPED, shaped_attribution_clip=2.0)
+    )
+    assert off.bounded_attribution > 2.0  # proxy tail: 0.3 * 30 = 9.0
+    assert clipped.bounded_attribution == pytest.approx(2.0, abs=1e-9)
+
+
+def test_shaped_attribution_clip_is_positive_only() -> None:
+    """D2: the clip is positive-only — a large negative penalty is left intact."""
+    off = _shaped_negative_components(ContributionRewardConfig(reward_mode=RewardMode.SHAPED))
+    clipped = _shaped_negative_components(
+        ContributionRewardConfig(reward_mode=RewardMode.SHAPED, shaped_attribution_clip=2.0)
+    )
+    assert off.bounded_attribution < -2.0  # precondition: a large penalty exists
+    assert clipped.bounded_attribution == pytest.approx(off.bounded_attribution, rel=1e-9)
+
+
+def test_shaped_attribution_unit_normalize_divides_by_100_exactly() -> None:
+    """Arm B: the clean-counterfactual term is divided by exactly 100."""
+    off = _shaped_clean_components(ContributionRewardConfig(reward_mode=RewardMode.SHAPED))
+    norm = _shaped_clean_components(
+        ContributionRewardConfig(reward_mode=RewardMode.SHAPED, attribution_unit_normalize=True)
+    )
+    assert norm.bounded_attribution == pytest.approx(off.bounded_attribution / 100.0, rel=1e-9)
+    assert norm.bounded_attribution == pytest.approx(0.2, abs=1e-9)
+
+
+def test_shaped_attribution_unit_normalize_scales_proxy_channel() -> None:
+    """D1/D3: normalize also rescales the proxy dense channel by 1/100."""
+    off = _shaped_proxy_components(ContributionRewardConfig(reward_mode=RewardMode.SHAPED))
+    norm = _shaped_proxy_components(
+        ContributionRewardConfig(reward_mode=RewardMode.SHAPED, attribution_unit_normalize=True)
+    )
+    assert norm.bounded_attribution == pytest.approx(off.bounded_attribution / 100.0, rel=1e-9)
+
+
+def test_shaped_attribution_unit_normalize_scales_negative_branch() -> None:
+    """D3: normalize rescales BOTH signs (no 100:1 penalty:credit asymmetry)."""
+    off = _shaped_negative_components(ContributionRewardConfig(reward_mode=RewardMode.SHAPED))
+    norm = _shaped_negative_components(
+        ContributionRewardConfig(reward_mode=RewardMode.SHAPED, attribution_unit_normalize=True)
+    )
+    assert norm.bounded_attribution == pytest.approx(off.bounded_attribution / 100.0, rel=1e-9)
+    assert norm.bounded_attribution == pytest.approx(-0.1, abs=1e-9)
+
+
+def test_phase_minus1_flags_do_not_touch_escrow() -> None:
+    """ESCROW path has its own escrow_delta_clip; the SHAPED flags must not alter it."""
+    seed_info = SeedInfo(
+        stage=SeedStage.BLENDING.value,
+        improvement_since_stage_start=5.0,
+        total_improvement=20.0,
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.TRAINING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=10,
+        counterfactual_total_improvement=20.0,
+    )
+    kwargs = dict(
+        action=LifecycleOp.WAIT,
+        seed_contribution=20.0,
+        val_acc=70.0,
+        seed_info=seed_info,
+        epoch=30,
+        max_epochs=150,
+        total_params=110_000,
+        host_params=100_000,
+        acc_at_germination=50.0,
+        acc_delta=2.0,
+        stable_val_acc=70.0,
+        return_components=True,
+    )
+    _, base = compute_contribution_reward(
+        config=ContributionRewardConfig(reward_mode=RewardMode.ESCROW), **kwargs
+    )
+    _, withflags = compute_contribution_reward(
+        config=ContributionRewardConfig(
+            reward_mode=RewardMode.ESCROW,
+            shaped_attribution_clip=2.0,
+            attribution_unit_normalize=True,
+        ),
+        **kwargs,
+    )
+    assert withflags.bounded_attribution == pytest.approx(base.bounded_attribution, rel=1e-9)
