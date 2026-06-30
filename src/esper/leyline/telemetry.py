@@ -119,6 +119,10 @@ class TelemetryEventType(Enum):
     # === Memory / Allocator Events ===
     ALLOCATOR_STATS = auto()  # Per-device CUDA caching-allocator stats (frag, retries, OOMs)
 
+    # === Causal-contribution harness Events (SUPPRESS-SLOT) ===
+    INTERVENTION_CONFIGURED = auto()  # Run-start record describing a stationary intervention mask (no action_id)
+    INTERVENTION_STEP = auto()        # Per-step RNG compare-point hashes + forced-step split by reason
+
 
 @dataclass
 class TelemetryEvent:
@@ -2554,6 +2558,102 @@ class GovernorRollbackPayload:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class InterventionConfiguredPayload:
+    """Payload for INTERVENTION_CONFIGURED. Run-start record (NO action_id).
+
+    Describes a stationary intervention mask for the causal-contribution
+    harness. SUPPRESS-SLOT is the only intervention defined; the mask makes
+    ``suppressed_slot_id`` un-committable to every non-WAIT op for the whole run
+    (with the op-validity repair). Emitted once at run start so the analysis can
+    join arms by the declared intervention without a per-step action_id.
+    """
+
+    # REQUIRED — intervention identity
+    proof_baseline_mode: str            # ProofBaselineMode.SUPPRESS_SLOT.value
+    lifecycle_policy: str               # SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY
+    suppressed_slot_id: str             # e.g. "r0c0"
+    suppressed_slot_index: int          # slot_config.index_for_slot_id(slot_id)
+    suppression_enabled: bool           # the literal OFF/ON toggle (no-op when False)
+
+    # REQUIRED — determinism / RNG-split posture
+    determinism_class: str              # DeterminismClass value (crn_statistical)
+    rng_split_enabled: bool             # three-domain split active for this run
+
+    # OPTIONAL — provenance
+    master_seed: int | None = None
+    description: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "InterventionConfiguredPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            proof_baseline_mode=data["proof_baseline_mode"],
+            lifecycle_policy=data["lifecycle_policy"],
+            suppressed_slot_id=data["suppressed_slot_id"],
+            suppressed_slot_index=data["suppressed_slot_index"],
+            suppression_enabled=data["suppression_enabled"],
+            determinism_class=data["determinism_class"],
+            rng_split_enabled=data["rng_split_enabled"],
+            master_seed=data.get("master_seed"),
+            description=data.get("description"),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class InterventionStepPayload:
+    """Payload for INTERVENTION_STEP. Per-rollout-step compare-point + split.
+
+    Carries (i) the RNG compare-point (§5.6): per-domain cumulative draw-count
+    and/or generator-state hash so the intervention-OFF run can be PROVEN CRN
+    identical to the matched control up to the first suppression event; and
+    (ii) the forced-step split by reason (§5.7): intervention-forced vs
+    WAIT-saturation, which a single pooled ratio would conflate.
+    """
+
+    # REQUIRED — step identity
+    epoch: int
+
+    # REQUIRED — cheap device-portable per-step compare-point (§5.6). The
+    # controller draws a fixed number of times per step, so a constant per-step
+    # DELTA in this count (within a run) and equal cumulative counts across paired
+    # arms are the DISPOSITIVE no-offset proof — no GPU sync, no cross-process
+    # state-hash comparability assumption.
+    controller_draw_count: int          # cumulative controller get_action invocations
+    blueprint_draw_count: int           # cumulative content-addressed blueprint-init germinations
+
+    # REQUIRED — forced-step split by reason (§5.7), counts over envs this step.
+    intervention_forced_count: int      # flipped to WAIT-only BY the suppression mask
+    wait_saturation_count: int          # naturally WAIT-only (mask-derived, all arms)
+    num_envs: int
+
+    # OPTIONAL — expensive per-domain generator-state digests. Each costs a
+    # GPU->CPU sync, so they are emitted only at a fixed stride and at suppression
+    # events (None otherwise); a secondary cross-check on the cheap draw counts.
+    controller_state_hash: str | None = None
+    host_state_hash: str | None = None
+
+    # OPTIONAL — context
+    suppressed_slot_index: int | None = None
+    first_suppression_epoch: int | None = None  # set on the step suppression first bites
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "InterventionStepPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            epoch=data["epoch"],
+            controller_draw_count=data["controller_draw_count"],
+            blueprint_draw_count=data["blueprint_draw_count"],
+            intervention_forced_count=data["intervention_forced_count"],
+            wait_saturation_count=data["wait_saturation_count"],
+            num_envs=data["num_envs"],
+            controller_state_hash=data.get("controller_state_hash"),
+            host_state_hash=data.get("host_state_hash"),
+            suppressed_slot_index=data.get("suppressed_slot_index"),
+            first_suppression_epoch=data.get("first_suppression_epoch"),
+        )
+
+
 # =============================================================================
 # Telemetry Payload Type Union
 # =============================================================================
@@ -2585,6 +2685,8 @@ TelemetryPayload = (
     | MorphologyCausalLogPayload
     | TopologyManifestPayload
     | PhaseProfileReport
+    | InterventionConfiguredPayload
+    | InterventionStepPayload
 )
 
 

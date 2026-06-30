@@ -820,6 +820,21 @@ from esper.leyline.telemetry import (
     TopologyManifestRole,
     TopologyManifestPayload,
     GovernorPanicReason,
+    InterventionConfiguredPayload,
+    InterventionStepPayload,
+)
+
+# Causal-contribution harness contracts
+from esper.leyline.causal_intervention import (
+    CONTROL_MODE,
+    CONTROLLER_RNG_SEED_OFFSET,
+    HOST_RNG_SEED_OFFSET,
+    INTERVENTION_DETERMINISM_CLASS,
+    SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY,
+    SUPPRESS_SLOT_TARGET_SLOT_ID,
+    DeterminismClass,
+    ForcedStepReason,
+    RngDomain,
 )
 
 # Alpha controller contracts
@@ -1149,6 +1164,17 @@ __all__ = [
     "PPOUpdatePayload",
     "MemoryWarningPayload",
     "AllocatorStatsPayload",
+    "InterventionConfiguredPayload",
+    "InterventionStepPayload",
+    "CONTROLLER_RNG_SEED_OFFSET",
+    "HOST_RNG_SEED_OFFSET",
+    "INTERVENTION_DETERMINISM_CLASS",
+    "SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY",
+    "SUPPRESS_SLOT_TARGET_SLOT_ID",
+    "CONTROL_MODE",
+    "DeterminismClass",
+    "ForcedStepReason",
+    "RngDomain",
     "RewardHackingSuspectedPayload",
     "TamiyoInitiatedPayload",
     "SeedGerminatedPayload",

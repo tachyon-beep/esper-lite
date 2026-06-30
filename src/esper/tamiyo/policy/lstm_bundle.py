@@ -85,6 +85,7 @@ class LSTMPolicyBundle:
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
         probability_floor: dict[str, float] | None = None,
+        generator: torch.Generator | None = None,
     ) -> ActionResult:
         """Select action using the LSTM network.
 
@@ -122,6 +123,7 @@ class LSTMPolicyBundle:
             deterministic=deterministic,
             return_op_logits=True,
             probability_floor=probability_floor,
+            generator=generator,
         )
 
         # Network returns GetActionResult dataclass

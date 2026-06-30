@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import os
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Generator, TYPE_CHECKING, cast
@@ -1099,6 +1099,12 @@ class SeedSlot(nn.Module):
         self.telemetry_inner_epoch: int | None = None
         self.telemetry_global_epoch: int | None = None
         self._pending_morphology_context: LifecycleMutationCausalContext | None = None
+        # Causal-contribution harness RNG split (domains B + C). None => unchanged
+        # behavior (global default generator, byte-identical to pre-harness). Set
+        # per-env via attach_experiment_rng() on the instrumented build only.
+        self._experiment_rng: Any = None
+        self._experiment_env_idx: int = -1
+        self._experiment_env_seed: int = 0
         # Auto-forward gates: stage transitions can be advanced automatically by step_epoch()
         # when the corresponding gate passes (configured by Simic TrainingConfig).
         self.auto_forward_gates: frozenset[GateLevel] = frozenset()
@@ -1153,8 +1159,28 @@ class SeedSlot(nn.Module):
             return self._resolved_topology
         return "cnn"
 
-    def _get_shape_probe(self, topology: str) -> torch.Tensor:
-        """Get cached shape probe for topology, creating if needed."""
+    def attach_experiment_rng(
+        self, rng_domains: Any, *, env_idx: int, env_seed: int
+    ) -> None:
+        """Attach the causal-contribution RNG split to this slot (instrumented build).
+
+        ``rng_domains`` is an ``ExperimentRngDomains``; left None on normal runs,
+        in which case germination uses the unchanged global-default RNG path.
+        """
+        self._experiment_rng = rng_domains
+        self._experiment_env_idx = env_idx
+        self._experiment_env_seed = env_seed
+
+    def _get_shape_probe(
+        self, topology: str, *, generator: torch.Generator | None = None
+    ) -> torch.Tensor:
+        """Get cached shape probe for topology, creating if needed.
+
+        ``generator`` (domain B, harness only) draws the probe from the per-env
+        host stream instead of the global default. The probe output is a
+        discarded shape smoke test, so this only keeps the global stream clean
+        and the compare-point separable; generator=None is the unchanged default.
+        """
         # Include channels in key to handle slot reuse/reconfiguration (BUG-014)
         key = (topology, self.channels)
         cached = self._shape_probe_cache.get(key)
@@ -1173,6 +1199,7 @@ class SeedSlot(nn.Module):
                 CNN_SHAPE_PROBE_SPATIAL,
                 CNN_SHAPE_PROBE_SPATIAL,
                 device=self.device,
+                generator=generator,
             )
         else:
             probe = torch.randn(
@@ -1180,6 +1207,7 @@ class SeedSlot(nn.Module):
                 TRANSFORMER_SHAPE_PROBE_SEQ_LEN,
                 self.channels,
                 device=self.device,
+                generator=generator,
             )
 
         # Store device as torch.device, not string
@@ -1376,8 +1404,23 @@ class SeedSlot(nn.Module):
         if resolved_topology not in ("cnn", "transformer"):
             raise ValueError(f"Unknown topology '{resolved_topology}' for SeedSlot.germinate")
         self._resolved_topology = resolved_topology
+        # Causal-contribution harness (domain C): content-address blueprint-init
+        # so a germination's weights depend ONLY on its content seed (the existing
+        # content-addressed rng_seed on the pending morphology context), not on
+        # how many germinations preceded it. Construction is CPU-only (then moved
+        # below), so the ExperimentRngDomains.blueprint_init context saves/seeds/
+        # restores the CPU default generator. content_init is None on normal runs
+        # => unchanged global-default behavior.
+        content_init: Any = nullcontext()
+        if self._experiment_rng is not None and self._pending_morphology_context is not None:
+            content_init = self._experiment_rng.blueprint_init(
+                self._pending_morphology_context.rng_seed
+            )
         try:
-            self.seed = BlueprintRegistry.create(resolved_topology, blueprint_id, self.channels)
+            with content_init:
+                self.seed = BlueprintRegistry.create(
+                    resolved_topology, blueprint_id, self.channels
+                )
         except ValueError as exc:
             available = BlueprintRegistry.list_for_topology(resolved_topology)
             names = [s.name for s in available]
@@ -1392,7 +1435,17 @@ class SeedSlot(nn.Module):
 
         # Validate shape: ensure seed preserves feature shape in a host-agnostic way
         # without mutating host BatchNorm statistics. Smoke test only.
-        shape_probe = self._get_shape_probe(resolved_topology)
+        # Domain B (harness only): draw the probe from the per-env host stream.
+        host_probe_generator: torch.Generator | None = None
+        if self._experiment_rng is not None:
+            host_probe_generator = self._experiment_rng.host_generator(
+                self._experiment_env_idx,
+                env_seed=self._experiment_env_seed,
+                device=self.device,
+            )
+        shape_probe = self._get_shape_probe(
+            resolved_topology, generator=host_probe_generator
+        )
         expected_shape = shape_probe.shape
         seed_was_training = self.seed.training
         try:

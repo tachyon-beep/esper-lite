@@ -29,6 +29,9 @@ class ProofBaselineMode(str, Enum):
     STATIC_FINAL = "static_final"
     FIXED_SCHEDULE = "fixed_schedule"
     LOCKSTEP_REWARD_AB = "lockstep_reward_ab"
+    # Causal-contribution harness (R1 pilot). NOT a blueprint-health baseline:
+    # deliberately absent from REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES.
+    SUPPRESS_SLOT = "suppress_slot"
 
 
 STATIC_FINAL_SOURCE_COHORT_ID = "static_final_source"

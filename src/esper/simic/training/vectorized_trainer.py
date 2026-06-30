@@ -22,6 +22,10 @@ from esper.leyline import (
     TelemetryEventType,
     TopologyManifestPayload,
 )
+from esper.leyline.causal_intervention import (
+    SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY,
+    SUPPRESS_SLOT_TARGET_SLOT_ID,
+)
 from esper.leyline.proof_baselines import (
     FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT,
     FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
@@ -63,6 +67,7 @@ from esper.utils.data import augment_cifar10_batch
 from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .helpers import policy_amp_context
+from .intervention import SuppressSlotResult, apply_suppress_slot_mask
 from .normalizer_checkpoint import obs_normalizer_metadata
 from .counterfactual_eval import process_fused_val_batch
 from .parallel_env_state import ParallelEnvState
@@ -254,8 +259,41 @@ def apply_proof_baseline_action_controls(
     schedule_action_count: int | None = None,
     epoch: int,
     static_final_replay_validated: bool = False,
-) -> None:
-    """Apply proof-baseline lifecycle controls before action sampling."""
+    slot_config: Any = None,
+    suppression_enabled: bool = False,
+) -> SuppressSlotResult | None:
+    """Apply proof-baseline lifecycle controls before action sampling.
+
+    Returns a ``SuppressSlotResult`` ONLY for an active SUPPRESS-SLOT
+    intervention (so the caller can emit the forced-step split telemetry);
+    None for every other policy and for a no-op (suppression OFF).
+    """
+    if lifecycle_policy == SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY:
+        # Causal-contribution harness PRIMARY arm. A stationary mask making the
+        # target slot un-committable for the whole run. NOT a
+        # _PROOF_CONTROLLED_LIFECYCLE_POLICY (must not zero actor gradients).
+        if (
+            schedule_id is not None
+            or schedule_hash is not None
+            or schedule_version is not None
+            or schedule_action_count is not None
+        ):
+            raise ValueError(
+                f"{SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY} must not carry schedule provenance"
+            )
+        # Literal OFF gate: byte-identical no-op (no mask mutation, no extra RNG).
+        if not suppression_enabled:
+            return None
+        if slot_config is None:
+            raise ValueError(
+                f"{SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY} requires slot_config to "
+                "resolve the suppressed slot index"
+            )
+        suppressed_idx = slot_config.index_for_slot_id(SUPPRESS_SLOT_TARGET_SLOT_ID)
+        return apply_suppress_slot_mask(
+            masks_batch, suppressed_slot_index=suppressed_idx
+        )
+
     if lifecycle_policy is None:
         if (
             schedule_id is not None
@@ -696,6 +734,12 @@ class VectorizedPPOTrainer:
     effective_max_seeds: int
     device: str
     logger: logging.Logger
+    # Causal-contribution harness (defaults keep all existing runs unchanged).
+    # suppression toggle is SEPARATE from the lifecycle policy: a SUPPRESS-SLOT
+    # arm with suppression OFF is the CRN no-op control (literal byte-identical
+    # mask path); experiment_rng (ExperimentRngDomains | None) drives the split.
+    proof_baseline_suppression_enabled: bool = False
+    experiment_rng: Any = None
     action_execution_context: ActionExecutionContext = field(init=False)
     ppo_coordinator: PPOCoordinator = field(init=False)
     # Tier-0 phase-profiler handle. NullProfiler until run() enters the real
@@ -703,6 +747,17 @@ class VectorizedPPOTrainer:
     _phase_profiler: PhaseProfiler | NullProfiler = field(
         init=False, default_factory=NullProfiler
     )
+    # Causal-contribution harness: epoch the suppression first bit (first step
+    # with >=1 intervention-forced env), for the divergence-onset assertion.
+    _first_suppression_epoch: int | None = field(init=False, default=None)
+    # Stride for the GPU-sync compare-point state hashes (state hashes emitted at
+    # suppression events, the warm-up window, and every Nth step; cheap draw
+    # counts every step). Tunable so a short smoke can force frequent hashes.
+    compare_point_hash_stride: int = 50
+    # Within-run no-offset tracking: previous cumulative controller draw count and
+    # the pinned constant per-step delta (RuntimeError on deviation).
+    _prev_controller_draw_count: int | None = field(init=False, default=None)
+    _controller_stride_delta: int | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         # Ada sm_89 TF32: ~2x FP32 matmul/conv on tensor cores at ~1e-3 rel error.
@@ -2045,7 +2100,7 @@ class VectorizedPPOTrainer:
         masks_batch["slot_by_op"] = torch.stack(
             [m["slot_by_op"] for m in all_masks]
         ).to(device)
-        apply_proof_baseline_action_controls(
+        suppress_slot_result = apply_proof_baseline_action_controls(
             masks_batch=masks_batch,
             lifecycle_policy=self.proof_baseline_lifecycle_policy,
             schedule_id=self.proof_baseline_schedule_id,
@@ -2056,7 +2111,18 @@ class VectorizedPPOTrainer:
             ),
             epoch=epoch,
             static_final_replay_validated=static_final_replay_validated,
+            slot_config=self.slot_config,
+            suppression_enabled=self.proof_baseline_suppression_enabled,
         )
+        # Causal-contribution harness telemetry: per-step compare-point (§5.6) +
+        # forced-step split (§5.7). Only when the instrumented RNG split is wired.
+        if self.experiment_rng is not None:
+            self._emit_intervention_step(
+                epoch=epoch,
+                suppress_slot_result=suppress_slot_result,
+                op_mask=masks_batch["op"],
+                num_envs=len(env_states),
+            )
 
         # Accumulate raw states for deferred normalizer update
         raw_states_for_normalizer_update.append(states_batch.detach())
@@ -2101,6 +2167,14 @@ class VectorizedPPOTrainer:
         # get_action returns ActionResult dataclass.
         # P1-BF16: wrap in the SAME BF16 autocast as the PPO update so the
         # stored old_log_probs share the BF16 backbone (unbiased ratio).
+        # Causal-contribution harness (domain A): route controller sampling
+        # through the dedicated controller generator so it is insulated from
+        # blueprint/host draw counts. None (no harness) => unchanged global stream.
+        controller_generator = (
+            self.experiment_rng.controller_generator
+            if self.experiment_rng is not None
+            else None
+        )
         with rollout_autocast():
             action_result = agent.policy.get_action(
                 states_batch_normalized,
@@ -2109,10 +2183,15 @@ class VectorizedPPOTrainer:
                 hidden=batched_lstm_hidden,
                 deterministic=False,
                 probability_floor=agent.probability_floor,
+                generator=controller_generator,
             )
         actions_dict = action_result.action
         head_log_probs = action_result.log_prob
         values_tensor = action_result.value
+        # Causal-contribution harness: account this controller draw (one fixed-size
+        # multinomial set per step). Device-portable; underpins the no-offset proof.
+        if self.experiment_rng is not None:
+            self.experiment_rng.record_controller_invocation()
 
         # OPTIMIZATION: Update batched hidden state directly (eliminates per-env slice/cat)
         batched_lstm_hidden = action_result.hidden
@@ -3046,6 +3125,96 @@ class VectorizedPPOTrainer:
             prof_steps,
             static_final_replay_validated,
             shutdown,
+        )
+
+    def _emit_intervention_step(
+        self,
+        *,
+        epoch: int,
+        suppress_slot_result: SuppressSlotResult | None,
+        op_mask: torch.Tensor,
+        num_envs: int,
+    ) -> None:
+        """Emit the per-step compare-point (§5.6) + forced-step split (§5.7).
+
+        ``op_mask`` is the POST-hook batched op mask [num_envs, num_ops]. The
+        WAIT-saturation component is a property of THAT mask (exactly one valid
+        op), so it is computable for EVERY instrumented arm — control and
+        suppress_slot_off included — which is what lets §5.7's expected-parity
+        check on WAIT-saturation actually run across arms. intervention-forced is
+        only meaningful for an active suppression (it comes from the result).
+        """
+        if not self.hub or self.experiment_rng is None:
+            return
+        from esper.leyline import InterventionStepPayload
+
+        intervention_forced = (
+            suppress_slot_result.intervention_forced_count
+            if suppress_slot_result is not None
+            else 0
+        )
+        # Total WAIT-only (forced) steps from the post-hook mask; the natural
+        # WAIT-saturation component is the remainder after intervention-forcing.
+        total_wait_only = int((op_mask.sum(dim=-1) == 1).sum().item())
+        wait_saturation = total_wait_only - intervention_forced
+        suppressed_index = (
+            suppress_slot_result.suppressed_slot_index
+            if suppress_slot_result is not None
+            else None
+        )
+        is_suppression_event = intervention_forced > 0
+        if is_suppression_event and self._first_suppression_epoch is None:
+            self._first_suppression_epoch = epoch
+
+        # WITHIN-RUN no-offset assertion: the controller draws a fixed number of
+        # times per step, so the per-step delta of the cumulative draw count must
+        # be constant. A deviation means the controller stream was offset (e.g. a
+        # stray draw) inside this single run — catch it loudly, without needing the
+        # cross-arm join. The delta is pinned from the first observed step.
+        draw_count = self.experiment_rng.controller_draw_count
+        if self._prev_controller_draw_count is not None:
+            delta = draw_count - self._prev_controller_draw_count
+            if self._controller_stride_delta is None:
+                self._controller_stride_delta = delta
+            elif delta != self._controller_stride_delta:
+                raise RuntimeError(
+                    "Causal-contribution no-offset invariant violated: controller "
+                    f"draw-count delta {delta} != expected {self._controller_stride_delta} "
+                    f"at epoch {epoch}. The controller stream was offset within the "
+                    "run (a stray/missing draw) — Δ_struct would carry an RNG artifact."
+                )
+        self._prev_controller_draw_count = draw_count
+
+        # Stride the GPU-sync state hashes: emit them only at suppression events,
+        # at a fixed stride, and for the early warm-up window (so the pre-first-
+        # suppression parity check has samples). The cheap counts go EVERY step.
+        stride = self.compare_point_hash_stride
+        include_hashes = (
+            is_suppression_event
+            or epoch <= stride
+            or (stride > 0 and epoch % stride == 0)
+        )
+        compare = self.experiment_rng.compare_point(include_state_hashes=include_hashes)
+        self.hub.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.INTERVENTION_STEP,
+                group_id=self.group_id,
+                epoch=epoch,
+                data=InterventionStepPayload(
+                    epoch=epoch,
+                    controller_draw_count=compare["controller_draw_count"],
+                    blueprint_draw_count=compare["blueprint_draw_count"],
+                    intervention_forced_count=intervention_forced,
+                    wait_saturation_count=wait_saturation,
+                    num_envs=num_envs,
+                    controller_state_hash=compare["controller_state_hash"],
+                    host_state_hash=compare["host_state_hash"],
+                    suppressed_slot_index=suppressed_index,
+                    first_suppression_epoch=self._first_suppression_epoch,
+                ),
+                severity="debug",
+                message="Causal-contribution intervention step",
+            )
         )
 
     def run(self) -> list[dict[str, Any]]:

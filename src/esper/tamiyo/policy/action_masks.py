@@ -611,6 +611,37 @@ def _normalized_entropy_from_masked_logits(
     return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)
 
 
+def _nan_safe_sampling_probs(probs: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Substitute masked-uniform for any non-finite sampling row (rollout guard only).
+
+    ``torch.multinomial`` raises a CUDA device-side assert -- ``probability tensor
+    contains either inf, nan or element < 0`` -- if any sampled row holds a non-finite
+    value. A single non-finite *logit* from the policy network (e.g. an activation
+    overflow under autocast) makes ``F.softmax`` emit NaN across that entire row, which
+    would abort the run mid-rollout, before the PPO finiteness gate (update path) can
+    observe the non-finite log-probs and skip the update.
+
+    This guard keeps only the ROLLOUT sampler from crashing on such a row, by drawing the
+    fallback action from a uniform distribution over the valid actions. It deliberately
+    does NOT touch the logits/log-probs that feed the loss: the row's stored
+    ``old_log_prob`` stays NaN, so the downstream finiteness gate still trips and skips
+    the resulting update -- no silent training on sanitized garbage. It is therefore a
+    numerical-robustness boundary guard, not a suppressor of the upstream instability.
+
+    Byte-identical for well-conditioned inputs: a row whose probabilities are already all
+    finite is returned unchanged (``torch.where`` selects the original values exactly, and
+    the helper consumes no RNG, so the ``multinomial`` draw and the generator advance are
+    untouched).
+    """
+    row_finite = torch.isfinite(probs).all(dim=-1, keepdim=True)
+    # Uniform over the valid actions. The clamp(min=1.0) only guards a divide-by-zero on a
+    # fully-empty mask, which is already rejected upstream (InvalidStateMachineError); it
+    # never fires for a real, non-empty mask, so it does not perturb the fallback.
+    uniform = mask.float()
+    uniform = uniform / uniform.sum(dim=-1, keepdim=True).clamp(min=1.0)
+    return torch.where(row_finite, probs, uniform)
+
+
 class MaskedCategorical:
     """Categorical distribution with action masking and correct entropy calculation.
 

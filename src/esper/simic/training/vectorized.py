@@ -83,6 +83,7 @@ from esper.simic.rewards import (
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput, NissaHub
 from esper.simic.telemetry.emitters import VectorizedEmitter
 from .env_factory import EnvFactoryContext
+from .experiment_rng import ExperimentRngDomains
 from .helpers import policy_amp_context
 from .normalizer_checkpoint import (
     restore_obs_normalizer_from_metadata as _restore_obs_normalizer_from_metadata,
@@ -778,6 +779,14 @@ def train_ppo_vectorized(
     proof_baseline_schedule_hash: str | None = None,
     proof_baseline_schedule_version: int | None = None,
     proof_baseline_schedule_action_count: int | None = None,
+    # Causal-contribution harness (R1 pilot). Defaults keep all existing runs
+    # byte-identical: no RNG split, no suppression. rng_three_domain_split turns
+    # on the instrumented build (controller/host/blueprint streams + compare-point
+    # telemetry); proof_baseline_suppression_enabled is the SEPARATE literal ON/OFF
+    # toggle for the SUPPRESS-SLOT mask (OFF => CRN no-op control).
+    rng_three_domain_split: bool = False,
+    proof_baseline_suppression_enabled: bool = False,
+    compare_point_hash_stride: int = 50,
     static_final_source_manifest: TopologyManifestPayload | None = None,
     static_final_source_run_dir: str | None = None,
     static_final_source_group_id: str | None = None,
@@ -1444,6 +1453,37 @@ def train_ppo_vectorized(
         for dev in env_device_map
     ]
 
+    # Causal-contribution harness (§5.5): build the three-domain RNG split AFTER
+    # controller init + data-order seeding (both key off the global default at
+    # torch.manual_seed(seed) above and the iterators' explicit seed), so the
+    # pairing pillars (shared controller init, shared data order) are preserved.
+    # None on normal runs => every call site threads generator=None (unchanged).
+    experiment_rng = (
+        ExperimentRngDomains(master_seed=seed, controller_device=device)
+        if rng_three_domain_split
+        else None
+    )
+    # Run-start INTERVENTION_CONFIGURED record (no action_id, §5.7). Emitted only
+    # for the instrumented (RNG-split) build; describes the stationary mask so the
+    # analysis joins arms by declared intervention.
+    if experiment_rng is not None and hub is not None:
+        from .intervention import build_intervention_configured_payload
+
+        hub.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.INTERVENTION_CONFIGURED,
+                group_id=group_id,
+                data=build_intervention_configured_payload(
+                    lifecycle_policy=proof_baseline_lifecycle_policy,
+                    suppression_enabled=proof_baseline_suppression_enabled,
+                    slot_config=slot_config,
+                    rng_split_enabled=True,
+                    master_seed=seed,
+                ),
+                message="Causal-contribution intervention configured",
+            )
+        )
+
     env_factory = EnvFactoryContext(
         env_device_map=env_device_map,
         env_streams=env_streams,
@@ -1464,6 +1504,7 @@ def train_ppo_vectorized(
         hub=hub,
         signal_tracker_cls=SignalTracker,
         group_id=group_id,
+        experiment_rng=experiment_rng,
     )
 
     trainer = VectorizedPPOTrainer(
@@ -1527,6 +1568,9 @@ def train_ppo_vectorized(
         proof_baseline_schedule_hash=proof_baseline_schedule_hash,
         proof_baseline_schedule_version=proof_baseline_schedule_version,
         proof_baseline_schedule_action_count=proof_baseline_schedule_action_count,
+        proof_baseline_suppression_enabled=proof_baseline_suppression_enabled,
+        compare_point_hash_stride=compare_point_hash_stride,
+        experiment_rng=experiment_rng,
         static_final_source_manifest=static_final_source_manifest,
         static_final_source_run_dir=static_final_source_run_dir,
         static_final_source_group_id=static_final_source_group_id,

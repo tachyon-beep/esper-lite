@@ -51,6 +51,7 @@ from esper.tamiyo.policy.action_masks import (
     MaskedCategorical,
     _apply_floor_to_logits,
     _masked_log_prob,
+    _nan_safe_sampling_probs,
     _normalized_entropy_from_masked_logits,
     _validate_action_mask,
     _validate_logits,
@@ -793,6 +794,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         alpha_curve_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         probability_floor: dict[str, float] | None = None,
+        generator: torch.Generator | None = None,
     ) -> _ForwardOutput:
         """Forward pass returning logits, value, and new hidden state.
 
@@ -902,7 +904,19 @@ class FactoredRecurrentActorCritic(nn.Module):
                 op_min_prob,
             )
         op_probs_flat = F.softmax(op_logits_flat, dim=-1)  # [batch*seq_len, num_ops]
-        sampled_op_flat = torch.multinomial(op_probs_flat, num_samples=1).squeeze(-1)
+        # NaN-safe rollout sampling (see _nan_safe_sampling_probs): a non-finite network
+        # logit makes softmax emit NaN, which would trip the multinomial device-side assert
+        # and abort the rollout. Substitute masked-uniform for any non-finite row; the
+        # update-path finiteness gate stays the authority on non-finite policy outputs.
+        # Consumes no RNG, so the controller-generator stream advances byte-identically.
+        op_probs_flat = _nan_safe_sampling_probs(op_probs_flat, op_mask_flat)
+        # Causal-contribution harness (domain A): when a dedicated controller
+        # generator is threaded, the op draw consumes ONLY the controller stream,
+        # insulating it from blueprint/host draw counts. generator=None is the
+        # unchanged default (byte-identical to pre-harness behavior).
+        sampled_op_flat = torch.multinomial(
+            op_probs_flat, num_samples=1, generator=generator
+        ).squeeze(-1)
         sampled_op = sampled_op_flat.reshape(batch_size, seq_len)
 
         # Op-INDEPENDENT PPO baseline: V(s). This is the value stored in the rollout
@@ -950,6 +964,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         deterministic: bool = False,
         return_op_logits: bool = False,
         probability_floor: dict[str, float] | None = None,
+        generator: torch.Generator | None = None,
     ) -> GetActionResult:
         """Sample actions from all heads (inference mode).
 
@@ -1042,6 +1057,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 hidden=hidden,
                 op_mask=op_mask,
                 probability_floor=probability_floor,
+                generator=generator,
             )
 
             # Sample from each head using MaskedCategorical for safety
@@ -1113,9 +1129,19 @@ class FactoredRecurrentActorCritic(nn.Module):
                 if deterministic:
                     action = masked_logits.argmax(dim=-1)
                 else:
-                    # Direct multinomial sampling (no Categorical overhead)
+                    # Direct multinomial sampling (no Categorical overhead).
+                    # Causal-contribution harness (domain A): the per-head draws
+                    # share the controller generator threaded into get_action;
+                    # generator=None is the unchanged default.
                     probs = F.softmax(masked_logits, dim=-1)
-                    action = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                    # NaN-safe rollout sampling (see _nan_safe_sampling_probs): keep a
+                    # non-finite network logit from aborting the rollout at multinomial.
+                    # The stored log_prob (below) is left NaN for such a row so the PPO
+                    # finiteness gate still skips the resulting update.
+                    probs = _nan_safe_sampling_probs(probs, mask)
+                    action = torch.multinomial(
+                        probs, num_samples=1, generator=generator
+                    ).squeeze(-1)
 
                 actions[key] = action
                 log_probs[key] = _masked_log_prob(masked_logits, action)

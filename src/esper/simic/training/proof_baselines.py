@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from esper.leyline.causal_intervention import SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY
 from esper.leyline.proof_baselines import (
     FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT,
     FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
@@ -138,6 +139,44 @@ def build_blueprint_health_proof_plan(
                 current_runner_supported=True,
             ),
         ),
+    )
+
+
+CAUSAL_CONTRIBUTION_R1_PAIR_ID = "causal-contribution-r1"
+
+
+def build_suppress_slot_cohort(
+    *,
+    training_seed: int,
+    suppression_enabled: bool,
+    reward_mode: RewardMode = RewardMode.SHAPED,
+) -> ProofBaselineCohort:
+    """Cohort wiring for the R1 SUPPRESS-SLOT arm.
+
+    The cohort fixes the mode (SUPPRESS_SLOT), the lifecycle policy
+    (``suppress_slot_r0c0``), the per-arm seed, and the pairing id. The literal
+    suppression ON/OFF toggle and the three-domain RNG split are run-level train()
+    params (``proof_baseline_suppression_enabled`` / ``rng_three_domain_split``),
+    not cohort fields — OFF is the CRN no-op control of the SAME cohort.
+
+    NOTE: this is deliberately NOT one of the blueprint-health required modes and
+    is NOT in ``_PROOF_CONTROLLED_LIFECYCLE_POLICIES`` (which would zero every
+    env's actor gradient and destroy the "controller re-forms downstream"
+    premise of the total-system estimand).
+    """
+    state = "on" if suppression_enabled else "off"
+    return ProofBaselineCohort(
+        cohort_id=f"suppress_slot_r0c0_{state}_s{training_seed}",
+        mode=ProofBaselineMode.SUPPRESS_SLOT,
+        reward_mode=reward_mode.value,
+        training_seed=training_seed,
+        lifecycle_policy=SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY,
+        proof_baseline_pair_id=CAUSAL_CONTRIBUTION_R1_PAIR_ID,
+        proof_baseline_schedule_id=None,
+        proof_baseline_schedule_hash=None,
+        proof_baseline_schedule_version=None,
+        proof_baseline_schedule_action_count=None,
+        current_runner_supported=True,
     )
 
 
@@ -303,11 +342,13 @@ def _extract_static_final_source_manifest(
 
 
 __all__ = [
+    "CAUSAL_CONTRIBUTION_R1_PAIR_ID",
     "ProofBaselineCohort",
     "ProofBaselineMode",
     "ProofBaselinePlan",
     "REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES",
     "build_blueprint_health_proof_plan",
+    "build_suppress_slot_cohort",
     "missing_required_baseline_modes",
     "train_blueprint_health_proof_baselines",
 ]
