@@ -5,18 +5,16 @@
 > schedule. Do not compute WSJF here; hand the committed bet over for sequencing.
 
 ## Now  (committed, in-flight)
-- **Reward credit-assignment redesign — causal resolution of the (a)/(b) fork.** The
-  controller's *committed* structure carries ~0 committed-per-param counterfactual value (J):
-  the reward credits survival/ensemble residency, not committed marginal value. The
-  **cheap-rescale escape hatch is CLOSED** (GATE −1 falsifier verdict NO STOP / SURVIVE,
-  PDR-0002 — rescale does not fix the defect). Active work is the **owner-gated
-  causal-contribution run** (PDR-0003): is the early-conv r0c0 cohort a freeloader (a) or an
-  LOO-undervalued enabling stem (b)? — opposite reward fixes. **Immediate prerequisite
-  (PDR-0005): fix the pervasive policy entropy collapse** — general + pre-existing (also in
-  GATE-1), it blocks any healthy-policy causal read; the morphogenesis is confirmed REAL
-  (+7.69pp / n=6), so this is a fixable stability issue, not a reason to abandon. Binding
-  constraint = signal/credit, not optimizer. · tracker: esper-lite-3d67b09687 (Stage-0
-  instrument) · metric: policy-entropy guardrail (restore) → then committed-J / corr(reward,J)
+- **Reward credit-assignment redesign — causal resolution of the (a)/(b) fork, measured on J.**
+  The cheap-rescale escape hatch is CLOSED (GATE −1 SURVIVE, PDR-0002); the estimand-invariant
+  harness is built + GPU-validated + committed (PDR-0003). The "entropy collapse" that looked
+  like the blocker was a **MEASUREMENT ARTIFACT** (PDR-0006) — the policy is healthy, no training
+  fix needed. The fork's discriminator is **J / acc-per-param, NOT accuracy** (accuracy ties):
+  the n=3 pilot leans **(b) r0c0 is an efficiency-enabling stem** (suppressing it ~halves system
+  efficiency — the opposite of a freeloader). Active work: the **n=5 J-read** (PDR-0007) — Phase 0
+  (analyzer + pre-registered run sheet) DONE; Phase 1 (seeds 44–45, ~13h GPU) awaits owner go.
+  · tracker: esper-lite-8190ff1c95 (n=5 J-read), esper-lite-425dcc4ca2 (telemetry hygiene)
+  · metric: paired ΔJ/acc-per-param (seed-level), n=5 → n=10
 
 ## Next (shaped, decreasing certainty)
 - **Credit-assignment redesign itself** — a two-term targeted credit (enabling/synergy
