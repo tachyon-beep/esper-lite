@@ -1,17 +1,22 @@
-# Roadmap — Esper            Updated: 2026-06-28 (PDR-0001)
+# Roadmap — Esper            Updated: 2026-06-30 (PDR-0002, PDR-0003, PDR-0005)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
 > schedule. Do not compute WSJF here; hand the committed bet over for sequencing.
 
 ## Now  (committed, in-flight)
-- **Reward credit-assignment redesign — Phase 0 (instrument-first)** — the controller's
-  *committed* structure carries ~0 committed-per-param counterfactual value (J) on the
-  control arm: the reward credits survival/ensemble residency, not committed marginal
-  value. Phase 0 makes J a computable post-hoc yardstick and runs the GATE −1 cheap-fix
-  falsifier sweep to decide rescale-vs-redesign. Binding constraint = signal/credit, not
-  optimizer. · tracker: esper-lite-3d67b09687 (Stage-0 instrument), esper-lite-a221da47ea
-  (Phase −1 falsifier) · metric: committed-J / corr(reward,J)
+- **Reward credit-assignment redesign — causal resolution of the (a)/(b) fork.** The
+  controller's *committed* structure carries ~0 committed-per-param counterfactual value (J):
+  the reward credits survival/ensemble residency, not committed marginal value. The
+  **cheap-rescale escape hatch is CLOSED** (GATE −1 falsifier verdict NO STOP / SURVIVE,
+  PDR-0002 — rescale does not fix the defect). Active work is the **owner-gated
+  causal-contribution run** (PDR-0003): is the early-conv r0c0 cohort a freeloader (a) or an
+  LOO-undervalued enabling stem (b)? — opposite reward fixes. **Immediate prerequisite
+  (PDR-0005): fix the pervasive policy entropy collapse** — general + pre-existing (also in
+  GATE-1), it blocks any healthy-policy causal read; the morphogenesis is confirmed REAL
+  (+7.69pp / n=6), so this is a fixable stability issue, not a reason to abandon. Binding
+  constraint = signal/credit, not optimizer. · tracker: esper-lite-3d67b09687 (Stage-0
+  instrument) · metric: policy-entropy guardrail (restore) → then committed-J / corr(reward,J)
 
 ## Next (shaped, decreasing certainty)
 - **Credit-assignment redesign itself** — a two-term targeted credit (enabling/synergy

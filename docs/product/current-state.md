@@ -1,52 +1,48 @@
-# Current State — Esper        Checkpoint: 2026-06-28 (resume #1 — bootstrap workspace persisted)
+# Current State — Esper        Checkpoint: 2026-06-30 (checkpoint #2 — causal-run arc + collapse finding)
 
 ## The bet right now
-**Reward credit-assignment redesign — Phase 0 (instrument-first).** Make J a computable
-post-hoc yardstick and decide rescale-vs-redesign via the GATE −1 cheap-fix falsifier
-sweep. Metric it moves: committed-J / corr(reward,J).
+**Reward credit-assignment redesign — causal resolution of the (a)/(b) fork.** The
+cheap-rescale escape hatch is CLOSED (GATE −1 verdict NO STOP / SURVIVE, PDR-0002). The active
+work is the owner-gated causal-contribution run to decide freeloader (a) vs LOO-undervalued
+enabling stem (b) — opposite reward fixes. **Immediate Now: fix the pervasive policy entropy
+collapse (PDR-0005)** — it gates any healthy-policy causal read. Metric: restore the
+policy-entropy guardrail → then committed-J / corr(reward,J).
 
 ## In flight
-- **GATE −1 cheap-fix falsifier sweep** — 16/25 runs done (control 5/5, unitnorm 5/5,
-  clip2 5/5; clip5 + escrow finishing), **9 left + a placebo batch owed**; box alive and
-  mid-sweep (latest run `telemetry_2026-06-27_231925` still appending past midnight),
-  ~1 day wall-clock at 2/2 GPUs, self-driving. · tracker: esper-lite-a221da47ea (Phase −1),
-  esper-lite-3d67b09687 (Stage-0 instrument)
-- **The (a)/(b) synergy fork** — OPEN. n=5 co-resident synergy shows complementarity is
-  real (mechanism exists, pro-(b)); the closer (does the *committed* neg-blendΔ early-conv
-  cohort enable?) is **blocked on seed-identity reconstruction** (see open questions).
-- **EV-stabilization** epic (Next). · tracker: esper-lite-f25b71c165
+- **Entropy-collapse fix** (the active Now prerequisite) — scoped levers: anneal-window
+  (3000 vs 200-ep), std-floor / entropy-floor penalty on the raw distribution, fp32 logits;
+  validate entropy holds on a smoke before resuming the causal R1. · tracker:
+  esper-lite-425dcc4ca2 (new), esper-lite-3d67b09687 (Stage-0 instrument)
+- **Causal-contribution harness** — BUILT, R2-reviewed, validated on GPU (Stage-1 + R1
+  full-scale offset-free), and COMMITTED (68fca06d + escrow fix e0134230) on branch
+  feat/phase-minus1-scale-falsifier (**NOT pushed**). Waiting on the collapse fix. Design:
+  docs/plans/concepts/2026-06-28-causal-contribution-run-design-v2.md
+- **The (a)/(b) fork** — still OPEN; now blocked on the collapse fix (the seed-identity
+  reconstruction path is superseded by the causal-run approach).
 
 ## Open questions / blocked-on-owner
-- **(a)/(b) fork** (freeloader defect vs LOO-undervalued enabling stem) — decides
-  redesign-vs-remeasure; opposite fixes. Needs the **seed-lifecycle-conditioned synergy**,
-  which is blocked: `(env,slot)` is not single-occupancy (multi-candidate germination) and
-  structured germ/foss events carry no stable `seed_id` — needs seed-identity
-  reconstruction (likely morphogenesis schema / drl-expert). Detail: evidence packet §5.3.
-- **metrics.md TARGET numbers are still `<owner-set>` placeholders** — *highest-value owner
-  input.* No acceptance/kill decision can fire until the committed-J north-star and the
-  guardrail floors carry a number + date (a target with no number is not falsifiable).
-  Same for the inferred **vision.md audience/secondary**. *(blocked-on-owner)*
-- **Escrow config fix uncommitted** (`configs/config-3slot-3seed-baseline-escrow.json`,
-  n_envs 128→12) — awaiting owner word to commit; deliberately excluded from the workspace
-  commit. *(blocked-on-owner)*
-- **Dropped-events completeness check owed** before any paired GATE −1 verdict (several
-  runs exited non-zero with DirectoryOutput trailing-event loss — data integrity, not
-  config contamination).
+- **Causal estimand SCOPE (PDR-0004, PROPOSED — owner sign-off pending):** ratify the
+  total-system pivot (Goal-1 = system-level dependence, mechanistic-enabling claim out of
+  scope) OR commission a placebo/DUMMY-R0C0 design to try to keep the mechanistic claim. The
+  run is estimand-invariant; this decides what it may CLAIM. *(blocked-on-owner)*
+- **metrics.md TARGET numbers still `<owner-set>` placeholders** — highest-value owner input;
+  no acceptance/kill fires until the committed-J north-star + guardrail floors carry a
+  number+date. Same for vision.md inferred audience/secondary. *(blocked-on-owner)*
+- **Policy-entropy guardrail is BREACHED** (collapse, metrics.md) — it is the active Now work
+  (PDR-0005), not a kill signal yet (PDR-0005's reversal trigger fires only if the fix fails).
 
 ## Last checkpoint did
-- RESUME #1 (`/own-product` → `/product-checkpoint`): **clean resume, no drift** — HEAD
-  unchanged (406aeb25), all 4 in-flight tracker IDs still `open`, box alive mid-sweep.
-- **Authority grant re-confirmed as written** (Default research grant; Last reviewed
-  2026-06-28) — no change.
-- **Persisted the bootstrap workspace** — the 5 artifacts + PDR-0001 were untracked since
-  bootstrap; this is their first commit. No new PDR (no new product decision this session).
-- Note: Karn MCP binding returned empty this session — run-state verified by filesystem,
-  not Karn queries, until it is pointed at the run dir.
+- **GATE −1 falsifier scored → NO STOP / SURVIVE** (PDR-0002); closed esper-lite-a221da47ea.
+- **Commissioned + built + GPU-validated + committed the causal-contribution harness**
+  (PDR-0003); estimand SCOPE flagged for owner (PDR-0004, proposed).
+- **R1 pilot ran (n=3): harness validated, NO causal read (collapsed policies).** Collapse
+  investigation → morphogenesis REAL (+7.69pp / n=6), collapse general + pre-existing →
+  **fix the collapse first** (PDR-0005); created esper-lite-425dcc4ca2.
+- Escrow config fix (prior blocked-on-owner) committed with disclosure (e0134230).
 
 ## Next session, start here
-**The seed-identity reconstruction for the lifecycle-conditioned synergy closer** — the
-actual answer to the (a)/(b) fork (validate the fate-distribution before interpreting any
-synergy). In parallel, the box finishes the arm sweep + placebo, then paired-bootstrap
-GATE −1 scoring (resample the ≥5 seeds as the unit, NOT the 12 vec-envs — the
-pre-registered invalidator). Substantive detail lives in
-`docs/analysis/2026-06-25-phase0-objective-and-instrumentation.md` and project memory.
+**Implement the entropy-collapse fix** (esper-lite-425dcc4ca2): the scoped levers, then a
+healthy-policy smoke confirming slot-head entropy holds across the run, then resume the
+causal R1 on a healthy policy (re-measure the paired-Δ SD → n=5 → n=10, the morphogenesis seed
+floor). Substantive detail: docs/analysis/2026-06-30-r1-pilot-result.md + project memory
+(reward-redesign-phase0-state).
