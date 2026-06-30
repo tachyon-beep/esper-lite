@@ -64,3 +64,29 @@ direction is banked.**
 
 Durable: `scratchpad/cc_r1_stage2_run2/` (telemetry), `cc_r1_stage2_analyze.py` (analyzer+gates),
 `cc_r1_stage2/CRASH_DIAGNOSIS.md`. Design: `docs/plans/concepts/2026-06-28-causal-contribution-run-design-v2.md`.
+
+---
+
+## Collapse investigation (2026-06-30) — refines Part 2; decides the fix-vs-reprioritize fork
+
+Owner-chosen cheap discriminator (from existing telemetry, no new GPU). Three findings:
+
+1. **The morphogenesis is REAL and robust — NOT hollow.** From the counterfactual matrices (all-on vs
+   all-off = host-alone), committed structure adds **+7.69pp mean across all 6 runs** (host-alone ~38% →
+   with-structure ~46%; per-run +6.67…+8.27, tight). This CONFIRMS and exceeds the n=1 control:41 +6.1pp.
+   ⇒ the "accuracy decoupled from structure / morphogenesis hollow" story is **REFUTED**.
+2. **Refines Part 2:** structure is NOT decoupled from accuracy (it adds +7.7pp). The between-arm Δacc≈0 is that
+   **both arms reach the same +7.7pp** — i.e. **r0c0 is accuracy-replaceable** (suppress it, the controller hits
+   the same contribution via more downstream), not that accuracy ignores structure. Whether a HEALTHY policy also
+   finds r0c0 replaceable (vs using it efficiently/enabling) is the still-open (a)/(b) question — the collapse
+   caveat applies to the structural-CHOICE quality, not to whether structure matters.
+3. **The entropy collapse is GENERAL and pre-existing — not caused by the causal harness.** GATE-1's control s41
+   run (`telemetry/telemetry_2026-06-25_202151`) shows **411 entropy_collapse anomalies**, comparable to R1's
+   ~450. So the collapse has been present throughout the reward-redesign work (the +6.1/+7.7pp were always measured
+   on collapsed policies; the NaN crash was a latent transient GATE-1 happened not to trip). GATE-1 SURVIVE still
+   stands (all arms collapse alike).
+
+**Decision:** the morphogenesis works (+7.7pp, robust) and the collapse is a FIXABLE, pervasive policy-stability
+issue — not fundamental brokenness. ⇒ **fix the collapse → resume the causal track is justified; re-prioritizing /
+abandoning is not.** The collapse fix is now more than a causal-run prerequisite — it is a foundational improvement
+(may raise the contribution; required for trustworthy (a)/(b) structural decisions; affects the whole line of work).
