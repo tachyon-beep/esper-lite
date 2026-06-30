@@ -615,8 +615,16 @@ class PPOCoordinator:
                 metrics[f"rollout_{key}"] = value
 
         # Per-head entropy collapse detection (Task 6)
-        # Check individual action heads for collapse even when total entropy appears healthy
-        head_entropies_raw = metrics.get("head_entropies")
+        # Check individual action heads for collapse even when total entropy appears healthy.
+        # This MUST read the CHOICE-conditioned series. head_entropies is the unconditional
+        # mean over ALL steps; on forced/single-valid steps normalized entropy is exactly 0,
+        # so head_X_entropy = learnable_fraction × conditional_entropy — a decision-DENSITY
+        # proxy that, for sparse heads (slot decides on ~9% of steps), is born below the 0.10
+        # threshold and can never clear, manufacturing permanent FALSE collapse anomalies.
+        # conditional_head_entropies restricts entropy to causally-relevant steps (the exact
+        # quantity the entropy regularizer optimizes) and reads ~0.3–1.0 when healthy.
+        # See PDR-0006 / docs/analysis/2026-06-30-r1-pilot-result.md.
+        head_entropies_raw = metrics.get("conditional_head_entropies")
         if head_entropies_raw:
             # Convert per-epoch lists to mean per head
             mean_head_entropies = {

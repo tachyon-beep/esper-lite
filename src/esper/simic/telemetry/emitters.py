@@ -1023,7 +1023,10 @@ def emit_ppo_update_event(
             ev_low_return_variance=metrics["ev_low_return_variance"],
             ev_low_return_variance_count=metrics["ev_low_return_variance_count"],
             ev_return_variance=metrics.get("ev_return_variance", None),
-            entropy_loss=0.0,
+            # The real entropy-regularizer term (losses.entropy_loss); metrics["entropy"]
+            # carries its negation (ppo_agent.py ~1664). Previously a hardcoded 0.0 stub that
+            # masqueraded as an inert entropy bonus and misled diagnosis (PDR-0006).
+            entropy_loss=-metrics["entropy"],
             # MANDATORY advantage statistics - computed in PPO update
             advantage_mean=metrics["advantage_mean"],
             advantage_std=metrics["advantage_std"],
