@@ -1,6 +1,6 @@
 # PDR-0005 — Fix the pervasive entropy collapse before banking any causal read
 
-Date: 2026-06-30   Status: accepted   Author: Claude (agent)   Owner sign-off: yes (grant — reprioritize the active bet); owner chose "investigate first" via AskUserQuestion
+Date: 2026-06-30   Status: **superseded (by PDR-0006 — the "collapse" was a measurement artifact; no training collapse to fix)**   Author: Claude (agent)   Owner sign-off: yes (grant — reprioritize the active bet); owner chose "investigate first" via AskUserQuestion
 Supersedes: —   Related: PDR-0003, metrics.md, docs/analysis/2026-06-30-r1-pilot-result.md
 
 ## Context
