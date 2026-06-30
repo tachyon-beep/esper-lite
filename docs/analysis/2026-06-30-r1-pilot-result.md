@@ -90,3 +90,50 @@ Owner-chosen cheap discriminator (from existing telemetry, no new GPU). Three fi
 issue — not fundamental brokenness. ⇒ **fix the collapse → resume the causal track is justified; re-prioritizing /
 abandoning is not.** The collapse fix is now more than a causal-run prerequisite — it is a foundational improvement
 (may raise the contribution; required for trustworthy (a)/(b) structural decisions; affects the whole line of work).
+
+---
+
+## UPDATE 2026-07-01 — the "collapse" was a MEASUREMENT ARTIFACT; the fork discriminator is J, not accuracy
+
+**SUPERSEDES Part 2's "wrong population" block AND the Collapse-investigation's "fix collapse first."** A diagnose-first
+ultracode workflow (4 agents + adversarial synthesis, very-high confidence) + independent verification reversed the
+entropy-collapse premise.
+
+**1. There was NO training collapse — it is a telemetry/analyser artifact.** The anomaly detector
+(`ppo_coordinator.py:619`) reads `head_X_entropy` = per-head entropy averaged over ALL steps; on the ~60% of steps where
+a head does not decide (single valid action) normalized entropy is EXACTLY 0, so `head_X_entropy = learnable_fraction ×
+conditional_entropy` — a decision-DENSITY proxy. Verified identity: `head_slot_entropy == head_slot_learnable_fraction
+= 0.0872` at birth (ratio 1.0000). The slot threshold (0.10) sits BELOW that diluted baseline from update 1, so the
+~411 anomalies are FALSE and structurally can never clear. Reconstructed DECISION-STEP slot entropy is HEALTHY:
+control 1.0→~0.70 (min 0.48), suppress 1.0→~0.60 (min 0.30) — never <0.1; op (undiluted) ~0.88. The entropy bonus is
+alive (`entropy_loss=0.0` is a hardcoded emitter STUB; the real term rides the `entropy` field 14.16→12.99); the floor
+is anti-collapse; cardinality + anneal ruled out; GATE-1 reproduces the identity → structural, run-independent.
+⇒ **the policy ran on a HEALTHY-EXPLORATION population. The "wrong population" block on the R1 causal read is
+RETRACTED.** (Caveat: healthy exploration ≠ fully-converged policy — the ordinary n=3→n=5/n=10 caveat stands.)
+
+**2. The fork discriminator is J (committed counterfactual gain per param), NOT accuracy.** On accuracy both arms tie
+(~+7.7pp) — which is exactly why "replaceable" kept oscillating. On acc-per-param they do NOT tie (R1 re-analysis,
+existing data, no GPU):
+
+| seed | control pp/Mparam | suppress pp/Mparam | Δ | control totParams | suppress totParams |
+|------|-------------------|--------------------|-----|-------------------|--------------------|
+| 41 | 19.96 | 7.34 | −12.6 | 411k | 1,126k |
+| 42 | 11.92 | 7.51 | −4.4 | 560k | 1,079k |
+| 43 | 16.34 | 9.30 | −7.0 | 438k | 830k |
+| median | | | **−7.0** | | |
+
+Suppressing r0c0 roughly HALVES system parameter-efficiency (same accuracy, ~2–2.7× the total params; cf/param
+0.008–0.011 → 0.004–0.005). **Dropping r0c0 makes the system LESS efficient — the OPPOSITE of a free-droppable
+freeloader.**
+
+**Corrected verdict (PILOT, n=3 — bank the METHOD, not yet the direction):**
+- "R1 was on a collapsed / wrong population" → FALSE, retracted.
+- The (a)/(b)/(c) fork's discriminator is **ΔJ / Δ(acc-per-param)**; the "+707k params for ~0 accuracy" gap is the SIGNAL.
+- At n=3 the pilot leans AWAY from (a) freeloader and TOWARD **(b) an efficiency-enabling stem the LOO reward
+  UNDERVALUES** — penalizing r0c0 would be the wrong fix; crediting its enabling/efficiency contribution is indicated.
+  NOT banked (n=3; design needs n=5 to begin causal evidence, n=10 floor; healthy-exploration ≠ converged).
+
+**Sequencing change:** "fix the collapse first, then re-run R1" is MOOTED — no collapse to fix. The telemetry read-path
+swap (wire `conditional_head_entropies` to the detector; fix the `entropy_loss` stub; emit conditional entropy; relabel
+the raw series a density proxy) is HYGIENE (so the analyser stops lying), shipped bit-identical-guarded. The next
+decision-relevant GPU step is the **n=5 J-read**, NOT a collapse-fix rerun.
