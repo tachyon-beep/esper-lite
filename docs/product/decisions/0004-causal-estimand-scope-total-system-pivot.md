@@ -1,6 +1,6 @@
 # PDR-0004 — Causal-run estimand scope: total-system pivot vs mechanistic-via-placebo
 
-Date: 2026-06-28   Status: **proposed** (owner sign-off pending — FLAGGED)   Author: Claude (agent)   Owner sign-off: NO — awaiting owner
+Date: 2026-06-28   Status: **accepted** (owner ratified total-system 2026-07-01)   Author: Claude (agent)   Owner sign-off: YES — ratified 2026-07-01
 Supersedes: —   Related: PDR-0003, docs/plans/concepts/2026-06-28-causal-contribution-run-design-v2.md (header: SUPERSEDE PENDING)
 
 ## Context
@@ -38,3 +38,18 @@ supersedes v1; **(2)** owner wants the mechanistic claim → commission the plac
 design as a Next bet and this PDR is `superseded` by that design's PDR. Until the owner
 rules, the causal read is reported as total-system with the mechanistic claim explicitly
 out of scope.
+
+## Owner ratification (2026-07-01)
+Owner chose **Option 1 — ratify total-system**; mechanistic path DEFERRED. Deciding rationale:
+(1) the J-reframe (PDR-0006) makes the total-system read produce a clean, decision-relevant
+signal (n=3 pilot: suppressing r0c0 ~halves system efficiency); (2) the read is **r0c0-specific**
+(SUPPRESS-SLOT targets r0c0), so it is "the system is less efficient without r0c0," not a weak
+"needs some structure" claim; (3) the reward-design goal (credit vs penalize r0c0-like stems, and
+how much) is answerable at the system level — credit r0c0's system counterfactual J; (4) the
+mechanistic path blocks on an unsolved placebo/DUMMY design (v1 review: cannot bound the
+action-space artifact) and per-pair synergy has not been shown necessary. The causal run's Goal-1
+is therefore **system-level dependence**; the mechanistic-enabling claim is out of scope.
+
+**Mechanistic revisit-trigger (deferred, not dead):** re-open only if the reward design turns out
+to need per-pair synergy credit, or a publication-grade mechanistic claim is wanted — and even
+then, a placebo/DUMMY-R0C0 design that bounds the action-space artifact must be solved first.

@@ -60,9 +60,8 @@ uv run python scripts/causal_contribution_j_analyze.py telemetry/causal_r1_n5 41
 1. Population is healthy **exploration** but a 200-ep policy — not fully converged. The read is
    on this regime; "the well-trained controller's verdict" is a later question.
 2. The earlier "collapse" was a MEASUREMENT artifact (PDR-0006); decision-step entropy is healthy.
-3. Estimand SCOPE (PDR-0004, owner-gated): the read is on the **total-system** estimand (system
-   efficiency without r0c0). What the run may ultimately CLAIM (system-level vs mechanistic)
-   awaits owner sign-off; the J-read proceeds under total-system either way.
+3. Estimand SCOPE: **RATIFIED total-system** (PDR-0004 accepted 2026-07-01). Goal-1 = r0c0-specific
+   system dependence; the mechanistic-enabling claim is out of scope (deferred). No placebo/DUMMY.
 
 ## Owner-gated
 - **Phase 1 GPU spend (~13h)** — explicit go.

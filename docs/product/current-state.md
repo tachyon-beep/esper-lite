@@ -22,8 +22,8 @@ system efficiency). Active work: the **n=5 J-read** (PDR-0007).
 
 ## Open questions / blocked-on-owner
 - **Phase 1 GPU go (~13h)** — the n=5 J-read's only blocker. *(blocked-on-owner)*
-- **PDR-0004 estimand SCOPE (proposed):** total-system vs placebo/DUMMY-R0C0 — what the run may
-  CLAIM. The J-read proceeds under total-system either way. *(blocked-on-owner)*
+- **PDR-0004 estimand SCOPE — RESOLVED 2026-07-01:** owner ratified **total-system** (the run
+  claims r0c0-specific system dependence; mechanistic/placebo DEFERRED). No longer blocking.
 - **metrics.md TARGET numbers** still `<owner-set>` placeholders. *(blocked-on-owner)*
 - **Advantage-pathology family** (PDR-0006 `does_not_fix`): op-conditioned Q, global adv-norm
   diluting sparse-head credit — queued next per advisor/ChatGPT review, after the J-read.
