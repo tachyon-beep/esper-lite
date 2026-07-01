@@ -12,8 +12,9 @@ system efficiency). Active work: the **n=5 J-read** (PDR-0007).
   the J analyzer (`scripts/causal_contribution_j_analyze.py` — all gates pass, reproduces the
   pilot, median Δeff −7.0); pre-registered the run sheet
   (`docs/plans/ready/2026-07-01-n5-j-read-run-sheet.md`).
-- **Phase 1 — GPU, OWNER GO PENDING (~13h).** Run seeds 44–45 × {control, suppress}, gpu_preload,
-  committed harness; ≤2 concurrent (1/card). Commands in the run sheet.
+- **Phase 1 — LAUNCHED 2026-07-01, IN FLIGHT (~13h).** Seeds 44–45 × {control (cuda:0, bg
+  bq3r29zsq), suppress (cuda:1, bg bmbp8eg0w)} → `telemetry/causal_r1_n5/`; harness-tracked,
+  notifies on completion.
 - **Phase 2/3 — analysis + record.** Gates + paired ΔJ/acc-per-param (seed-level CI) → apply the
   pre-registered decision rule (negative CI → (b); includes 0 → (c); positive → (a); wide → n=10);
   durable result doc + PDR. · tracker: esper-lite-8190ff1c95
@@ -36,7 +37,8 @@ system efficiency). Active work: the **n=5 J-read** (PDR-0007).
 - **Commissioned the n=5 J-read** (PDR-0007); Phase 0 done; created esper-lite-8190ff1c95.
 
 ## Next session, start here
-**Phase 1 of the n=5 J-read** (on owner go): run seeds 44–45 per the run sheet, then Phase 2
-(`uv run python scripts/causal_contribution_j_analyze.py telemetry/causal_r1_n5 41,42,43,44,45`)
-→ apply the decision rule. If no GPU go yet, settle PDR-0004 estimand scope and/or start the
-advantage-pathology queue in parallel.
+**Phase 2 of the n=5 J-read** when 44–45 land (control `bq3r29zsq` / suppress `bmbp8eg0w`):
+`uv run python scripts/causal_contribution_j_analyze.py telemetry/causal_r1_n5 41,42,43,44,45`
+→ apply the pre-registered decision rule (neg CI → (b); incl 0 → (c); pos → (a); wide → n=10).
+Parallel track available now: the advantage-pathology queue (PDR-0006 `does_not_fix`).
+PDR-0004 resolved (total-system).

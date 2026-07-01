@@ -1,6 +1,6 @@
 # Run sheet — n=5 J-read (causal contribution: r0c0 freeloader vs enabling stem)
 
-**Status:** PRE-REGISTERED · Phase 0 COMPLETE · Phase 1 (GPU) pending owner go · **Date:** 2026-07-01
+**Status:** PRE-REGISTERED · Phase 0 COMPLETE · **Phase 1 LAUNCHED 2026-07-01 (in flight, ~13h — control bg `bq3r29zsq` / suppress bg `bmbp8eg0w`)** · **Date:** 2026-07-01
 **Decision record:** PDR-0006 (J-reframe), PDR-0007 (commission n=5) · **Result doc:** TBD
 **Reviewed_by:** drl-expert (diagnosis workflow wrpmqysf6), advisor (J-reframe + sequencing)
 
