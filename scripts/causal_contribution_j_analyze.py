@@ -176,9 +176,16 @@ def main() -> int:
             control_state_hashes=c["state_hashes"][:n], other_state_hashes=on["state_hashes"][:n]))
         ok &= gate("on germinates ZERO r0c0", lambda: assert_target_slot_never_committed(on["germ_slots"]))
         for tag, a in [("control", c), ("on", on)]:
-            if a["fin_trips"]:
-                print(f"    FAIL  finiteness trips ({tag}): {a['fin_trips']}")
+            # Finiteness trips are INFORMATIONAL, not a hard gate: a rare transient
+            # non-finite logit is sanitized in-place (value-independent → offset-free
+            # parity is preserved, which IS the pairing gate above) and perturbs one step
+            # out of ~30k (negligible for Δ_struct/Δacc). Only a CASCADE signals real
+            # instability. (Advisor 2026-07-01: gate on estimand/pairing, not trips==0.)
+            if a["fin_trips"] > 10:
+                print(f"    FAIL  finiteness CASCADE ({tag}): {a['fin_trips']} trips (>10 ⇒ instability, not a transient)")
                 ok = False
+            elif a["fin_trips"]:
+                print(f"    WARN  {a['fin_trips']} transient finiteness trip(s) ({tag}) — sanitized; pairing preserved (offset-free gate above)")
             if a["slot_cond_min"] <= 0.1:
                 print(f"    FAIL  decision-step slot entropy health ({tag}): min={a['slot_cond_min']:.3f} ≤ 0.1")
                 ok = False

@@ -205,6 +205,14 @@ def _masked_op_probs_for_telemetry(
     op_min_prob = None
     if probability_floor is not None and "op" in probability_floor:
         op_min_prob = probability_floor["op"]
+    # A rare transient non-finite op-logit (BF16 rollout artifact) must not crash this
+    # telemetry readout (MaskedCategorical._validate_logits hard-raises on non-finite).
+    # Sanitize non-finite entries to 0 (→ masked-uniform for that row); byte-identical when
+    # all finite (the guard is skipped). Training is unaffected (telemetry-only) and the
+    # real non-finite still trips the PPO update finiteness gate — the signal is recorded,
+    # not swallowed.
+    if not torch.isfinite(op_logits).all():
+        op_logits = torch.nan_to_num(op_logits, nan=0.0, posinf=0.0, neginf=0.0)
     return MaskedCategorical(op_logits, op_mask, min_prob=op_min_prob).probs
 
 
