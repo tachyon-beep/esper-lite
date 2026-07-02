@@ -161,6 +161,20 @@ class TrainingConfig:
     shaped_attribution_clip: float = 0.0
     attribution_unit_normalize: bool = False
 
+    # === Committed-Shapley synergy top-up (experiment, default OFF) ===
+    # PDR-0010/0012; plan docs/plans/ready/2026-07-02-committed-shapley-topup-build.md.
+    # scale=0.0 => the ENTIRE terminal 2^k apparatus is skipped (byte-identical
+    # status quo). Enablement is a separate owner-gated decision; these stay 0.0
+    # in every shipped config. Units: noise_floor (tau) and cap are accuracy
+    # PERCENTAGE POINTS; std_floor is raw-reward units (a floor on the
+    # divide_by_std divisor); normalized_cap is buffer units (the PRIMARY bound
+    # on the retro-written credit). scale>0 REQUIRES cap>0 and normalized_cap>0.
+    shapley_synergy_scale: float = 0.0
+    shapley_synergy_noise_floor: float = 0.0
+    shapley_synergy_cap: float = 0.0
+    shapley_synergy_std_floor: float = 0.0
+    shapley_synergy_normalized_cap: float = 0.0
+
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
     improvement_threshold: float = 2.0
@@ -409,6 +423,11 @@ class TrainingConfig:
             "sparse_reward_scale": self.sparse_reward_scale,
             "shaped_attribution_clip": self.shaped_attribution_clip,
             "attribution_unit_normalize": self.attribution_unit_normalize,
+            "shapley_synergy_scale": self.shapley_synergy_scale,
+            "shapley_synergy_noise_floor": self.shapley_synergy_noise_floor,
+            "shapley_synergy_cap": self.shapley_synergy_cap,
+            "shapley_synergy_std_floor": self.shapley_synergy_std_floor,
+            "shapley_synergy_normalized_cap": self.shapley_synergy_normalized_cap,
             "rent_host_params_floor": self.rent_host_params_floor,
             "basic_acc_delta_weight": self.basic_acc_delta_weight,
             "plateau_threshold": self.plateau_threshold,
@@ -468,6 +487,26 @@ class TrainingConfig:
             raise ValueError("entropy_anneal_episodes cannot be negative")
         if self.value_warmup_batches < 0:
             raise ValueError("value_warmup_batches cannot be negative")
+
+        for name in (
+            "shapley_synergy_scale",
+            "shapley_synergy_noise_floor",
+            "shapley_synergy_cap",
+            "shapley_synergy_std_floor",
+            "shapley_synergy_normalized_cap",
+        ):
+            if getattr(self, name) < 0.0:
+                raise ValueError(f"{name} must be >= 0 (got {getattr(self, name)})")
+        if self.shapley_synergy_scale > 0.0 and self.hra_value_decomposition:
+            # A retro-written credit lands only in the total/main reward stream;
+            # CF-stream routing under HRA is undefined (GATE 2 probe asserted
+            # HRA-off). TODO: [FUTURE FUNCTIONALITY] - define committed-Shapley
+            # credit routing across HRA reward streams before allowing both.
+            raise ValueError(
+                "shapley_synergy_scale > 0 is not supported with "
+                "hra_value_decomposition: the retro-written credit has no "
+                "defined CF-stream routing"
+            )
 
         if self.max_seeds is not None and self.max_seeds < 1:
             raise ValueError("max_seeds must be >= 1 when provided")

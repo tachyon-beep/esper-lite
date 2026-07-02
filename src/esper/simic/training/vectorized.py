@@ -746,6 +746,13 @@ def train_ppo_vectorized(
     # See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5.
     shaped_attribution_clip: float = 0.0,
     attribution_unit_normalize: bool = False,
+    # Committed-Shapley synergy top-up (default OFF => status quo; PDR-0012).
+    # Plan: docs/plans/ready/2026-07-02-committed-shapley-topup-build.md.
+    shapley_synergy_scale: float = 0.0,
+    shapley_synergy_noise_floor: float = 0.0,
+    shapley_synergy_cap: float = 0.0,
+    shapley_synergy_std_floor: float = 0.0,
+    shapley_synergy_normalized_cap: float = 0.0,
     reward_family: str = "contribution",
     permissive_gates: bool = True,
     auto_forward_g1: bool = False,
@@ -964,6 +971,14 @@ def train_ppo_vectorized(
         raise ValueError(
             f"rent_host_params_floor must be >= 1 (got {rent_host_params_floor})"
         )
+    if shapley_synergy_scale > 0.0 and hra_value_decomposition:
+        # Mirrors TrainingConfig._validate for direct callers: the retro-written
+        # credit has no defined CF-stream routing under HRA (GATE 2 probe
+        # asserted HRA-off). TODO: [FUTURE FUNCTIONALITY] - define committed-
+        # Shapley credit routing across HRA reward streams before allowing both.
+        raise ValueError(
+            "shapley_synergy_scale > 0 is not supported with hra_value_decomposition"
+        )
 
     reward_config = ContributionRewardConfig(
         reward_mode=reward_mode_enum,
@@ -974,6 +989,11 @@ def train_ppo_vectorized(
         basic_acc_delta_weight=basic_acc_delta_weight,
         shaped_attribution_clip=shaped_attribution_clip,
         attribution_unit_normalize=attribution_unit_normalize,
+        shapley_synergy_scale=shapley_synergy_scale,
+        shapley_synergy_noise_floor=shapley_synergy_noise_floor,
+        shapley_synergy_cap=shapley_synergy_cap,
+        shapley_synergy_std_floor=shapley_synergy_std_floor,
+        shapley_synergy_normalized_cap=shapley_synergy_normalized_cap,
         disable_pbrs=disable_pbrs,
         disable_terminal_reward=disable_terminal_reward,
         disable_anti_gaming=disable_anti_gaming,

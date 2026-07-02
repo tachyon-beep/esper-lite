@@ -241,3 +241,35 @@ class TestRewardNormalizer:
             rewards = [0.0] * 24 + [0.7 + 0.02 * ep]
             normalized = [normalizer.update_and_normalize(r) for r in rewards]
             assert all(math.isfinite(n) for n in normalized)
+
+
+class TestRewardNormalizerCurrentStd:
+    """Committed-Shapley build (WI-4/WI-5): the delivery seam needs the running
+    std EXPOSED so the credit divisor can be floored (max(std, std_floor)) —
+    divide_by_std cannot express the F2 bound (it floors at epsilon only)."""
+
+    def test_current_std_matches_divide_by_std_divisor(self):
+        from esper.simic.control import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=10.0)
+        for s in [2.0, 4.0, 6.0, 8.0]:
+            normalizer.update_and_normalize(s)
+
+        std = normalizer.current_std()
+        assert std is not None
+        # Same divisor divide_by_std uses (epsilon-floored sample std).
+        assert normalizer.divide_by_std(5.0) == 5.0 / std
+        # Read-only: no stat update.
+        count_before = normalizer.count
+        normalizer.current_std()
+        assert normalizer.count == count_before
+
+    def test_current_std_is_none_below_two_samples(self):
+        from esper.simic.control import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=10.0)
+        assert normalizer.current_std() is None
+        normalizer.update_and_normalize(1.0)
+        assert normalizer.current_std() is None
+        normalizer.update_and_normalize(2.0)
+        assert normalizer.current_std() is not None

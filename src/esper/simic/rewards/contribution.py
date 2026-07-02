@@ -327,6 +327,23 @@ class ContributionRewardConfig:
     #   dimensional consistency. False = OFF.
     attribution_unit_normalize: bool = False
 
+    # === Committed-Shapley synergy top-up (experiment, default OFF) ===
+    # PDR-0010/0012; plan docs/plans/ready/2026-07-02-committed-shapley-topup-build.md.
+    # A terminal-only, additive credit over the FOSSILIZED coalition, delivered
+    # by retro-write into the rollout buffer at each seed's FOSSILIZE step
+    # (pre-GAE) — NOT a per-step additend of this reward function. scale=0.0
+    # skips the entire 2^k apparatus (byte-identical status quo). When scale>0
+    # the two sibling synergy channels (interaction bonus; hindsight credit)
+    # are structurally disabled — the top-up replaces them (double-pay guard).
+    # Units: noise_floor (tau) and cap are accuracy PERCENTAGE POINTS;
+    # std_floor is raw-reward units (floor on the divide_by_std divisor);
+    # normalized_cap is buffer units (the PRIMARY bound on the written credit).
+    shapley_synergy_scale: float = 0.0
+    shapley_synergy_noise_floor: float = 0.0
+    shapley_synergy_cap: float = 0.0
+    shapley_synergy_std_floor: float = 0.0
+    shapley_synergy_normalized_cap: float = 0.0
+
     # === Drip Reward Configuration (BASIC_PLUS mode) ===
     # Post-fossilization accountability: drip reward paid over remaining epochs
     # based on continued seed contribution. DRL Expert review 2026-01-12.
@@ -361,6 +378,32 @@ class ContributionRewardConfig:
             raise ValueError("min_drip_epochs must be >= 1")
         if self.negative_drip_ratio < 0 or self.negative_drip_ratio > 1.0:
             raise ValueError("negative_drip_ratio must be in [0.0, 1.0]")
+
+        for name in (
+            "shapley_synergy_scale",
+            "shapley_synergy_noise_floor",
+            "shapley_synergy_cap",
+            "shapley_synergy_std_floor",
+            "shapley_synergy_normalized_cap",
+        ):
+            if getattr(self, name) < 0.0:
+                raise ValueError(f"{name} must be >= 0 (got {getattr(self, name)})")
+        if self.shapley_synergy_scale > 0.0:
+            # F2 (reviewer): the credit bound must be structurally ON whenever
+            # the term can pay. cap bounds raw(s) in pp; normalized_cap bounds
+            # the retro-written credit in buffer units (the PRIMARY bound,
+            # since divide_by_std is the one unclipped reward channel).
+            if self.shapley_synergy_cap <= 0.0:
+                raise ValueError(
+                    "shapley_synergy_scale > 0 requires shapley_synergy_cap > 0 "
+                    "(a zero per-seed cap pays nothing; a missing cap is unbounded)"
+                )
+            if self.shapley_synergy_normalized_cap <= 0.0:
+                raise ValueError(
+                    "shapley_synergy_scale > 0 requires "
+                    "shapley_synergy_normalized_cap > 0 (the normalized-space "
+                    "bound on the retro-written credit must be ON)"
+                )
 
     @staticmethod
     def default() -> "ContributionRewardConfig":

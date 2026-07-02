@@ -256,6 +256,19 @@ class RewardNormalizer:
         std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
         return float(reward / std)
 
+    def current_std(self) -> float | None:
+        """The running std ``divide_by_std`` would divide by, or None below 2 samples.
+
+        Committed-Shapley delivery (WI-4) needs the divisor exposed so the F2
+        safety floor can be applied as ``max(current_std(), std_floor)`` —
+        ``divide_by_std`` itself floors at epsilon only and silently passes the
+        raw value through below 2 samples, so it cannot express the bound.
+        Read-only: no stat update.
+        """
+        if self.count < 2:
+            return None
+        return float(max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5))
+
     def state_dict(self) -> dict[str, float | int]:
         """Return state dictionary for checkpointing."""
         return {
