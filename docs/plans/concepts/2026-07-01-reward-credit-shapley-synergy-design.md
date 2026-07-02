@@ -1,5 +1,15 @@
 # Reward-credit design — Committed-Shapley synergy top-up (DRAFT)
 
+**BUILD COMPLETE 2026-07-02 (owner-signed, default-OFF):** implemented per
+`docs/plans/completed/2026-07-02-committed-shapley-topup-build.md` (drl+pytorch plan reviews,
+reward-function-reviewer re-pass APPROVE_WITH_CHANGES with its one change closed, adversarial code
+review CLEAN). **Semantic amendment to §mechanism:** the build's `c_paid(s) = v({s}) − v(∅)` from the
+TERMINAL 2^k family (reviewer F4/F6) REPLACES the line below defining c_paid as the fossilize-time
+`seed_contribution` snapshot — c_paid is now the standalone/synergy split, not "what the dense channel
+already paid"; the double-pay guard is null-player + tau + cap + G-clamp + sibling mutual exclusion
+(interaction bonus + hindsight credit are structurally disabled when scale > 0). Flag stays
+`shapley_synergy_scale=0.0`; enablement criteria unchanged (separate later gate).
+
 **Status:** CANDIDATE · default-OFF · **GATE 1 PASSED 2026-07-02** · **GATE 2 (learnability) PASSED 2026-07-02 —
 retro-write delivery MANDATED, terminal-flush FAILED** (result: `docs/analysis/2026-07-02-gate2-learnability-result.md`;
 NOTE: the "deferred scaffold-credit rail" routing below is WRONG as written — pending_hindsight_credit flushes

@@ -4,7 +4,7 @@
 # Plan Metadata
 id: committed-shapley-topup-build
 title: Committed-Shapley synergy top-up — default-OFF build (retro-write delivery)
-type: in-progress
+type: completed
 created: 2026-07-02
 updated: 2026-07-02
 owner: Claude (product-owner session; owner build sign-off received 2026-07-02)
@@ -30,9 +30,15 @@ blocks:
   - reward-credit-enablement-gate   # tau/PIN-E placebo, off-switch-J hard gate, entrenchment monitor
 
 status_notes: >
-  Reviewed 2026-07-02 (both approved-with-changes; findings folded into WI text below —
-  the reconciled WI text is authoritative). Implementation started same day.
-percent_complete: 5
+  COMPLETED 2026-07-02, same day: all 12 WIs implemented across commits a479d776..2d7e0db5
+  (plan 7ec67de7). Verification: tests/simic+leyline 1718 passed / kasmina 641 / karn 763
+  (sole failures = pre-existing Phase 0 seed_residency cluster, esper-lite-obs-7240279be3);
+  reward-function-reviewer re-pass APPROVE_WITH_CHANGES (its one MEDIUM — nonzero-credit
+  e2e — closed at 2d7e0db5); adversarial code review CLEAN (8/8 hazard areas). Residuals
+  handed to the enablement gate: terminal-vs-t_f std drift on the credit divisor; cuDNN
+  batch-shape perturbation of terminal val_acc at scale>0; normalized_cap upper-bound
+  calibration; env_reward_configs homogeneity documented as invariant.
+percent_complete: 100
 
 reviewed_by:
   - reviewer: pytorch-expert
