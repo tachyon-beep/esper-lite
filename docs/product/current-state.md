@@ -1,44 +1,41 @@
-# Current State — Esper        Checkpoint: 2026-07-01 (checkpoint #3 — measurement-artifact reversal + J-reframe; n=5 J-read pre-registered)
+# Current State — Esper        Checkpoint: 2026-07-02 (checkpoint #4 — n=5 banks (b); reward-credit design gated)
 
 ## The bet right now
-**Reward credit-assignment redesign — causal resolution of the (a)/(b) fork, measured on J
-(acc-per-param), not accuracy.** Cheap-rescale closed (GATE −1 SURVIVE); harness built + validated
-+ committed. The "entropy collapse" was a **MEASUREMENT ARTIFACT** (PDR-0006) — policy healthy, no
-training fix. n=3 pilot leans **(b)**: r0c0 is an efficiency-enabling stem (suppressing it ~halves
-system efficiency). Active work: the **n=5 J-read** (PDR-0007).
+**Reward credit-assignment redesign — design the credit term for the enabling stem.** The (a)/(b) fork is RESOLVED:
+the n=5 J-read banks **(b)** — r0c0 is an efficiency-enabling stem (suppressing it ~halves system param-efficiency, 5/5
+seeds; PDR-0009), and the optimizer is adequate so the defect is reward-side (PDR-0008). The reward must CREDIT the
+enabling contribution the per-step LOO undervalues. Metric it moves: committed-J / corr(reward,J) once the term is A/B'd.
 
-## In flight — the n=5 J-read (three phases)
-- **Phase 0 — DONE.** Preserved 41–43 telemetry (`telemetry/causal_r1_n5/`); promoted + validated
-  the J analyzer (`scripts/causal_contribution_j_analyze.py` — all gates pass, reproduces the
-  pilot, median Δeff −7.0); pre-registered the run sheet
-  (`docs/plans/ready/2026-07-01-n5-j-read-run-sheet.md`).
-- **Phase 1 — LAUNCHED 2026-07-01, IN FLIGHT (~13h).** Seeds 44–45 × {control (cuda:0, bg
-  bq3r29zsq), suppress (cuda:1, bg bmbp8eg0w)} → `telemetry/causal_r1_n5/`; harness-tracked,
-  notifies on completion.
-- **Phase 2/3 — analysis + record.** Gates + paired ΔJ/acc-per-param (seed-level CI) → apply the
-  pre-registered decision rule (negative CI → (b); includes 0 → (c); positive → (a); wide → n=10);
-  durable result doc + PDR. · tracker: esper-lite-8190ff1c95
-- **Telemetry hygiene** (esper-lite-425dcc4ca2): detector read-path fix LANDED (a84f9a78);
-  observability emit (relabel raw → density, emit conditional) is the open follow-up.
+## In flight
+- **Reward-credit term** — a default-OFF Committed-Shapley synergy top-up (PDR-0010, surviving candidate; design
+  `docs/plans/concepts/2026-07-01-reward-credit-shapley-synergy-design.md`). GATE 1 (proxy-vs-estimand) PASSED (r0c0
+  terminally load-bearing, not scaffolding); mirror reassuring (terminal-drop selective) but entrenchment is a monitored
+  gate. **Next concrete step: GATE 2 — learnability probe** (can a once-per-episode terminal credit propagate to the
+  FOSSILIZE action?). · tracker: esper-lite-254175df90
+- **Telemetry hygiene** (esper-lite-425dcc4ca2): detector read-path fix LANDED (a84f9a78); observability-emit follow-up
+  (relabel raw → density, emit conditional) still open. Also LANDED: the seed-44 telemetry crash fix (db61dc3a).
 
 ## Open questions / blocked-on-owner
-- **Phase 1 GPU go (~13h)** — the n=5 J-read's only blocker. *(blocked-on-owner)*
-- **PDR-0004 estimand SCOPE — RESOLVED 2026-07-01:** owner ratified **total-system** (the run
-  claims r0c0-specific system dependence; mechanistic/placebo DEFERRED). No longer blocking.
-- **metrics.md TARGET numbers** still `<owner-set>` placeholders. *(blocked-on-owner)*
-- **Advantage-pathology family** (PDR-0006 `does_not_fix`): op-conditioned Q, global adv-norm
-  diluting sparse-head credit — queued next per advisor/ChatGPT review, after the J-read.
+- **n=10 vs bank-at-n=5 (MAGNITUDE):** (b) direction is banked (5/5, sign-test p≈0.03); the "CI" is a sign test, not a
+  CI. Extending to n=10 (the morphogenesis floor) is the only way to bank the effect *size*. **Owner's call.**
+- **Reward-term ENABLEMENT is gated:** the Shapley top-up stays default-OFF (shapley_synergy_scale=0.0). Enabling it
+  (a reward-behavior change) needs GATE 2 pass + reward-function-reviewer + **owner sign-off** — do NOT enable
+  autonomously. *(blocked-on-owner)*
+- **metrics.md TARGET numbers** still `<owner-set>` placeholders (committed-J north-star, guardrail floors).
+- Verify before wiring the term: which signal `fossilize_contribution_scale` multiplies (SEED_FOSSILIZED.counterfactual
+  reads ~10 for r0c0 = joint, not the ~0 per-seed LOO the "undervalued" premise is about).
 
-## Last checkpoint did (checkpoint #3)
-- **Reversed the entropy-collapse premise:** diagnose-first ultracode workflow + verification →
-  MEASUREMENT ARTIFACT, not training collapse (PDR-0006 supersedes PDR-0005); policy is healthy.
-- **Reframed the fork discriminator to J / acc-per-param** (not accuracy); n=3 pilot leans (b).
-- **Shipped the telemetry read-path fix** (a84f9a78; 435 tests green; PPO bit-identical).
-- **Commissioned the n=5 J-read** (PDR-0007); Phase 0 done; created esper-lite-8190ff1c95.
+## Last checkpoint did (checkpoint #4)
+- **n=5 J-read → (b) banked** at total-system scope (PDR-0009; all 10 runs, 5/5 negative Δeff, gates pass); closed
+  esper-lite-8190ff1c95.
+- **Advantage-pathology track CLOSED** — optimizer adequate, defect reward-side (PDR-0008), confirming the redesign
+  targets the right layer.
+- **Reward-credit design** — Committed-Shapley top-up is the surviving candidate (PDR-0010); GATE 1 + mirror run on the
+  n=5 data; created esper-lite-254175df90.
+- Fixed the seed-44 telemetry crash (db61dc3a; a diagnostic must not crash training) — n=5 completed clean.
 
 ## Next session, start here
-**Phase 2 of the n=5 J-read** when 44–45 land (control `bq3r29zsq` / suppress `bmbp8eg0w`):
-`uv run python scripts/causal_contribution_j_analyze.py telemetry/causal_r1_n5 41,42,43,44,45`
-→ apply the pre-registered decision rule (neg CI → (b); incl 0 → (c); pos → (a); wide → n=10).
-Parallel track available now: the advantage-pathology queue (PDR-0006 `does_not_fix`).
-PDR-0004 resolved (total-system).
+**GATE 2 — the reward-credit learnability probe** (esper-lite-254175df90): does a synthetic once-per-episode terminal
+top-up on a FOSSILIZE action measurably move that action's advantage in this recurrent PPO? Cheap, no GPU dependency,
+and it decides whether candidate A can even propagate before anyone builds the Shapley apparatus. If it fails → pivot to
+candidate B (temporal/hindsight credit). In parallel, the owner's two calls above (n=10; enablement sign-off).
