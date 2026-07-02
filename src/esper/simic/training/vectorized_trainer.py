@@ -1815,7 +1815,14 @@ class VectorizedPPOTrainer:
                             f"gpu_preload={self.gpu_preload_augment}"
                         )
 
-                collect_gradients = self.use_telemetry and (
+                # Gradient stats are CONTROL-PATH state, not observability:
+                # they feed the G2 blending gate (seed_gradient_norm_ratio EMA
+                # + gradient health; KTS-001 denies unmeasured seeds). Coupling
+                # collection to use_telemetry silently disabled ALL blending/
+                # fossilization in telemetry-off runs (esper-lite-4fe98055f7).
+                # The stride caps measurement cost; telemetry EMISSION stays
+                # gated by use_telemetry downstream.
+                collect_gradients = (
                     batch_step % self.gradient_telemetry_stride == 0
                 )
                 loss_tensor, correct_tensor, total, grad_stats = (
@@ -1824,7 +1831,7 @@ class VectorizedPPOTrainer:
                         inputs,
                         targets,
                         criterion,
-                        use_telemetry=collect_gradients,
+                        collect_gradients=collect_gradients,
                         slots=self.slots,
                         max_grad_norm=self.max_grad_norm,
                         task_spec=self.task_spec,
@@ -1974,10 +1981,12 @@ class VectorizedPPOTrainer:
                     continue
                 slot_state.metrics.record_accuracy(val_acc)
 
-            # Sync gradient telemetry after record_accuracy so telemetry reflects this epoch's metrics.
+            # Sync gradient stats into seed state after record_accuracy so they
+            # reflect this epoch's metrics. This is gate input (G2/KTS-001), so
+            # it runs regardless of use_telemetry (esper-lite-4fe98055f7).
             grad_stats_for_env = env_grad_stats[env_idx]
             synced_slot_ids: set[str] = set()
-            if use_telemetry and grad_stats_for_env is not None:
+            if grad_stats_for_env is not None:
                 for slot_id, async_stats in grad_stats_for_env.items():
                     if not model.has_active_seed_in_slot(slot_id):
                         continue

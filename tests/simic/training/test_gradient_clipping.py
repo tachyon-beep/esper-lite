@@ -165,7 +165,7 @@ class TestGradientClippingAMPOrdering:
             inputs,
             targets,
             criterion,
-            use_telemetry=True,
+            collect_gradients=True,
             slots=["r0c1"],
             max_grad_norm=max_grad_norm,
             task_spec=_TaskSpec(),
