@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-02 (PDR-0008, PDR-0009, PDR-0010)
+# Roadmap — Esper            Updated: 2026-07-02 (PDR-0011, PDR-0012)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -10,11 +10,14 @@
   (suppressing it ~halves system param-efficiency, 5/5 seeds, PDR-0009), and the optimizer is
   adequate so the defect is reward-side (PDR-0008). ⇒ the reward must CREDIT the enabling
   contribution the per-step LOO undervalues. Active work: the **reward-credit term** — a default-OFF
-  Committed-Shapley synergy top-up (PDR-0010, surviving candidate; GATE 1 passed — r0c0 is terminally
-  load-bearing, not scaffolding). Next concrete step: **GATE 2 (learnability probe)** — can a terminal
-  credit propagate to the FOSSILIZE action? — then reward-function-reviewer + owner sign-off before
-  ANY enablement (flag stays default-OFF). · tracker: esper-lite-254175df90 (reward-credit term),
-  esper-lite-425dcc4ca2 (telemetry hygiene) · metric: committed-J / corr(reward,J) once A/B'd
+  Committed-Shapley synergy top-up (PDR-0010, surviving candidate). **All non-owner gates PASSED
+  (2026-07-02):** GATE 1 (proxy-vs-estimand), **GATE 2 (learnability, PDR-0011 — retro-write delivery
+  MANDATED, terminal-flush dead; verdict transfers to candidate B)**, signal verification, and
+  reward-function-reviewer (**APPROVE_WITH_CHANGES**, 5 build-conditioning changes). **Next concrete
+  step: OWNER SIGN-OFF to start the default-OFF build (PDR-0012, proposed)** — flag stays
+  shapley_synergy_scale=0.0 throughout; enablement is a separate later gate (tau/placebo + hard
+  efficiency gate). · tracker: esper-lite-254175df90 (reward-credit term), esper-lite-425dcc4ca2
+  (telemetry hygiene) · metric: committed-J / corr(reward,J) once A/B'd
 
 ## Next (shaped, decreasing certainty)
 - **Credit-assignment redesign itself** — a two-term targeted credit (enabling/synergy
