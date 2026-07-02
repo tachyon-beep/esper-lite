@@ -49,6 +49,10 @@ class HandlerContext:
     epoch: int
     max_epochs: int
     episodes_completed: int
+    # Committed-Shapley top-up scale (PDR-0012). When > 0 the fossilize
+    # handler does NOT accrue hindsight credit — the terminal top-up replaces
+    # that sibling channel (F1/F8 mutual exclusion).
+    shapley_synergy_scale: float = 0.0
 
 
 @dataclass(slots=True)

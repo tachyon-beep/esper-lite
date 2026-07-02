@@ -779,8 +779,16 @@ def compute_contribution_reward(
     if components:
         components.pbrs_bonus = pbrs_bonus
 
+    # F1/F8 mutual exclusion (PDR-0012): when the Committed-Shapley top-up is
+    # on it REPLACES the interaction-driven synergy channel — paying both
+    # would double-credit the same coalition effect.
     synergy_bonus = 0.0
-    if seed_info is not None and attribution_discount >= 0.5 and bounded_attribution > 0:
+    if (
+        config.shapley_synergy_scale == 0.0
+        and seed_info is not None
+        and attribution_discount >= 0.5
+        and bounded_attribution > 0
+    ):
         synergy_bonus = _compute_synergy_bonus(
             seed_info.interaction_sum,
         )

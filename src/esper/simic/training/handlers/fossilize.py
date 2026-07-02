@@ -211,11 +211,19 @@ def execute_fossilize(
     # Clean up germination tracking
     ctx.env_state.acc_at_germination.pop(ctx.slot_id, None)
 
-    # Compute hindsight credit for scaffolds
-    hindsight = compute_hindsight_credit_for_beneficiary(ctx, total_improvement)
-
-    if hindsight.total_credit > 0:
-        ctx.env_state.pending_hindsight_credit += hindsight.total_credit
+    # Compute hindsight credit for scaffolds. F1/F8 mutual exclusion
+    # (PDR-0012): when the Committed-Shapley top-up is on it REPLACES this
+    # retroactive scaffold-credit channel — accruing both would double-pay
+    # the same enabling contribution. The zero result keeps the telemetry
+    # honest: no credit was computed or accrued.
+    if ctx.shapley_synergy_scale == 0.0:
+        hindsight = compute_hindsight_credit_for_beneficiary(ctx, total_improvement)
+        if hindsight.total_credit > 0:
+            ctx.env_state.pending_hindsight_credit += hindsight.total_credit
+    else:
+        hindsight = HindsightCreditResult(
+            total_credit=0.0, scaffold_count=0, total_delay=0.0
+        )
 
     # Clear beneficiary from all scaffold ledgers
     clear_beneficiary_from_ledger(ctx)

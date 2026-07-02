@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from contextlib import AbstractContextManager, nullcontext
+from itertools import combinations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, cast
 
@@ -52,6 +53,11 @@ from esper.simic.telemetry import (
 from esper.simic.telemetry.phase_profiler import NullProfiler, PhaseProfiler
 from esper.simic.telemetry.emitters import check_performance_degradation
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
+from esper.simic.rewards.committed_shapley import (
+    MAX_EXACT_COALITION_SLOTS,
+    CommittedShapleyEnvCredits,
+    compute_committed_shapley_topup,
+)
 from esper.simic.rewards.residency import (
     SlotResidencySample,
     accumulate_residency_for_env,
@@ -766,6 +772,12 @@ class VectorizedPPOTrainer:
     # the pinned constant per-step delta (RuntimeError on deviation).
     _prev_controller_draw_count: int | None = field(init=False, default=None)
     _controller_stride_delta: int | None = field(init=False, default=None)
+    # Committed-Shapley top-up (PDR-0012): terminal credits computed by the
+    # fused val pass, consumed (and cleared) by _run_batch's run_update call.
+    # Always empty at shapley_synergy_scale == 0.
+    _pending_committed_shapley: list[CommittedShapleyEnvCredits] = field(
+        init=False, default_factory=list
+    )
 
     def __post_init__(self) -> None:
         # Ada sm_89 TF32: ~2x FP32 matmul/conv on tensor cores at ~1e-3 rel error.
@@ -1132,6 +1144,64 @@ class VectorizedPPOTrainer:
                     shapley_cfg["_tuple"] = config_tuple
                     configs.append(shapley_cfg)
 
+            # Committed-Shapley top-up (PDR-0012): the 2^k coalition family
+            # over the FOSSILIZED set at the terminal epoch. Gated ONLY on the
+            # flag — never on use_telemetry or the counterfactual helper (bug
+            # esper-lite-4fe98055f7 posture). v(S): coalition members keep
+            # natural alpha; fossilized non-members AND all non-fossilized
+            # active slots are masked 0.0 (v(empty) = host only).
+            if (
+                self.reward_config.shapley_synergy_scale > 0.0
+                and epoch == max_epochs
+            ):
+                committed_slot_list: list[str] = []
+                for sid in slots:
+                    if not model.has_active_seed_in_slot(sid):
+                        continue
+                    slot_c = cast(SeedSlotProtocol, model.seed_slots[sid])
+                    if slot_c.state is None:
+                        continue
+                    if slot_c.state.stage == SeedStage.FOSSILIZED:
+                        if slot_c.state.alpha_algorithm == AlphaAlgorithm.GATE:
+                            # The fused pass materializes alpha_schedule for
+                            # GATE slots appearing as config keys and does not
+                            # restore it; a GATE fossilized slot would extend
+                            # that hazard silently (plan review, pytorch F3).
+                            raise ValueError(
+                                f"committed-Shapley over a GATE-algorithm "
+                                f"fossilized slot {sid} is not supported"
+                            )
+                        committed_slot_list.append(sid)
+                if committed_slot_list:
+                    if self.reward_config.drip_fraction > 0.0:
+                        # BASIC_PLUS puts fossilized slots back into
+                        # active_slot_list (solo/committed overlap); the
+                        # coalition family is not defined for that regime
+                        # (plan review, pytorch F4).
+                        raise ValueError(
+                            "shapley_synergy_scale > 0 requires "
+                            "drip_fraction == 0"
+                        )
+                    if len(committed_slot_list) > MAX_EXACT_COALITION_SLOTS:
+                        raise ValueError(
+                            f"committed-Shapley is exact-factorial only "
+                            f"(k <= {MAX_EXACT_COALITION_SLOTS}); got "
+                            f"k={len(committed_slot_list)}"
+                        )
+                    committed_set = tuple(sorted(committed_slot_list))
+                    for r in range(len(committed_set) + 1):
+                        for combo in combinations(committed_set, r):
+                            cs_cfg: dict[str, Any] = {
+                                sid: 0.0 for sid in active_slot_list
+                            }
+                            for sid in committed_set:
+                                if sid not in combo:
+                                    cs_cfg[sid] = 0.0
+                            cs_cfg["_kind"] = "committed_shapley"
+                            cs_cfg["_subset"] = frozenset(combo)
+                            cs_cfg["_committed_set"] = committed_set
+                            configs.append(cs_cfg)
+
             env_configs.append(configs)
 
         # baseline_accs[env_idx][slot_id] = accuracy with that slot's seed disabled
@@ -1453,6 +1523,10 @@ class VectorizedPPOTrainer:
 
         # Process results for each config
         val_corrects = [0] * envs_this_batch
+        # Committed-Shapley (PDR-0012): per-env 2^k coalition accs + coalition
+        # set, filled by the "committed_shapley" unpack branch at terminal.
+        committed_shapley_accs: dict[int, dict[frozenset[str], float]] = {}
+        committed_shapley_sets: dict[int, tuple[str, ...]] = {}
 
         for i, env_state in enumerate(env_states):
             correct_counts = env_cfg_correct_accums_cpu[i].tolist()
@@ -1520,6 +1594,16 @@ class VectorizedPPOTrainer:
                     shapley_results[i][shapley_tuple] = (0.0, acc)
                 elif kind == "committed":
                     env_state.committed_val_acc = acc
+                elif kind == "committed_shapley":
+                    if i not in committed_shapley_accs:
+                        committed_shapley_accs[i] = {}
+                        committed_shapley_sets[i] = cfg["_committed_set"]
+                    committed_shapley_accs[i][cfg["_subset"]] = acc
+                else:
+                    # Fail loud (plan review, pytorch F2): a forgotten branch
+                    # would silently leave a coalition acc unpopulated and
+                    # corrupt phi downstream.
+                    raise ValueError(f"Unknown fused-val config kind: {kind!r}")
 
             env_state.committed_acc_history.append(
                 env_state.committed_val_acc
@@ -1662,6 +1746,38 @@ class VectorizedPPOTrainer:
                     self.logger.warning(
                         f"Shapley computation failed for env {i}: {e}"
                     )
+
+        # Committed-Shapley top-up (PDR-0012): fold the terminal 2^k coalition
+        # accs into per-env credits for the coordinator's pre-GAE retro-write.
+        # Only populated at epoch == max_epochs with scale > 0 (the unpack
+        # branch is the sole writer of committed_shapley_accs). t_f comes from
+        # the execution-time records — a fossilized slot without a record is a
+        # bug, not a skippable case.
+        for i, coalition_accs in committed_shapley_accs.items():
+            env_state = env_states[i]
+            committed_set = committed_shapley_sets[i]
+            topup_result = compute_committed_shapley_topup(
+                coalition_accs,
+                committed_set,
+                scale=self.reward_config.shapley_synergy_scale,
+                cap=self.reward_config.shapley_synergy_cap,
+                tau=self.reward_config.shapley_synergy_noise_floor,
+            )
+            t_f_by_slot = dict(env_state.fossilize_step_records)
+            missing = [s for s in committed_set if s not in t_f_by_slot]
+            if missing:
+                raise ValueError(
+                    f"env {i}: fossilized slots {missing} have no "
+                    f"fossilize_step_records entry — t_f recording is broken"
+                )
+            self._pending_committed_shapley.append(
+                CommittedShapleyEnvCredits(
+                    env_idx=i,
+                    result=topup_result,
+                    t_f_by_slot={s: t_f_by_slot[s] for s in committed_set},
+                    episode_idx=batch_idx,
+                )
+            )
 
         return (
             FusedValResult(
@@ -2901,6 +3017,11 @@ class VectorizedPPOTrainer:
         )
 
         # Execute PPO updates
+        # Committed-Shapley (PDR-0012): hand the terminal credits to the
+        # pre-GAE retro-write seam and clear the per-batch carry either way
+        # (an update-skipped batch drops its credits with the batch).
+        committed_shapley_credits = self._pending_committed_shapley
+        self._pending_committed_shapley = []
         with self._phase_profiler.phase("ppo_update"):
             metrics, update_skipped, ppo_update_time_ms = ppo_coordinator.run_update(
                 raw_states_for_normalizer_update=raw_states_for_normalizer_update,
@@ -2908,6 +3029,7 @@ class VectorizedPPOTrainer:
                 envs_this_batch=envs_this_batch,
                 throughput_step_time_ms_sum=throughput_step_time_ms_sum,
                 throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
+                committed_shapley_credits=committed_shapley_credits,
             )
 
         # Tier-0: ppo_update accrues here in _run_batch, AFTER the per-epoch drain at

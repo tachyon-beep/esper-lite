@@ -28,6 +28,7 @@ from math import factorial
 __all__ = [
     "SlotTopUp",
     "CommittedShapleyResult",
+    "CommittedShapleyEnvCredits",
     "compute_committed_shapley_topup",
 ]
 
@@ -56,6 +57,23 @@ class CommittedShapleyResult:
     sum_raw: float
     clamp_binding: bool
     k: int
+
+
+@dataclass(frozen=True)
+class CommittedShapleyEnvCredits:
+    """One env's terminal credits, ready for retro-write delivery.
+
+    Built by the trainer at the terminal fused-val pass; consumed by the PPO
+    coordinator at the pre-GAE seam. ``t_f_by_slot`` maps each committed slot
+    to the buffer step index of its FOSSILIZE decision (recorded at execution
+    time in ``env_state.fossilize_step_records`` — never reconstructed from
+    epoch arithmetic).
+    """
+
+    env_idx: int
+    result: CommittedShapleyResult
+    t_f_by_slot: dict[str, int]
+    episode_idx: int | None = None
 
 
 def compute_committed_shapley_topup(

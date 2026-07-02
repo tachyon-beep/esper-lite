@@ -109,6 +109,7 @@ class TelemetryEventType(Enum):
 
     # === Counterfactual Attribution Events ===
     COUNTERFACTUAL_MATRIX_COMPUTED = auto()  # Full factorial matrix for env
+    COMMITTED_SHAPLEY_TOPUP = auto()  # Terminal committed-coalition credit (PDR-0012)
 
     # === Analytics Events ===
     ANALYTICS_SNAPSHOT = auto()       # Full state snapshot for dashboard sync
@@ -1644,6 +1645,64 @@ class CounterfactualMatrixPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class CommittedShapleyTopUpPayload:
+    """Payload for COMMITTED_SHAPLEY_TOPUP (one per credited env, terminal epoch).
+
+    The committed-Shapley credit is retro-written into the rollout buffer at
+    each seed's FOSSILIZE step (pre-GAE) — it is NOT a per-step reward
+    additend, so this event is the sole ledger for the buffer-side delta.
+    Per-slot tuples are index-aligned with ``slot_ids``. Units: phi/c_paid/
+    gap/raw/top_up are accuracy percentage points; credit_buf is buffer
+    (divide_by_std) units; std_used is the divisor actually applied
+    (max(running_std, shapley_synergy_std_floor)).
+    """
+
+    # REQUIRED
+    env_id: int
+    slot_ids: tuple[str, ...]
+    phi: tuple[float, ...]
+    c_paid: tuple[float, ...]
+    gap: tuple[float, ...]
+    raw: tuple[float, ...]
+    top_up: tuple[float, ...]
+    t_f: tuple[int, ...]
+    credit_buf: tuple[float, ...]
+    g: float
+    sum_raw: float
+    clamp_binding: bool
+    std_used: float
+
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
+    # OPTIONAL
+    # True only on the pathological count<2 normalizer state (no reward-scale
+    # information all batch): the credits were computed but NOT written.
+    dropped_no_std: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CommittedShapleyTopUpPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            slot_ids=_ensure_tuple(data["slot_ids"]),
+            phi=_ensure_tuple(data["phi"]),
+            c_paid=_ensure_tuple(data["c_paid"]),
+            gap=_ensure_tuple(data["gap"]),
+            raw=_ensure_tuple(data["raw"]),
+            top_up=_ensure_tuple(data["top_up"]),
+            t_f=_ensure_tuple(data["t_f"]),
+            credit_buf=_ensure_tuple(data["credit_buf"]),
+            g=data["g"],
+            sum_raw=data["sum_raw"],
+            clamp_binding=data["clamp_binding"],
+            std_used=data["std_used"],
+            episode_idx=data["episode_idx"],
+            dropped_no_std=data.get("dropped_no_std", False),
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class HeadTelemetry:
     """Per-head confidence and entropy values for factored action heads.
 
@@ -2677,6 +2736,7 @@ TelemetryPayload = (
     | SeedFossilizedPayload
     | SeedPrunedPayload
     | CounterfactualMatrixPayload
+    | CommittedShapleyTopUpPayload
     | AnalyticsSnapshotPayload
     | AnomalyDetectedPayload
     | PerformanceDegradationPayload

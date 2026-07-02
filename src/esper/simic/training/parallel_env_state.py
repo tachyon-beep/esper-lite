@@ -128,6 +128,13 @@ class ParallelEnvState:
     # DRL Expert review 2026-01-12: Per-epoch counterfactual is the correct signal.
     fossilized_drip_states: list[FossilizedSeedDripState] = field(default_factory=list)
 
+    # Committed-Shapley top-up (PDR-0012): (slot_id, buffer_step_idx) for every
+    # SUCCESSFUL fossilize this episode — the exact step index buffer.add used
+    # for the FOSSILIZE decision, recorded at execution time (never epoch
+    # arithmetic). Always on: a pure bookkeeping append, only read when
+    # shapley_synergy_scale > 0 (the documented no-op deviation, plan WI-3).
+    fossilize_step_records: list[tuple[str, int]] = field(default_factory=list)
+
     # === Obs V3 Action Feedback (Phase 2a½) ===
     # last_action_success: True = no prior action to fail (first step has none)
     # last_action_op: LifecycleOp.WAIT.value (0) = neutral "no action yet"
@@ -260,6 +267,7 @@ class ParallelEnvState:
         self.residency_accumulators.clear()
         # Clear drip states on episode reset (BASIC_PLUS mode accountability)
         self.fossilized_drip_states.clear()
+        self.fossilize_step_records.clear()
 
         # Reset Obs V3 action feedback (Phase 2a½)
         self.last_action_success = True  # No prior action to fail

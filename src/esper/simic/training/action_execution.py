@@ -1163,6 +1163,9 @@ def execute_actions(
                     epoch=epoch,
                     max_epochs=max_epochs,
                     episodes_completed=episodes_completed,
+                    shapley_synergy_scale=(
+                        env_reward_configs[env_idx].shapley_synergy_scale
+                    ),
                 )
                 try:
                     handler = get_handler(op_action)
@@ -1183,6 +1186,14 @@ def execute_actions(
                             context.fossilize_active_seed,
                         )
                         if handler_result.success:
+                            # Committed-Shapley (PDR-0012): record the buffer step
+                            # this FOSSILIZE occupies (the same counter buffer.add
+                            # uses below for this step) so the terminal credit can
+                            # retro-write at exactly this decision's timestep.
+                            # Success-only: G5-declined attempts are never credited.
+                            env_state.fossilize_step_records.append(
+                                (target_slot, int(agent.buffer.step_counts[env_idx]))
+                            )
                             if collect_reward_summary:
                                 summary = reward_summary_accum[env_idx]
                                 summary.scaffold_count += int(
