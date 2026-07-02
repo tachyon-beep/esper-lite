@@ -41,7 +41,11 @@ MAX_EPOCHS = STATIC_FINAL_SOURCE_TOPOLOGY_MIN_EPOCHS + 2
 
 
 def _run(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, *, shapley_on: bool
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    *,
+    shapley_on: bool,
+    force_top_up: float | None = None,
 ) -> dict[str, Any]:
     import esper.runtime as runtime
     import esper.simic.training.ppo_coordinator as ppo_coordinator_mod
@@ -90,7 +94,37 @@ def _run(
 
     def spying_compute(*args: Any, **kwargs: Any) -> Any:
         observed["compute_calls"] += 1
-        return real_compute(*args, **kwargs)
+        result = real_compute(*args, **kwargs)
+        if force_top_up is None:
+            return result
+        # Reviewer re-pass MEDIUM finding: the k=1 schedule pays zero by
+        # construction, so a nonzero credit never crosses the live seam.
+        # Force a paying result HERE (the math module is exhaustively
+        # unit-tested); everything downstream — records handoff, run_update
+        # param, config-value reads, normalizer std, the buffer write —
+        # stays fully live.
+        from esper.simic.rewards.committed_shapley import (
+            CommittedShapleyResult,
+            SlotTopUp,
+        )
+
+        per_slot = {
+            slot: SlotTopUp(
+                phi=entry.phi,
+                c_paid=entry.c_paid,
+                gap=force_top_up,
+                raw=force_top_up,
+                top_up=force_top_up,
+            )
+            for slot, entry in result.per_slot.items()
+        }
+        return CommittedShapleyResult(
+            per_slot=per_slot,
+            g=force_top_up * len(per_slot),
+            sum_raw=force_top_up * len(per_slot),
+            clamp_binding=False,
+            k=result.k,
+        )
 
     monkeypatch.setattr(vt_mod, "compute_committed_shapley_topup", spying_compute)
 
@@ -162,6 +196,37 @@ def test_scale_on_full_loop_credits_the_fossilize_transition(
     assert payload.slot_ids == (slot_id,)
     assert payload.t_f == (t_f,)
     assert payload.credit_buf == (0.0,)
+
+
+@pytest.mark.integration
+def test_scale_on_forced_nonzero_credit_lands_in_buffer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Reviewer re-pass (MEDIUM): a NONZERO credit through the fully live
+    seam — trainer fold -> run_update handoff -> config-value reads ->
+    normalizer std -> buffer write at t_f. Only the credit magnitude is
+    forced (the math module is exhaustively unit-tested); the delivery
+    arithmetic asserted here uses the run's real running std."""
+    top_up = 2.0
+    observed = _run(monkeypatch, tmp_path, shapley_on=True, force_top_up=top_up)
+
+    assert len(observed["apply_calls"]) == 1
+    call = observed["apply_calls"][0]
+    (credits,) = call["env_credits"]
+    (slot_id,) = credits.t_f_by_slot
+    t_f = credits.t_f_by_slot[slot_id]
+    (payload,) = call["payloads"]
+
+    # The write landed at exactly the FOSSILIZE transition, nowhere else.
+    delta = call["rewards_after"] - call["rewards_before"]
+    expected = min(5.0, top_up / payload.std_used)  # normalized_cap=5.0
+    assert payload.dropped_no_std is False
+    assert payload.std_used > 0.0
+    assert delta[0, t_f].item() == pytest.approx(expected)
+    assert payload.credit_buf == (pytest.approx(expected),)
+    mask = torch.ones_like(delta, dtype=torch.bool)
+    mask[0, t_f] = False
+    assert torch.all(delta[mask] == 0.0)
 
 
 @pytest.mark.integration
