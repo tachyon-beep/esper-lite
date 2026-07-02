@@ -42,10 +42,18 @@ import torch
 import torch.nn.functional as F
 
 from esper.leyline.factored_actions import LifecycleOp
+from esper.simic.training.config import TrainingConfig
 from esper.simic.training.ppo_coordinator import PPOCoordinator
 from esper.simic.training.vectorized import train_ppo_vectorized
 
 FOSS = int(LifecycleOp.FOSSILIZE)
+
+# The n=5 J-read regime (PDR-0009): the probe MUST train in the same regime the
+# gate generalizes to — auto-forward gates, entropy anneal 0.15->0.08 with
+# per-head multipliers, gae_lambda=0.95, value_coef=0.25, AMP. Loaded exactly
+# like scripts/causal_contribution_r1_pilot.py loads it.
+DEFAULT_CONFIG = "configs/config-3slot-3seed-suppress-slot-r0c0.json"
+_HARNESS_KEY = "_causal_contribution_r1"
 
 
 class Gate2Probe:
@@ -180,6 +188,20 @@ class Gate2Probe:
         gamma_lambda = agent.gamma * agent.gae_lambda
         delta_buf = coord.reward_normalizer.divide_by_std(self.delta_raw)
 
+        # Lifecycle diagnostics: per-op legality (steps where each op was legal)
+        # and executed-op histogram — locates where the lifecycle stalls when
+        # fossilize-eligibility is zero.
+        op_legal_counts = {
+            op.name: int((buffer.op_masks[:, :, int(op)] & clean).sum())
+            for op in LifecycleOp
+        }
+        executed, counts = torch.unique(
+            buffer.effective_op_actions[clean], return_counts=True
+        )
+        op_executed_counts = {
+            LifecycleOp(int(o)).name: int(c) for o, c in zip(executed, counts)
+        }
+
         record: dict = {
             "batch": self.batch_idx,
             "arm": self.arm,
@@ -191,6 +213,8 @@ class Gate2Probe:
             "n_foss_forced": int(
                 ((buffer.effective_op_actions == FOSS) & clean & buffer.forced_actions).sum()
             ),
+            "op_legal_counts": op_legal_counts,
+            "op_executed_counts": op_executed_counts,
         }
 
         rewards_orig = buffer.rewards.clone()
@@ -341,6 +365,13 @@ def summarize(out_path: Path) -> dict:
     return summary
 
 
+def load_regime_kwargs(config_path: str) -> dict:
+    """Load the n=5 regime hyperparams exactly as the causal pilot does."""
+    raw = json.loads(Path(config_path).read_text())
+    raw.pop(_HARNESS_KEY, None)  # driver-only metadata, not TrainingConfig schema
+    return TrainingConfig.from_dict(raw).to_train_kwargs()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", required=True, choices=("control", "retro", "terminal"))
@@ -349,19 +380,13 @@ def main() -> None:
                         "delta*; scaled into buffer units via divide_by_std)")
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--rounds", type=int, default=20)
-    parser.add_argument("--envs", type=int, default=12)
-    parser.add_argument("--episode-length", type=int, default=150)
+    parser.add_argument("--config", default=DEFAULT_CONFIG,
+                        help="Regime config JSON (default: the n=5 J-read config)")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--gpu-preload", action="store_true")
-    parser.add_argument("--entropy-coef", type=float, default=0.05,
-                        help="Match the n=5 J-read regime (0.05)")
-    parser.add_argument("--slots", nargs="+", default=["r0c0", "r0c1", "r0c2"])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--self-check", action="store_true",
                         help="Assert the GAE linearity identities per batch (slow)")
-    parser.add_argument("--auto-forward", action="store_true",
-                        help="Fast-forward lifecycle gates (harness validation only; "
-                        "NOT for the pre-registered Tier 2 runs)")
     args = parser.parse_args()
 
     probe = Gate2Probe(
@@ -372,24 +397,36 @@ def main() -> None:
     )
     probe.install()
 
-    t0 = time.perf_counter()
-    train_ppo_vectorized(
+    kwargs = load_regime_kwargs(args.config)
+    kwargs.update(
         n_episodes=args.rounds,
-        n_envs=args.envs,
-        max_epochs=args.episode_length,
-        device=args.device,
-        task="cifar_baseline",
         seed=args.seed,
-        entropy_coef=args.entropy_coef,
-        slots=args.slots,
+        device=args.device,
         gpu_preload=args.gpu_preload,
-        use_telemetry=False,
+        # use_telemetry MUST stay True: seed gradient stats are collected only
+        # when telemetry is on (vectorized_trainer.py: collect_gradients =
+        # use_telemetry and stride), and G2 hard-fails on unmeasured gradient
+        # health (KTS-001, slot.py:_check_g2) => telemetry-off silently blocks
+        # ALL blending/fossilization. Found the hard way (validate2-5).
+        use_telemetry=True,
+        telemetry_dir=str(args.out.with_suffix("")) + "_telemetry",
         quiet_analytics=True,
-        auto_forward_g1=args.auto_forward,
-        auto_forward_g2=args.auto_forward,
-        auto_forward_g3=args.auto_forward,
+        # Match the n=5 instrumented RNG build (CRN pairing structure); the
+        # injection consumes no RNG, so arms stay paired either way.
+        rng_three_domain_split=True,
+        # The n=5 runs RECORDED amp_enabled=false (TRAINING_STARTED, control_s41)
+        # even though the config JSON says amp=true: on a bf16-capable local GPU
+        # amp_dtype="auto" would silently enable bf16 host training, which changes
+        # the seed-improvement gate signals (bf16 artifacts are quarantined per
+        # docs/analysis/2026-06-15-bf16-artifact-quarantine.md). Pin to the
+        # recorded regime: fp32.
+        amp=False,
+        amp_dtype="off",
         group_id=f"gate2_{args.arm}_s{args.seed}",
     )
+
+    t0 = time.perf_counter()
+    train_ppo_vectorized(**kwargs)
     wall_s = time.perf_counter() - t0
 
     summary = summarize(args.out)

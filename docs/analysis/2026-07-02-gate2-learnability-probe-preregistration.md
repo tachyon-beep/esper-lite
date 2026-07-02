@@ -25,8 +25,24 @@ was earned in the dense per-step regime and does NOT transfer here. If the credi
    (`seed_contribution = val_acc − baseline_accs[slot]`, `action_execution.py:833`) — the synergy-blind ~0 signal,
    exactly as the design premise assumed. `SEED_FOSSILIZED.counterfactual` (~10 for r0c0) is the *joint*
    `counterfactual_total_improvement`, used only by gates. No bug; premise intact.
-3. GAE is linear in rewards: a terminal delta δ moves A(t) by exactly δ·(γλ)^(T−t) with V fixed
-   (γ=0.995, λ=0.98, γλ=0.9751; credit half-life ≈ 28 steps).
+3. GAE is linear in rewards: a terminal delta δ moves A(t) by exactly δ·(γλ)^(T−t) with V fixed.
+4. **REGIME CORRECTION (2026-07-02, after first validation run):** the n=5 J-read runs were driven by
+   `scripts/causal_contribution_r1_pilot.py` with `configs/config-3slot-3seed-suppress-slot-r0c0.json`, which sets
+   **gae_lambda=0.95** (NOT the leyline default 0.98), **auto_forward_g1/g2/g3=true** (auto-forward IS the regime
+   for this experiment line), entropy anneal 0.15→0.08 over 3000 episodes (effectively ≈0.15 across a 200-episode
+   run) with per-head multipliers (op ×3.0), value_coef=0.25. The probe loads this SAME config
+   (`--config`, default = that JSON) and overrides only rounds/seed/device/telemetry — regime fidelity by
+   construction. γλ = **0.94525**; credit half-life ≈ 12.3 steps.
+5. **Telemetry is LOAD-BEARING for the lifecycle (found via lifecycle-stall debugging):** seed gradient stats are
+   collected only when telemetry is on (`vectorized_trainer.py:1818`: `collect_gradients = use_telemetry and
+   stride`), and the G2 blending gate HARD-FAILS on unmeasured gradient health (KTS-001, `slot.py:_check_g2`).
+   A probe run with `use_telemetry=False` therefore silently blocks ALL blending/fossilization — zero
+   fossilize-legal steps in 48 episodes vs blending from episode 2 in the reference. The probe pins
+   `use_telemetry=True` (as the pilot ran). Also pinned `amp=False/amp_dtype="off"`: the config JSON says
+   `amp: true, amp_dtype: auto` but the n=5 RECORDED `amp_enabled: false`; on a bf16-capable local GPU "auto"
+   would enable bf16 host training (a quarantined artifact source,
+   docs/analysis/2026-06-15-bf16-artifact-quarantine.md) — pinned to the recorded regime. (AMP was empirically
+   NOT the stall cause — validate4/5 behaved identically — but the pin keeps the regime faithful.)
 
 ## Tier 0a — measured on the logged n=5 control runs (2026-07-02, DONE)
 
@@ -35,15 +51,16 @@ was earned in the dense per-step regime and does NOT transfer here. If the credi
 | Episode length | 150 decision steps (1/host-epoch); 12 envs; 1 PPO update / 12-episode batch (1800 steps) |
 | Fossilize rate | 0.207/ep ≈ 2.4 events per update batch |
 | r0c0 fossilize step t_f (n=2018) | q10=30, median=74, q90=133 |
-| Terminal→t_f GAE factor (γλ)^(150−t_f) | q10=0.049, **median=0.147**, q90=0.651; 34.6% of events < 0.1 |
+| Terminal→t_f GAE factor (γλ)^(150−t_f) at the REGIME γλ=0.94525 | q10=0.0012, **median=0.0139**, q90=0.384; **76.3% of events < 0.1, 46.3% < 0.01**. (An earlier read used the leyline default λ=0.98 → median 0.147; superseded — the run config pins λ=0.95.) Terminal-flush is analytically moribund before Tier 1; the Tier-1 screen formalizes the kill. |
 | **Free-vs-forced at fossilize** | **2,475/2,475 free (100%)** — op_entropy median 0.875, all > 0.1. The credit-to-action premise is WELL-POSED. |
 | P(FOSSILIZE) when chosen | median 0.150 — ample headroom for a credit to move it |
 | Raw per-step reward std (normalizer scale) | ≈ 1.86 (seed 41, n=360k steps) → clip ±10 ⇒ raw-δ clip saturation ≈ 18.6; realistic δ far below |
 
 ## The four-link causal chain (why "moves the advantage" is insufficient)
 
-- **L1 reward→advantage:** terminal-flush decays by (γλ)^(150−t_f) (median 0.147) and divides by the running
-  reward std; retro-write delivers δ full-strength at A(t_f). *Analytic; Tier 1 confirms through the production pipeline.*
+- **L1 reward→advantage:** terminal-flush decays by (γλ)^(150−t_f) (median 0.0139 at the regime γλ=0.94525) and
+  divides by the running reward std; retro-write delivers δ full-strength at A(t_f). *Analytic; Tier 1 confirms
+  through the production pipeline.*
 - **L2 advantage SNR:** the systematic bump competes with σ_A over only ~2.4 events/update; per-update noise
   σ_batch ≈ σ_A/√2.4 ≈ 0.65σ_A. *Tier 0b measures σ_A.*
 - **L3 gradient→logit:** shared LSTM trunk with 1,798 other timesteps; entropy bonus pushback; clipping. *Tier 2.*
@@ -89,7 +106,8 @@ Same-seed pairing mandatory, all pairs reported; assert `std_floored == False` e
 0.1 must not bite); report the pre-entropy Tier-1 signal AND the Tier-2 behavioral endpoint separately (a real
 signal hidden only by entropy is a design-tunable fail, not a learnability fail); rollback-contaminated envs
 excluded from injection and measurement; NO isolation of the fossilize gradient (the shared-trunk swamping is the
-question, not an artifact); auto-forward flags are harness-validation only, forbidden in pre-registered runs.
+question, not an artifact); the probe loads the n=5 regime config verbatim (auto-forward, entropy anneal +
+per-head multipliers, λ=0.95) so Tier-2 verdicts generalize to the regime the reward term would ship into.
 
 ## Strategic note (expert finding, held for the design record)
 
