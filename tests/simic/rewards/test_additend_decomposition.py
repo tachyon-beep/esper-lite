@@ -34,7 +34,7 @@ def test_decompose_reconciles_to_reward_raw_exactly() -> None:
         blending_warning=-0.2,
         holding_warning=-0.1,
         pbrs_bonus=1.5,
-        synergy_bonus=0.05,
+        interaction_bonus=0.05,
         compute_rent=-0.3,       # already negative
         alpha_shock=-0.04,
         occupancy_rent=0.2,      # positive magnitude, reward subtracts

@@ -77,7 +77,7 @@ class RewardComponentsTelemetry:
     # Bonuses
     stage_bonus: float = 0.0
     pbrs_bonus: float = 0.0
-    synergy_bonus: float = 0.0  # Scaffolding bonus for positive interactions
+    interaction_bonus: float = 0.0  # Scaffolding bonus for positive interactions
     action_shaping: float = 0.0
     terminal_bonus: float = 0.0
     fossilize_terminal_bonus: float = 0.0  # Terminal bonus from fossilized seed count
@@ -140,7 +140,7 @@ class RewardComponentsTelemetry:
             # Bonuses
             self.stage_bonus
             + self.pbrs_bonus
-            + self.synergy_bonus
+            + self.interaction_bonus
             + self.action_shaping
             + self.terminal_bonus
             + self.fossilize_terminal_bonus
@@ -183,7 +183,7 @@ class RewardComponentsTelemetry:
             "holding_warning": self.holding_warning,
             "stage_bonus": self.stage_bonus,
             "pbrs_bonus": self.pbrs_bonus,
-            "synergy_bonus": self.synergy_bonus,
+            "interaction_bonus": self.interaction_bonus,
             "action_shaping": self.action_shaping,
             "terminal_bonus": self.terminal_bonus,
             "fossilize_terminal_bonus": self.fossilize_terminal_bonus,
@@ -246,7 +246,7 @@ class RewardComponentsTelemetry:
             holding_warning=float(data["holding_warning"]),  # type: ignore[arg-type]
             stage_bonus=float(data["stage_bonus"]),  # type: ignore[arg-type]
             pbrs_bonus=float(data["pbrs_bonus"]),  # type: ignore[arg-type]
-            synergy_bonus=float(data["synergy_bonus"]),  # type: ignore[arg-type]
+            interaction_bonus=float(data["interaction_bonus"]),  # type: ignore[arg-type]
             action_shaping=float(data["action_shaping"]),  # type: ignore[arg-type]
             terminal_bonus=float(data["terminal_bonus"]),  # type: ignore[arg-type]
             fossilize_terminal_bonus=float(data["fossilize_terminal_bonus"]),  # type: ignore[arg-type]

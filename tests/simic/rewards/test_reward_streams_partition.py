@@ -198,6 +198,7 @@ def _run_step(
         base_slot_rent_ratio=0.0,
         disable_pbrs=True,  # no germination clawback noise on a WAIT step
         escrow_stable_window=1,
+        shapley_synergy_scale=0.0,  # HandlerContext reads it (PDR-0012)
     )
     telemetry_config = (
         SimpleNamespace(should_collect=lambda level: False) if telemetry_off else None

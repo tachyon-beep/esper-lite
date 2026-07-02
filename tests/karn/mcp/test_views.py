@@ -649,7 +649,7 @@ def test_rewards_view_extracts_all_fields(tmp_path):
                 # Bonuses
                 "stage_bonus": 0.1,
                 "pbrs_bonus": 0.03,
-                "synergy_bonus": 0.02,
+                "interaction_bonus": 0.02,
                 "action_shaping": 0.05,
                 "terminal_bonus": 0.0,
                 "fossilize_terminal_bonus": 0.0,
@@ -687,7 +687,7 @@ def test_rewards_view_extracts_all_fields(tmp_path):
             -- Penalties
             compute_rent, alpha_shock, blending_warning, holding_warning,
             -- Bonuses
-            stage_bonus, pbrs_bonus, synergy_bonus, action_shaping,
+            stage_bonus, pbrs_bonus, interaction_bonus, action_shaping,
             terminal_bonus, fossilize_terminal_bonus, hindsight_credit,
             num_fossilized_seeds, num_contributing_fossilized,
             -- Context fields
@@ -734,7 +734,7 @@ def test_rewards_view_extracts_all_fields(tmp_path):
     # Bonuses
     assert result[22] == 0.1  # stage_bonus
     assert result[23] == 0.03  # pbrs_bonus (key field per task)
-    assert result[24] == 0.02  # synergy_bonus
+    assert result[24] == 0.02  # interaction_bonus
     assert result[25] == 0.05  # action_shaping
     assert result[26] == 0.0  # terminal_bonus
     assert result[27] == 0.0  # fossilize_terminal_bonus

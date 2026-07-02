@@ -42,7 +42,7 @@ ADDITEND_SIGN_MAP: dict[str, int] = {
     "blending_warning": 1,
     "holding_warning": 1,
     "pbrs_bonus": 1,
-    "synergy_bonus": 1,
+    "interaction_bonus": 1,
     "alpha_shock": 1,
     "action_shaping": 1,
     "terminal_bonus": 1,

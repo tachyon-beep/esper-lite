@@ -780,21 +780,21 @@ def compute_contribution_reward(
         components.pbrs_bonus = pbrs_bonus
 
     # F1/F8 mutual exclusion (PDR-0012): when the Committed-Shapley top-up is
-    # on it REPLACES the interaction-driven synergy channel — paying both
+    # on it REPLACES the legacy interaction-driven reward channel — paying both
     # would double-credit the same coalition effect.
-    synergy_bonus = 0.0
+    interaction_bonus = 0.0
     if (
         config.shapley_synergy_scale == 0.0
         and seed_info is not None
         and attribution_discount >= 0.5
         and bounded_attribution > 0
     ):
-        synergy_bonus = _compute_synergy_bonus(
+        interaction_bonus = _compute_interaction_bonus(
             seed_info.interaction_sum,
         )
-        reward += synergy_bonus
+        reward += interaction_bonus
     if components:
-        components.synergy_bonus = synergy_bonus
+        components.interaction_bonus = interaction_bonus
 
     rent_penalty = 0.0
     growth_ratio = 0.0
@@ -1316,16 +1316,16 @@ def _contribution_pbrs_bonus(
     return config.pbrs_weight * (config.gamma * phi_current - phi_prev)
 
 
-def _compute_synergy_bonus(
+def _compute_interaction_bonus(
     interaction_sum: float,
-    synergy_weight: float = 0.1,
+    interaction_weight: float = 0.1,
 ) -> float:
-    """Compute synergy bonus for scaffolding behavior."""
+    """Compute interaction bonus for scaffolding behavior."""
     if interaction_sum <= 0:
         return 0.0
 
     raw_bonus = math.tanh(interaction_sum * 0.5)
-    return raw_bonus * synergy_weight
+    return raw_bonus * interaction_weight
 
 
 def compute_scaffold_hindsight_credit(

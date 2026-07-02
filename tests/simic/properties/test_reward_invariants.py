@@ -82,7 +82,7 @@ class TestRewardComposition:
             + components.alpha_shock
             + components.action_shaping
             + components.terminal_bonus
-            + components.synergy_bonus  # B6-CR-01: was missing, caused silent failures
+            + components.interaction_bonus  # B6-CR-01: was missing, caused silent failures
             # D2 capacity economics
             - components.occupancy_rent  # Subtracted: slots above threshold incur cost
             - components.fossilized_rent  # Subtracted: maintenance cost for fossilized seeds

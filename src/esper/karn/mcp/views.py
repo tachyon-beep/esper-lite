@@ -524,7 +524,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             -- Bonuses
             json_extract(data, '$.reward_components.stage_bonus')::DOUBLE as stage_bonus,
             json_extract(data, '$.reward_components.pbrs_bonus')::DOUBLE as pbrs_bonus,
-            json_extract(data, '$.reward_components.synergy_bonus')::DOUBLE as synergy_bonus,
+            json_extract(data, '$.reward_components.interaction_bonus')::DOUBLE as interaction_bonus,
             json_extract(data, '$.reward_components.action_shaping')::DOUBLE as action_shaping,
             json_extract(data, '$.reward_components.terminal_bonus')::DOUBLE as terminal_bonus,
             json_extract(data, '$.reward_components.fossilize_terminal_bonus')::DOUBLE as fossilize_terminal_bonus,

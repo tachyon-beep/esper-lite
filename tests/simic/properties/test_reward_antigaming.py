@@ -73,17 +73,17 @@ class TestRansomwarePattern:
 
     @given(inputs=ransomware_seed_inputs())
     @settings(max_examples=300)
-    def test_ransomware_no_synergy_bonus(self, inputs):
-        """B6-DRL-03: Ransomware seeds should receive zero synergy bonus.
+    def test_ransomware_no_interaction_bonus(self, inputs):
+        """B6-DRL-03: Ransomware seeds should receive zero interaction bonus.
 
-        The anti-stacking gate blocks synergy_bonus for seeds with
+        The anti-stacking gate blocks interaction_bonus for seeds with
         negative total_improvement, regardless of interaction_sum.
-        This prevents ransomware seeds from gaming the synergy system.
+        This prevents ransomware seeds from gaming the interaction system.
         """
         _, components = compute_contribution_reward(**inputs, return_components=True)
 
-        assert components.synergy_bonus == 0.0, (
-            f"Ransomware seed received synergy_bonus={components.synergy_bonus}, "
+        assert components.interaction_bonus == 0.0, (
+            f"Ransomware seed received interaction_bonus={components.interaction_bonus}, "
             f"expected 0.0. attribution_discount={components.attribution_discount}, "
             f"bounded_attribution={components.bounded_attribution}"
         )

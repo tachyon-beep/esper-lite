@@ -30,7 +30,7 @@ _TOPUP_ON = dict(
 )
 
 
-def _synergy_seed_info() -> SeedInfo:
+def _interaction_seed_info() -> SeedInfo:
     return SeedInfo(
         stage=SeedStage.BLENDING.value,
         improvement_since_stage_start=0.05,
@@ -51,7 +51,7 @@ def _reward(config: ContributionRewardConfig) -> tuple[float, RewardComponentsTe
         action=LifecycleOp.WAIT,
         seed_contribution=0.05,
         val_acc=70.0,
-        seed_info=_synergy_seed_info(),
+        seed_info=_interaction_seed_info(),
         epoch=10,
         max_epochs=25,
         total_params=110000,
@@ -62,16 +62,16 @@ def _reward(config: ContributionRewardConfig) -> tuple[float, RewardComponentsTe
     return reward, components
 
 
-def test_interaction_synergy_bonus_paid_at_scale_zero():
+def test_interaction_bonus_paid_at_scale_zero():
     _, components = _reward(ContributionRewardConfig())
-    assert components.synergy_bonus > 0.0
+    assert components.interaction_bonus > 0.0
 
 
-def test_interaction_synergy_bonus_not_paid_when_topup_on():
+def test_interaction_bonus_not_paid_when_topup_on():
     reward_off, comp_off = _reward(ContributionRewardConfig())
     reward_on, comp_on = _reward(ContributionRewardConfig(**_TOPUP_ON))
-    assert comp_on.synergy_bonus == 0.0
-    assert reward_on == pytest.approx(reward_off - comp_off.synergy_bonus)
+    assert comp_on.interaction_bonus == 0.0
+    assert reward_on == pytest.approx(reward_off - comp_off.interaction_bonus)
 
 
 def _fossilize_ctx(shapley_synergy_scale: float) -> HandlerContext:

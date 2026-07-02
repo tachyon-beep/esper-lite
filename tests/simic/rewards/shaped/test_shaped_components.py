@@ -78,7 +78,7 @@ def test_holding_warning_applies_only_to_positive_attribution_wait() -> None:
     assert components.total_reward == pytest.approx(base_attribution + components.holding_warning)
 
 
-def test_synergy_bonus_is_bounded_and_gated() -> None:
+def test_interaction_bonus_is_bounded_and_gated() -> None:
     config = shaped_config()
 
     reward, components = compute_contribution_reward(
@@ -97,9 +97,9 @@ def test_synergy_bonus_is_bounded_and_gated() -> None:
         return_components=True,
     )
 
-    expected_synergy = math.tanh(2.0 * 0.5) * 0.1
-    assert components.synergy_bonus == pytest.approx(expected_synergy)
-    assert 0.0 < components.synergy_bonus <= 0.1
+    expected_interaction = math.tanh(2.0 * 0.5) * 0.1
+    assert components.interaction_bonus == pytest.approx(expected_interaction)
+    assert 0.0 < components.interaction_bonus <= 0.1
     assert reward == pytest.approx(components.total_reward)
 
 
