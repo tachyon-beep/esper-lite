@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-02 (PDR-0011, PDR-0012)
+# Roadmap — Esper            Updated: 2026-07-02 (PDR-0013)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -9,15 +9,15 @@
   fork is **RESOLVED**: the n=5 J-read banks **(b)** — r0c0 is an efficiency-enabling stem
   (suppressing it ~halves system param-efficiency, 5/5 seeds, PDR-0009), and the optimizer is
   adequate so the defect is reward-side (PDR-0008). ⇒ the reward must CREDIT the enabling
-  contribution the per-step LOO undervalues. Active work: the **reward-credit term** — a default-OFF
-  Committed-Shapley synergy top-up (PDR-0010, surviving candidate). **All non-owner gates PASSED
-  (2026-07-02):** GATE 1 (proxy-vs-estimand), **GATE 2 (learnability, PDR-0011 — retro-write delivery
-  MANDATED, terminal-flush dead; verdict transfers to candidate B)**, signal verification, and
-  reward-function-reviewer (**APPROVE_WITH_CHANGES**, 5 build-conditioning changes). **Next concrete
-  step: OWNER SIGN-OFF to start the default-OFF build (PDR-0012, proposed)** — flag stays
-  shapley_synergy_scale=0.0 throughout; enablement is a separate later gate (tau/placebo + hard
-  efficiency gate). · tracker: esper-lite-254175df90 (reward-credit term), esper-lite-425dcc4ca2
-  (telemetry hygiene) · metric: committed-J / corr(reward,J) once A/B'd
+  contribution the per-step LOO undervalues. **The reward-credit term is BUILT (PDR-0013,
+  2026-07-02, owner-signed): default-OFF Committed-Shapley top-up, retro-write delivery,
+  specialist-reviewed + reviewer re-pass approved + adversarial code review clean;
+  esper-lite-254175df90 CLOSED.** Flag stays shapley_synergy_scale=0.0 everywhere. **Next
+  concrete step: the ENABLEMENT gate (esper-lite-f22a1d48a7, owner-gated)** — tau from the
+  PIN-E placebo (esper-lite-3d67b09687), F2 scale/cap calibration, hard off-switch-J
+  efficiency + fossilize-count gate, entrenchment monitor, ON-run dormancy recheck, then the
+  paired ≥5-seed OFF/ON A/B. · tracker: esper-lite-f22a1d48a7 (enablement),
+  esper-lite-425dcc4ca2 (telemetry hygiene) · metric: committed-J / corr(reward,J) in the A/B
 
 ## Next (shaped, decreasing certainty)
 - **Credit-assignment redesign itself** — a two-term targeted credit (enabling/synergy
