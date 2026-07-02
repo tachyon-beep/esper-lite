@@ -1,7 +1,12 @@
 # Reward-credit design — Committed-Shapley synergy top-up (DRAFT)
 
-**Status:** CANDIDATE · default-OFF · **GATE 1 (proxy-vs-estimand) PASSED 2026-07-02** · **(b) CONFIRMED (n=5, banked
-direction)** · remaining gates: (2) learnability check, (3) owner + reward-function-reviewer sign-off.
+**Status:** CANDIDATE · default-OFF · **GATE 1 PASSED 2026-07-02** · **GATE 2 (learnability) PASSED 2026-07-02 —
+retro-write delivery MANDATED, terminal-flush FAILED** (result: `docs/analysis/2026-07-02-gate2-learnability-result.md`;
+NOTE: the "deferred scaffold-credit rail" routing below is WRONG as written — pending_hindsight_credit flushes
+next-step and zeroes at reset; build = retro-write into buffer.rewards[env, t_f] pre-GAE via divide_by_std) ·
+**reward-function-reviewer: APPROVE_WITH_CHANGES 2026-07-02** (5 build-conditioning changes F1-F6 + enablement
+criteria: `docs/analysis/2026-07-02-reward-credit-term-review.md`) · **(b) CONFIRMED (n=5, banked direction)** ·
+remaining gate: **owner sign-off** (flag stays shapley_synergy_scale=0.0 throughout).
 Advisor-reconciled 2026-07-01 (surfaced the terminal-vs-developmental blind spot); GATE-1 reconcile PENDING.
 **Date:** 2026-07-01 · **Source:** ultracode design workflow wc8i117pi (candidate A + adversarial synthesis; candidates B/hindsight + C/efficiency-frontier stalled on infra — not compared, see §Alternatives) · advisor reconcile PENDING
 **Decision record:** PDR-0007 (n=5 J-read), PDR-0006 (J-reframe), PDR-0004 (total-system estimand)
