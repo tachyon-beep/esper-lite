@@ -89,6 +89,7 @@ Residency integral = 1.00 + 3.00 + 8.00 = **12.00**. `J(s) = 12.00 / 2000 = 6.0e
 - **Non-degeneracy requirement (reviewer — must hold for the report to count):** a *true zero-output* inert seed (identity/zero module) produces **bit-identical** logits in the main pass and the leave-this-slot-out ablation pass on the same val minibatch, so `c_t ≡ 0` *deterministically* — a vacuous "noise floor" of ~0 that **understates** a real seed's estimator noise (a real seed perturbs logits and carries genuine minibatch/sampling variance). The placebo MUST therefore be a **near-inert *small-real* seed** (or carry an assertion that its credit spread is driven by the same noise sources that move a real seed's `c_t`); a deterministic-zero placebo does **not** satisfy the noise-floor deliverable.
 - **Operating-range caveat:** the placebo characterizes LOO noise at *zero* contribution (the freeloader decision threshold). It does **not** characterize heteroscedastic estimator variance at non-zero magnitudes — if Phase 1 densely *pays* J, require per-magnitude (option-a) variance on a subsample.
 - **Does it block GATE 0?** **No** (report-not-clear is the bar). But the non-degeneracy requirement blocks the *meaningfulness* of the reported line, so it must hold before the checkbox counts.
+- **Concrete design (building blocks located 2026-06-26):** the `noop` blueprint (`kasmina/blueprints/cnn.py:21`, `param_estimate=0`, "Identity seed") is the DEGENERATE case (deterministic-zero floor) — do NOT use it. Use a **small real blueprint** (`depthwise`/`conv_light`) with `zero_init_final_layer` (`kasmina/blueprints/initialization.py:29`, `delta(x)≈0` at birth, real params), forced onto the output path via the `FIXED_SCHEDULE` proof-baseline lifecycle (`training/proof_baselines.py`), running with the residency telemetry on. The per-stage spread of its credited `seed_contribution`/`cf_weighted_integral` = the noise floor (mean=bias, std=floor, CoV). **An offline proxy from the live runs is rejected** — selecting on low-contribution seeds is circular and confounds true small-negative contribution with estimator noise. ⇒ a short dedicated run, slotted in when a GPU frees after the control sweep.
 
 ---
 
@@ -203,12 +204,96 @@ This **validates the additend set on real data** (my unit tests set `reward_raw`
 
 **Karn-view gap found (telemetry-chain TODO):** the `rewards` view does NOT expose `occupancy_rent` / `fossilized_rent` (they are on the leyline dataclass but absent from the view projection), so multi-seed reconciliation from the view alone is impossible — they happened to be 0 on this single-seed run. The wiring step must add these two columns to the `rewards` view/emit path.
 
-| metric (≥5-seed control arm) | value |
+**MULTI-SEED control-arm results — GATE-0 LOCKED at n=5 (commit `406aeb25`, seeds 41–45, `max_seeds=3`, 200 episodes each, ~360k reward rows each).** Per-seed and aggregate:
+
+(`committed J` column removed — structurally 0 for any policy, see retired-evidence note below.)
+
+| seed | `share_attribution`† | corr(reward,J) | fossilize/ep | mean J/ep |
+|---|---|---|---|---|
+| 41 | 0.923 | 0.189 | 0.201 | 0.072 |
+| 42 | 0.923 | 0.292 | 0.200 | 0.067 |
+| 43 | 0.924 | 0.206 | 0.212 | 0.088 |
+| 44 | 0.922 | 0.173 | 0.212 | 0.097 |
+| 45 | 0.933 | 0.203 | 0.212 | 0.075 |
+| **AGG n=5** | **0.925 ± 0.004**† | **0.212 ± 0.046** | **0.207 ± 0.006** | — |
+
+† magnitude-confounded (`ba` ≈ 68% of reward magnitude) — see downgrade note.
+
+- **Reconciliation holds across all 5** (`max|residual|` 0.4–0.6, ~6–7 rows >1e-2 of ~360k = auto-prune `residual`; `occupancy_rent`/`fossilized_rent` exercised, `−1` sign confirmed on real data).
+- **`share_attribution = 0.925 ± 0.004` — DOWNGRADED, substantially mechanical** (advisor 2026-06-27). On control:41, `mean|bounded_attribution| / mean|reward| = 68%`: a term that is ⅔ of the reward *magnitude* dominates `Cov/Var` near-automatically (same tautology family as the rejected "shares-sum-to-1"). So 0.92 is NOT a clean "attribution drives the policy" signal; it is mostly "biggest addend in the sum." The `>0.40` GATE-1 threshold is met but weakly informative. Keep as a magnitude fact, not a behavioral claim.
+- **committed J = 0 — RETIRED as evidence** (advisor 2026-06-27): this is a *structural tautology*, not a finding. Fossilized seeds are excluded from the LOO ablation ⇒ `seed_contribution = None` ⇒ the committed bucket can never accrue, for *any* policy. It measures the ablation design, not behavior. The real, non-circular commitment signal is **fossilize/ep** (control 0.207 ± 0.006).
+- **corr(reward, J) = 0.212 ± 0.046** — weak across all 5 seeds (kept; not magnitude-confounded the way share is). Awaits placebo to certify J above noise.
+- **⚠️ CONVERGENCE / BASELINE adjudication (advisor 2026-06-27, control:41) — overturns the strong thesis:**
+  - **Controller DOES contribute accuracy.** Per-CF-event baseline gap (all-seeds-on − all-disabled): host-alone **40.0%** → with morphogenesis **46.1%**, **mean gap +6.1% / median +3.5%**; 69% of events add >0.5%, only 8% degrade. So "degenerate / produces no improvement" is **FALSE** — this is an **efficiency** finding (real +6% at +252% params / 7× compute), i.e. the original park-the-freeloader thesis, NOT a do-nothing attractor.
+  - **Policy is NOT confidently converged.** Raw op_entropy 0.37 was a *forced-WAIT artifact* (median 0.000; >½ of op-steps single-legal-op). On **unmasked** op-steps op_entropy = **0.93 / 1.61 max ≈ 58%** — substantially stochastic. So much of the churn is genuine policy stochasticity, not a locked metronome.
+  - **REWARD_HACKING_SUSPECTED fires 48×** (`ransomware_signature`: +self-LOO `seed_contribution`, −env-joint `total_improvement` — the live PIN-A divergence) but is **rare** (~0.02/episode) — a tail phenomenon, not the main story.
+  - **Net:** the strong "reward makes it farm a dense signal while producing nothing" claim is **dead**. What survives: **inefficiency (modest accuracy at high param/compute cost) + churn that the cheap scale-levers (unit-norm, clip2) do not reduce.** Still leans SURVIVE, but for a milder reason than first stated.
+- **Caveat:** decile cuts above are **one seed (41)** — extend to ≥5 before hardening. Arm analysis must be **seed-matched paired deltas + paired bootstrap** (advisor), NOT the unpaired n=5-vs-n=4 aggregate. STOP-vs-SURVIVE (GATE −1) still needs all arms at ≥5 paired seeds (runs in flight). No placebo yet ⇒ noise-floor leg of GATE 0 still open.
+
+| GATE-0 leg (≥5-seed control arm) | status |
 |---|---|
-| per-step reconciliation (`residual`≈0, `share_residual`≈0) | _pending runs (machinery validated above)_ |
-| `share_attribution` on ≥5 paired seeds | _pending runs (0.82 on cited single-seed)_ |
-| raw J computable on ≥5 seeds | _pending residency telemetry + runs_ |
-| noise floor (placebo, per stage) | _pending placebo harness + runs_ |
+| per-step reconciliation (`residual`≈0) | ✅ **LOCKED n=5** |
+| `share_attribution` computable + stable | ✅ computable, 0.925 ± 0.004 (n=5) — but **magnitude-confounded** (interpret as a magnitude fact, not a behavioral lever) |
+| raw J computable on ≥5 seeds | ✅ **LOCKED** n=5 nonzero, stable (mean J/ep 0.072–0.097) |
+| noise floor (placebo, per stage) | ⏳ placebo harness pending (the remaining code deliverable) |
+
+> **GATE-0 instrument verdict unchanged** (the instrument is sound: J computes, reconciles, replicates). What changed 2026-06-27 is the *interpretation of the control-arm readouts*: the strong "reward-farming / no-improvement" reading is falsified (controller adds +6% acc at high cost; policy is stochastic not peaked), committed-J retired as tautological, share downgraded as magnitude-confounded. GATE −1 (cheap-fix vs redesign) must use **paired** arm deltas and is still pending the arm runs.
+
+### 5.2 Motif/freeloader probe + the central open question (control:41, n=1 — DO NOT harden)
+
+Motivated by the owner's observation that the controller *can* rediscover good structure (early-conv/late-stabiliser ≈ **CoAtNet**, Google 2021). Two probes on control seed 41:
+
+**Fossilized seeds by position × blueprint family** (per-seed blending Δacc = LOO quality; ensemble CF = joint at fossilization):
+
+| cell | n | own blendΔ (LOO quality) | ensemble CF |
+|---|---|---|---|
+| **early conv-family** (CoAtNet stem) | **261 (54%)** | **−0.34** | **+13.23** |
+| early stabiliser | 132 | +2.85 | +1.34 |
+| late conv-family | 25 | +2.80 | +2.69 |
+| late stabiliser | 13 | +0.74 | +0.19 |
+| mid conv-family | 35 | −0.33 | +15.06 |
+
+**Freeloader scan** (residency, on-path seeds n=2354): freeloaders (survived ≥10 on-path steps, cf-credit ≤0) = **245 (10% of seeds, 14% of survival-time)**, mean survival **38.1 steps** vs productive seeds' 30.3 — i.e. negative-contribution seeds survive *longer*; `corr(survival, quality) = 0.165` (weak). 74% of long-survivors are genuinely productive (mean cf +128). **The defect is a real minority tail, not the dominant mode** (consistent with REWARD_HACKING firing but rare).
+
+**⚠️ THE CENTRAL OPEN QUESTION (this fork decides the whole conclusion):** the controller's dominant fossilization (early conv, 54%) and the freeloader tail both have **low/negative per-seed LOO** but high *ensemble* value — and that pattern is ambiguous between:
+- **(a) Freeloader / commitment-avoidance defect** — seeds committed despite not individually helping, wrongly credited by the surrounding ensemble. ⇒ **redesign the reward** (the J/redesign thesis).
+- **(b) Foundational stem undervalued by LOO** — an early-conv *stem* (the CoAtNet motif) has low leave-one-out marginal *because it is enabling*; remove it with everything present and other paths compensate, but it **enabled the structure to form**. ⇒ the controller is correct and **J/PIN-A mis-measures it** (a measurement problem, not a controller defect).
+
+**Neither the motif table nor the freeloader scan can disambiguate (a) from (b)** — both define quality via per-seed LOO (PIN A), which is precisely the metric blind to enabling value. **The disambiguator is SYNERGY: does removing the early-conv seed collapse the *late* seeds' contributions?** (yes → (b), real stem, J needs a synergy/Shapley-aware term; no → (a), true freeloader, redesign justified.)
+
+### 5.3 SYNERGY result — the runs logged the FULL factorial ablation (n=5 control, median-led, advisor-vetted)
+
+The CF matrix logs the **complete factorial** for multi-seed episodes: `(4 configs, 2 seeds): 2886/run` (full 2×2) and `(8,3): 138/run` (full 2³). So true *interventional* synergy is computable, no re-run needed. Per 2-seed factorial event: **interaction `I = acc(A,B) − acc(A,¬B) − acc(¬A,B) + acc(¬A,¬B)`** — `>0` ⇒ co-resident seeds COMPLEMENT (enabling); `≈0` ⇒ independent (the pure-freeloader signature — removing a freeloader can't change a co-resident's contribution); `<0` ⇒ substitute/redundant. Reported as the **per-event interaction MEDIAN** (paired within each factorial; robust to single-epoch CF noise), per slot-pair, per seed:
+
+| slot pair | s41 | s42 | s43 | s44 | s45 | **mean ± sd of medians** | total n |
+|---|---|---|---|---|---|---|---|
+| **r0c0→r0c1** (early→adjacent) | +1.08 | +0.60 | +0.48 | +0.84 | +0.96 | **+0.79 ± 0.22** | 7339 |
+| r0c0→r0c2 (early→distal) | +0.24 | +0.12 | +0.00 | +0.12 | +0.12 | +0.12 ± 0.08 | 4796 |
+| r0c1→r0c2 (mid→adjacent) | +1.20 | +0.36 | +0.36 | +0.36 | +0.06 | +0.47 ± 0.38 | 808 |
+
+**Finding (n=5, sign-consistent, median-led):** `r0c0→r0c1` synergy is **positive in all 5 seeds** (+0.48…+1.08) — the early seed *enables its neighbor* (~+0.8 acc-pts), which a pure freeloader cannot produce. This is **positive evidence that co-resident structure is complementary, not redundant**, and per-seed LOO (PIN A) is blind to it. Two honest limits: enabling is **local** (early→distal r0c0→r0c2 = +0.12, a whisker off zero — decays with distance), and **modest** (sub-acc-point). Caveats carried: (i) this is **slot-position** synergy, one inferential step short of **conv-blueprint** synergy (blueprint join owed); (ii) **selection-scoped** — measured only on pairs the controller chose to co-resident.
+
+> **⚠️ STRUCTURAL SCOPE (advisor 2026-06-27 — do not conflate):** the factorial mask contains only **ablatable** seeds. A **fossilized** seed is baked into the host (α=1) and lives in the always-on baseline, **NOT in the ablation mask**. So this synergy result is about **co-resident *transient* (TRAINING/BLENDING) seeds — NOT the committed fossils.** It therefore does **not**, by itself, speak to the §5.2 puzzle (the 261 *fossilized* neg-blendΔ early-conv seeds). Earlier wording here ("the structure the controller commits to") was wrong and is corrected: the claim is about co-resident, not committed, structure.
+
+**Per-population split (n=5 control, median-led).** Splitting each factorial pair by the weaker seed's own marginal `m`: `I, m_A, m_B` are mutually orthogonal contrasts of the same 4 cells (so conditioning on marginals cannot algebraically force `I` — the split is real structure):
+
+| group | median I (all 5 seeds) | IQR of I |
+|---|---|---|
+| **both-help** (m>0) | **+0.84 … +1.32** | **5.04** |
+| freeloader-looking (m≤0) | +0.00 (±0.000) | 0.96 |
+
+Among m≤0 seeds, enable-rate (I>0): r0c0 38%, r0c1 49%, r0c2 47%.
+
+**Three claims at their true confidence (advisor-gated):**
+1. **SOLID:** complementarity is real and concentrated in **direct-helper** pairs (m>0, median I≈+1, IQR 5.04 = genuine range), n=5 sign-consistent. Co-resident good seeds genuinely complement.
+2. **DOWNGRADED (confounded):** transient neg-marginal (m≤0) co-residents show median I=0 — BUT the m≤0 group's IQR is 0.96 vs the helpers' 5.04 (~5× tighter), so much of that "0" is **accuracy-floor range-compression, not independence.** "Weak seeds don't enable" is therefore **not cleanly established** — this dataset can *detect* enabling where it exists but cannot robustly prove its *absence* in the low-accuracy regime.
+3. **OPEN — the original §5.2 fork is NOT resolved.** The fossil puzzle concerns *committed* seeds, which are absent from the factorial mask (see scope box). A feasibility check (do will-fossilize slots appear in factorials pre-commitment?) was **inconclusive**: 482 fossilizations span only 36 (env,slot) combos (~13 lifecycles/slot), so (env,slot)-matching conflates lifecycles. **Resolving the fossil fork requires the seed-lifecycle (germination→fossilization) join** — the heavy closer the advisor first pointed at; the join-free proxy answered a *related* question (do transient low-marginal co-residents enable?), not *the* question (do the committed neg-blendΔ fossils enable?).
+
+**⇒ The (a)/(b) fork remains OPEN.** What's banked: real complementarity among co-resident helpers (pro-(b) *mechanism exists*), and a method that detects enabling where present. The two-term-credit redesign brief (synergy term + freeloader penalty) is a **hypothesis**, not a conclusion — it rests on the proxy population. **QUEUED (run fresh, not at session end): seed-lifecycle-conditioned synergy on the will-fossilize / fossilized-conv@r0c0 cohort.**
+
+> **Closer attempt 2026-06-28 FAILED (data-model blocker, not interpreted):** the first lifecycle-join (`scratchpad/phase0runs/synergy_lifecycle.py`) is buggy and its output must NOT be trusted. `(env,slot)` is not a single-occupancy key — the controller germinates **multiple blueprint candidates in the same slot at the same episode** (morphogenesis selection), and structured germ/foss/prune events carry **no stable `seed_id`** (only in human log text) while `morph_id` keys the *action*, not the seed. So germination and fossilization of one seed share no structured key, and naive interval reconstruction yields ~23k `UNKNOWN(G→G)` intervals with the target `FOSS/conv/neg` cohort empty. The correct closer needs **seed-identity reconstruction** (isolate the single *persisting* seed per slot — `end_ep ≫ germ_ep`, excluding immediate-prune candidates — or recover `seed_id` from the residency/active stream), and must **validate the fate distribution before interpreting any synergy.** Likely warrants the morphogenesis schema / `drl-expert`.
+
+> Bank (error pattern, bit 4× on 2026-06-27): n=1 synergy on 3 hand tables read *negative* → systematic n=5 reversed to positive; then a population-level split nearly flipped the *puzzle* verdict to (a) on a proxy population (transient ≠ committed). **No directional read off <30 hand-picked samples; and verify the population you measured is the population the question is about** before any verdict.
 
 ---
 
@@ -240,6 +325,11 @@ Reuse the Phase −1 frozen arm (shared so one run-set serves GATE −1 and GATE
 - **Land telemetry first**, then run **≥5 control-arm seeds**. Because the Phase −1 A/B is **PENDING** (its packet, dated today, says so), a single control-arm run-set serves **both** GATE −1 (Phase −1) and GATE 0 (Phase 0) — same config, same seeds.
 - Launch: `uv run python -m esper.scripts.train ppo --config configs/config-3slot-3seed-baseline-shaped.json --seed <s> --max-seeds 3 --device cuda:0 --gpu-preload`.
 - The ≥5-seed launch is the one genuine compute decision → surfaced to the user at the launch point. GATE 0 may be reported PROVISIONAL on a seed subset.
+
+### 8.1 Control-arm run launch (provenance)
+- **Launched 2026-06-25** against commit `406aeb25` (this Phase-0 work), control arm `config-3slot-3seed-baseline-shaped.json` (sha256 `7f199a3ac1b3`, `max_seeds=3`, HRA-OFF, 12 vec-envs, n_episodes=200), `--gpu-preload`.
+- **Seeds 41–45** split across 2× RTX 4060 Ti: cuda:0 = {41, 43, 45}, cuda:1 = {42, 44}. Telemetry → `telemetry/` (Karn-discoverable).
+- **GATE-0 scoring queries to run on completion** (per run_dir): (1) reconciliation `residual` stats — now with `occupancy_rent`/`fossilized_rent` nonzero (re-confirms the −1 sign on real multi-seed data); (2) `share_attribution = Cov(bounded_attribution, total_reward)/Var(total_reward)` per seed + aggregate; (3) `J = SUM(j_per_param) GROUP BY run_dir, episode_idx` from the `seed_residency` view; (4) committed/uncommitted split + None-fraction (`n_none_steps/n_on_path_steps`). **Noise-floor leg** still needs the inert-seed placebo harness (not in these runs) — remains PROVISIONAL.
 
 ---
 
