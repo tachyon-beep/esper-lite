@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-03 (checkpoint #9 — owner ruled: tau ACCEPT-PROVISIONAL, probes ran, coverage YELLOW, F2 calibration LICENSED; PDR-0018)
+# Current State — Esper        Checkpoint: 2026-07-03 (checkpoint #9+F2 — F2 knobs FROZEN (drl-reviewed); scoring re-based per PDR-0019; next = pre-A/B build)
 
 ## The bet right now
 **Reward credit-assignment redesign.** Term BUILT default-OFF (PDR-0013). Enablement gate
@@ -9,13 +9,18 @@ coverage **YELLOW** (66.7% J-currency). `shapley_synergy_scale=0.0` everywhere. 
 renamed **`fossilize_payable_J`** (never bare "committed-J").
 
 ## In flight
-- Nothing on GPU. **Next dispatch: F2 scale/cap calibration** (gate criterion 2 —
-  scale/cap/normalized_cap/std_floor against the minimum running std the term will meet;
-  normalized_cap currently has NO upper sanity bound). The A/B launches only after F2 is
-  frozen, under the PDR-0018 large-effect targets.
-- **Telemetry hygiene** (esper-lite-425dcc4ca2): unchanged; still the prerequisite for any
-  healthy-policy causal read, and the probe caveat leans on it (occurrence bounds hold for
-  the current entropy-degenerate policy population only).
+- Nothing on GPU. **F2 calibration FROZEN 2026-07-03** (criterion 2 SATISFIED; drl-expert
+  review: all knobs ACCEPTED): scale=1.0, cap=5.0pp, std_floor=0.25 (0.5 fallback / 1.0
+  ON-recalibration lever), normalized_cap=3.0 (**sole operative bound** — ±10 clip not in
+  this channel). Memo + review outcome: docs/analysis/2026-07-03-f2-scale-cap-calibration.md;
+  scripts scratchpad/f2_calibration/.
+- **Scoring re-based (PDR-0019, owner-ruled):** primary = design criteria (i)–(v);
+  effect-size floor = episode-level paired Δcorr(reward,J) ≥ +0.10 (n=5) / LB>0 (n=10);
+  Δfossilize_payable_J overlay SUPERSEDED (structurally-zero median); per-run paid mass
+  REJECTED as Goodhart-aligned; **asymmetric null recorded** (null n=5 fires nothing).
+- **Telemetry hygiene** (esper-lite-425dcc4ca2): open — NOTE the entropy-degeneracy premise
+  is stale per PDR-0006 (decision-step entropy HEALTHY); remaining scope is read-path
+  wiring + alarm recalibration, no longer an A/B prerequisite.
 
 ## Probe verdicts (banked 2026-07-03)
 F1 prune-flip NOT exploited (0.17% of pos-ba mass; flip mostly CHARGES helper-prunes);
@@ -52,14 +57,13 @@ PRIMARY gates. F1 probe must re-run on Phase −1 arm telemetry BEFORE any clip-
 - Committed the owner's two-checkpoint-old Phase-0 analysis-doc edits (data-loss risk closed).
 
 ## Next session, start here
-**F2 scale/cap calibration** (design doc + gate criterion 2; scoping banked at gate comment
-#103). RESOLVED: running std is NOT logged in telemetry — primary path is offline Welford
-reconstruction of the std trajectory from the logged total_reward stream (order-sensitivity
-caveat + validation check recorded; fallback: cheap instrumentation run — `current_std()`
-exists at simic/control/normalization.py:259). Read the std distribution at episode-terminal
-steps (early-run minimum matters most), then propose scale/cap/normalized_cap/std_floor
-(incl. the missing normalized_cap upper bound) with drl-expert review before freezing.
-After freeze: n=5 OFF/ON A/B per PDR-0018. Housekeeping: 3 pending P3 test-hygiene
-observations (seed_residency round-trip rule, optimizer-lifecycle mock drift, seed_residency
-view expected-set) — mechanical fixes, now unblocked since the Phase-0 doc edits are
-committed (93bc930e).
+**The pre-A/B build** (tracker: see gate comment #105 conditions 3+4): (a) per-paid-event
+`(credit_buf, met_std)` + normalized_cap bind-rate telemetry at the delivery seam
+(telemetry-only); (b) the criterion-3 fossilize-count guard + HARD §3 safety gates — the
+drl-mandated enablement precondition (knobs bound magnitude, not payment frequency; guard
+semantics need a small design pass first); (c) ON-arm A/B config with the frozen knobs +
+tau=0.28 (NUM_BLUEPRINTS same-commit constraint, PDR-0015); (d) the scoring-time confound
+gate in the analysis plan (effect carried by std<1.0 events → re-confirm at floor ≥1.0).
+Then launch the paired n=5 OFF/ON A/B scored per PDR-0019. Housekeeping: 3 pending P3
+test-hygiene observations (seed_residency round-trip rule, optimizer-lifecycle mock drift,
+seed_residency view expected-set) — mechanical, unblocked since 93bc930e.

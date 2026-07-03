@@ -1,6 +1,7 @@
 # PDR-0018 — tau ACCEPT-PROVISIONAL; occurrence probes license F2 calibration (coverage YELLOW); large-effect A/B targets set
 
 Date: 2026-07-03   Status: accepted (owner-ruled; ratifies the comment-#99 pre-registration)
+   — §3's Δfossilize_payable_J overlay and §6's scope framing SUPERSEDED IN PART by PDR-0019
 Author: Claude (agent), owner-ratified
 Related: PDR-0015, PDR-0016, PDR-0017; gate esper-lite-f22a1d48a7 (comments #99–#101);
 docs/analysis/2026-07-03-occurrence-probes-f1-f2-f5-s1-coverage.md;
