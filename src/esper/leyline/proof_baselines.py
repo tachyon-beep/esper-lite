@@ -156,11 +156,17 @@ STATIC_FINAL_SOURCE_TOPOLOGY_MIN_EPOCHS = STATIC_FINAL_SOURCE_TOPOLOGY_STEPS[-1]
 
 
 # --- PIN-E 3-slot placebo hold schedule (esper-lite-94869250f1) ---
-# Three staggered near-inert placebo lifecycles, all held at HOLDING alpha=1
-# for the remainder of the run. Deliberately NO fossilize step: fossilized
-# slots are excluded from the ablation family at shapley_synergy_scale=0, so a
-# fossilized placebo would be invisible to the noise-floor measurement. The
-# 10-epoch TRAINING dwell per slot satisfies the permissive G2 gate.
+# Three SERIAL near-inert placebo lifecycles, all held at HOLDING alpha=1 for
+# the remainder of the run. Serial (not parallel) because the D3 germination
+# rule masks GERMINATE while any seed is in GERMINATED/TRAINING — each placebo
+# must reach HOLDING before the next germinates. Deliberately NO fossilize
+# step: fossilized slots are excluded from the ablation family at
+# shapley_synergy_scale=0, so a fossilized placebo would be invisible to the
+# noise-floor measurement. The 10-epoch TRAINING dwell per slot satisfies the
+# permissive G2 gate; BLENDING ramps alpha over TEMPO_TO_EPOCHS[STANDARD]=5
+# epochs (alpha_speed does NOT skip the blend ramp), so the HOLDING advance
+# lands 5 epochs after BLENDING entry — the same arithmetic as
+# STATIC_FINAL_SOURCE.
 FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1 = "fixed-schedule-hold-placebo-3slot-v1"
 FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_VERSION = 1
 
@@ -194,18 +200,24 @@ def _advance_action(slot_idx: int) -> FactoredAction:
 FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_STEPS: tuple[ProofBaselineScheduleStep, ...] = tuple(
     ProofBaselineScheduleStep(epoch=epoch, action=action)
     for epoch, action in (
+        # Per slot: germinate -> TRAINING (10-epoch G2 dwell) -> BLENDING
+        # (5-epoch STANDARD-tempo alpha ramp; alpha_speed does NOT skip it)
+        # -> HOLDING at alpha=1. Same dwell/ramp arithmetic as
+        # STATIC_FINAL_SOURCE_TOPOLOGY_STEPS, minus the fossilize.
         (1, _placebo_germinate_action(0)),
-        (2, _placebo_germinate_action(1)),
-        (3, _placebo_germinate_action(2)),
-        (4, _advance_action(0)),   # -> TRAINING
-        (5, _advance_action(1)),
-        (6, _advance_action(2)),
-        (14, _advance_action(0)),  # -> BLENDING (10-epoch G2 dwell: 4..13)
-        (15, _advance_action(1)),
-        (16, _advance_action(2)),
-        (17, _advance_action(0)),  # -> HOLDING (alpha=1, INSTANT)
-        (18, _advance_action(1)),
-        (19, _advance_action(2)),
+        (2, _advance_action(0)),   # -> TRAINING (dwell 2..11)
+        (12, _advance_action(0)),  # -> BLENDING (ramp 12..16)
+        (17, _advance_action(0)),  # -> HOLDING
+        # slot 1 (slot 0 at HOLDING no longer blocks D3 germination)
+        (18, _placebo_germinate_action(1)),
+        (19, _advance_action(1)),  # -> TRAINING (dwell 19..28)
+        (29, _advance_action(1)),  # -> BLENDING (ramp 29..33)
+        (34, _advance_action(1)),  # -> HOLDING
+        # slot 2
+        (35, _placebo_germinate_action(2)),
+        (36, _advance_action(2)),  # -> TRAINING (dwell 36..45)
+        (46, _advance_action(2)),  # -> BLENDING (ramp 46..50)
+        (51, _advance_action(2)),  # -> HOLDING; all three co-resident from here
     )
 )
 
@@ -240,7 +252,7 @@ FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_ACTION_COUNT = len(
     FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_STEPS
 )
 FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_EXPECTED_HASH = (
-    "8484773896a8ba74137b7c29106def29b83c316f6c6bb3383d0dad854cf4b7c3"
+    "16bb7eff9935c18db720b16c8be0edddb322c2e2647a997c9869af52472eea00"
 )
 
 

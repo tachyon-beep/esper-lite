@@ -687,6 +687,20 @@ def _finalize_run_scoped_nissa_backends(
 # =============================================================================
 
 
+def apply_seed_lr_override(task_spec: Any, seed_lr_override: float | None) -> Any:
+    """Return the task spec with seed_lr replaced; None leaves it untouched.
+
+    PIN-E harness support: seed_lr=0.0 freezes every germinated seed's
+    parameters (SGD lr=0 is a true no-op incl. momentum) while requires_grad
+    stays True, so gradient-health stays measurable for the G2 stage gate.
+    """
+    if seed_lr_override is None:
+        return task_spec
+    if seed_lr_override < 0.0:
+        raise ValueError(f"seed_lr_override must be >= 0, got {seed_lr_override}")
+    return dataclasses.replace(task_spec, seed_lr=seed_lr_override)
+
+
 def train_ppo_vectorized(
     n_episodes: int = 100,
     n_envs: int = DEFAULT_N_ENVS,
@@ -694,6 +708,7 @@ def train_ppo_vectorized(
     device: str = "cuda:0",
     devices: list[str] | None = None,
     task: str = "cifar_baseline",
+    seed_lr_override: float | None = None,  # PIN-E: 0.0 freezes seed params (delta stays fixed)
     use_telemetry: bool = True,
     lr: float = DEFAULT_LEARNING_RATE,
     clip_ratio: float = DEFAULT_CLIP_RATIO,
@@ -889,7 +904,7 @@ def train_ppo_vectorized(
     # Lazy import to avoid circular dependency
     from esper.runtime import get_task_spec
 
-    task_spec = get_task_spec(task)
+    task_spec = apply_seed_lr_override(get_task_spec(task), seed_lr_override)
     ActionEnum = task_spec.action_enum
 
     # Derive slot_config from host's injection specs, filtered to requested slots

@@ -69,13 +69,15 @@ def test_dispatch_rejects_unknown_schedule_and_bad_epoch():
 
 
 def test_placebo_schedule_shape():
-    """3 staggered placebo lifecycles: germinate 1/2/3, ADVANCE to TRAINING
-    4/5/6, ADVANCE to BLENDING after the 10-epoch G2 dwell 14/15/16, ADVANCE to
-    HOLDING 17/18/19, WAIT forever after — and NO fossilize step ever
-    (fossilized slots are ablation-invisible at shapley_synergy_scale=0)."""
+    """3 SERIAL placebo lifecycles (the D3 rule masks GERMINATE while any seed
+    is GERMINATED/TRAINING, so each placebo reaches HOLDING before the next
+    germinates; BLENDING ramps alpha over 5 STANDARD-tempo epochs):
+    s0 germ@1/train@2/blend@12/hold@17; s1 18/19/29/34; s2 35/36/46/51.
+    WAIT forever after — and NO fossilize step ever (fossilized slots are
+    ablation-invisible at shapley_synergy_scale=0)."""
     sched = DECLARED_SCHEDULES[FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1]
 
-    for epoch, slot in ((1, 0), (2, 1), (3, 2)):
+    for epoch, slot in ((1, 0), (18, 1), (35, 2)):
         action = declared_schedule_action_for_epoch(
             FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1, epoch
         )
@@ -84,9 +86,9 @@ def test_placebo_schedule_shape():
         assert action.blueprint == BlueprintAction.PLACEBO
 
     for epoch, slot in (
-        (4, 0), (5, 1), (6, 2),        # -> TRAINING
-        (14, 0), (15, 1), (16, 2),     # -> BLENDING (>=10 epochs TRAINING dwell)
-        (17, 0), (18, 1), (19, 2),     # -> HOLDING
+        (2, 0), (19, 1), (36, 2),      # -> TRAINING
+        (12, 0), (29, 1), (46, 2),     # -> BLENDING (10-epoch TRAINING dwell)
+        (17, 0), (34, 1), (51, 2),     # -> HOLDING (5-epoch alpha ramp)
     ):
         action = declared_schedule_action_for_epoch(
             FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1, epoch
@@ -94,17 +96,19 @@ def test_placebo_schedule_shape():
         assert action.op == LifecycleOp.ADVANCE, f"epoch {epoch}"
         assert action.slot_idx == slot, f"epoch {epoch}"
 
-    for epoch in (7, 13, 20, 150):
+    for epoch in (5, 11, 28, 45, 52, 150):
         assert declared_schedule_action_for_epoch(
             FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1, epoch
         ).op == LifecycleOp.WAIT
 
     assert all(step.action.op != LifecycleOp.FOSSILIZE for step in sched.steps)
-    # 10-epoch TRAINING dwell per slot (G2 permissive requirement).
-    germinate_to_training = {0: 4, 1: 5, 2: 6}
-    training_to_blending = {0: 14, 1: 15, 2: 16}
+    # 10-epoch TRAINING dwell + 5-epoch blend ramp per slot.
+    training_entry = {0: 2, 1: 19, 2: 36}
+    blending_entry = {0: 12, 1: 29, 2: 46}
+    holding_entry = {0: 17, 1: 34, 2: 51}
     for slot in (0, 1, 2):
-        assert training_to_blending[slot] - germinate_to_training[slot] == 10
+        assert blending_entry[slot] - training_entry[slot] == 10
+        assert holding_entry[slot] - blending_entry[slot] == 5
 
 
 def test_germinate_blueprints_helper():
