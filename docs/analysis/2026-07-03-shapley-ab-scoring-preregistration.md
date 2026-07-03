@@ -9,7 +9,13 @@ plan `docs/plans/ready/2026-07-03-pre-ab-build.md`.
 ON = `configs/config-3slot-3seed-baseline-shaped-shapley-on.json` (scale=1.0,
 tau=0.28, cap=5.0, std_floor=0.25, normalized_cap=3.0). Paired seeds 41–45,
 **same commit for both arms** (PDR-0015 NUM_BLUEPRINTS constraint) — record the
-launch commit hash here at launch: `<commit>`.
+launch commit hash here at launch: **`6dd80716`** (launched 2026-07-03, owner GPU-go;
+working tree carried doc/tooling-only churn — no source diffs — noted for provenance).
+**Launch plan:** telemetry → `telemetry/shapley_ab_n5/{off,on}_s<seed>`; per GPU, the
+OFF wave runs first then the ON wave (cuda:0 = seeds {41,43,45}, cuda:1 = {42,44},
+mirroring the causal_r1_n5 sweep pattern); command per run:
+`uv run python -m esper.scripts.train ppo --config-json <arm-config> --seed <s>
+--device cuda:<i> --gpu-preload --no-tui --telemetry-dir telemetry/shapley_ab_n5/<arm>_s<s>`.
 
 ## Primary gates — design criteria (i)–(v), operationalized
 
