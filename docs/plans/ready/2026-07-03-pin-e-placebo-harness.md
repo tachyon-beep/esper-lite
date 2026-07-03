@@ -154,14 +154,21 @@ the governor preflight honest (`preflight_blueprint_id = BLUEPRINT_IDS[blueprint
   `apply_proof_baseline_action_controls` forcing path.
 
 ### 2.4 New declared schedule + dispatch generalization
-`FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1` — three staggered placebo lifecycles (the schedule pins ONE
-action per epoch): germinate s0@1/s1@2/s2@3 → advance-to-TRAINING s0@4/s1@5/s2@6 → after the
-10-epoch G2 TRAINING dwell, advance-to-BLENDING s0@14/s1@15/s2@16 → advance-to-HOLDING
-s0@17/s1@18/s2@19 (G3 permissive skips the blend dwell; INSTANT α ⇒ α=1 from BLENDING entry) →
-**WAIT forever** (no fossilize step). All three at HOLDING α=1 from epoch 19 to max_epochs. Exact
-epochs are finalized against the G2/G3 gate math in WI-5's integration test before any GPU run.
-Skeleton follows `STATIC_FINAL_SOURCE_TOPOLOGY_STEPS` (`leyline/proof_baselines.py:133-154`) minus
-fossilize, times three slots.
+**(AS BUILT — two corrections surfaced by the WI-5 gate test, exactly what it exists for:)**
+1. **D3 germination rule:** the action mask blocks GERMINATE while ANY seed is in
+   GERMINATED/TRAINING (anti-PBRS-farming, `action_masks.py:86-89`) — a parallel 1/2/3 stagger is
+   structurally impossible. The schedule is **SERIAL**: each placebo reaches HOLDING (which does
+   not block D3) before the next germinates. Also more ecologically valid — real runs develop
+   seeds under the same rule.
+2. **`alpha_speed=INSTANT` does NOT skip the BLENDING ramp** — alpha follows the tempo-driven
+   sigmoid (`TEMPO_TO_EPOCHS[STANDARD]=5`); measured α≈0.024 one epoch into BLENDING. HOLDING
+   advances land 5 epochs after BLENDING entry, mirroring STATIC_FINAL_SOURCE arithmetic.
+
+`FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1` final shape: s0 germinate@1 / →TRAINING@2 (10-epoch G2
+dwell) / →BLENDING@12 (5-epoch ramp) / →HOLDING@17; s1 18/19/29/34; s2 35/36/46/51; **WAIT
+forever** (no fossilize step). All three co-resident at HOLDING α=1 from epoch 51 to max_epochs.
+Dispatch generalized via the `DECLARED_SCHEDULES` registry (per-schedule import-time hash guard;
+hardcoded `*_action_for_epoch` functions deleted, all call sites updated).
 
 The dispatch is currently hardcoded to one schedule (`fixed_schedule_action_for_epoch`
 `:187-198`; runner validation `vectorized_trainer.py:392-403`). Generalize: a
@@ -176,7 +183,7 @@ the same commit). Import-time hash guard retained per schedule.
   **Primary population for tau = ONE sample per episode: the single true terminal epoch** (the
   term fires once at `epoch==max_epochs` on a converged host) — ~360 independent (φ−c_paid)
   triples/seed (3 null players/episode, within-episode correlated ⇒ block-bootstrap by episode,
-  drl R1b/d). The ~130-epoch HOLDING window feeds D1 and secondary/detrended diagnostics only
+  drl R1b/d). The ~99-epoch all-HOLDING window (51..150) feeds D1 and secondary diagnostics only
   (heavily autocorrelated; effective N/episode ≈ 1 at a converged terminal). Sufficiency is
   bound to the block-bootstrap CI width vs the tau estimate, not raw sample count (drl Q6).
   Runtime estimate ~1h/run (scaling from 6.6h @ 200 rounds, run sheet `:27`) — verify by smoke
@@ -194,9 +201,11 @@ Read `events.jsonl` raw (template: `scripts/causal_contribution_j_analyze.py`). 
   Cross-check against `COUNTERFACTUAL_MATRIX_COMPUTED` configs — for a SINGLE active seed there is
   NO `all_off` config (only built for 2≤n≤4, `vectorized_trainer.py:1082`); v(∅) is the `solo`
   config (slot forced α=0), which for one seed IS the empty coalition.
-- **Alpha note:** the schedule uses `alpha_speed=INSTANT`, so BLENDING already sits at α=1 — the
-  BLENDING/HOLDING per-stage split is nominal (both at full amplitude). That is intentional: φ is
-  measured at full amplitude, so every on-path sample is collected in the φ-relevant regime.
+- **Alpha note (corrected by WI-5):** BLENDING is a genuine 5-epoch ramp window (α ramps
+  0.02→1.0; `alpha_speed=INSTANT` does not skip it). The BLENDING-stage floor is therefore
+  measured at reduced amplitude — report it in D1, derive nothing from it (drl (e): expected
+  quantization-limited). **HOLDING = full amplitude = the only tau-relevant regime**, and the
+  terminal epoch is deep inside the all-three-HOLDING window (51..150).
 - Per-episode integrals: `ANALYTICS_SNAPSHOT kind='seed_residency'`
   (`cf_weighted_integral`, `n_on_path_steps`, `n_none_steps`, `j_per_param`).
 
