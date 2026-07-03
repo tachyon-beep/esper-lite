@@ -75,13 +75,18 @@ def main() -> None:
                         "batch present in ALL runs)")
     args = parser.parse_args()
 
+    # Only COMPLETE pairs enter `runs`: the whole-`runs` consumers below (the
+    # common-batch endpoint intersection, the Tier-1 pooled screen) would
+    # otherwise silently include a one-armed orphan (esper-lite-72fb7074ca).
     runs: dict[tuple[str, int], list[dict]] = {}
     for seed in args.seeds:
-        for arm in ("control", "retro"):
-            path = args.dir / f"tier2_{arm}_s{seed}.jsonl"
-            if not path.exists():
+        paths = {arm: args.dir / f"tier2_{arm}_s{seed}.jsonl" for arm in ("control", "retro")}
+        missing = [p for p in paths.values() if not p.exists()]
+        if missing:
+            for path in missing:
                 print(f"MISSING: {path} — pair for seed {seed} incomplete, skipping seed")
-                break
+            continue
+        for arm, path in paths.items():
             runs[(arm, seed)] = load_run(path)
 
     seeds = [s for s in args.seeds if ("control", s) in runs and ("retro", s) in runs]
