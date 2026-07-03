@@ -18,6 +18,7 @@ from esper.leyline import (
     AlphaSpeedAction,
     AnalyticsSnapshotPayload,
     BLUEPRINT_IDS,
+    BlueprintAction,
     EPISODE_SUCCESS_THRESHOLD,
     EpisodeOutcome,
     EpisodeOutcomePayload,
@@ -325,6 +326,9 @@ class ActionExecutionContext:
     # Defaulted so existing context constructions (and unit-test fakes) stay valid on the
     # OFF leg; the trainer sets it from self.agent.hra_value_decomposition.
     hra_value_decomposition: bool = False
+    # PIN-E: blueprints a declared proof-baseline schedule germinates that must be
+    # unioned into the blueprint availability mask (empty for non-scheduled runs).
+    extra_blueprints: frozenset[BlueprintAction] = frozenset()
 
 
 @dataclass
@@ -1571,6 +1575,7 @@ def execute_actions(
                     device=torch.device(device),
                     topology=task_spec.topology,
                     disable_advance=context.disable_advance,
+                    extra_blueprints=context.extra_blueprints,
                 )
             )
 

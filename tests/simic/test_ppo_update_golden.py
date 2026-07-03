@@ -152,28 +152,34 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig) -> None:
 # the new architecture, regenerated and verified stable across repeated runs. (K=1 ratio
 # is now exactly 1.0 -- the new V(s) head leaves the epoch-0 anchored ratio identity
 # cleaner than the prior 0.9999998 float residue.)
+# RE-BASELINED 2026-07-03 (PIN-E: BlueprintAction.PLACEBO, NUM_BLUEPRINTS 13->14).
+# The wider blueprint head + embedding row shift the orthogonal-init RNG draw
+# sequence AND the seeded fill-buffer trajectory (different sampled states ->
+# different masks -> different surviving per-head entropy), so every metric
+# legitimately moves. Regenerated and verified bit-identical across repeated
+# runs, same procedure as the 2026-06-17 re-baseline above.
 _GOLDENS: dict[int, dict[str, float]] = {
     1: {
-        "policy_loss": -1.1549229621887207,
-        "value_loss": 0.025900892913341522,
-        "entropy": 6.99962043762207,
+        "policy_loss": -0.7800129652023315,
+        "value_loss": 0.04450620710849762,
+        "entropy": 4.399840354919434,
         "approx_kl": 0.0,
         "clip_fraction": 0.0,
         "ratio_mean": 1.0,
-        "ratio_max": 1.0,
+        "ratio_max": 1.0000001192092896,
         "ratio_min": 1.0,
-        "ratio_std": 0.0,
+        "ratio_std": 6.882551417675131e-08,
     },
     4: {
-        "policy_loss": -1.3849077224731445,
-        "value_loss": 0.01459794957190752,
-        "entropy": 6.966041088104248,
-        "approx_kl": 0.007933689281344414,
-        "clip_fraction": 0.3125,
-        "ratio_mean": 1.294655680656433,
-        "ratio_max": 3.2952778339385986,
-        "ratio_min": 0.8902816772460938,
-        "ratio_std": 0.4891107678413391,
+        "policy_loss": -1.0347375869750977,
+        "value_loss": 0.020116401836276054,
+        "entropy": 4.383790969848633,
+        "approx_kl": 0.010353856720030308,
+        "clip_fraction": 0.375,
+        "ratio_mean": 1.003546953201294,
+        "ratio_max": 1.5737634897232056,
+        "ratio_min": 0.6655834317207336,
+        "ratio_std": 0.2271275520324707,
     },
 }
 

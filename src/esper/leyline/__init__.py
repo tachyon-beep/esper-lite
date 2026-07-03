@@ -369,11 +369,14 @@ from esper.leyline.proof_baselines import (
     STATIC_FINAL_SOURCE_TOPOLOGY_V1,
     STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
     STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS,
+    DECLARED_SCHEDULES,
+    DeclaredSchedule,
     ProofBaselineCohort,
     ProofBaselineMode,
     ProofBaselinePlan,
     StaticFinalSourceManifestRef,
-    static_final_source_action_for_epoch,
+    declared_schedule_action_for_epoch,
+    declared_schedule_germinate_blueprints,
 )
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
@@ -639,7 +642,7 @@ BLUEPRINT_NULL_INDEX = NUM_BLUEPRINTS
 # Embedding dimension for blueprint vectors.
 # Small (4) because blueprints are low-cardinality (13 types).
 # Larger dims would overfit; 4 is sufficient for type discrimination.
-# Total embedding params: (NUM_BLUEPRINTS + 1) * EMBED_DIM = 14 * 4 = 56
+# Total embedding params: (NUM_BLUEPRINTS + 1) * EMBED_DIM = 15 * 4 = 60
 DEFAULT_BLUEPRINT_EMBED_DIM = 4
 
 # Obs V3 base observation dimension (before blueprint embeddings are concatenated).
@@ -981,7 +984,10 @@ __all__ = [
     "STATIC_FINAL_SOURCE_TOPOLOGY_VERSION",
     "STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS",
     "StaticFinalSourceManifestRef",
-    "static_final_source_action_for_epoch",
+    "DECLARED_SCHEDULES",
+    "DeclaredSchedule",
+    "declared_schedule_action_for_epoch",
+    "declared_schedule_germinate_blueprints",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
     "NUM_ALPHA_SPEEDS",

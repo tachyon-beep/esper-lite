@@ -32,6 +32,11 @@ class BlueprintAction(IntEnum):
     MLP_SMALL = 10
     MLP = 11
     FLEX_ATTENTION = 12
+    # PIN-E measurement placebo: a first-class member because the observation
+    # encoder fail-louds on non-enum blueprint_ids, but deliberately absent
+    # from CNN_BLUEPRINTS/TRANSFORMER_BLUEPRINTS — only a declared
+    # proof-baseline schedule surfaces it (mask extra_blueprints union).
+    PLACEBO = 13
 
     def to_blueprint_id(self) -> str:
         """Map to registered blueprint name.
@@ -53,6 +58,7 @@ class BlueprintAction(IntEnum):
             10: "mlp_small",
             11: "mlp",
             12: "flex_attention",
+            13: "placebo",
         }
         return mapping[self.value]
 

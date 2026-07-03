@@ -290,18 +290,21 @@ def test_off_leg_update_emits_no_cf_or_ev_keys() -> None:
 # Pinned 2026-06-24 from the deterministic ON build (seed 123, the _fill_buffer above).
 # These are the new-architecture deterministic output; regenerate + re-pin only on an
 # intentional ON-leg change. Tolerance mirrors the golden file's strict band.
+# RE-BASELINED 2026-07-03 (PIN-E: BlueprintAction.PLACEBO, NUM_BLUEPRINTS 13->14).
+# Wider blueprint head + embedding row shift the init-RNG draw sequence and the
+# seeded fill-buffer trajectory; regenerated, bit-identical across repeated runs.
 _ON_GOLDENS: dict[int, dict[str, float]] = {
     1: {
-        "policy_loss": -2.0044755935668945,
-        "value_loss": 0.007826905697584152,
-        "cf_value_loss": 0.009760173037648201,
-        "entropy": 6.799691200256348,
+        "policy_loss": 5.144352912902832,
+        "value_loss": 0.010874505154788494,
+        "cf_value_loss": 0.0032510568853467703,
+        "entropy": 9.399567604064941,
     },
     4: {
-        "policy_loss": -2.425248146057129,
-        "value_loss": 0.005328205414116383,
-        "cf_value_loss": 0.0037804325111210346,
-        "entropy": 6.764498710632324,
+        "policy_loss": 4.491600036621094,
+        "value_loss": 0.006555970758199692,
+        "cf_value_loss": 0.0016773276729509234,
+        "entropy": 9.366403579711914,
     },
 }
 

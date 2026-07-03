@@ -155,6 +155,7 @@ def compute_action_masks(
     topology: Topology = "cnn",
     allow_governor_override: bool = False,
     disable_advance: bool = False,
+    extra_blueprints: frozenset[BlueprintAction] = frozenset(),
 ) -> dict[str, torch.Tensor]:
     """Compute action masks based on slot states.
 
@@ -243,6 +244,12 @@ def compute_action_masks(
     valid_blueprints = TRANSFORMER_BLUEPRINTS if topology == "transformer" else CNN_BLUEPRINTS
     for bp in valid_blueprints:
         # NOOP is technically in the sets but we force it masked out anyway below
+        blueprint_mask[bp] = True
+
+    # Declared proof-baseline schedules may germinate blueprints that are
+    # deliberately absent from the topology sets (e.g. PLACEBO): the run-level
+    # union keeps the forced germination legal without polluting normal runs.
+    for bp in extra_blueprints:
         blueprint_mask[bp] = True
 
     # NOOP is a placeholder seed with no trainable parameters - always disable
@@ -369,6 +376,7 @@ def compute_batch_masks(
     topology: Topology = "cnn",
     allow_governor_override: bool = False,
     disable_advance: bool = False,
+    extra_blueprints: frozenset[BlueprintAction] = frozenset(),
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
 
@@ -420,6 +428,7 @@ def compute_batch_masks(
             topology=topology,
             allow_governor_override=allow_governor_override,
             disable_advance=disable_advance,
+            extra_blueprints=extra_blueprints,
         )
         for i, slot_states in enumerate(batch_slot_states)
     ]

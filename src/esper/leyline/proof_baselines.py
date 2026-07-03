@@ -155,6 +155,61 @@ STATIC_FINAL_SOURCE_TOPOLOGY_STEPS: tuple[ProofBaselineScheduleStep, ...] = (
 STATIC_FINAL_SOURCE_TOPOLOGY_MIN_EPOCHS = STATIC_FINAL_SOURCE_TOPOLOGY_STEPS[-1].epoch
 
 
+# --- PIN-E 3-slot placebo hold schedule (esper-lite-94869250f1) ---
+# Three staggered near-inert placebo lifecycles, all held at HOLDING alpha=1
+# for the remainder of the run. Deliberately NO fossilize step: fossilized
+# slots are excluded from the ablation family at shapley_synergy_scale=0, so a
+# fossilized placebo would be invisible to the noise-floor measurement. The
+# 10-epoch TRAINING dwell per slot satisfies the permissive G2 gate.
+FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1 = "fixed-schedule-hold-placebo-3slot-v1"
+FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_VERSION = 1
+
+
+def _placebo_germinate_action(slot_idx: int) -> FactoredAction:
+    return FactoredAction(
+        slot_idx=slot_idx,
+        blueprint=BlueprintAction.PLACEBO,
+        style=GerminationStyle.SIGMOID_ADD,
+        tempo=TempoAction.STANDARD,
+        alpha_target=AlphaTargetAction.FULL,
+        alpha_speed=AlphaSpeedAction.INSTANT,
+        alpha_curve=AlphaCurveAction.LINEAR,
+        op=LifecycleOp.GERMINATE,
+    )
+
+
+def _advance_action(slot_idx: int) -> FactoredAction:
+    return FactoredAction(
+        slot_idx=slot_idx,
+        blueprint=BlueprintAction.NOOP,
+        style=GerminationStyle.SIGMOID_ADD,
+        tempo=TempoAction.STANDARD,
+        alpha_target=AlphaTargetAction.FULL,
+        alpha_speed=AlphaSpeedAction.INSTANT,
+        alpha_curve=AlphaCurveAction.LINEAR,
+        op=LifecycleOp.ADVANCE,
+    )
+
+
+FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_STEPS: tuple[ProofBaselineScheduleStep, ...] = tuple(
+    ProofBaselineScheduleStep(epoch=epoch, action=action)
+    for epoch, action in (
+        (1, _placebo_germinate_action(0)),
+        (2, _placebo_germinate_action(1)),
+        (3, _placebo_germinate_action(2)),
+        (4, _advance_action(0)),   # -> TRAINING
+        (5, _advance_action(1)),
+        (6, _advance_action(2)),
+        (14, _advance_action(0)),  # -> BLENDING (10-epoch G2 dwell: 4..13)
+        (15, _advance_action(1)),
+        (16, _advance_action(2)),
+        (17, _advance_action(0)),  # -> HOLDING (alpha=1, INSTANT)
+        (18, _advance_action(1)),
+        (19, _advance_action(2)),
+    )
+)
+
+
 def _schedule_hash(steps: tuple[ProofBaselineScheduleStep, ...]) -> str:
     payload = [
         {
@@ -170,43 +225,109 @@ def _schedule_hash(steps: tuple[ProofBaselineScheduleStep, ...]) -> str:
 FIXED_SCHEDULE_GERMINATE_R0C0_HASH = _schedule_hash(
     FIXED_SCHEDULE_GERMINATE_R0C0_STEPS
 )
-if (
-    FIXED_SCHEDULE_GERMINATE_R0C0_HASH
-    != FIXED_SCHEDULE_GERMINATE_R0C0_EXPECTED_HASH
-):
-    raise RuntimeError(
-        "fixed-schedule hash drift: update the schedule version and proof fixtures"
-    )
 FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT = len(
     FIXED_SCHEDULE_GERMINATE_R0C0_STEPS
 )
 STATIC_FINAL_SOURCE_TOPOLOGY_HASH = _schedule_hash(STATIC_FINAL_SOURCE_TOPOLOGY_STEPS)
 STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT = len(STATIC_FINAL_SOURCE_TOPOLOGY_STEPS)
+STATIC_FINAL_SOURCE_TOPOLOGY_EXPECTED_HASH = (
+    "ec5bbce4686177b486454a3a87b43a45c0724e790028ea66eda9c2078f838f3c"
+)
+FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_HASH = _schedule_hash(
+    FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_STEPS
+)
+FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_ACTION_COUNT = len(
+    FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_STEPS
+)
+FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_EXPECTED_HASH = (
+    "8484773896a8ba74137b7c29106def29b83c316f6c6bb3383d0dad854cf4b7c3"
+)
 
 
-def fixed_schedule_action_for_epoch(epoch: int) -> FactoredAction:
-    """Return the declared fixed-schedule action for an epoch.
+@dataclass(frozen=True, slots=True)
+class DeclaredSchedule:
+    """A hash-guarded declared proof-baseline lifecycle schedule."""
 
-    Epochs without an explicit lifecycle operation are scheduled WAIT steps.
-    """
-    if epoch < 1:
-        raise ValueError(f"fixed-schedule epoch must be >= 1, got {epoch}")
+    schedule_id: str
+    version: int
+    steps: tuple[ProofBaselineScheduleStep, ...]
+    expected_hash: str
 
-    for step in FIXED_SCHEDULE_GERMINATE_R0C0_STEPS:
-        if step.epoch == epoch:
-            return step.action
-    return WAIT_FIXED_SCHEDULE_ACTION
+    @property
+    def hash(self) -> str:
+        return _schedule_hash(self.steps)
+
+    @property
+    def action_count(self) -> int:
+        return len(self.steps)
+
+    def action_for_epoch(self, epoch: int) -> FactoredAction:
+        """Return the declared action for an epoch (WAIT when unscheduled)."""
+        if epoch < 1:
+            raise ValueError(f"declared-schedule epoch must be >= 1, got {epoch}")
+        for step in self.steps:
+            if step.epoch == epoch:
+                return step.action
+        return WAIT_FIXED_SCHEDULE_ACTION
 
 
-def static_final_source_action_for_epoch(epoch: int) -> FactoredAction:
-    """Return the deterministic source-final topology action for an epoch."""
-    if epoch < 1:
-        raise ValueError(f"static-final source epoch must be >= 1, got {epoch}")
+DECLARED_SCHEDULES: dict[str, DeclaredSchedule] = {
+    schedule.schedule_id: schedule
+    for schedule in (
+        DeclaredSchedule(
+            schedule_id=FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+            version=FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
+            steps=FIXED_SCHEDULE_GERMINATE_R0C0_STEPS,
+            expected_hash=FIXED_SCHEDULE_GERMINATE_R0C0_EXPECTED_HASH,
+        ),
+        DeclaredSchedule(
+            schedule_id=STATIC_FINAL_SOURCE_TOPOLOGY_V1,
+            version=STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
+            steps=STATIC_FINAL_SOURCE_TOPOLOGY_STEPS,
+            expected_hash=STATIC_FINAL_SOURCE_TOPOLOGY_EXPECTED_HASH,
+        ),
+        DeclaredSchedule(
+            schedule_id=FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1,
+            version=FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_VERSION,
+            steps=FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_STEPS,
+            expected_hash=FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_EXPECTED_HASH,
+        ),
+    )
+}
 
-    for step in STATIC_FINAL_SOURCE_TOPOLOGY_STEPS:
-        if step.epoch == epoch:
-            return step.action
-    return WAIT_FIXED_SCHEDULE_ACTION
+for _schedule in DECLARED_SCHEDULES.values():
+    if _schedule.hash != _schedule.expected_hash:
+        raise RuntimeError(
+            f"declared-schedule hash drift for {_schedule.schedule_id!r}: "
+            "update the schedule version and proof fixtures"
+        )
+del _schedule
+
+
+def declared_schedule_action_for_epoch(schedule_id: str, epoch: int) -> FactoredAction:
+    """Dispatch to a registered declared schedule by id."""
+    if schedule_id not in DECLARED_SCHEDULES:
+        raise ValueError(
+            f"Unknown declared schedule {schedule_id!r}; "
+            f"known: {sorted(DECLARED_SCHEDULES)}"
+        )
+    return DECLARED_SCHEDULES[schedule_id].action_for_epoch(epoch)
+
+
+def declared_schedule_germinate_blueprints(
+    schedule_id: str,
+) -> frozenset[BlueprintAction]:
+    """Blueprints a declared schedule germinates (for mask availability union)."""
+    if schedule_id not in DECLARED_SCHEDULES:
+        raise ValueError(
+            f"Unknown declared schedule {schedule_id!r}; "
+            f"known: {sorted(DECLARED_SCHEDULES)}"
+        )
+    return frozenset(
+        step.action.blueprint
+        for step in DECLARED_SCHEDULES[schedule_id].steps
+        if step.action.op == LifecycleOp.GERMINATE
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,8 +394,17 @@ __all__ = [
     "STATIC_FINAL_SOURCE_TOPOLOGY_V1",
     "STATIC_FINAL_SOURCE_TOPOLOGY_VERSION",
     "STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS",
+    "STATIC_FINAL_SOURCE_TOPOLOGY_EXPECTED_HASH",
+    "DECLARED_SCHEDULES",
+    "DeclaredSchedule",
+    "FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_ACTION_COUNT",
+    "FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_EXPECTED_HASH",
+    "FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_HASH",
+    "FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_STEPS",
+    "FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_V1",
+    "FIXED_SCHEDULE_HOLD_PLACEBO_3SLOT_VERSION",
     "StaticFinalSourceManifestRef",
     "WAIT_FIXED_SCHEDULE_ACTION",
-    "fixed_schedule_action_for_epoch",
-    "static_final_source_action_for_epoch",
+    "declared_schedule_action_for_epoch",
+    "declared_schedule_germinate_blueprints",
 ]

@@ -14,6 +14,7 @@ import torch.nn as nn
 
 from esper.leyline import (
     AlphaAlgorithm,
+    BlueprintAction,
     FactoredAction,
     HEAD_NAMES,
     LifecycleOp,
@@ -28,17 +29,13 @@ from esper.leyline.causal_intervention import (
     SUPPRESS_SLOT_TARGET_SLOT_ID,
 )
 from esper.leyline.proof_baselines import (
-    FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT,
-    FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
-    FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
-    FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+    DECLARED_SCHEDULES,
     STATIC_FINAL_SOURCE_LIFECYCLE_POLICY,
     STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT,
     STATIC_FINAL_SOURCE_TOPOLOGY_HASH,
     STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
     STATIC_FINAL_SOURCE_TOPOLOGY_V1,
-    fixed_schedule_action_for_epoch,
-    static_final_source_action_for_epoch,
+    declared_schedule_germinate_blueprints,
 )
 from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry import (
@@ -342,7 +339,9 @@ def apply_proof_baseline_action_controls(
                 f"proof_baseline_schedule_id={STATIC_FINAL_SOURCE_TOPOLOGY_V1!r}, "
                 "the matching hash, version, and action count"
             )
-        action = static_final_source_action_for_epoch(epoch)
+        action = DECLARED_SCHEDULES[STATIC_FINAL_SOURCE_TOPOLOGY_V1].action_for_epoch(
+            epoch
+        )
         _force_scheduled_action_masks(
             masks_batch=masks_batch,
             action=action,
@@ -390,18 +389,24 @@ def apply_proof_baseline_action_controls(
         )
 
     if lifecycle_policy == "apply_declared_lifecycle_schedule":
+        if schedule_id not in DECLARED_SCHEDULES:
+            raise ValueError(
+                "apply_declared_lifecycle_schedule requires a registered "
+                f"proof_baseline_schedule_id; got {schedule_id!r}, "
+                f"known: {sorted(DECLARED_SCHEDULES)}"
+            )
+        schedule = DECLARED_SCHEDULES[schedule_id]
         if (
-            schedule_id != FIXED_SCHEDULE_GERMINATE_R0C0_V1
-            or schedule_hash != FIXED_SCHEDULE_GERMINATE_R0C0_HASH
-            or schedule_version != FIXED_SCHEDULE_GERMINATE_R0C0_VERSION
-            or schedule_action_count != FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+            schedule_hash != schedule.hash
+            or schedule_version != schedule.version
+            or schedule_action_count != schedule.action_count
         ):
             raise ValueError(
-                "apply_declared_lifecycle_schedule requires "
-                f"proof_baseline_schedule_id={FIXED_SCHEDULE_GERMINATE_R0C0_V1!r}, "
-                "the matching hash, version, and action count"
+                "apply_declared_lifecycle_schedule provenance mismatch for "
+                f"{schedule_id!r}: hash, version, and action count must match "
+                "the registered schedule"
             )
-        action = fixed_schedule_action_for_epoch(epoch)
+        action = schedule.action_for_epoch(epoch)
         _force_scheduled_action_masks(
             masks_batch=masks_batch,
             action=action,
@@ -755,6 +760,8 @@ class VectorizedPPOTrainer:
     proof_baseline_suppression_enabled: bool = False
     experiment_rng: Any = None
     action_execution_context: ActionExecutionContext = field(init=False)
+    # PIN-E: germinate blueprints of the active declared schedule (mask union).
+    schedule_extra_blueprints: frozenset[BlueprintAction] = field(init=False)
     ppo_coordinator: PPOCoordinator = field(init=False)
     # Tier-0 phase-profiler handle. NullProfiler until run() enters the real
     # instrument; safe to call .phase()/.drain() before run() (no-op).
@@ -785,6 +792,14 @@ class VectorizedPPOTrainer:
         # deprecated torch.backends.cuda.matmul.allow_tf32 (a redundant second path).
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.allow_tf32 = True
+        # PIN-E: a declared schedule may germinate blueprints (e.g. PLACEBO)
+        # that are absent from the topology availability sets; union them into
+        # the blueprint mask for this run so the forced germination is legal.
+        self.schedule_extra_blueprints = (
+            declared_schedule_germinate_blueprints(self.proof_baseline_schedule_id)
+            if self.proof_baseline_schedule_id is not None
+            else frozenset()
+        )
         self.action_execution_context = ActionExecutionContext(
             slots=self.slots,
             ordered_slots=validate_slot_ids(list(self.slots)),
@@ -810,6 +825,7 @@ class VectorizedPPOTrainer:
             host_params_baseline=self.host_params_baseline,
             # EV-stab Stage 2: construction-time constant; gates the cf reward split.
             hra_value_decomposition=self.agent.hra_value_decomposition,
+            extra_blueprints=self.schedule_extra_blueprints,
         )
 
         # Create PPO coordinator for update phase
@@ -2209,6 +2225,7 @@ class VectorizedPPOTrainer:
                 device=torch.device(device),
                 topology=task_spec.topology,
                 disable_advance=disable_advance,
+                extra_blueprints=self.schedule_extra_blueprints,
             )
             all_masks.append(mask)
 
