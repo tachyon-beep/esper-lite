@@ -2096,7 +2096,6 @@ class VectorizedPPOTrainer:
         obs_normalizer = self.obs_normalizer
         initial_obs_normalizer_mean = self.initial_obs_normalizer_mean
         ops_telemetry_enabled = self.ops_telemetry_enabled
-        use_telemetry = self.use_telemetry
         emitters = self.emitters
         device = self.device
         effective_max_seeds = self.effective_max_seeds

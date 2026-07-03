@@ -70,7 +70,8 @@ def create_placebo_seed(dim: int, **kwargs: Any) -> nn.Module:
             nn.init.normal_(self.conv.weight, std=PLACEBO_INIT_STD)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + self.conv(x)
+            delta: torch.Tensor = self.conv(x)
+            return x + delta
 
     return PlaceboSeed(dim)
 

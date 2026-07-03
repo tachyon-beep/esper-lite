@@ -489,15 +489,15 @@ class TrainingConfig:
         if self.value_warmup_batches < 0:
             raise ValueError("value_warmup_batches cannot be negative")
 
-        for name in (
-            "shapley_synergy_scale",
-            "shapley_synergy_noise_floor",
-            "shapley_synergy_cap",
-            "shapley_synergy_std_floor",
-            "shapley_synergy_normalized_cap",
+        for name, value in (
+            ("shapley_synergy_scale", self.shapley_synergy_scale),
+            ("shapley_synergy_noise_floor", self.shapley_synergy_noise_floor),
+            ("shapley_synergy_cap", self.shapley_synergy_cap),
+            ("shapley_synergy_std_floor", self.shapley_synergy_std_floor),
+            ("shapley_synergy_normalized_cap", self.shapley_synergy_normalized_cap),
         ):
-            if getattr(self, name) < 0.0:
-                raise ValueError(f"{name} must be >= 0 (got {getattr(self, name)})")
+            if value < 0.0:
+                raise ValueError(f"{name} must be >= 0 (got {value})")
         if self.shapley_synergy_normalized_cap > REWARD_NORMALIZER_CLIP:
             # Pre-A/B build WI-4: the credit channel is clip-free
             # (divide_by_std), so normalized_cap is its SOLE operative bound.

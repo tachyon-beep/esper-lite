@@ -222,7 +222,7 @@ def execute_fossilize(
             ctx.env_state.pending_hindsight_credit += hindsight.total_credit
     else:
         hindsight = HindsightCreditResult(
-            total_credit=0.0, scaffold_count=0, total_delay=0.0
+            total_credit=0.0, scaffold_count=0, total_delay=0
         )
 
     # Clear beneficiary from all scaffold ledgers

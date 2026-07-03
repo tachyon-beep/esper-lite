@@ -16,6 +16,8 @@ the reward SUBTRACTS — so naïve summation of the raw fields flips two signs.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
@@ -24,6 +26,21 @@ from esper.simic.rewards.partition import ADDITEND_SIGN_MAP, decompose_additends
 
 def _components(**overrides: float | None) -> RewardComponentsTelemetry:
     return RewardComponentsTelemetry(**overrides)
+
+
+def test_additend_sign_map_keys_are_component_fields() -> None:
+    """Pin the map<->dataclass pairing the decomposition's getattr iteration relies on.
+
+    ``decompose_additends`` reads each ADDITEND_SIGN_MAP key off the typed
+    RewardComponentsTelemetry instance (whitelisted canonical-map iteration,
+    defensive_patterns.yaml). This makes the drift failure a NAMED contract
+    rather than an incidental AttributeError inside other tests.
+    """
+    field_names = {f.name for f in dataclasses.fields(RewardComponentsTelemetry)}
+    missing = set(ADDITEND_SIGN_MAP) - field_names
+    assert not missing, (
+        f"ADDITEND_SIGN_MAP keys must be RewardComponentsTelemetry fields: {sorted(missing)}"
+    )
 
 
 def test_decompose_reconciles_to_reward_raw_exactly() -> None:
