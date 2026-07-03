@@ -1,48 +1,47 @@
-# Current State — Esper        Checkpoint: 2026-07-03 (checkpoint #7 — PIN-E harness BUILT; noise-floor runs IN FLIGHT)
+# Current State — Esper        Checkpoint: 2026-07-03 (checkpoint #8 — tau DELIVERED, plateau trigger FIRED; SHAPED audit banked; prioritization review is next)
 
 ## The bet right now
-**Reward credit-assignment redesign.** Term BUILT default-OFF (PDR-0013); **enablement gate
-OPENED (PDR-0014)** and its first leg — the PIN-E placebo noise-floor harness — is **BUILT,
-ACCEPTED, and measuring** (PDR-0015): full 2-arm GPU runs in flight to set tau.
-`shapley_synergy_scale=0.0` everywhere. Metric: committed-J / corr(reward,J) in the
-enablement A/B; immediate sub-metric: tau (see metrics.md, preliminary +0.252 pp).
+**Reward credit-assignment redesign.** Term BUILT default-OFF (PDR-0013); enablement gate
+OPEN (PDR-0014) with its **first leg DELIVERED**: tau = +0.28 pp CONSERVATIVE-PROVISIONAL
+LOWER BOUND (PDR-0017; memo = esper-lite-f22a1d48a7 comment #98). `shapley_synergy_scale=0.0`
+everywhere. Metric: committed-J / corr(reward,J) in the enablement A/B.
 
 ## In flight
-- **PIN-E noise-floor runs** (esper-lite-94869250f1, in_progress): 3 seeds × std=1e-3 on
-  cuda:0 + 3 seeds × std=1e-4 (epsilon arm) on cuda:1 → `telemetry/pin_e/`. Smoke verified
-  NON-degenerate (PDR-0014 reversal trigger NOT tripped). On completion: run
-  `scripts/pin_e_placebo_analyze.py telemetry/pin_e` (D1 GATE-0 line + D2 tau, committed
-  9be132c1), write `docs/analysis/2026-07-03-pin-e-placebo-noise-floor.md`, post the tau
-  memo to esper-lite-f22a1d48a7, close the task, move the plan to completed/.
-- **Enablement gate** (esper-lite-f22a1d48a7, blocked_by the above): after tau — F2
-  scale/cap calibration, hard off-switch-J efficiency + fossilize-count gate, entrenchment
-  monitor, ON-run dormancy recheck, paired ≥5-seed OFF/ON A/B. Enabling scale>0 stays
-  owner-gated.
-- **Telemetry hygiene** (esper-lite-425dcc4ca2): unchanged. (The fixed-schedule runs print
-  per-head entropy-collapse warnings — expected: the policy is a masked passenger; alarm
-  miscalibration is this issue's scope.)
+- Nothing on GPU. Both subagents idle. esper-lite-94869250f1 CLOSED (@ 05569309);
+  the gate esper-lite-f22a1d48a7 is now UNBLOCKED and waiting on the owner review below.
+- **Telemetry hygiene** (esper-lite-425dcc4ca2): unchanged.
 
-## Open questions / blocked-on-owner
-- **n=10 vs bank-at-n=5 (MAGNITUDE, PDR-0009):** still unanswered; independent of this leg.
-- **metrics.md TARGET numbers** still `<owner-set>` placeholders.
-- **Owner's working tree:** phase-0 doc/CLAUDE.md/AGENTS.md/.gitignore edits remain
-  uncommitted (untouched by the agent); seed_residency test gap = esper-lite-obs-7240279be3.
-- **NUM_BLUEPRINTS 13→14 cost (PDR-0015):** pre-change checkpoints don't load; all paired
-  A/Bs must be same-commit. Standing constraint, not a question.
+## Open questions / blocked-on-owner — THE PRIORITIZATION REVIEW (owner, with full deck)
+The owner deferred all prioritization until this data landed; it has. The deck:
+1. **tau disposition (PDR-0017, trigger FIRED):** epsilon plateau FAILED — the noise
+   floor is magnitude-dependent. Accept +0.28 as lower bound and proceed to F2
+   (recommended); supplement with methodology option (a); or re-scope. Owner's call.
+2. **SHAPED audit findings (PDR-0016, esper-lite-a7ef375203, 9 findings PARKED):**
+   F1 (prune pays unbounded positive, clip-exempt) + F5 (fossilize spuriously suppressed
+   on coalitions) + F3 (PBRS not invariant) + F2 (dense credit keys on r0c0 via WAIT
+   canonicalization). Owner-endorsed synthesis: these jointly rationalize the
+   never-fossilize pathology (fossilize 0.207/ep vs germinate 12.4). Zero-GPU occurrence
+   probes are defined and ready; audit note: run the F1 probe BEFORE reading any Phase −1
+   clip-arm verdict.
+3. **A/B false-negative risk (recorded on the gate):** the top-up pays only at FOSSILIZE;
+   if F1/F5 keep OFF-arm fossilization rare, the A/B can't show an effect. Decide whether
+   F1/F5 fixes (or probes) precede the A/B leg.
+4. Standing: n=10 vs bank-at-n=5 (PDR-0009 — now carries the F2-audit interpretation
+   caveat); metrics.md TARGET placeholders; owner's uncommitted working-tree files
+   (seed_residency gap esper-lite-obs-7240279be3). NUM_BLUEPRINTS 13→14: paired A/Bs
+   must be same-commit (PDR-0015).
 
-## Last checkpoint did (checkpoint #7)
-- **PDR-0015:** k=1→k=3 measurement redesign (dual-review caught φ≡c_paid at k=1 before any
-  code), Option A enum cost accepted, HOLDING-forever schedule; build ACCEPTED.
-- **Delivered WI-1..7** (commits 4d1e4c54..9be132c1, TDD-first): placebo blueprint + PLACEBO
-  action + declared-schedule registry + seed_lr_override + serial schedule + WI-5 gate test
-  + run driver with hard measurement preflight + offline D1/D2 analyzer (agent-built,
-  independently reproduced, ~60 new tests). Rec3 masking-equivalence closed (1c05ba4f).
-- **Metrics:** first tau reading (preliminary smoke) added; non-degeneracy verdict recorded.
-- Tracker: esper-lite-94869250f1 progress comments #95/#96; gate description corrected
-  (pointer mis-binding fixed per PDR-0014).
+## Last checkpoint did (checkpoint #8)
+- **PDR-0016:** SHAPED adversarial audit accepted (5/5 load-bearing claims re-verified in
+  code); 9 findings PARKED per owner directive; committed f3d8db95.
+- **PDR-0017:** full-run tau delivered; PDR-0015 plateau trigger honestly FIRED and
+  flagged (⚠ in metrics.md); disposition proposed, owner decides; esper-lite-94869250f1
+  closed; plan → completed/ (d36c2395); analysis doc 05569309.
+- Metrics: tau row updated to full-run readings with the trigger flag.
 
 ## Next session, start here
-**If the runs finished:** analyze → analysis doc → tau memo on esper-lite-f22a1d48a7 →
-close esper-lite-94869250f1 → plan to completed/. **If a run died:** driver is resumable
-per-seed (`--seeds`), preflight refuses corrupted configs. Then the gate's next leg (F2
-calibration) is DECIDE-ready.
+**The owner's prioritization review** — everything is staged on esper-lite-f22a1d48a7
+(tau memo + options) and esper-lite-a7ef375203 (audit + probe menu). The cheapest first
+move regardless of direction: the zero-GPU F1/F2 occurrence probes over the existing
+n=5 telemetry (telemetry/causal_r1_n5/). Nothing proceeds to F2 calibration or the A/B
+until the owner rules on tau disposition and audit sequencing.

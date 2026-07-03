@@ -14,7 +14,7 @@
 | Metric | Target | Current | Read on |
 |--------|--------|---------|---------|
 | corr(reward, J) — reward aligned to the J yardstick | ≥ TARGET `<owner-set>` | **0.212 ± 0.046 (weak)** | 2026-06-25 (n=5) |
-| **Placebo noise floor tau** = P99 of SIGNED terminal (φ − c_paid) for a null player — the north-star's "placebo-noise-floor" term and the enablement deadband | calibrated when the full-run P99 CI can bound a false-positive budget (CONSERVATIVE-PROVISIONAL until first ON run) | **PRELIMINARY (smoke, N=72): +0.252 pp, block-bootstrap CI [+0.106, +0.380]; NON-degenerate (77.8% nonzero). Full 2-arm read (3 seeds × std {1e-3, 1e-4}, ≈3240 samples/arm) in flight** | 2026-07-03 (smoke) |
+| **Placebo noise floor tau** = P99 of SIGNED terminal (φ − c_paid) for a null player — the north-star's "placebo-noise-floor" term and the enablement deadband | calibrated when the full-run P99 CI can bound a false-positive budget (CONSERVATIVE-PROVISIONAL until first ON run) | **DELIVERED (full 2-arm, 3240 samples/arm): 1e-3 arm +0.2401 CI [+0.2398, +0.2721]; 1e-4 arm +0.1201 CI [+0.1000, +0.1401]. Recommendation +0.28 pp LOWER BOUND. Non-degeneracy PASSED both arms. ⚠ TRIGGER FIRED: epsilon plateau FAILED (PDR-0015) — the floor is magnitude-dependent; disposition awaits owner at esper-lite-f22a1d48a7 (PDR-0017); first-ON-run recalibration MANDATORY** | 2026-07-03 (full) |
 | share_attribution — reward variance carried by the cf-attribution term | context only (magnitude-confounded: `ba`≈68% of |reward|) | 0.925 ± 0.004 | 2026-06-25 (n=5) |
 
 ## Guardrails (must NOT degrade)
