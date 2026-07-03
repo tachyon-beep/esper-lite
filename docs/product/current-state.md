@@ -1,42 +1,48 @@
-# Current State — Esper        Checkpoint: 2026-07-02 (checkpoint #6 — reward-credit term BUILT default-OFF; enablement is the next gate)
+# Current State — Esper        Checkpoint: 2026-07-03 (checkpoint #7 — PIN-E harness BUILT; noise-floor runs IN FLIGHT)
 
 ## The bet right now
-**Reward credit-assignment redesign.** The Committed-Shapley top-up is **BUILT and ACCEPTED
-(PDR-0013)**: owner signed off in-session, same-day plan → specialist review → TDD build → verification
-(reviewer re-pass APPROVE_WITH_CHANGES with its one change closed in-build; adversarial code review
-CLEAN; ~100 new tests; suites green except a pre-existing Phase 0 item). `shapley_synergy_scale=0.0`
-everywhere — nothing is enabled. Metric it moves: committed-J / corr(reward,J) in the enablement A/B.
+**Reward credit-assignment redesign.** Term BUILT default-OFF (PDR-0013); **enablement gate
+OPENED (PDR-0014)** and its first leg — the PIN-E placebo noise-floor harness — is **BUILT,
+ACCEPTED, and measuring** (PDR-0015): full 2-arm GPU runs in flight to set tau.
+`shapley_synergy_scale=0.0` everywhere. Metric: committed-J / corr(reward,J) in the
+enablement A/B; immediate sub-metric: tau (see metrics.md, preliminary +0.252 pp).
 
 ## In flight
-- **Enablement gate** (esper-lite-f22a1d48a7, open, owner-gated): tau from the PIN-E placebo
-  (esper-lite-3d67b09687), F2 scale/cap/normalized_cap calibration, HARD off-switch-J efficiency +
-  fossilize-count gate, entrenchment monitor, ON-run sibling-dormancy recheck, then the paired
-  ≥5-seed OFF/ON A/B. Carries the build-time residuals (terminal-vs-t_f std drift on the credit
-  divisor; cuDNN terminal-val_acc confound at scale>0).
-- **Telemetry hygiene** (esper-lite-425dcc4ca2): observability-emit follow-up — unchanged.
+- **PIN-E noise-floor runs** (esper-lite-94869250f1, in_progress): 3 seeds × std=1e-3 on
+  cuda:0 + 3 seeds × std=1e-4 (epsilon arm) on cuda:1 → `telemetry/pin_e/`. Smoke verified
+  NON-degenerate (PDR-0014 reversal trigger NOT tripped). On completion: run
+  `scripts/pin_e_placebo_analyze.py telemetry/pin_e` (D1 GATE-0 line + D2 tau, committed
+  9be132c1), write `docs/analysis/2026-07-03-pin-e-placebo-noise-floor.md`, post the tau
+  memo to esper-lite-f22a1d48a7, close the task, move the plan to completed/.
+- **Enablement gate** (esper-lite-f22a1d48a7, blocked_by the above): after tau — F2
+  scale/cap calibration, hard off-switch-J efficiency + fossilize-count gate, entrenchment
+  monitor, ON-run dormancy recheck, paired ≥5-seed OFF/ON A/B. Enabling scale>0 stays
+  owner-gated.
+- **Telemetry hygiene** (esper-lite-425dcc4ca2): unchanged. (The fixed-schedule runs print
+  per-head entropy-collapse warnings — expected: the policy is a masked passenger; alarm
+  miscalibration is this issue's scope.)
 
 ## Open questions / blocked-on-owner
-- **START THE ENABLEMENT GATE?** Its first executable leg is the PIN-E placebo harness
-  (esper-lite-3d67b09687, GATE-0's last open leg) — needed for tau regardless.
-- **n=10 vs bank-at-n=5 (MAGNITUDE, PDR-0009):** still unanswered; independent of the build.
+- **n=10 vs bank-at-n=5 (MAGNITUDE, PDR-0009):** still unanswered; independent of this leg.
 - **metrics.md TARGET numbers** still `<owner-set>` placeholders.
-- **Owner's working tree:** phase-0 doc/CLAUDE.md/AGENTS.md/.gitignore edits remain uncommitted
-  (untouched by the agent). Related: Phase 0 seed_residency test-expectation gap filed as
-  esper-lite-obs-7240279be3.
+- **Owner's working tree:** phase-0 doc/CLAUDE.md/AGENTS.md/.gitignore edits remain
+  uncommitted (untouched by the agent); seed_residency test gap = esper-lite-obs-7240279be3.
+- **NUM_BLUEPRINTS 13→14 cost (PDR-0015):** pre-change checkpoints don't load; all paired
+  A/Bs must be same-commit. Standing constraint, not a question.
 
-## Last checkpoint did (checkpoint #6)
-- **Built the term (PDR-0013)** across 7ec67de7 + a479d776..2d7e0db5: exact 2^k committed-coalition
-  Shapley in the terminal fused pass; retro-write at t_f pre-GAE (min(normalized_cap,
-  top_up/max(std, std_floor))); five default-0.0 flags; F1/F8 sibling mutual exclusion; HRA hard
-  exclusion; `synergy_bonus`→`interaction_bonus` rename (No-Legacy); COMMITTED_SHAPLEY_TOPUP telemetry.
-- **Process:** 3 scout agents → plan (drl+pytorch approved-with-changes; both caught the same
-  divide_by_std API hole before code existed) → TDD (mandated GAE test first) → WI-8/WI-9 delegated →
-  reviewer re-pass + adversarial code review.
-- Tracker: esper-lite-254175df90 CLOSED (close_commit 2d7e0db5); enablement successor
-  esper-lite-f22a1d48a7 created; plan moved to docs/plans/completed/; design doc amended (c_paid
-  semantic shift); PLAN_TRACKER updated.
+## Last checkpoint did (checkpoint #7)
+- **PDR-0015:** k=1→k=3 measurement redesign (dual-review caught φ≡c_paid at k=1 before any
+  code), Option A enum cost accepted, HOLDING-forever schedule; build ACCEPTED.
+- **Delivered WI-1..7** (commits 4d1e4c54..9be132c1, TDD-first): placebo blueprint + PLACEBO
+  action + declared-schedule registry + seed_lr_override + serial schedule + WI-5 gate test
+  + run driver with hard measurement preflight + offline D1/D2 analyzer (agent-built,
+  independently reproduced, ~60 new tests). Rec3 masking-equivalence closed (1c05ba4f).
+- **Metrics:** first tau reading (preliminary smoke) added; non-degeneracy verdict recorded.
+- Tracker: esper-lite-94869250f1 progress comments #95/#96; gate description corrected
+  (pointer mis-binding fixed per PDR-0014).
 
 ## Next session, start here
-**The enablement gate is the bet's critical path**: build the PIN-E placebo harness
-(esper-lite-3d67b09687) to set tau — everything else in esper-lite-f22a1d48a7 hangs off it. The n=10
-magnitude run remains available in parallel if the owner wants the (b) effect size banked.
+**If the runs finished:** analyze → analysis doc → tau memo on esper-lite-f22a1d48a7 →
+close esper-lite-94869250f1 → plan to completed/. **If a run died:** driver is resumable
+per-seed (`--seeds`), preflight refuses corrupted configs. Then the gate's next leg (F2
+calibration) is DECIDE-ready.

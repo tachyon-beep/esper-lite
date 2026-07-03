@@ -1,4 +1,4 @@
-# Metrics — Esper             Last read: 2026-07-02
+# Metrics — Esper             Last read: 2026-07-03
 
 > Research framework, not a commercial product: the "north-star" is the morphogenetic
 > objective J (committed per-param counterfactual gain), not an engagement metric.
@@ -14,6 +14,7 @@
 | Metric | Target | Current | Read on |
 |--------|--------|---------|---------|
 | corr(reward, J) — reward aligned to the J yardstick | ≥ TARGET `<owner-set>` | **0.212 ± 0.046 (weak)** | 2026-06-25 (n=5) |
+| **Placebo noise floor tau** = P99 of SIGNED terminal (φ − c_paid) for a null player — the north-star's "placebo-noise-floor" term and the enablement deadband | calibrated when the full-run P99 CI can bound a false-positive budget (CONSERVATIVE-PROVISIONAL until first ON run) | **PRELIMINARY (smoke, N=72): +0.252 pp, block-bootstrap CI [+0.106, +0.380]; NON-degenerate (77.8% nonzero). Full 2-arm read (3 seeds × std {1e-3, 1e-4}, ≈3240 samples/arm) in flight** | 2026-07-03 (smoke) |
 | share_attribution — reward variance carried by the cf-attribution term | context only (magnitude-confounded: `ba`≈68% of |reward|) | 0.925 ± 0.004 | 2026-06-25 (n=5) |
 
 ## Guardrails (must NOT degrade)
