@@ -153,7 +153,10 @@ def main() -> int:
     seeds = [int(s) for s in (sys.argv[2].split(",") if len(sys.argv) > 2 else "41,42,43".split(","))]
 
     ok = True
-    deltas: list[float] = []
+    # (seed, Δeff) pairs — the seed rides WITH its delta so a skipped pair can
+    # never shift attribution (esper-lite-03a5351609; the G1-abort pairing rule
+    # makes the skip path a live scenario at A/B scoring time).
+    paired_deltas: list[tuple[int, float]] = []
     print(f"{'seed':>4} {'arm':>9} {'totParams':>10} {'r0c0_p':>8} {'downP':>9} "
           f"{'contrib':>8} {'pp/Mparam':>10} {'cf/param':>9} {'finTrip':>7} {'slotCondMin':>11}")
     for seed in seeds:
@@ -189,29 +192,30 @@ def main() -> int:
             if a["slot_cond_min"] <= 0.1:
                 print(f"    FAIL  decision-step slot entropy health ({tag}): min={a['slot_cond_min']:.3f} ≤ 0.1")
                 ok = False
-        deltas.append(on["eff"] - c["eff"])
+        paired_deltas.append((seed, on["eff"] - c["eff"]))
 
+    delta_values = [d for _, d in paired_deltas]
     print("\n" + "=" * 64)
-    print(f"PRIMARY: paired Δ(acc-per-param) = eff_suppress − eff_control, n={len(deltas)} seeds")
-    for seed, d in zip(seeds, deltas):
+    print(f"PRIMARY: paired Δ(acc-per-param) = eff_suppress − eff_control, n={len(delta_values)} seeds")
+    for seed, d in paired_deltas:
         print(f"  seed {seed}: Δeff = {d:+.3f} pp/Mparam")
-    if len(deltas) >= 2:
-        med = statistics.median(deltas)
-        print(f"  median Δeff = {med:+.3f} pp/Mparam (mean {statistics.mean(deltas):+.3f}, "
-              f"SD {statistics.pstdev(deltas):.3f})")
-        if len(deltas) >= 3:
-            lo, hi = bootstrap_ci(deltas)
+    if len(delta_values) >= 2:
+        med = statistics.median(delta_values)
+        print(f"  median Δeff = {med:+.3f} pp/Mparam (mean {statistics.mean(delta_values):+.3f}, "
+              f"SD {statistics.pstdev(delta_values):.3f})")
+        if len(delta_values) >= 3:
+            lo, hi = bootstrap_ci(delta_values)
             excl0 = (lo > 0) or (hi < 0)
             sign = "NEGATIVE → (b) efficiency-enabling stem" if hi < 0 else (
                 "POSITIVE → (a) freeloader" if lo > 0 else "INCLUDES 0 → (c) fungible / underpowered")
             print(f"  seed-level bootstrap 95% CI = [{lo:+.3f}, {hi:+.3f}]  "
                   f"({'EXCLUDES' if excl0 else 'INCLUDES'} 0) ⇒ {sign}")
-            print(f"  [n={len(deltas)}: n=5 BEGINS causal evidence; n=10 is the floor. "
+            print(f"  [n={len(delta_values)}: n=5 BEGINS causal evidence; n=10 is the floor. "
                   f"Wide CI ⇒ escalate to n=10.]")
     if not ok:
         print("\nGATES: FAILURE — a gate tripped; do NOT bank Δeff")
-    elif len(deltas) < 5:
-        print(f"\nGATES: ALL PASS (data clean). n={len(deltas)} is a PILOT — the bootstrap CI is "
+    elif len(delta_values) < 5:
+        print(f"\nGATES: ALL PASS (data clean). n={len(delta_values)} is a PILOT — the bootstrap CI is "
               f"degenerate below n=5; direction NOT yet banked (n=5 begins causal evidence, n=10 floor).")
     else:
         print("\nGATES: ALL PASS — apply the decision rule to the seed-level CI above.")
