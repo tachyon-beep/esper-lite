@@ -115,3 +115,18 @@ Candidate B is a priori superior on L1 — retro-write **is** B's delivery mecha
 valuation. WHERE the credit lands (routing) and WHAT its value is (Shapley vs eligibility weighting) are
 orthogonal and composable. The single Tier-2 retro-write test therefore transfers to both candidates; the gate
 money is spent once.
+
+## ADDENDUM (2026-07-04, flagged post-campaign clarification — estimand, not a rule change)
+
+**The Tier-2 primary endpoint reads the network's UNFLOORED op-head preference, not the floored behavior
+policy** (external-review finding, verified; esper-lite-da189467f1). The probe's `_propensity` softmaxes the raw
+masked op logits, while the production policy applies the probability floor (op = 0.15,
+`PROBABILITY_FLOOR_PER_HEAD`) on both rollout and update legs via the shared `_apply_floor_to_logits`
+floor-preserving renormalization. The floor BINDS in the measured regime: Tier-0a's "P(FOSSILIZE) when chosen"
+median of **0.150 is the floor value** (an unfloored preference of ~0.13 lifted to the effective floor at
+sampling), so behavior-policy fossilize mass sat floor-pinned in the control arm. This does not change any
+pre-registered rule: the readout is identical in both arms (the paired Δ is well-defined), and it is
+deliberately the MORE sensitive channel — the floor censors exactly the below-floor movement the learnability
+question is about. The behavior-policy translation of the result is recorded as a caveat in the RESULT doc.
+A rerun wanting the behavior-policy view adds a supplementary floored column (recipe in `_propensity`'s
+docstring); the pre-registered endpoint is never replaced.

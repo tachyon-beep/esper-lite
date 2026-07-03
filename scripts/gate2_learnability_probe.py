@@ -17,6 +17,9 @@ drl-expert three-tier design (2026-07-02):
     trains on it. Behavioral endpoint: P(op=FOSSILIZE | fossilize-legal),
     read via a no-grad forward over the buffer states conditioned on the
     stored per-step LSTM hiddens (the TELEMETRY-ONLY pre_step_hidden buffer).
+    ESTIMAND: the endpoint is the network's UNFLOORED op-head preference, not
+    the floored behavior policy — see the estimand note on _propensity
+    (esper-lite-da189467f1).
 
 The probe wraps PPOCoordinator.run_update at class level; production code is
 untouched. Rollback-contaminated envs are excluded from injection and
@@ -118,7 +121,23 @@ class Gate2Probe:
 
     def _propensity(self, agent, buffer, valid: torch.Tensor) -> dict:
         """P(op=FOSSILIZE | fossilize-legal) via a no-grad forward over buffer
-        states conditioned on the stored per-step LSTM hiddens."""
+        states conditioned on the stored per-step LSTM hiddens.
+
+        ESTIMAND NOTE (pre-registered — do NOT "fix" post-hoc; esper-lite-da189467f1):
+        this softmaxes the RAW masked op logits WITHOUT agent.probability_floor,
+        while the production policy applies the floor (op = 0.15,
+        PROBABILITY_FLOOR_PER_HEAD) on BOTH rollout and update legs via the shared
+        _apply_floor_to_logits helper. In the measured regime the floor BINDS
+        (Tier-2 control baseline ~0.13 < 0.15; Tier-0a's chosen-FOSSILIZE median
+        0.150 is the floor value), so this readout is the network's unfloored head
+        preference, NOT the behavior policy. That is deliberate and identical in
+        both arms: the floor censors exactly the below-floor movement the
+        learnability probe exists to detect, so the unfloored logits are the MORE
+        sensitive paired readout. Any future rerun wanting the behavior-policy
+        view should ADD a supplementary column — softmax over
+        _apply_floor_to_logits(op_logits, op_mask, agent.probability_floor["op"])
+        (import from esper.tamiyo.policy.action_masks) — never replace this one.
+        """
         idx = torch.nonzero(valid)
         if idx.numel() == 0:
             return {"eligible": {"n": 0}, "op_entropy_eligible_mean": None}

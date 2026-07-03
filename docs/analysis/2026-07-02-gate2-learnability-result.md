@@ -47,6 +47,13 @@ L3 (shared-trunk gradient→logit), and L4 (critic catch-up within 30 updates) a
 - Injection targets all effective-FOSSILIZE steps (incl. any G5-failed attempts), not only committed seeds —
   identical across arms; a purity refinement for the build, not the probe.
 - The n=10 magnitude question on the (b) result itself is untouched by GATE 2 (owner's call, PDR-0009).
+- **Estimand (added 2026-07-04, esper-lite-da189467f1):** the ΔP endpoint reads the UNFLOORED op-head
+  preference, not the floored behavior policy (prereg ADDENDUM). Behavior-policy translation: the control
+  baseline (~0.13) sits BELOW the op probability floor (0.15) — behavior was floor-pinned — while the retro
+  endpoint (~0.21) clears it, so the behavioral ΔP is ≈ +0.06 against a floor-pinned (near-zero-drift) control.
+  Direction, persistence, and the drift-floor margin survive the translation: **the PASS is robust to the
+  estimand distinction.** The unfloored readout remains the pre-registered endpoint (more sensitive; the floor
+  censors below-floor movement).
 
 ## What this unlocks (per the issue's gate order)
 
