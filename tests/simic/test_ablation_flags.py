@@ -388,6 +388,25 @@ def test_shapley_synergy_flags_round_trip():
         assert config.to_dict()[key] == expected
 
 
+def test_shapley_synergy_normalized_cap_upper_bound():
+    """Pre-A/B build WI-4 (gate criterion 2 residual): normalized_cap gains
+    the missing upper sanity bound — <= the reward-normalizer clip. It is the
+    SOLE operative bound on the credit channel (the ±10 clip is not in that
+    path), so a value above the clip is a misconfiguration, not headroom."""
+    from esper.leyline import REWARD_NORMALIZER_CLIP
+    from esper.simic.rewards.contribution import ContributionRewardConfig
+
+    with pytest.raises(ValueError, match="normalized_cap"):
+        ContributionRewardConfig(
+            shapley_synergy_normalized_cap=REWARD_NORMALIZER_CLIP + 1.0
+        )
+    with pytest.raises(ValueError, match="normalized_cap"):
+        TrainingConfig(shapley_synergy_normalized_cap=REWARD_NORMALIZER_CLIP + 1.0)
+    # The boundary itself is accepted.
+    ContributionRewardConfig(shapley_synergy_normalized_cap=REWARD_NORMALIZER_CLIP)
+    TrainingConfig(shapley_synergy_normalized_cap=REWARD_NORMALIZER_CLIP)
+
+
 def test_shapley_synergy_scale_requires_both_bounds():
     """F2 (drl F-A / pytorch F1): the credit bound must be structurally ON
     whenever the term can pay — scale>0 without cap or normalized_cap is a

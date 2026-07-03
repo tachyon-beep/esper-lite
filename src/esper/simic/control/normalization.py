@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import torch
 
+from esper.leyline import REWARD_NORMALIZER_CLIP
+
 
 class RunningMeanStd:
     """Running mean and std for observation normalization.
@@ -198,7 +200,7 @@ class RewardNormalizer:
         normalized_reward = normalizer.update_and_normalize(raw_reward)
     """
 
-    def __init__(self, clip: float = 10.0, epsilon: float = 1e-8):
+    def __init__(self, clip: float = REWARD_NORMALIZER_CLIP, epsilon: float = 1e-8):
         self.mean = 0.0
         self.m2 = 0.0  # Sum of squared deviations (Welford's M2)
         self.count = 0  # Start at 0, not epsilon

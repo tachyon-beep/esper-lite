@@ -16,6 +16,7 @@ from esper.leyline import (
     AlphaAlgorithm,
     BlueprintAction,
     FactoredAction,
+    FossilizeRateGuardTrippedPayload,
     HEAD_NAMES,
     LifecycleOp,
     SeedSlotProtocol,
@@ -50,6 +51,7 @@ from esper.simic.telemetry import (
 from esper.simic.telemetry.phase_profiler import NullProfiler, PhaseProfiler
 from esper.simic.telemetry.emitters import check_performance_degradation
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
+from esper.simic.training.fossilize_rate_guard import FossilizeRateGuard
 from esper.simic.rewards.committed_shapley import (
     MAX_EXACT_COALITION_SLOTS,
     CommittedShapleyEnvCredits,
@@ -784,6 +786,11 @@ class VectorizedPPOTrainer:
     # Always empty at shapley_synergy_scale == 0.
     _pending_committed_shapley: list[CommittedShapleyEnvCredits] = field(
         init=False, default_factory=list
+    )
+    # G1 fossilize-rate guard (pre-A/B build WI-3): consulted ONLY at
+    # shapley_synergy_scale > 0 — the OFF arm never observes a batch.
+    _fossilize_rate_guard: FossilizeRateGuard = field(
+        init=False, default_factory=FossilizeRateGuard
     )
 
     def __post_init__(self) -> None:
@@ -1791,6 +1798,7 @@ class VectorizedPPOTrainer:
                     env_idx=i,
                     result=topup_result,
                     t_f_by_slot={s: t_f_by_slot[s] for s in committed_set},
+                    coalition_accs=coalition_accs,
                     episode_idx=batch_idx,
                 )
             )
@@ -3190,6 +3198,46 @@ class VectorizedPPOTrainer:
                 epoch=epoch,
             )
             prev_rolling_avg_acc = rolling_avg_acc
+
+            # G1 fossilize-rate guard (pre-A/B build WI-3; gate criterion 3):
+            # the in-run RUNAWAY breaker for the committed-Shapley ON arm.
+            # Emit-then-raise: the trainer's shutdown `finally` (hub.close())
+            # flushes the event, so the trip context survives the abort.
+            if self.reward_config.shapley_synergy_scale > 0.0:
+                batch_fossilized = sum(es.seeds_fossilized for es in env_states)
+                if self._fossilize_rate_guard.observe_batch(batch_fossilized):
+                    guard = self._fossilize_rate_guard
+                    if self.hub is not None:
+                        self.hub.emit(
+                            TelemetryEvent(
+                                event_type=(
+                                    TelemetryEventType.FOSSILIZE_RATE_GUARD_TRIPPED
+                                ),
+                                group_id=self.group_id,
+                                severity="critical",
+                                message=(
+                                    f"G1 fossilize-rate guard tripped: "
+                                    f"{batch_fossilized} fossilizations in batch "
+                                    f"{batch_idx} (threshold {guard.trip_count}, "
+                                    f"{guard.consecutive} consecutive batches)"
+                                ),
+                                data=FossilizeRateGuardTrippedPayload(
+                                    batch_idx=batch_idx,
+                                    fossilize_count=batch_fossilized,
+                                    trip_count_threshold=guard.trip_count,
+                                    consecutive_batches=guard.consecutive,
+                                    episodes_in_batch=len(env_states),
+                                ),
+                            )
+                        )
+                    raise RuntimeError(
+                        f"committed-Shapley ON-arm aborted by the G1 "
+                        f"fossilize-rate guard: {batch_fossilized} "
+                        f"fossilizations/batch >= {guard.trip_count} for "
+                        f"{guard.consecutive} consecutive batches (5x the "
+                        f"banked 0.207/ep control baseline). Commit-spam "
+                        f"regime — the run is not a valid A/B arm."
+                    )
 
             # B7-DRL-02: Check for performance degradation (was previously unwired)
             # Detects catastrophic forgetting, reward hacking, and training decay

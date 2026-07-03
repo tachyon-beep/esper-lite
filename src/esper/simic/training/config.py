@@ -37,6 +37,7 @@ from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_GAE_LAMBDA,
     DEFAULT_EPISODE_LENGTH,
+    REWARD_NORMALIZER_CLIP,
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_N_ENVS,
     DEFAULT_LEARNING_RATE,
@@ -497,6 +498,14 @@ class TrainingConfig:
         ):
             if getattr(self, name) < 0.0:
                 raise ValueError(f"{name} must be >= 0 (got {getattr(self, name)})")
+        if self.shapley_synergy_normalized_cap > REWARD_NORMALIZER_CLIP:
+            # Pre-A/B build WI-4: the credit channel is clip-free
+            # (divide_by_std), so normalized_cap is its SOLE operative bound.
+            raise ValueError(
+                f"shapley_synergy_normalized_cap must be <= the reward-"
+                f"normalizer clip ({REWARD_NORMALIZER_CLIP}); got "
+                f"{self.shapley_synergy_normalized_cap}"
+            )
         if self.shapley_synergy_scale > 0.0 and self.hra_value_decomposition:
             # A retro-written credit lands only in the total/main reward stream;
             # CF-stream routing under HRA is undefined (GATE 2 probe asserted

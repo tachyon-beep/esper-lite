@@ -95,6 +95,9 @@ def test_view_definitions_exist():
         "morphology_causal_log",
         "topology_manifests",
         "phase_occupancy",
+        # Phase 0 reward-redesign instrumentation (commit 406aeb25): the
+        # per-seed J-integrand view (esper-lite-obs-7240279be3).
+        "seed_residency",
     }
     assert set(VIEW_DEFINITIONS.keys()) == expected
 

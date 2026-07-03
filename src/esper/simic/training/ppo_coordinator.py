@@ -93,21 +93,38 @@ def apply_committed_shapley_credits(
             t_f_list.append(t_f)
 
         credit_buf_list: list[float] = []
+        ncap_bound_list: list[bool] = []
         if std is None:
             credit_buf_list = [0.0 for _ in slot_ids]
+            ncap_bound_list = [False for _ in slot_ids]
             std_used = 0.0
+            std_floor_bound = False
             dropped_no_std = True
         else:
             std_used = max(std, std_floor)
+            std_floor_bound = std < std_floor
             dropped_no_std = False
             for slot_id, t_f in zip(slot_ids, t_f_list):
                 top_up = credits.result.per_slot[slot_id].top_up
                 if top_up <= 0.0:
                     credit_buf_list.append(0.0)
+                    ncap_bound_list.append(False)
                     continue
-                credit_buf = min(normalized_cap, top_up / std_used)
+                unbounded = top_up / std_used
+                credit_buf = min(normalized_cap, unbounded)
                 buffer.rewards[env_idx, t_f] += credit_buf
                 credit_buf_list.append(credit_buf)
+                ncap_bound_list.append(unbounded > normalized_cap)
+
+        # Raw 2^k coalition table, encoded as bitmasks over the slot_ids
+        # ordering (bit i <=> slot_ids[i] in S), masks ascending.
+        v_table = sorted(
+            (
+                sum(1 << slot_ids.index(s) for s in subset),
+                acc,
+            )
+            for subset, acc in credits.coalition_accs.items()
+        )
 
         per_slot = credits.result.per_slot
         payloads.append(
@@ -125,6 +142,11 @@ def apply_committed_shapley_credits(
                 sum_raw=credits.result.sum_raw,
                 clamp_binding=credits.result.clamp_binding,
                 std_used=std_used,
+                running_std_raw=std,
+                std_floor_bound=std_floor_bound,
+                normalized_cap_bound=tuple(ncap_bound_list),
+                v_table_masks=tuple(m for m, _ in v_table),
+                v_table_accs=tuple(a for _, a in v_table),
                 episode_idx=credits.episode_idx,
                 dropped_no_std=dropped_no_std,
             )

@@ -14,6 +14,7 @@ from esper.leyline import (
     LifecycleOp,
     MIN_HOLDING_EPOCHS,
     MIN_PRUNE_AGE,
+    REWARD_NORMALIZER_CLIP,
     SeedStage,
 )
 from esper.nissa import get_hub
@@ -388,6 +389,14 @@ class ContributionRewardConfig:
         ):
             if getattr(self, name) < 0.0:
                 raise ValueError(f"{name} must be >= 0 (got {getattr(self, name)})")
+        if self.shapley_synergy_normalized_cap > REWARD_NORMALIZER_CLIP:
+            # Pre-A/B build WI-4: the credit channel is clip-free
+            # (divide_by_std), so normalized_cap is its SOLE operative bound.
+            raise ValueError(
+                f"shapley_synergy_normalized_cap must be <= the reward-"
+                f"normalizer clip ({REWARD_NORMALIZER_CLIP}); got "
+                f"{self.shapley_synergy_normalized_cap}"
+            )
         if self.shapley_synergy_scale > 0.0:
             # F2 (reviewer): the credit bound must be structurally ON whenever
             # the term can pay. cap bounds raw(s) in pp; normalized_cap bounds

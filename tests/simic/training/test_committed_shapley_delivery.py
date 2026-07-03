@@ -39,6 +39,8 @@ def _normalizer(samples=(2.0, 4.0, 6.0, 8.0)):
 
 
 def _env_credits(env_idx, top_ups: dict[str, float], t_f: dict[str, int]):
+    from itertools import combinations
+
     per_slot = {
         slot: SlotTopUp(phi=0.0, c_paid=0.0, gap=up, raw=up, top_up=up)
         for slot, up in top_ups.items()
@@ -50,8 +52,19 @@ def _env_credits(env_idx, top_ups: dict[str, float], t_f: dict[str, int]):
         clamp_binding=False,
         k=len(top_ups),
     )
+    # Minimal complete 2^k table (values immaterial to delivery: carried verbatim).
+    slots = sorted(top_ups)
+    accs = {
+        frozenset(c): 0.0
+        for r in range(len(slots) + 1)
+        for c in combinations(slots, r)
+    }
     return CommittedShapleyEnvCredits(
-        env_idx=env_idx, result=result, t_f_by_slot=t_f, episode_idx=1
+        env_idx=env_idx,
+        result=result,
+        t_f_by_slot=t_f,
+        coalition_accs=accs,
+        episode_idx=1,
     )
 
 
@@ -177,6 +190,118 @@ def test_count_below_two_drops_credits_and_marks_payload():
     assert payloads[0].credit_buf == (0.0,)
 
 
+def test_payload_divisor_provenance_normal_path():
+    """Pre-A/B build (drl condition 4): the event carries the raw pre-floor
+    divisor and authoritative bound flags computed at write time."""
+    buffer = _buffer()
+    normalizer = _normalizer()
+    std = normalizer.current_std()
+    credits = [_env_credits(0, {"r0c0": 2.0}, {"r0c0": 3})]
+
+    payloads = apply_committed_shapley_credits(
+        buffer=buffer,
+        reward_normalizer=normalizer,
+        env_credits=credits,
+        std_floor=0.1,  # well below the real std -> floor inert
+        normalized_cap=100.0,
+    )
+    p = payloads[0]
+    assert p.running_std_raw == pytest.approx(std)
+    assert p.std_floor_bound is False
+    assert p.normalized_cap_bound == (False,)
+
+
+def test_payload_flags_std_floor_bound():
+    buffer = _buffer()
+    normalizer = _normalizer(samples=(1.0, 1.01, 1.02, 0.99))  # tiny std
+    std = normalizer.current_std()
+    std_floor = 0.5
+    assert std < std_floor
+    credits = [_env_credits(0, {"r0c0": 2.0}, {"r0c0": 1})]
+
+    payloads = apply_committed_shapley_credits(
+        buffer=buffer,
+        reward_normalizer=normalizer,
+        env_credits=credits,
+        std_floor=std_floor,
+        normalized_cap=100.0,
+    )
+    p = payloads[0]
+    assert p.std_floor_bound is True
+    assert p.running_std_raw == pytest.approx(std)
+    assert p.std_used == pytest.approx(std_floor)
+
+
+def test_payload_flags_normalized_cap_bound_per_slot():
+    buffer = _buffer()
+    normalizer = _normalizer(samples=(1.0, 1.01, 1.02, 0.99))  # tiny std
+    # r0c0's credit clips at the cap; r0c1 pays zero (never bound).
+    credits = [_env_credits(0, {"r0c0": 2.0, "r0c1": 0.0}, {"r0c0": 1, "r0c1": 2})]
+
+    payloads = apply_committed_shapley_credits(
+        buffer=buffer,
+        reward_normalizer=normalizer,
+        env_credits=credits,
+        std_floor=0.0,
+        normalized_cap=5.0,
+    )
+    assert payloads[0].normalized_cap_bound == (True, False)
+
+
+def test_payload_provenance_on_dropped_no_std_path():
+    buffer = _buffer()
+    normalizer = RewardNormalizer(clip=10.0)  # zero samples -> no std
+    credits = [_env_credits(0, {"r0c0": 2.0}, {"r0c0": 3})]
+
+    payloads = apply_committed_shapley_credits(
+        buffer=buffer,
+        reward_normalizer=normalizer,
+        env_credits=credits,
+        std_floor=0.5,
+        normalized_cap=100.0,
+    )
+    p = payloads[0]
+    assert p.running_std_raw is None
+    assert p.std_floor_bound is False
+    assert p.normalized_cap_bound == (False,)
+
+
+def test_payload_carries_raw_coalition_table():
+    """NOTE-7: the raw 2^k v(S) table rides the event (masks over slot_ids
+    order), retiring the transient-factorial proxy caveat on the first ON run."""
+    accs = {
+        frozenset(): 50.0,
+        frozenset({"r0c0"}): 60.0,
+        frozenset({"r0c1"}): 55.0,
+        frozenset({"r0c0", "r0c1"}): 70.0,
+    }
+    result = compute_committed_shapley_topup(
+        accs, ("r0c0", "r0c1"), scale=1.0, cap=10.0, tau=0.0
+    )
+    buffer = _buffer()
+    normalizer = _normalizer()
+    credits = [
+        CommittedShapleyEnvCredits(
+            env_idx=0,
+            result=result,
+            t_f_by_slot={"r0c0": 2, "r0c1": 5},
+            coalition_accs=accs,
+            episode_idx=0,
+        )
+    ]
+    payloads = apply_committed_shapley_credits(
+        buffer=buffer,
+        reward_normalizer=normalizer,
+        env_credits=credits,
+        std_floor=0.0,
+        normalized_cap=100.0,
+    )
+    p = payloads[0]
+    # mask bit i <-> slot_ids[i]: 0=empty, 1={r0c0}, 2={r0c1}, 3=both.
+    assert p.v_table_masks == (0, 1, 2, 3)
+    assert p.v_table_accs == (50.0, 60.0, 55.0, 70.0)
+
+
 def test_t_f_out_of_range_fails_loud():
     buffer = _buffer(steps=4)
     normalizer = _normalizer()
@@ -211,6 +336,7 @@ def test_end_to_end_with_real_shapley_result():
             env_idx=0,
             result=result,
             t_f_by_slot={"r0c0": 2, "r0c1": 5},
+            coalition_accs=accs,
             episode_idx=0,
         )
     ]

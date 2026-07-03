@@ -67,12 +67,15 @@ class CommittedShapleyEnvCredits:
     coordinator at the pre-GAE seam. ``t_f_by_slot`` maps each committed slot
     to the buffer step index of its FOSSILIZE decision (recorded at execution
     time in ``env_state.fossilize_step_records`` — never reconstructed from
-    epoch arithmetic).
+    epoch arithmetic). ``coalition_accs`` is the raw 2^k v(S) table the
+    Shapley result was computed from — carried through to telemetry so the
+    first ON run retires the transient-factorial calibration proxy.
     """
 
     env_idx: int
     result: CommittedShapleyResult
     t_f_by_slot: dict[str, int]
+    coalition_accs: Mapping[frozenset[str], float]
     episode_idx: int | None = None
 
 

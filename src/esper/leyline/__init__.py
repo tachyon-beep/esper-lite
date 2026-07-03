@@ -459,6 +459,20 @@ DEFAULT_GRADIENT_EMA_DECAY = 0.9
 # Lower = stricter = host stabilizes later (more conservative).
 DEFAULT_STABILIZATION_THRESHOLD = 0.03  # 3% relative improvement
 
+# G1 fossilize-rate guard (pre-A/B build WI-3; gate criterion 3): 5x the
+# banked control fossilize/ep baseline (0.207 +/- 0.006, n=5) over a 12-env
+# batch = 12.42 -> pinned to the integer ABOVE it (drl review NOTE-6). Two
+# consecutive over-threshold batches abort the ON run fail-loud.
+FOSSILIZE_RATE_GUARD_TRIP_COUNT = 13
+FOSSILIZE_RATE_GUARD_CONSECUTIVE_BATCHES = 2
+
+# The RewardNormalizer's symmetric clip on the ordinary (update_and_normalize)
+# path, in buffer units. Also the upper sanity bound for
+# shapley_synergy_normalized_cap: that channel is clip-free (divide_by_std),
+# so its cap is the SOLE operative bound and must not exceed what the
+# ordinary path would ever admit.
+REWARD_NORMALIZER_CLIP = 10.0
+
 # Consecutive epochs below threshold required to declare stability.
 DEFAULT_STABILIZATION_EPOCHS = 3
 
@@ -813,6 +827,7 @@ from esper.leyline.telemetry import (
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
     CommittedShapleyTopUpPayload,
+    FossilizeRateGuardTrippedPayload,
     AnalyticsSnapshotPayload,
     HeadTelemetry,
     AnomalyDetectedPayload,
@@ -1030,6 +1045,9 @@ __all__ = [
 
     # Host Stabilization
     "DEFAULT_STABILIZATION_THRESHOLD",
+    "FOSSILIZE_RATE_GUARD_TRIP_COUNT",
+    "FOSSILIZE_RATE_GUARD_CONSECUTIVE_BATCHES",
+    "REWARD_NORMALIZER_CLIP",
     "DEFAULT_STABILIZATION_EPOCHS",
 
     # Governor (Tolaria)
@@ -1191,6 +1209,7 @@ __all__ = [
     "SeedPrunedPayload",
     "CounterfactualMatrixPayload",
     "CommittedShapleyTopUpPayload",
+    "FossilizeRateGuardTrippedPayload",
     "AnalyticsSnapshotPayload",
     "HeadTelemetry",
     "AnomalyDetectedPayload",

@@ -110,6 +110,7 @@ class TelemetryEventType(Enum):
     # === Counterfactual Attribution Events ===
     COUNTERFACTUAL_MATRIX_COMPUTED = auto()  # Full factorial matrix for env
     COMMITTED_SHAPLEY_TOPUP = auto()  # Terminal committed-coalition credit (PDR-0012)
+    FOSSILIZE_RATE_GUARD_TRIPPED = auto()  # G1 in-run abort (pre-A/B build WI-3)
 
     # === Analytics Events ===
     ANALYTICS_SNAPSHOT = auto()       # Full state snapshot for dashboard sync
@@ -1655,6 +1656,14 @@ class CommittedShapleyTopUpPayload:
     gap/raw/top_up are accuracy percentage points; credit_buf is buffer
     (divide_by_std) units; std_used is the divisor actually applied
     (max(running_std, shapley_synergy_std_floor)).
+
+    Divisor provenance (pre-A/B build, drl condition 4): ``running_std_raw``
+    is the pre-floor ``current_std()`` (None on the dropped_no_std path);
+    ``std_floor_bound`` / ``normalized_cap_bound`` are authoritative
+    computed-at-write flags — bind RATES are offline aggregations over them.
+    ``v_table_masks``/``v_table_accs`` carry the raw 2^k coalition table
+    (bit i of a mask <=> slot_ids[i] in S, masks ascending) so the first ON
+    run retires the transient-factorial calibration proxy.
     """
 
     # REQUIRED
@@ -1671,6 +1680,11 @@ class CommittedShapleyTopUpPayload:
     sum_raw: float
     clamp_binding: bool
     std_used: float
+    running_std_raw: float | None
+    std_floor_bound: bool
+    normalized_cap_bound: tuple[bool, ...]
+    v_table_masks: tuple[int, ...]
+    v_table_accs: tuple[float, ...]
 
     # CONTEXT (injected by emit_with_env_context)
     episode_idx: int | None = None
@@ -1697,8 +1711,42 @@ class CommittedShapleyTopUpPayload:
             sum_raw=data["sum_raw"],
             clamp_binding=data["clamp_binding"],
             std_used=data["std_used"],
+            running_std_raw=data["running_std_raw"],
+            std_floor_bound=data["std_floor_bound"],
+            normalized_cap_bound=_ensure_tuple(data["normalized_cap_bound"]),
+            v_table_masks=_ensure_tuple(data["v_table_masks"]),
+            v_table_accs=_ensure_tuple(data["v_table_accs"]),
             episode_idx=data["episode_idx"],
             dropped_no_std=data.get("dropped_no_std", False),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class FossilizeRateGuardTrippedPayload:
+    """Payload for FOSSILIZE_RATE_GUARD_TRIPPED (G1 abort, pre-A/B build WI-3).
+
+    Emitted exactly once, immediately before the guard raises; the trainer's
+    shutdown ``finally`` (hub.close()) flushes it, so the trip context
+    survives the abort. G1 is the fast RUNAWAY breaker only — correctness is
+    adjudicated by G3 + the Δcorr(reward, J) floor at scoring time.
+    """
+
+    # REQUIRED
+    batch_idx: int
+    fossilize_count: int          # fossilizations in the tripping batch
+    trip_count_threshold: int     # FOSSILIZE_RATE_GUARD_TRIP_COUNT at trip time
+    consecutive_batches: int      # consecutive over-threshold batches incl. this one
+    episodes_in_batch: int
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "FossilizeRateGuardTrippedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            batch_idx=data["batch_idx"],
+            fossilize_count=data["fossilize_count"],
+            trip_count_threshold=data["trip_count_threshold"],
+            consecutive_batches=data["consecutive_batches"],
+            episodes_in_batch=data["episodes_in_batch"],
         )
 
 
@@ -2737,6 +2785,7 @@ TelemetryPayload = (
     | SeedPrunedPayload
     | CounterfactualMatrixPayload
     | CommittedShapleyTopUpPayload
+    | FossilizeRateGuardTrippedPayload
     | AnalyticsSnapshotPayload
     | AnomalyDetectedPayload
     | PerformanceDegradationPayload
