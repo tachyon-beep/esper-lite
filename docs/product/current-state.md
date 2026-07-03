@@ -52,7 +52,14 @@ PRIMARY gates. F1 probe must re-run on Phase −1 arm telemetry BEFORE any clip-
 - Committed the owner's two-checkpoint-old Phase-0 analysis-doc edits (data-loss risk closed).
 
 ## Next session, start here
-**F2 scale/cap calibration** (design doc + gate criterion 2). Inputs needed: the minimum
-running std the term will meet (normalizer stats at terminal steps — check whether logged;
-may need a cheap instrumentation run), then propose scale/cap/normalized_cap/std_floor with
-drl-expert review before freezing. After freeze: n=5 OFF/ON A/B per PDR-0018.
+**F2 scale/cap calibration** (design doc + gate criterion 2; scoping banked at gate comment
+#103). RESOLVED: running std is NOT logged in telemetry — primary path is offline Welford
+reconstruction of the std trajectory from the logged total_reward stream (order-sensitivity
+caveat + validation check recorded; fallback: cheap instrumentation run — `current_std()`
+exists at simic/control/normalization.py:259). Read the std distribution at episode-terminal
+steps (early-run minimum matters most), then propose scale/cap/normalized_cap/std_floor
+(incl. the missing normalized_cap upper bound) with drl-expert review before freezing.
+After freeze: n=5 OFF/ON A/B per PDR-0018. Housekeeping: 3 pending P3 test-hygiene
+observations (seed_residency round-trip rule, optimizer-lifecycle mock drift, seed_residency
+view expected-set) — mechanical fixes, now unblocked since the Phase-0 doc edits are
+committed (93bc930e).
