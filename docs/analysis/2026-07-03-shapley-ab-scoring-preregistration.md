@@ -86,3 +86,23 @@ From the non-truncated `COMMITTED_SHAPLEY_TOPUP` emission (every k≥1 env, incl
 k=1 and non-payers): P99 of `phi − c_paid` over null-player slots. PDR-0017 trigger:
 P99 > 2× placebo tau (> 0.56 pp) reopens the deadband method (option-a supplementation
 or magnitude-scaled tau) before the A/B is read.
+
+## FLAGGED post-launch deviation note (2026-07-04) — TOPUP `episode_idx` decode
+
+**This is a telemetry-DECODE correction, not a scoring-rule change.** The launch
+commit `6dd80716` carries bug esper-lite-e780981fe7: the `COMMITTED_SHAPLEY_TOPUP`
+payload's `episode_idx` field is stamped with the **batch index**, not the episode id
+(codebase convention `episodes_completed + env_idx`). The event is emitted directly to
+the hub (no env-context wrapper), so the payload field is the ONLY episode identity on
+the event. The payload's `env_id` field is correct.
+
+**Decode for the in-flight ON runs (all at `6dd80716`; fix landed post-launch on the
+branch, runs unaffected):** with `n_envs = 12` (both arm configs), the true id is
+
+    episode_idx_true = stored_episode_idx * 12 + env_id
+
+Exact for every batch including a final partial one (all *prior* batches are full, so
+`episodes_completed` at batch b is 12·b). Any scoring read that joins TOPUP events
+per-episode — criterion (v) advantage-at-credited-t_f in particular — MUST apply this
+decode. Per-event reads (criteria i/ii, tau recalibration, G4 counts, bind-rate
+tables) are unaffected.

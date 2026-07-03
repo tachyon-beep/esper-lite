@@ -182,6 +182,55 @@ def _pair_interaction_index(
     return pair_acc - solo_on_a - solo_on_b + all_off_acc
 
 
+def build_committed_shapley_env_credits(
+    committed_shapley_accs: dict[int, dict[frozenset[str], float]],
+    committed_shapley_sets: dict[int, tuple[str, ...]],
+    env_states: list[ParallelEnvState],
+    *,
+    scale: float,
+    cap: float,
+    tau: float,
+    episodes_completed: int,
+) -> list[CommittedShapleyEnvCredits]:
+    """Fold the terminal 2^k coalition accs into per-env credits (PDR-0012).
+
+    Built at the terminal fused-val pass for the PPO coordinator's pre-GAE
+    retro-write. t_f comes from the execution-time records — a fossilized slot
+    without a record is a bug, not a skippable case. Episode identity is the
+    batch-start convention ``episodes_completed + env_idx``, matching the
+    per-env episode context and emitters — never the batch index
+    (esper-lite-e780981fe7).
+    """
+    credits: list[CommittedShapleyEnvCredits] = []
+    for i, coalition_accs in committed_shapley_accs.items():
+        env_state = env_states[i]
+        committed_set = committed_shapley_sets[i]
+        topup_result = compute_committed_shapley_topup(
+            coalition_accs,
+            committed_set,
+            scale=scale,
+            cap=cap,
+            tau=tau,
+        )
+        t_f_by_slot = dict(env_state.fossilize_step_records)
+        missing = [s for s in committed_set if s not in t_f_by_slot]
+        if missing:
+            raise ValueError(
+                f"env {i}: fossilized slots {missing} have no "
+                f"fossilize_step_records entry — t_f recording is broken"
+            )
+        credits.append(
+            CommittedShapleyEnvCredits(
+                env_idx=i,
+                result=topup_result,
+                t_f_by_slot={s: t_f_by_slot[s] for s in committed_set},
+                coalition_accs=coalition_accs,
+                episode_idx=episodes_completed + i,
+            )
+        )
+    return credits
+
+
 def compute_forced_head_flags(
     masks_batch: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
@@ -1312,6 +1361,7 @@ class VectorizedPPOTrainer:
         envs_this_batch: int,
         val_criterion: nn.CrossEntropyLoss,
         batch_idx: int,
+        episodes_completed: int,
     ) -> tuple[FusedValResult, float]:
         """Run the fused validation + counterfactual ablation pass for one epoch.
 
@@ -1773,35 +1823,18 @@ class VectorizedPPOTrainer:
         # Committed-Shapley top-up (PDR-0012): fold the terminal 2^k coalition
         # accs into per-env credits for the coordinator's pre-GAE retro-write.
         # Only populated at epoch == max_epochs with scale > 0 (the unpack
-        # branch is the sole writer of committed_shapley_accs). t_f comes from
-        # the execution-time records — a fossilized slot without a record is a
-        # bug, not a skippable case.
-        for i, coalition_accs in committed_shapley_accs.items():
-            env_state = env_states[i]
-            committed_set = committed_shapley_sets[i]
-            topup_result = compute_committed_shapley_topup(
-                coalition_accs,
-                committed_set,
+        # branch is the sole writer of committed_shapley_accs).
+        self._pending_committed_shapley.extend(
+            build_committed_shapley_env_credits(
+                committed_shapley_accs,
+                committed_shapley_sets,
+                env_states,
                 scale=self.reward_config.shapley_synergy_scale,
                 cap=self.reward_config.shapley_synergy_cap,
                 tau=self.reward_config.shapley_synergy_noise_floor,
+                episodes_completed=episodes_completed,
             )
-            t_f_by_slot = dict(env_state.fossilize_step_records)
-            missing = [s for s in committed_set if s not in t_f_by_slot]
-            if missing:
-                raise ValueError(
-                    f"env {i}: fossilized slots {missing} have no "
-                    f"fossilize_step_records entry — t_f recording is broken"
-                )
-            self._pending_committed_shapley.append(
-                CommittedShapleyEnvCredits(
-                    env_idx=i,
-                    result=topup_result,
-                    t_f_by_slot={s: t_f_by_slot[s] for s in committed_set},
-                    coalition_accs=coalition_accs,
-                    episode_idx=batch_idx,
-                )
-            )
+        )
 
         return (
             FusedValResult(
@@ -2756,6 +2789,7 @@ class VectorizedPPOTrainer:
                 envs_this_batch=envs_this_batch,
                 val_criterion=val_criterion,
                 batch_idx=batch_idx,
+                episodes_completed=episodes_completed,
             )
         dataloader_wait_ms_epoch += val_dataloader_wait_ms
 
