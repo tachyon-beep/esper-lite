@@ -1,47 +1,58 @@
-# Current State — Esper        Checkpoint: 2026-07-03 (checkpoint #8 — tau DELIVERED, plateau trigger FIRED; SHAPED audit banked; prioritization review is next)
+# Current State — Esper        Checkpoint: 2026-07-03 (checkpoint #9 — owner ruled: tau ACCEPT-PROVISIONAL, probes ran, coverage YELLOW, F2 calibration LICENSED; PDR-0018)
 
 ## The bet right now
-**Reward credit-assignment redesign.** Term BUILT default-OFF (PDR-0013); enablement gate
-OPEN (PDR-0014) with its **first leg DELIVERED**: tau = +0.28 pp CONSERVATIVE-PROVISIONAL
-LOWER BOUND (PDR-0017; memo = esper-lite-f22a1d48a7 comment #98). `shapley_synergy_scale=0.0`
-everywhere. Metric: committed-J / corr(reward,J) in the enablement A/B.
+**Reward credit-assignment redesign.** Term BUILT default-OFF (PDR-0013). Enablement gate
+(esper-lite-f22a1d48a7) OPEN and advancing: tau = +0.28 pp **ACCEPT-PROVISIONAL / LOWER-BOUND
+ONLY** (owner-ratified, PDR-0018); zero-GPU occurrence probes DONE (pre-registered comment
+#99, results #100/#101 + docs/analysis/2026-07-03-occurrence-probes-f1-f2-f5-s1-coverage.md);
+coverage **YELLOW** (66.7% J-currency). `shapley_synergy_scale=0.0` everywhere. A/B metric
+renamed **`fossilize_payable_J`** (never bare "committed-J").
 
 ## In flight
-- Nothing on GPU. Both subagents idle. esper-lite-94869250f1 CLOSED (@ 05569309);
-  the gate esper-lite-f22a1d48a7 is now UNBLOCKED and waiting on the owner review below.
-- **Telemetry hygiene** (esper-lite-425dcc4ca2): unchanged.
+- Nothing on GPU. **Next dispatch: F2 scale/cap calibration** (gate criterion 2 —
+  scale/cap/normalized_cap/std_floor against the minimum running std the term will meet;
+  normalized_cap currently has NO upper sanity bound). The A/B launches only after F2 is
+  frozen, under the PDR-0018 large-effect targets.
+- **Telemetry hygiene** (esper-lite-425dcc4ca2): unchanged; still the prerequisite for any
+  healthy-policy causal read, and the probe caveat leans on it (occurrence bounds hold for
+  the current entropy-degenerate policy population only).
 
-## Open questions / blocked-on-owner — THE PRIORITIZATION REVIEW (owner, with full deck)
-The owner deferred all prioritization until this data landed; it has. The deck:
-1. **tau disposition (PDR-0017, trigger FIRED):** epsilon plateau FAILED — the noise
-   floor is magnitude-dependent. Accept +0.28 as lower bound and proceed to F2
-   (recommended); supplement with methodology option (a); or re-scope. Owner's call.
-2. **SHAPED audit findings (PDR-0016, esper-lite-a7ef375203, 9 findings PARKED):**
-   F1 (prune pays unbounded positive, clip-exempt) + F5 (fossilize spuriously suppressed
-   on coalitions) + F3 (PBRS not invariant) + F2 (dense credit keys on r0c0 via WAIT
-   canonicalization). Owner-endorsed synthesis: these jointly rationalize the
-   never-fossilize pathology (fossilize 0.207/ep vs germinate 12.4). Zero-GPU occurrence
-   probes are defined and ready; audit note: run the F1 probe BEFORE reading any Phase −1
-   clip-arm verdict.
-3. **A/B false-negative risk (recorded on the gate):** the top-up pays only at FOSSILIZE;
-   if F1/F5 keep OFF-arm fossilization rare, the A/B can't show an effect. Decide whether
-   F1/F5 fixes (or probes) precede the A/B leg.
-4. Standing: n=10 vs bank-at-n=5 (PDR-0009 — now carries the F2-audit interpretation
-   caveat); metrics.md TARGET placeholders; owner's uncommitted working-tree files
-   (seed_residency gap esper-lite-obs-7240279be3). NUM_BLUEPRINTS 13→14: paired A/Bs
-   must be same-commit (PDR-0015).
+## Probe verdicts (banked 2026-07-03)
+F1 prune-flip NOT exploited (0.17% of pos-ba mass; flip mostly CHARGES helper-prunes);
+F5 downgraded to latent-bug (all-off config in 100% of CF matrices); S1 mild (fossilize
+timing near-uniform); F2 occurring at full scale but value-aligned in aggregate (92.4% of
+steps / 97.8% |ba| on r0c0 vs 91–97% of value mass) — calibrate, don't correct; NO
+slot-specific r0c0 correction pre-A/B. 66% of positive cf mass parks HOLDING-never-
+fossilized (the follow-on target if the A/B underperforms: pre-fossil credit unlocker,
+salvage-B-adjacent). k≥2 in 1.1% of episodes ⇒ the A/B is a terminal COMMITMENT-credit
+test, not a synergy test. SET_ALPHA_TARGET harvest signal (19.9% of pos-ba mass, 10× per-
+step yield) flagged for a targeted probe before any dense-credit redesign.
 
-## Last checkpoint did (checkpoint #8)
-- **PDR-0016:** SHAPED adversarial audit accepted (5/5 load-bearing claims re-verified in
-  code); 9 findings PARKED per owner directive; committed f3d8db95.
-- **PDR-0017:** full-run tau delivered; PDR-0015 plateau trigger honestly FIRED and
-  flagged (⚠ in metrics.md); disposition proposed, owner decides; esper-lite-94869250f1
-  closed; plan → completed/ (d36c2395); analysis doc 05569309.
-- Metrics: tau row updated to full-run readings with the trigger flag.
+## Standing constraints on the A/B (PDR-0018)
+n=5 = direction gate: median paired Δfossilize_payable_J ≥ 2×tau_provisional (+0.56 pp now),
+≥4/5 seeds, EPISODE-level Δcorr ≥ +0.10, safety floors (acc ≥ −0.3 pp, efficiency ≥ −10%,
+fossilize opportunity not suppressed). n=10 = magnitude/bank: ≥2×tau_ON with bootstrap
+LB > 0; ON-run tau recalibration MANDATORY first. Design-doc criteria (i)–(v) remain the
+PRIMARY gates. F1 probe must re-run on Phase −1 arm telemetry BEFORE any clip-arm verdict
+(no arm runs on disk). Advantage-pathology/EV track stays queued BEHIND the A/B decision.
+
+## Open questions / blocked-on-owner
+- None blocking F2 calibration. Standing: n=10 magnitude call (now wired into the PDR-0018
+  n=10 gate); north-star/rent TARGET placeholders in metrics.md still owner-unset;
+  NUM_BLUEPRINTS 13→14 paired A/Bs same-commit (PDR-0015).
+
+## Last checkpoint did (checkpoint #9)
+- Pre-registered licensing rule BEFORE probe data (gate comment #99); ran F1/F2/F5/S1 +
+  coverage probes (two probe bugs caught, corrected, disclosed); banked analysis doc +
+  gate/audit comments (#100/#101).
+- Owner ruled (via external-analysis review): PDR-0018 recorded — tau accept-provisional,
+  J-currency coverage YELLOW, large-effect targets, no F1/F5 pre-A/B fixes, F2 calibrate-
+  not-correct, scope naming, never-fossilize as follow-on.
+- metrics.md: tau row ratified; coverage row added; corr row got the episode-level Δ target.
+- Committed the owner's two-checkpoint-old Phase-0 analysis-doc edits (data-loss risk closed).
 
 ## Next session, start here
-**The owner's prioritization review** — everything is staged on esper-lite-f22a1d48a7
-(tau memo + options) and esper-lite-a7ef375203 (audit + probe menu). The cheapest first
-move regardless of direction: the zero-GPU F1/F2 occurrence probes over the existing
-n=5 telemetry (telemetry/causal_r1_n5/). Nothing proceeds to F2 calibration or the A/B
-until the owner rules on tau disposition and audit sequencing.
+**F2 scale/cap calibration** (design doc + gate criterion 2). Inputs needed: the minimum
+running std the term will meet (normalizer stats at terminal steps — check whether logged;
+may need a cheap instrumentation run), then propose scale/cap/normalized_cap/std_floor with
+drl-expert review before freezing. After freeze: n=5 OFF/ON A/B per PDR-0018.

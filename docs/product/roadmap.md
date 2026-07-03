@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-03 (PDR-0014)
+# Roadmap — Esper            Updated: 2026-07-03 (PDR-0018)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -12,11 +12,15 @@
   contribution the per-step LOO undervalues. **The reward-credit term is BUILT (PDR-0013,
   2026-07-02, owner-signed): default-OFF Committed-Shapley top-up, retro-write delivery,
   specialist-reviewed + reviewer re-pass approved + adversarial code review clean;
-  esper-lite-254175df90 CLOSED.** Flag stays shapley_synergy_scale=0.0 everywhere. **ENABLEMENT gate OPENED 2026-07-03
-  (PDR-0014, owner-signed) via its first leg: the PIN-E placebo noise-floor harness
-  (esper-lite-94869250f1, in flight)** — sets tau; then F2 scale/cap calibration, hard
-  off-switch-J efficiency + fossilize-count gate, entrenchment monitor, ON-run dormancy
-  recheck, then the paired ≥5-seed OFF/ON A/B. Enabling scale>0 stays owner-gated.
+  esper-lite-254175df90 CLOSED.** Flag stays shapley_synergy_scale=0.0 everywhere. **ENABLEMENT gate OPEN and advancing (PDR-0014
+  → PDR-0018): tau = +0.28 pp ACCEPT-PROVISIONAL/LOWER-BOUND (owner-ratified); zero-GPU
+  occurrence probes DONE — coverage YELLOW in J currency, F1/F5 not exploited (no pre-A/B
+  fixes), A/B scoped as terminal commitment-credit (metric: `fossilize_payable_J`).**
+  Active leg: F2 scale/cap calibration; then hard off-switch-J efficiency +
+  fossilize-count gate, entrenchment monitor, ON-run dormancy recheck, then the paired
+  ≥5-seed OFF/ON A/B under the PDR-0018 large-effect targets (median paired Δ ≥
+  2×tau_provisional, ≥4/5 seeds, episode-level Δcorr ≥ +0.10, safety floors). ON-run tau
+  recalibration MANDATORY before n=10 magnitude claims. Enabling scale>0 stays owner-gated.
   (Pointer correction: earlier revisions mis-cited esper-lite-3d67b09687, which is the EV
   Stage-0 telemetry task.) · tracker: esper-lite-f22a1d48a7 (enablement, blocked_by
   esper-lite-94869250f1), esper-lite-425dcc4ca2 (telemetry hygiene) · metric:
