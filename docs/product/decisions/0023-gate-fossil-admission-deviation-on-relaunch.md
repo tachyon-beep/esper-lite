@@ -133,12 +133,19 @@ outcome data.
       caveat, population-validity carry-forward.
 - [x] Test battery green (see Evidence).
 - [x] OFF no-op replay — CPU deterministic leg (byte-identical).
-- [ ] OFF no-op replay — GPU leg: off_s41 replay at the patch-set
-      (RUNNING, `telemetry/relaunch_gates/off_replay_s41/`). Compared
-      against banked off_s41 on decision/reward/lifecycle streams and final
-      accuracy. If strict identity is broken by CUDA/co-tenancy
-      nondeterminism, attribution requires a same-commit control before the
-      substitute justification is accepted.
+- [x] OFF no-op replay — GPU leg: PASSED under the frozen acceptance rule
+      (tracker comment 118, fixed pre-result). Replay at the patch-set
+      completed clean (2400/2400, zero TOPUP); strict identity broken
+      (episode_reward identical 5/2400) with distribution preserved
+      (final_acc +0.10pp). Same-commit control at pure 6dd80716 decorrelated
+      HARDER (identical 3/2400; fossilize delta 5.6x the replay's;
+      CF-matrix count +10%) — same-class stochastic drift, zero TOPUP, exact
+      indexing. Auxiliary s43 packed-vs-solo replicate concurs. No
+      replay-unique directional shift (trip-wire silent). RECORD LANGUAGE
+      (binding): this establishes the GPU drift is NOT patch-specific — it
+      does not establish bitwise no-op; the CPU byte-identity digest remains
+      the stronger no-op proof; GPU stream identity is a low-sensitivity
+      check under this co-tenancy/nondeterminism regime.
 - [x] ON smoke at the patch-set (PASSED,
       `telemetry/relaunch_gates/on_smoke_s51/`, 8 batch-episodes,
       scale=1.0): exit 0, 96/96 episodes, 0 tracebacks / GATE errors / G1
