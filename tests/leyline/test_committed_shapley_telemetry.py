@@ -34,6 +34,8 @@ def test_payload_round_trips_from_dict():
         normalized_cap_bound=(False, False),
         v_table_masks=(0, 1, 2, 3),
         v_table_accs=(50.0, 60.0, 55.0, 70.0),
+        alpha_algorithms=("GATE", "ADD"),
+        tau_used=0.28,
         episode_idx=7,
     )
     parsed = CommittedShapleyTopUpPayload.from_dict(
@@ -56,6 +58,8 @@ def test_payload_round_trips_from_dict():
             "normalized_cap_bound": [False, False],
             "v_table_masks": [0, 1, 2, 3],
             "v_table_accs": [50.0, 60.0, 55.0, 70.0],
+            "alpha_algorithms": ["GATE", "ADD"],
+            "tau_used": 0.28,
             "episode_idx": 7,
         }
     )
@@ -85,6 +89,8 @@ def test_payload_carries_divisor_provenance_and_v_table():
         normalized_cap_bound=(False, True),
         v_table_masks=(0, 1, 2, 3),
         v_table_accs=(50.0, 60.0, 55.0, 70.0),
+        alpha_algorithms=("GATE", "ADD"),
+        tau_used=0.28,
         episode_idx=7,
     )
     parsed = CommittedShapleyTopUpPayload.from_dict(
@@ -107,6 +113,8 @@ def test_payload_carries_divisor_provenance_and_v_table():
             "normalized_cap_bound": [False, True],
             "v_table_masks": [0, 1, 2, 3],
             "v_table_accs": [50.0, 60.0, 55.0, 70.0],
+            "alpha_algorithms": ["GATE", "ADD"],
+            "tau_used": 0.28,
             "episode_idx": 7,
         }
     )
@@ -135,6 +143,8 @@ def test_payload_running_std_raw_none_on_dropped_path():
             "normalized_cap_bound": [False],
             "v_table_masks": [0, 1],
             "v_table_accs": [50.0, 51.0],
+            "alpha_algorithms": ["ADD"],
+            "tau_used": 0.0,
             "episode_idx": None,
             "dropped_no_std": True,
         }
@@ -163,6 +173,8 @@ def test_payload_dropped_no_std_default_false():
         normalized_cap_bound=(False,),
         v_table_masks=(0, 1),
         v_table_accs=(50.0, 51.0),
+        alpha_algorithms=("ADD",),
+        tau_used=0.0,
         episode_idx=None,
     )
     assert payload.dropped_no_std is False
