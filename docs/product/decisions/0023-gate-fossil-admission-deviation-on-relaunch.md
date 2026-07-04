@@ -139,11 +139,15 @@ outcome data.
       accuracy. If strict identity is broken by CUDA/co-tenancy
       nondeterminism, attribution requires a same-commit control before the
       substitute justification is accepted.
-- [ ] ON smoke at the patch-set (RUNNING,
+- [x] ON smoke at the patch-set (PASSED,
       `telemetry/relaunch_gates/on_smoke_s51/`, 8 batch-episodes,
-      scale=1.0): must survive organic GATE fossils, emit TOPUP events with
-      finite values and the gate-identity fields, no crash.
-- [ ] OFF rerun completion (off_s43 solo at 6dd80716, in progress).
+      scale=1.0): exit 0, 96/96 episodes, 0 tracebacks / GATE errors / G1
+      trips; 8 finite TOPUP events; gate-identity fields present with
+      organic {ADD, GATE, MULTIPLY} coverage; true episode ids; 0 paid
+      (expected at n=8).
+- [x] OFF rerun completion (off_s43 solo at 6dd80716: 2400/2400
+      EPISODE_OUTCOME, 200 PPO updates, clean terminal scoreboard, zero
+      tracebacks, zero TOPUP events — OFF set now 5/5).
 
 When all gates pass: relaunch ON-only — 5 seeds at the patch-set, ≤2 runs
 per GPU, telemetry to `telemetry/shapley_ab_n5/on_s4*`. Do not rerun OFF.
