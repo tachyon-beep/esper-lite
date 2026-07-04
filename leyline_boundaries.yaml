@@ -51,6 +51,26 @@ allow_hits:
     owner: "john"
     reason: "Post-fossilization drip tracking (BASIC_PLUS mode), simic-internal"
 
+  - key: "src/esper/simic/rewards/committed_shapley.py:dataclass:SlotTopUp"
+    owner: "john"
+    reason: "Committed-Shapley per-slot credit record (solver output), simic-internal; the cross-domain contract is CommittedShapleyTopUpPayload in leyline/telemetry"
+
+  - key: "src/esper/simic/rewards/committed_shapley.py:dataclass:CommittedShapleyResult"
+    owner: "john"
+    reason: "Committed-Shapley solver result bundle, simic-internal; telemetry contract lives in leyline"
+
+  - key: "src/esper/simic/rewards/committed_shapley.py:dataclass:CommittedShapleyEnvCredits"
+    owner: "john"
+    reason: "Per-env credit bundle passed trainer->coordinator within simic; not a cross-domain contract"
+
+  - key: "src/esper/simic/rewards/residency.py:dataclass:SeedResidencyAccumulator"
+    owner: "john"
+    reason: "Stateful residency accumulator (machinery, not a contract), simic-internal"
+
+  - key: "src/esper/simic/rewards/residency.py:dataclass:SlotResidencySample"
+    owner: "john"
+    reason: "Residency sample record consumed only by simic reward instrumentation"
+
   # ============================================================================
   # SIMIC: Telemetry Implementation
   # ============================================================================
@@ -203,6 +223,14 @@ allow_hits:
     owner: "john"
     reason: "PPO coordinator configuration, simic-internal"
 
+  - key: "src/esper/simic/training/fossilize_rate_guard.py:dataclass:FossilizeRateGuard"
+    owner: "john"
+    reason: "Stateful G1 fossilize-rate guard machinery, simic-internal"
+
+  - key: "src/esper/simic/training/intervention.py:dataclass:SuppressSlotResult"
+    owner: "john"
+    reason: "R1 harness mask-application result carrying live torch.Tensors, simic-internal"
+
   # ============================================================================
   # SIMIC: Lifecycle Handlers (env-refactor)
   # ============================================================================
@@ -339,6 +367,10 @@ allow_hits:
   - key: "src/esper/tamiyo/networks/factored_lstm.py:typeddict:_ForwardOutput"
     owner: "john"
     reason: "Internal TypedDict for forward() return"
+
+  - key: "src/esper/tamiyo/networks/factored_lstm.py:namedtuple:_EvalOutput"
+    owner: "john"
+    reason: "Private NamedTuple return type of the evaluate() hot path, tamiyo-internal"
 
   - key: "src/esper/tamiyo/tracker.py:dataclass:SignalTracker"
     owner: "john"

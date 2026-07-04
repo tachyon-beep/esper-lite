@@ -376,7 +376,7 @@ def apply_proof_baseline_action_controls(
             raise ValueError(
                 "proof_baseline schedule provenance requires a proof baseline lifecycle policy"
             )
-        return
+        return None
     if lifecycle_policy == "paired_lockstep_reward_comparison":
         if (
             schedule_id is not None
@@ -387,7 +387,7 @@ def apply_proof_baseline_action_controls(
             raise ValueError(
                 "paired_lockstep_reward_comparison must not carry schedule provenance"
             )
-        return
+        return None
     if lifecycle_policy == STATIC_FINAL_SOURCE_LIFECYCLE_POLICY:
         if (
             schedule_id != STATIC_FINAL_SOURCE_TOPOLOGY_V1
@@ -408,7 +408,7 @@ def apply_proof_baseline_action_controls(
             action=action,
             epoch=epoch,
         )
-        return
+        return None
 
     if lifecycle_policy == "freeze_replayed_final_topology":
         if (
@@ -436,7 +436,7 @@ def apply_proof_baseline_action_controls(
         controlled_op_mask = torch.zeros_like(masks_batch["op"])
         controlled_op_mask[:, wait_idx] = True
         masks_batch["op"] = controlled_op_mask
-        return
+        return None
 
     unsupported_policies: tuple[str, ...] = ()
     if lifecycle_policy in unsupported_policies:
@@ -473,7 +473,7 @@ def apply_proof_baseline_action_controls(
             action=action,
             epoch=epoch,
         )
-        return
+        return None
 
     wait_only_policies = (
         "force_wait_only",
@@ -495,6 +495,7 @@ def apply_proof_baseline_action_controls(
     controlled_op_mask = torch.zeros_like(masks_batch["op"])
     controlled_op_mask[:, wait_idx] = True
     masks_batch["op"] = controlled_op_mask
+    return None
 
 
 def _force_scheduled_action_masks(

@@ -737,7 +737,6 @@ def train_ppo_vectorized(
     experimental_gpu_preload_gather: bool = False,
     gpu_preload_augment: bool = False,
     gpu_preload_precompute_augment: bool = False,
-    gpu_preload_gather_shrink: bool = False,
     amp: bool = False,
     amp_dtype: str = "auto",  # "auto", "float16", "bfloat16", or "off"
     max_grad_norm: float | None = None,  # Gradient clipping max norm (None disables)
@@ -1339,7 +1338,6 @@ def train_ppo_vectorized(
                 is_train=True,
                 seed=seed,
                 cifar_precompute_aug=gpu_preload_precompute_augment,
-                allow_batch_shrink=gpu_preload_gather_shrink,
             )
             shared_test_iter = SharedGPUGatherBatchIterator(
                 batch_size_per_env=effective_batch_size_per_env,
@@ -1350,7 +1348,6 @@ def train_ppo_vectorized(
                 is_train=False,
                 seed=seed,
                 cifar_precompute_aug=gpu_preload_precompute_augment,
-                allow_batch_shrink=gpu_preload_gather_shrink,
             )
         else:
             from esper.utils.data import SharedGPUBatchIterator
