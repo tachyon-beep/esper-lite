@@ -219,12 +219,22 @@ def build_committed_shapley_env_credits(
                 f"env {i}: fossilized slots {missing} have no "
                 f"fossilize_step_records entry — t_f recording is broken"
             )
+        alpha_algorithm_by_slot: dict[str, str] = {}
+        for s in committed_set:
+            slot_s = cast(SeedSlotProtocol, env_state.model.seed_slots[s])
+            if slot_s.state is None:
+                raise ValueError(
+                    f"env {i}: committed slot {s} has no seed state — "
+                    f"the coalition set is stale"
+                )
+            alpha_algorithm_by_slot[s] = slot_s.state.alpha_algorithm.name
         credits.append(
             CommittedShapleyEnvCredits(
                 env_idx=i,
                 result=topup_result,
                 t_f_by_slot={s: t_f_by_slot[s] for s in committed_set},
                 coalition_accs=coalition_accs,
+                alpha_algorithm_by_slot=alpha_algorithm_by_slot,
                 episode_idx=episodes_completed + i,
             )
         )
@@ -1234,15 +1244,13 @@ class VectorizedPPOTrainer:
                     if slot_c.state is None:
                         continue
                     if slot_c.state.stage == SeedStage.FOSSILIZED:
-                        if slot_c.state.alpha_algorithm == AlphaAlgorithm.GATE:
-                            # The fused pass materializes alpha_schedule for
-                            # GATE slots appearing as config keys and does not
-                            # restore it; a GATE fossilized slot would extend
-                            # that hazard silently (plan review, pytorch F3).
-                            raise ValueError(
-                                f"committed-Shapley over a GATE-algorithm "
-                                f"fossilized slot {sid} is not supported"
-                            )
+                        # GATE fossilized slots are admitted: a GATE seed keeps
+                        # its trained alpha_schedule for life (the GATE forward
+                        # requires it at every stage), and coalition masking
+                        # composes as amplitude x gate (the force_alpha
+                        # contract) — alpha 0.0 is host-only, alpha 1.0 is the
+                        # natural fossilized forward. The fused pass never
+                        # materializes a schedule for FOSSILIZED slots.
                         committed_slot_list.append(sid)
                 if committed_slot_list:
                     if self.reward_config.drip_fraction > 0.0:
@@ -1498,10 +1506,15 @@ class VectorizedPPOTrainer:
 
                     # P4-FIX: Ensure alpha_schedule exists for GATE algorithm during fused pass.
                     # This can happen if a seed is in HOLD mode and its schedule was cleared.
+                    # Never for FOSSILIZED: a fossilized GATE seed keeps its trained
+                    # schedule for life, so a missing one is a broken invariant —
+                    # a fresh untrained gate here would silently corrupt v(S) and
+                    # persist on the permanent slot; the GATE forward fails loud.
                     if (
                         slot.state
                         and slot.state.alpha_algorithm
                         == AlphaAlgorithm.GATE
+                        and slot.state.stage != SeedStage.FOSSILIZED
                         and slot_concrete.alpha_schedule is None
                     ):
                         from esper.kasmina.blending import BlendCatalog

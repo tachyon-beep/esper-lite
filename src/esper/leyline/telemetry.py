@@ -1685,6 +1685,13 @@ class CommittedShapleyTopUpPayload:
     normalized_cap_bound: tuple[bool, ...]
     v_table_masks: tuple[int, ...]
     v_table_accs: tuple[float, ...]
+    # Per-slot AlphaAlgorithm names, index-aligned with ``slot_ids`` — the
+    # gate/non-gate stratification key (prereg addendum §5: gate-vs-non-gate
+    # credit split and stratified tau/P99 recalibration ride the TOPUP path
+    # so the OFF stream stays byte-identical).
+    alpha_algorithms: tuple[str, ...]
+    # The noise floor (tau) actually applied in this run's credit computation.
+    tau_used: float
 
     # CONTEXT (injected by emit_with_env_context)
     episode_idx: int | None = None
@@ -1716,6 +1723,8 @@ class CommittedShapleyTopUpPayload:
             normalized_cap_bound=_ensure_tuple(data["normalized_cap_bound"]),
             v_table_masks=_ensure_tuple(data["v_table_masks"]),
             v_table_accs=_ensure_tuple(data["v_table_accs"]),
+            alpha_algorithms=_ensure_tuple(data["alpha_algorithms"]),
+            tau_used=data["tau_used"],
             episode_idx=data["episode_idx"],
             dropped_no_std=data.get("dropped_no_std", False),
         )

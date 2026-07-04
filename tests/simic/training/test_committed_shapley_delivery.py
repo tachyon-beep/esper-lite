@@ -38,7 +38,12 @@ def _normalizer(samples=(2.0, 4.0, 6.0, 8.0)):
     return n
 
 
-def _env_credits(env_idx, top_ups: dict[str, float], t_f: dict[str, int]):
+def _env_credits(
+    env_idx,
+    top_ups: dict[str, float],
+    t_f: dict[str, int],
+    algos: dict[str, str] | None = None,
+):
     from itertools import combinations
 
     per_slot = {
@@ -59,13 +64,50 @@ def _env_credits(env_idx, top_ups: dict[str, float], t_f: dict[str, int]):
         for r in range(len(slots) + 1)
         for c in combinations(slots, r)
     }
+    algos = algos or {}
     return CommittedShapleyEnvCredits(
         env_idx=env_idx,
         result=result,
         t_f_by_slot=t_f,
         coalition_accs=accs,
+        alpha_algorithm_by_slot={
+            slot: algos.get(slot, "ADD") for slot in top_ups
+        },
         episode_idx=1,
     )
+
+
+def test_payload_carries_gate_identity_and_tau():
+    """Owner ratification §8 / addendum §5: scoring stratifies gate vs
+    non-gate credit from the TOPUP payload alone (the scale>0-only emission
+    path), never from OFF telemetry — so the payload must carry per-slot
+    alpha algorithms and the tau actually applied."""
+    buffer = _buffer()
+    normalizer = _normalizer()
+    algos = {"r0c0": "GATE", "r0c1": "ADD"}
+    credits = [
+        _env_credits(
+            0,
+            {"r0c0": 2.0, "r0c1": 0.5},
+            {"r0c0": 1, "r0c1": 3},
+            algos=algos,
+        )
+    ]
+
+    payloads = apply_committed_shapley_credits(
+        buffer=buffer,
+        reward_normalizer=normalizer,
+        env_credits=credits,
+        std_floor=0.0,
+        normalized_cap=100.0,
+        tau_used=0.28,
+    )
+
+    (payload,) = payloads
+    assert payload.alpha_algorithms == tuple(
+        algos[s] for s in payload.slot_ids
+    )
+    assert payload.tau_used == 0.28
 
 
 def test_credit_written_at_t_f_divided_by_std():
@@ -80,6 +122,7 @@ def test_credit_written_at_t_f_divided_by_std():
         env_credits=credits,
         std_floor=0.0,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
 
     expected = 2.0 / std
@@ -112,6 +155,7 @@ def test_std_floor_bounds_small_std_amplification():
         env_credits=credits,
         std_floor=std_floor,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     assert buffer.rewards[0, 1].item() == pytest.approx(2.0 / std_floor)
 
@@ -127,6 +171,7 @@ def test_normalized_cap_is_the_primary_bound():
         env_credits=credits,
         std_floor=0.0,
         normalized_cap=5.0,
+        tau_used=0.0,
     )
     # 2.0 / tiny-std >> 5.0 -> clamped to the normalized cap.
     assert buffer.rewards[0, 1].item() == pytest.approx(5.0)
@@ -148,6 +193,7 @@ def test_rollback_env_excluded_entirely():
         env_credits=credits,
         std_floor=0.0,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     assert buffer.rewards[0, 3].item() != 0.0
     assert buffer.rewards[1, 3].item() == 0.0
@@ -166,6 +212,7 @@ def test_zero_top_up_slots_not_written():
         env_credits=credits,
         std_floor=0.0,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     assert buffer.rewards[0, 4].item() == 0.0
     # The event still carries the zero slot (books complete)...
@@ -184,6 +231,7 @@ def test_count_below_two_drops_credits_and_marks_payload():
         env_credits=credits,
         std_floor=0.5,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     assert torch.all(buffer.rewards == 0.0)  # nothing written
     assert payloads[0].dropped_no_std is True
@@ -204,6 +252,7 @@ def test_payload_divisor_provenance_normal_path():
         env_credits=credits,
         std_floor=0.1,  # well below the real std -> floor inert
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     p = payloads[0]
     assert p.running_std_raw == pytest.approx(std)
@@ -225,6 +274,7 @@ def test_payload_flags_std_floor_bound():
         env_credits=credits,
         std_floor=std_floor,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     p = payloads[0]
     assert p.std_floor_bound is True
@@ -244,6 +294,7 @@ def test_payload_flags_normalized_cap_bound_per_slot():
         env_credits=credits,
         std_floor=0.0,
         normalized_cap=5.0,
+        tau_used=0.0,
     )
     assert payloads[0].normalized_cap_bound == (True, False)
 
@@ -259,6 +310,7 @@ def test_payload_provenance_on_dropped_no_std_path():
         env_credits=credits,
         std_floor=0.5,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     p = payloads[0]
     assert p.running_std_raw is None
@@ -286,6 +338,7 @@ def test_payload_carries_raw_coalition_table():
             result=result,
             t_f_by_slot={"r0c0": 2, "r0c1": 5},
             coalition_accs=accs,
+            alpha_algorithm_by_slot={"r0c0": "ADD", "r0c1": "ADD"},
             episode_idx=0,
         )
     ]
@@ -295,6 +348,7 @@ def test_payload_carries_raw_coalition_table():
         env_credits=credits,
         std_floor=0.0,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     p = payloads[0]
     # mask bit i <-> slot_ids[i]: 0=empty, 1={r0c0}, 2={r0c1}, 3=both.
@@ -314,6 +368,7 @@ def test_t_f_out_of_range_fails_loud():
             env_credits=credits,
             std_floor=0.0,
             normalized_cap=100.0,
+        tau_used=0.0,
         )
 
 
@@ -337,6 +392,7 @@ def test_end_to_end_with_real_shapley_result():
             result=result,
             t_f_by_slot={"r0c0": 2, "r0c1": 5},
             coalition_accs=accs,
+            alpha_algorithm_by_slot={"r0c0": "ADD", "r0c1": "ADD"},
             episode_idx=0,
         )
     ]
@@ -346,6 +402,7 @@ def test_end_to_end_with_real_shapley_result():
         env_credits=credits,
         std_floor=0.0,
         normalized_cap=100.0,
+        tau_used=0.0,
     )
     # top_up = 2.5 pp each (hand case from WI-1 tests).
     assert buffer.rewards[0, 2].item() == pytest.approx(2.5 / std)

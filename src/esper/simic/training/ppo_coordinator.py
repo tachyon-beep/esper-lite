@@ -49,6 +49,7 @@ def apply_committed_shapley_credits(
     env_credits: list[CommittedShapleyEnvCredits],
     std_floor: float,
     normalized_cap: float,
+    tau_used: float,
 ) -> list[CommittedShapleyTopUpPayload]:
     """Retro-write terminal committed-Shapley credits into the rollout buffer.
 
@@ -147,6 +148,10 @@ def apply_committed_shapley_credits(
                 normalized_cap_bound=tuple(ncap_bound_list),
                 v_table_masks=tuple(m for m, _ in v_table),
                 v_table_accs=tuple(a for _, a in v_table),
+                alpha_algorithms=tuple(
+                    credits.alpha_algorithm_by_slot[s] for s in slot_ids
+                ),
+                tau_used=tau_used,
                 episode_idx=credits.episode_idx,
                 dropped_no_std=dropped_no_std,
             )
@@ -453,6 +458,7 @@ class PPOCoordinator:
                 env_credits=committed_shapley_credits,
                 std_floor=reward_cfg.shapley_synergy_std_floor,
                 normalized_cap=reward_cfg.shapley_synergy_normalized_cap,
+                tau_used=reward_cfg.shapley_synergy_noise_floor,
             )
             if self.hub is not None:
                 for payload in topup_payloads:

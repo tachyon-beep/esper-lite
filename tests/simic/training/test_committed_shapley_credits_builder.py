@@ -32,9 +32,27 @@ from esper.simic.training.vectorized_trainer import (
 _SCALE, _CAP, _TAU = 1.0, 5.0, 0.28
 
 
+def _fossilized_slot(slot_id: str) -> "SeedSlot":
+    """Real SeedSlot walked to FOSSILIZED (the kasmina test idiom, ADD blend)."""
+    from esper.kasmina.slot import SeedSlot
+    from esper.leyline import AlphaAlgorithm, SeedStage
+
+    slot = SeedSlot(slot_id=slot_id, channels=8)
+    slot.germinate(
+        "norm", seed_id=f"s-{slot_id}", alpha_algorithm=AlphaAlgorithm.ADD
+    )
+    slot.state.transition(SeedStage.TRAINING)
+    slot.state.transition(SeedStage.BLENDING)
+    slot.state.transition(SeedStage.HOLDING)
+    slot.state.stage = SeedStage.FOSSILIZED
+    return slot
+
+
 def _env_state(records: list[tuple[str, int]]) -> ParallelEnvState:
-    """Minimal CPU ParallelEnvState; the builder reads only fossilize_step_records."""
+    """Minimal CPU ParallelEnvState; the builder reads fossilize_step_records
+    and each committed slot's seed state (for the alpha-algorithm map)."""
     model = nn.Linear(2, 2)
+    model.seed_slots = {sid: _fossilized_slot(sid) for sid, _ in records}
     state = ParallelEnvState(
         model=model,
         host_optimizer=torch.optim.SGD(model.parameters(), lr=0.0),
@@ -69,6 +87,8 @@ def test_episode_idx_is_episodes_completed_plus_env_idx() -> None:
     )
     by_env = {c.env_idx: c for c in credits}
     assert set(by_env) == {0, 1}
+    # The gate-stratification map is populated from real slot state.
+    assert by_env[0].alpha_algorithm_by_slot == {"r0c0": "ADD"}
     assert by_env[0].episode_idx == 8
     assert by_env[1].episode_idx == 9, (
         "episode identity must be episodes_completed + env_idx (the batch-start "

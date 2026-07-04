@@ -67,6 +67,49 @@ def test_holding_override_path_equals_live_scalar_path() -> None:
     )
 
 
+def test_fossilized_gate_override_one_equals_live_forward() -> None:
+    """FOSSILIZED GATE via alpha_override=1.0 == the live natural forward.
+
+    Criterion 6(c) extension (esper-lite-fbeead4efc): admitting GATE fossilized
+    slots to the coalition family means their member-present configs travel the
+    tensor-override blend path. That measurement is honest only if the override
+    path reproduces the deployed forward bit-identically — the same
+    "numerically inert" standard already verified for non-GATE fossils. The
+    trained gate module is shared by both paths; only the amplitude's tensor
+    form (broadcast override vs cached scalar) differs.
+    """
+    torch.manual_seed(2)
+    b, c, h, w = 4, 16, 8, 8
+    slot = SeedSlot(slot_id="r0c0", channels=c)
+    slot.germinate(
+        "placebo",
+        seed_id="s",
+        blend_algorithm_id="gated",
+        alpha_algorithm=AlphaAlgorithm.GATE,
+    )
+    slot.state.transition(SeedStage.TRAINING)
+    slot.state.transition(SeedStage.BLENDING)
+    slot.start_blending(total_steps=5)
+    slot.state.transition(SeedStage.HOLDING)
+    slot.set_alpha(1.0)
+    # Match existing kasmina test idiom: force the terminal stage directly;
+    # weights, gate module, and alpha are untouched by the stage flip.
+    slot.state.stage = SeedStage.FOSSILIZED
+    host = torch.randn(b, c, h, w)
+
+    with torch.inference_mode():
+        via_override = slot(host, alpha_override=torch.ones(b, 1, 1, 1))
+        live = slot(host)
+
+    assert torch.isfinite(via_override).all()
+    assert torch.equal(via_override, live), (
+        "FOSSILIZED GATE forward must be bit-identical between the fused-pass "
+        "alpha_override tensor path and the live cached-scalar path at alpha=1.0 "
+        "— otherwise coalition member-present configs measure a different "
+        "quantity than the deployed contribution"
+    )
+
+
 def test_fossilized_live_forward_equals_holding_measurement() -> None:
     """The same seed FOSSILIZED yields the identical live forward it had at HOLDING.
 

@@ -76,6 +76,12 @@ class CommittedShapleyEnvCredits:
     result: CommittedShapleyResult
     t_f_by_slot: dict[str, int]
     coalition_accs: Mapping[frozenset[str], float]
+    # Per-slot AlphaAlgorithm names for the committed set — the scoring-side
+    # gate/non-gate stratification key (prereg addendum §5). Carried here
+    # because slot state is only reachable at the terminal build, and the
+    # TOPUP event is the sole scale>0 telemetry ledger (OFF stream stays
+    # byte-identical).
+    alpha_algorithm_by_slot: dict[str, str]
     episode_idx: int | None = None
 
 

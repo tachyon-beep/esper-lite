@@ -135,6 +135,60 @@ def test_slot_alpha_override_zero_returns_host_bit_identical_multiply(stage: See
     )
 
 
+def _active_gate_norm_slot(*, channels: int, stage: SeedStage) -> SeedSlot:
+    """Standalone SeedSlot with a non-identity 'norm' seed on the GATE blend path.
+
+    The gated alpha_schedule is created by start_blending() at BLENDING entry
+    (production order), so only stages at or past BLENDING are constructible.
+    """
+    slot = SeedSlot(slot_id="r0c0", channels=channels)
+    slot.germinate(
+        "norm",
+        seed_id="s",
+        blend_algorithm_id="gated",
+        alpha_algorithm=AlphaAlgorithm.GATE,
+    )
+    slot.state.transition(SeedStage.TRAINING)
+    slot.state.transition(SeedStage.BLENDING)
+    slot.start_blending(total_steps=5)
+    if stage in (SeedStage.HOLDING, SeedStage.FOSSILIZED):
+        slot.state.transition(SeedStage.HOLDING)
+    if stage == SeedStage.FOSSILIZED:
+        # Match existing kasmina tests: force the terminal stage directly.
+        slot.state.stage = SeedStage.FOSSILIZED
+    _make_nonidentity_norm(slot.seed)
+    slot.set_alpha(NATURAL_ALPHA)
+    return slot
+
+
+@pytest.mark.parametrize(
+    "stage", (SeedStage.BLENDING, SeedStage.HOLDING, SeedStage.FOSSILIZED)
+)
+def test_slot_alpha_override_zero_returns_host_bit_identical_gate(
+    stage: SeedStage,
+) -> None:
+    """alpha_override=0 (GATE branch) => output == host features bit-identically.
+
+    blend_gate composes amplitude x gate, so amplitude 0 masks the seed exactly
+    regardless of the learned per-sample gate — the coalition DISABLED leg for
+    GATE slots (esper-lite-fbeead4efc admits GATE fossilized to the family)."""
+    torch.manual_seed(2)
+    b, c, h, w = 4, 16, 8, 8
+    slot = _active_gate_norm_slot(channels=c, stage=stage)
+    host = torch.randn(b, c, h, w)
+
+    masked = slot(host, alpha_override=torch.zeros(b, 1, 1, 1))
+    natural = slot(host, alpha_override=torch.full((b, 1, 1, 1), NATURAL_ALPHA))
+
+    assert torch.isfinite(masked).all()
+    assert torch.equal(masked, host), (
+        f"GATE alpha_override=0 must return host features bit-identically (stage={stage.name})"
+    )
+    assert not torch.equal(natural, host), (
+        f"GATE seed must be non-identity at natural alpha (stage={stage.name})"
+    )
+
+
 def test_slot_zeroing_is_blend_branch_not_ste() -> None:
     """A TRAINING slot with alpha==0 STILL zeroes exactly when an override tensor is passed.
 
