@@ -1,4 +1,4 @@
-# Metrics — Esper             Last read: 2026-07-03
+# Metrics — Esper             Last read: 2026-07-05
 
 > Research framework, not a commercial product: the "north-star" is the morphogenetic
 > objective J (committed per-param counterfactual gain), not an engagement metric.
@@ -25,3 +25,4 @@
 | **Policy DECISION-STEP (conditional) entropy** | must NOT collapse (≳ 0.1 on decision steps) | **HEALTHY — slot 1.0→0.30–0.70, op ~0.88 (never <0.1). Prior "⚠ BREACHED" was a FALSE ALARM (PDR-0006): the alarm read `head_*_entropy` = learnable_fraction × conditional — a density proxy diluted by ~60% forced steps; the ~411 anomalies were a telemetry artifact. Raw series → relabel `head_*_entropy_density`.** | 2026-07-01 |
 | Rent / efficiency — committed param & compute cost per acc-point | ≤ ceiling `<owner-set>` | **n=5 BANKED (5/5 seeds): control 12–20 vs suppress(no r0c0) 7–9 pp/M-param, median Δeff −7.0 (sign-test p≈0.03) ⇒ r0c0 is an efficiency-enabling stem (b), NOT a freeloader (PDR-0009). DIRECTION banked; MAGNITUDE → owner's n=10 call (the "CI" is a sign test, not a CI). [prior n=1: +252% params / 7× compute for +6% acc]** | 2026-07-02 (n=5 J-read) |
 | Churn not reward-farmed — germinate/prune per episode vs contribution | not decoupled from contribution | germ 12.4 / prune 11.6 per ep | 2026-06-25 (n=5) |
+| **ON-wave mechanism validity (IN-FLIGHT, first 20% of runs)** — TOPUP finiteness, G1 trips, anomaly rates vs OFF baseline | zero non-finite; G1 zero trips; anomaly rates ≤ OFF baseline | **HEALTHY: 275 TOPUP all finite, tau=0.28 stamped 275/275, true episode ids confirmed; G1 trips 0/4 runs; reward-hacking + rollback rates OFF-consistent. ⚠ G4-flag (audit at scoring, NOT a trip): k=2 paid fraction 47% vs ~1% null-exceedance prior; 4/9 payments cap-clipped (tracker comment 121)** | 2026-07-05 (4 runs @ ~40 b.e.) |
