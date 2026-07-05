@@ -29,11 +29,14 @@ from esper.leyline import (
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent
 from esper.simic.agent.ppo_agent import CHECKPOINT_VERSION
+from esper.simic.rewards.partition import COMPONENT_TERMS
 from esper.tamiyo.policy import create_policy
 from esper.tamiyo.policy.features import get_feature_size
 
 
-def _build_agent(*, hra: bool, recurrent_n_epochs: int = 1) -> tuple[PPOAgent, SlotConfig]:
+def _build_agent(
+    *, hra: bool, recurrent_n_epochs: int = 1, return_variance_telemetry: bool = False
+) -> tuple[PPOAgent, SlotConfig]:
     torch.manual_seed(123)
     slot_config = SlotConfig.default()
     policy = create_policy(
@@ -53,11 +56,14 @@ def _build_agent(*, hra: bool, recurrent_n_epochs: int = 1) -> tuple[PPOAgent, S
         target_kl=None,
         recurrent_n_epochs=recurrent_n_epochs,
         hra_value_decomposition=hra,
+        return_variance_telemetry=return_variance_telemetry,
     )
     return agent, slot_config
 
 
-def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig, *, hra: bool) -> None:
+def _fill_buffer(
+    agent: PPOAgent, slot_config: SlotConfig, *, hra: bool, with_components: bool = False
+) -> None:
     """Deterministic 4-step episode. On the ON leg a deterministic r_cf stream + the
     network's own V_cf are threaded into the buffer (mirrors the rollout contract)."""
     state_dim = get_feature_size(slot_config)
@@ -105,6 +111,13 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig, *, hra: bool) -> None
         else:
             assert result.cf_value is None
             cf_kwargs = {}
+        if with_components:
+            # Minimal signed decomposition that sums to reward: cf = r_cf stream,
+            # residual = reward - r_cf, all other additends 0 (mirrors the rollout feed).
+            comp = dict.fromkeys(COMPONENT_TERMS, 0.0)
+            comp["bounded_attribution"] = r_cf
+            comp["residual"] = reward - r_cf
+            cf_kwargs = {**cf_kwargs, "component_additends": comp}
         agent.buffer.add(
             env_id=0,
             state=state.squeeze(0),
@@ -280,6 +293,37 @@ def test_off_leg_update_emits_no_cf_or_ev_keys() -> None:
         "cov_rcf_return_share",
         "r_main_cov",
     ):
+        assert key not in metrics
+
+
+_RETURN_VAR_KEYS = (
+    "return_var_cf_share",
+    "return_var_main_share",
+    "return_var_residual_share",
+)
+
+
+def test_return_variance_gate_emitted_when_flag_on() -> None:
+    """The value-free Stage-0 gate is emitted from update() when the flag is ON — and on
+    the HRA-OFF leg (it is the CONTROL-run gate, independent of hra_value_decomposition)."""
+    agent, slot_config = _build_agent(hra=False, return_variance_telemetry=True)
+    _fill_buffer(agent, slot_config, hra=False, with_components=True)
+    metrics = agent.update(clear_buffer=True)
+
+    assert metrics["ppo_update_performed"] is True
+    for key in _RETURN_VAR_KEYS:
+        assert key in metrics, f"missing value-free gate key {key!r}"
+        assert torch.isfinite(torch.tensor(metrics[key])).all()
+
+
+def test_return_variance_gate_absent_when_flag_off() -> None:
+    """Flag OFF (default): the gate keys are absent, so the metrics-dict contract and the
+    strict reducer whitelist are byte-identical to the pre-Stage-0 baseline."""
+    agent, slot_config = _build_agent(hra=False)  # return_variance_telemetry defaults OFF
+    _fill_buffer(agent, slot_config, hra=False)
+    metrics = agent.update(clear_buffer=True)
+
+    for key in _RETURN_VAR_KEYS:
         assert key not in metrics
 
 

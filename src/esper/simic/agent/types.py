@@ -87,8 +87,13 @@ class PPOUpdateMetrics(TypedDict, total=False):
     ev_main: float  # EV(V_main, returns_main)
     ev_cf: float  # EV(V_cf, returns_cf)
     ev_sum: float  # EV(V_total, returns_total) (== explained_variance on the ON leg)
-    cov_rcf_return_share: float  # Cov(returns_cf, returns_total)/Var(returns_total) GATE
-    r_main_cov: float  # std(returns_main)/(|mean(returns_main)|+eps) GATE
+    cov_rcf_return_share: float  # ON-leg λ-return DIAGNOSTIC (V_cf-contaminated, NOT the gate)
+    r_main_cov: float  # std(returns_main)/(|mean(returns_main)|+eps): ON-leg λ CoV diagnostic
+    # EV-stab Stage 0 GATE (value-free, both legs; gated on return_variance_telemetry). The
+    # TRUE gate (PDR-0028): raw per-return covariance shares, identical on both legs.
+    return_var_cf_share: float  # Cov(R_cf, R)/Var(R) — the >0.40 Stage-0 gate
+    return_var_main_share: float  # Var(R_main)/Var(R) — the smoothness leg
+    return_var_residual_share: float  # ~0 reconciliation diagnostic
     # EV-telemetry-robustness (additive). value_nrmse: floor-stabilized companion;
     # ev_low_return_variance: per-update floored-denominator flag; ev_return_variance:
     # EV-denominator variance (Bessel, correction=1); ev_low_return_variance_count: per-update

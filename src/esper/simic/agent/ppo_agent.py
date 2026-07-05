@@ -22,6 +22,7 @@ from .ppo_update import PPOUpdateResult, compute_contribution_aux_loss, compute_
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
+from esper.simic.telemetry.reward_variance import compute_return_variance_metrics
 from esper.simic.control import ValueNormalizer
 from esper.leyline.value_metrics import (
     ValueFunctionMetricsDict,
@@ -765,7 +766,11 @@ class PPOAgent:
             # exactly only with a consistent correction) and the v_return_correlation /
             # return_variance siblings; the EV family above deliberately stays correction=1.
             #   cov_rcf_return_share = Cov(returns_cf, returns_total)/Var(returns_total):
-            #     the epic gate (>0.40 ⇒ the cf stream dominates return variance).
+            #     an ON-leg Stage-2 DIAGNOSTIC (NOT the Stage-0 gate, PDR-0028) — it
+            #     decomposes GAE λ-returns whose returns_cf bootstraps V_cf's own
+            #     predictions, so it is V_cf-contaminated and biased toward passing. The
+            #     value-free gate is return_var_cf_share (below); the GAP between the two
+            #     measures the V_cf contamination.
             #   r_main_cov = std(returns_main)/(|mean(returns_main)|+eps): the "is R_main the
             #     smoother stream" gate (coefficient of variation of the subtractive R_main).
             # Zero-variance / zero-mean degenerate batches return 0.0 (no signal, not a bug:
@@ -782,6 +787,19 @@ class PPOAgent:
             r_main_cov = valid_returns_main.std(unbiased=False) / (main_mean_abs + 1e-8)
             metrics["cov_rcf_return_share"] = [cov_rcf_return_share]
             metrics["r_main_cov"] = [r_main_cov]
+
+        # EV-stab Stage 0 GATE (the TRUE gate, PDR-0028): the value-free per-return
+        # variance-share decomposition, read off the raw per-component additend SoA.
+        # Unconditional w.r.t. hra_value_decomposition (it reads on the Stage-2-OFF control
+        # run), gated only on the collection flag + non-empty data. return_var_cf_share is
+        # the >0.40 gate; return_var_main_share is the smoothness leg.
+        if self.return_variance_telemetry:
+            for rv_key, rv_val in compute_return_variance_metrics(
+                self.buffer, self.gamma
+            ).items():
+                # Scalar tensor: the metrics builder stacks each key's list (ppo_metrics
+                # finalize), so elements must be tensors like the sibling EV metrics.
+                metrics[rv_key] = [torch.tensor(rv_val)]
 
         # Return statistics for diagnosing value loss scale
         return_mean = valid_returns.mean()

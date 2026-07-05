@@ -373,6 +373,42 @@ def test_emit_ppo_update_event_surfaces_ev_stream_gate_metrics() -> None:
     assert restored.r_main_cov == pytest.approx(0.9)
 
 
+def test_emit_ppo_update_event_surfaces_value_free_stage0_gate() -> None:
+    """EV-stab Stage 0: the value-free gate (return_var_cf_share = the >0.40 gate,
+    plus the smoothness + residual legs) must reach the payload and survive the
+    serialize/deserialize round trip the Karn ppo_updates view reads."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            return_var_cf_share=0.47,
+            return_var_main_share=0.61,
+            return_var_residual_share=-0.02,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.return_var_cf_share == pytest.approx(0.47)
+    assert payload.return_var_main_share == pytest.approx(0.61)
+    assert payload.return_var_residual_share == pytest.approx(-0.02)
+
+    from dataclasses import asdict
+
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    restored = PPOUpdatePayload.from_dict(asdict(payload))
+    assert restored.return_var_cf_share == pytest.approx(0.47)
+    assert restored.return_var_main_share == pytest.approx(0.61)
+    assert restored.return_var_residual_share == pytest.approx(-0.02)
+
+
 def test_emit_ppo_update_event_omits_ev_stream_metrics_on_off_leg() -> None:
     """OFF (HRA-off) leg: the per-stream EV + GATE keys are absent from the metrics
     dict, so the payload carries None (byte-identical to pre-Stage-0 behaviour)."""
@@ -396,6 +432,9 @@ def test_emit_ppo_update_event_omits_ev_stream_metrics_on_off_leg() -> None:
     assert payload.ev_sum is None
     assert payload.cov_rcf_return_share is None
     assert payload.r_main_cov is None
+    assert payload.return_var_cf_share is None
+    assert payload.return_var_main_share is None
+    assert payload.return_var_residual_share is None
 
 
 def test_emit_ppo_update_event_requires_q_head_gradient_norm() -> None:

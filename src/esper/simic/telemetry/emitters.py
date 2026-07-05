@@ -1071,6 +1071,11 @@ def emit_ppo_update_event(
             ev_sum=metrics.get("ev_sum"),
             cov_rcf_return_share=metrics.get("cov_rcf_return_share"),
             r_main_cov=metrics.get("r_main_cov"),
+            # EV-stab Stage 0 value-free GATE (return_variance_telemetry-gated; absent
+            # otherwise -> .get() None, same legitimate optional-numeric pattern).
+            return_var_cf_share=metrics.get("return_var_cf_share"),
+            return_var_main_share=metrics.get("return_var_main_share"),
+            return_var_residual_share=metrics.get("return_var_residual_share"),
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=metrics.get("inf_grad_count", 0),
