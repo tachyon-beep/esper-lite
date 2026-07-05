@@ -1,59 +1,58 @@
-# Current State — Esper        Checkpoint: 2026-07-05 ~16:00 (checkpoint #16 — TERM PARKED (owner call a); EV track is the Now bet; PDR-0027)
+# Current State — Esper        Checkpoint: 2026-07-05 ~17:30 (checkpoint #17 — EV Stage-0 reconciliation + methodology correction; PDR-0028, PDR-0029)
 
 ## The bet right now
-**EV-stabilization — joint value-target variance reduction for recurrent
-factored-action PPO** (esper-lite-f25b71c165, moved Next → Now by PDR-0027).
-Metric: per-stream EV / value-target variance; secondary product signal =
-fossilize/ep and k≥2 co-fossilization frequency on control runs (the
-organic-coverage trigger that can reopen the Shapley A/B re-run).
+**EV-stabilization** (esper-lite-f25b71c165, Now bet per PDR-0027). Metric =
+the **value-free EV Stage-0 gate** `Cov(R_cf, R)/Var(R) > 0.40` on a Stage-2-OFF
+control run, + low `r_main_var_share`. **Delivery is on branch
+`feat/ev-stab-stage2-hra`** (adopted PDR-0028 — that branch, not this one, holds
+the real EV implementation).
 
-## What just closed
-**Committed-Shapley top-up: PARKED by explicit owner word** ("checkpoint for
-A (parking the term)", 2026-07-05). The n=5 A/B scored NULL-NOT-INFORMATIVE
-(PDR-0026: paid episodes 0.49%, k≥2 = 1.10% — the pre-registered coverage
-floor, hit exactly; mean paired Δcorr −0.017 = pure noise) with the mechanism
-ALL GREEN. Instrument banked as validated; flag stays 0.0 and owner-gated;
-enablement task esper-lite-f22a1d48a7 CLOSED. Scorecard:
-`docs/analysis/2026-07-05-shapley-ab-n5-scoring-verdict.md`.
+## What just happened (this session)
+The "implement Stage-0" task was really a **branch-divergence + methodology**
+problem (PDR-0028). Stage-0's control-run gate was implemented NOWHERE: the existing
+metric only fires on the Stage-2 ON leg and decomposes V_cf-contaminated GAE
+λ-returns (leg-b biased toward passing) — invalid as a gate. **Two independent DRL
+reviews converged** on this (opus plan-gate + fable specialist). Owner ratified
+"do it right on ev-stab". **Landed** (ev-stab commit `f721a5b3`, TDD 4/4 green):
+`compute_return_variance_shares` — the value-free, raw-scale, per-return covariance
+decomposition (the canonical gate metric, reads identically on both legs).
 
 ## In flight
-- Nothing running. GPUs free. All 10 A/B runs banked in
-  `telemetry/shapley_ab_n5/` (do not delete — owner-gated; quarantine dirs
-  from the aborted prelaunch remain by rename only).
+- **Stage-0 remaining plumbing on `feat/ev-stab-stage2-hra`** (esper-lite-3d67b09687,
+  in_progress): per-component buffer SoA → both-legs ppo_agent wiring (demote the
+  ON-leg λ-return metric to a Stage-2 diagnostic) → the 6-file telemetry contract →
+  read the gate on a control run. Nothing running on GPU.
+- Review gate esper-lite-cfbdfdf040 CLOSED (PDR-0029): Stage 3 scoped out (needs its
+  own authored plan); MAJOR-1 (`ev_sum` hard floor) + MAJOR-3 (provenance) folded into
+  the Stage-2 acceptance criteria.
 
 ## Facts the next session must not relitigate
-- The null does NOT count against the term (asymmetric null); PDR-0018 §7
-  does NOT fire; GATE-2 does NOT reopen.
-- Parking ≠ killing: the term passed every validity/safety/anti-farming test;
-  the finding was channel bandwidth (1.1% coverage), not credit-math error.
-- Re-run licensing lives in PDR-0027 reversal triggers (organic k≥2 rise ≥3×
-  → owner decides; ≥10× coverage null = informative). n=10 magnitude path
-  needs the τ null-player placebo leg (incl. GATE-placebo, addendum §5c).
-- Mid-run "47% paid" flag was a reference-class error (44.7% vs 45.4% design
-  prior); governor rollbacks ON 12.4 vs OFF 7.4/run (s43=21) — RCA if a
-  future ON leg shows it again.
-- Standing: scale>0 owner-gated ALWAYS; identity = tachyon-beep; no
-  push/tag/release without ask.
+- Do NOT read the Stage-0 gate from the ON-leg λ-return metric — it is V_cf-contaminated
+  (PDR-0028). The value-free `compute_return_variance_shares` is the gate.
+- Shapley A/B evidence ≠ HRA Stage-0 gate evidence (shapley⊕HRA mutually exclusive;
+  MAJOR-3). Capture the value-free gate BEFORE any HRA ON-leg run.
+- Two diverging copies of `partition.py`/`reward_variance.py` exist (per-step on this
+  Shapley branch; per-return on ev-stab). Reconcile ONLY at owner-gated unification.
+- Marginal-V (Stage 1) is ALREADY satisfied (directly-learned op-independent V(s)) —
+  approved, do not re-open.
 
 ## Open questions / blocked-on-owner
-- None blocking the Now bet. (Owner may later reopen (b) coverage-leg or
-  (c) pre-fossil reshape — recorded in PDR-0027, not live.)
-- Standing placeholders: north-star/rent TARGETs (metrics.md); G3 paired
-  noise floor unbanked (matters to any future efficiency gate).
+- **Branch unification (ESCALATION, flag-only):** how/when to unify `feat/ev-stab-stage2-hra`
+  into the mainline (the "collapse to 0.3.0"). Release-adjacent — owner word required;
+  never merge/rebase/tag without it.
+- Product docs now also live on `main` (this checkpoint). Push remains owner-gated.
+- Standing placeholders: north-star / rent TARGETs (metrics.md) still owner-set.
 
-## Last checkpoint did (checkpoint #16)
-- PDR-0027 (owner-ratified park + EV promotion); roadmap: Shapley → Parked
-  band, EV-stabilization → Now.
-- Tracker: esper-lite-f22a1d48a7 closed (comments 122–123 carry verdict +
-  parking); esper-lite-f25b71c165 annotated as Now bet (comment 124).
-- No metric changes since #15 (PDR-0026 rows already dated 2026-07-05).
+## Last checkpoint did (checkpoint #17)
+- PDR-0028 (reconciliation + branch adoption, owner-ratified) + PDR-0029 (review-gate
+  disposition). metrics.md: added the EV Stage-0 gate row (reading pending).
+- Committed the Stage-0 core unit on ev-stab (`f721a5b3`) + wardline `.gitignore` hygiene.
+- Tracker: cfbdfdf040 closed; esper-lite-3d67b09687 annotated (core unit landed);
+  Stage-3 authored-plan task filed. Product workspace merged onto `main` (no push).
 
 ## Next session, start here
-**Pick up the EV epic esper-lite-f25b71c165: first leg is Stage-0
-instrumentation esper-lite-3d67b09687** (per-component return variance +
-per-stream EV telemetry). Related ready items: esper-lite-cfbdfdf040
-(specialist review of the staged variance-reduction plan) — review gate per
-CLAUDE.md applies (drl-expert + yzmir-deep-rl). Memory pointers:
-`ev-stab-stage2-impl-state` (HRA branch feat/ev-stab-stage2-hra, resume at
-buffer per-stream GAE), `ev-variance-research-verdict` (sequencing:
-marginal-V(s) first, then per-head-norm flag, then HRA head).
+**Continue Stage-0 on `feat/ev-stab-stage2-hra`** (checkout it first). TDD backlog:
+port `decompose_additends` + `ADDITEND_SIGN_MAP` into ev-stab's `partition.py` → the
+per-component buffer SoA (both legs) → both-legs `ppo_agent` wiring → 6-file contract
+→ read `Cov(R_cf,R)/Var(R)` on a capable-host control run. Memory pointers:
+`ev-stab-stage2-impl-state` (updated this session), `ev-variance-research-verdict`.

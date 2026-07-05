@@ -31,7 +31,7 @@ script.
 - A codebase carrying **legacy / backwards-compat / shim** code (No Legacy Code policy).
 
 ## Authority grant
-Granted by: john (GitHub: tachyon-beep)     Last reviewed: 2026-06-28
+Granted by: john (GitHub: tachyon-beep)     Last reviewed: 2026-07-05
 Review cadence: on any vision change, or monthly — whichever first.
 
 Autonomous within strategy — the agent MAY, without asking:
