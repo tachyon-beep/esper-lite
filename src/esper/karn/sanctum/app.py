@@ -106,6 +106,14 @@ HELP_TEXT = """\
 GLOSSARY_TEXT = """\
 [bold cyan]Glossary (Fields + Semantics)[/bold cyan]
 
+[bold]Triage Spine (top strip + tab badges)[/bold]
+  [red]ANOMALIES:[/red]   Header when a [red]critical[/red] is present; the strip background goes error-red.
+  [yellow]WARNINGS:[/yellow]    Header when only [yellow]warnings[/yellow] are present; a muted tint, not the red alarm.
+  [red]● tab[/red]        Red bullet on a tab = a critical lives there; [yellow]yellow ●[/yellow] = a warning. Jump there for detail.
+  [red]GOV ROLLBACK[/red] The governor panic-rolled-back an env (reason in […]); leads the strip — the loudest safety event.
+  [cyan](A)/(B)[/cyan]      Leg tag: which policy leg the anomaly is on (shown only when >1 leg is running).
+  [magenta]S0 gate[/magenta]      Stage-0 diagnosis chip (cf share past the gate); a finding, never an alarm.
+
 [bold]Tamiyo Status Banner[/bold]
   [cyan]NOW/WHY/NEXT[/cyan]  Narrative strip: what’s happening, top drivers, and what to watch next.
 
@@ -568,18 +576,20 @@ class SanctumApp(App[None]):
         severities = self._compute_tab_severities(strip)
         if severities == self._tab_severity_map:
             return  # No change — avoid per-tick label churn.
-        self._tab_severity_map = severities
 
         try:
             tabs = self.query_one("#main-tabs", TabbedContent)
         except NoMatches:
-            return
+            return  # Tabs not mounted yet — don't claim the map; retry next tick.
         for tab_id, base in self._TAB_LABELS.items():
             try:
                 tab = tabs.get_tab(tab_id)
             except NoMatches:
-                continue
+                return  # Partial mount — leave the map unchanged so we retry.
             tab.label = self._badged_label(base, severities[tab_id])
+
+        # Only claim the dedup state once every label has actually been applied.
+        self._tab_severity_map = severities
 
     @staticmethod
     def _badged_label(base: str, severity: str) -> RichText:
