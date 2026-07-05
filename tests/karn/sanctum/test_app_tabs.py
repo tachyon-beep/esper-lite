@@ -9,7 +9,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from esper.karn.sanctum.app import SanctumApp
-from esper.karn.sanctum.schema import SanctumSnapshot
+from esper.karn.sanctum.schema import EnvState, SanctumSnapshot
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData, RewardHealthPanel
 
 
@@ -138,6 +138,49 @@ async def test_overview_tamiyo_is_a_digest():
         assert brain.query_one("#health-panel", HealthStatusPanel) is not None
         assert not brain.query(ActionHeadsPanel)  # moved to Policy tab
         assert not brain.query(CriticCalibrationPanel)  # lives on Critic tab only
+
+
+@pytest.mark.asyncio
+async def test_tab_badges_reflect_anomaly_severity():
+    """A critic-level critical badges the Critic tab; an env warning badges Overview."""
+    from textual.widgets import TabbedContent
+
+    leg = SanctumSnapshot()
+    leg.tamiyo.ppo_data_received = True
+    leg.tamiyo.explained_variance = -0.2  # critic critical → tab-critic
+    leg.tamiyo.value_min, leg.tamiyo.value_max = -8.0, 14.0
+    leg.tamiyo.value_std, leg.tamiyo.value_mean = 6.0, 3.0
+    leg.envs[0] = EnvState(env_id=0, status="stalled")  # env warning → tab-overview
+
+    app = SanctumApp(backend=_mock_backend({"default": leg}))
+    async with app.run_test() as pilot:
+        app._poll_and_refresh()
+        await pilot.pause()
+
+        assert app._tab_severity_map["tab-critic"] == "critical"
+        assert app._tab_severity_map["tab-overview"] == "warning"
+        assert app._tab_severity_map["tab-experiment"] == ""
+
+        tabs = app.query_one("#main-tabs", TabbedContent)
+        assert "●" in str(tabs.get_tab("tab-critic").label)
+        assert "●" in str(tabs.get_tab("tab-overview").label)
+        assert "●" not in str(tabs.get_tab("tab-experiment").label)
+
+
+@pytest.mark.asyncio
+async def test_tab_badges_clear_when_healthy():
+    leg = SanctumSnapshot()
+    leg.tamiyo.ppo_data_received = True
+    leg.tamiyo.explained_variance = 0.5
+    leg.tamiyo.value_min, leg.tamiyo.value_max = -8.0, 14.0
+    leg.tamiyo.value_std, leg.tamiyo.value_mean = 6.0, 3.0
+    leg.envs[0] = EnvState(env_id=0, status="healthy")
+
+    app = SanctumApp(backend=_mock_backend({"default": leg}))
+    async with app.run_test() as pilot:
+        app._poll_and_refresh()
+        await pilot.pause()
+        assert all(sev == "" for sev in app._tab_severity_map.values())
 
 
 @pytest.mark.asyncio

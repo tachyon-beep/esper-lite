@@ -31,6 +31,7 @@ import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -452,9 +453,17 @@ class SanctumApp(App[None]):
         self._cached_reward_health_by_group: dict[str, RewardHealthData] = {}
         self._active_group_id: str | None = None
         self._last_primary_group_id: str | None = None
+        self._tab_severity_map: dict[str, str] = {}
 
     # Tab cycle order for the [ / ] bindings
     _TAB_ORDER = ("tab-overview", "tab-policy", "tab-critic", "tab-experiment")
+    # Base tab labels (a severity badge is prefixed when that tab owns a fire).
+    _TAB_LABELS = {
+        "tab-overview": "Overview",
+        "tab-policy": "Policy",
+        "tab-critic": "Critic",
+        "tab-experiment": "Experiment",
+    }
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -522,6 +531,68 @@ class SanctumApp(App[None]):
         except ValueError:
             idx = 0
         tabs.active = order[(idx + step) % len(order)]
+
+    def _compute_tab_severities(self, strip: AnomalyStrip) -> dict[str, str]:
+        """Worst anomaly severity per tab: 'critical' | 'warning' | ''.
+
+        Maps each aggregate anomaly to the tab that owns its detail, so the tab
+        badge tells the operator where to jump. Env/seed/governor issues live on
+        Overview, actor/trust-region on Policy, critic/value on Critic.
+        """
+        def sev(critical: bool, warning: bool) -> str:
+            return "critical" if critical else ("warning" if warning else "")
+
+        return {
+            "tab-overview": sev(
+                strip.degraded_count > 0
+                or strip.gradient_issues > 0
+                or strip.governor_rollback_count > 0
+                or strip.memory_alarm,
+                strip.stalled_count > 0 or strip.rollback_unattributed,
+            ),
+            "tab-policy": sev(
+                strip.ratio_explosion
+                or strip.nan_grad_count > 0
+                or strip.exploding_layers > 0,
+                strip.ppo_issues or strip.dead_layers > 0,
+            ),
+            "tab-critic": sev(
+                strip.ev_critical or strip.value_critical or strip.residual_breach,
+                strip.value_warning,
+            ),
+            "tab-experiment": "",
+        }
+
+    def _update_tab_badges(self, strip: AnomalyStrip) -> None:
+        """Prefix each tab label with a severity bullet when it owns a fire."""
+        severities = self._compute_tab_severities(strip)
+        if severities == self._tab_severity_map:
+            return  # No change — avoid per-tick label churn.
+        self._tab_severity_map = severities
+
+        try:
+            tabs = self.query_one("#main-tabs", TabbedContent)
+        except NoMatches:
+            return
+        for tab_id, base in self._TAB_LABELS.items():
+            try:
+                tab = tabs.get_tab(tab_id)
+            except NoMatches:
+                continue
+            tab.label = self._badged_label(base, severities[tab_id])
+
+    @staticmethod
+    def _badged_label(base: str, severity: str) -> RichText:
+        """Tab label with a leading severity bullet (red critical, yellow warning)."""
+        if severity == "critical":
+            label = RichText("● ", style="red bold")
+            label.append(base)
+            return label
+        if severity == "warning":
+            label = RichText("● ", style="yellow")
+            label.append(base)
+            return label
+        return RichText(base)
 
     def on_mount(self) -> None:
         """Start refresh timer when app mounts."""
@@ -789,9 +860,9 @@ class SanctumApp(App[None]):
         # Update anomaly strip (after run header). Feed EVERY leg, not just the
         # primary — a critical unique to leg B must still fire the strip.
         try:
-            self.query_one("#anomaly-strip", AnomalyStrip).update_snapshots(
-                view.snapshots_by_group, view.primary_group_id
-            )
+            strip = self.query_one("#anomaly-strip", AnomalyStrip)
+            strip.update_snapshots(view.snapshots_by_group, view.primary_group_id)
+            self._update_tab_badges(strip)
         except NoMatches:
             pass  # Widget hasn't mounted yet
 
