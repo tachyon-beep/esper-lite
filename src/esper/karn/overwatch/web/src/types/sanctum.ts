@@ -275,6 +275,7 @@ export interface RunConfig {
   param_budget: number;
   resume_path: string;
   entropy_anneal: Record<string, number>;
+  proof_profile: string | null;
 }
 
 export interface BestRunRecord {
@@ -317,6 +318,17 @@ export interface TamiyoState {
   value_nrmse: number;
   ev_low_return_variance: boolean;
   ev_return_variance: number | null;
+  cf_value_loss: number | null;
+  ev_main: number | null;
+  ev_cf: number | null;
+  return_var_cf_share: number | null;
+  return_var_main_share: number | null;
+  return_var_residual_share: number | null;
+  hra_leg_active: boolean;
+  rvt_leg_active: boolean;
+  advantage_per_head_normalized: boolean;
+  advantage_norm_fellback_count: number;
+  min_sparse_head_advantage_std: number;
   policy_loss: number;
   value_loss: number;
   entropy_loss: number;
@@ -400,6 +412,9 @@ export interface TamiyoState {
   head_alpha_curve_ratio_max: number;
   head_op_ratio_max: number;
   joint_ratio_max: number;
+  head_clip_fraction: Record<string, number>;
+  head_learnable_fraction: Record<string, number | null>;
+  head_gradient_state: Record<string, string | null>;
   episode_return_history: number[];
   current_episode_return: number;
   current_episode: number;
@@ -410,6 +425,10 @@ export interface TamiyoState {
   explained_variance_history: number[];
   kl_divergence_history: number[];
   clip_fraction_history: number[];
+  ev_main_history: number[];
+  ev_cf_history: number[];
+  cf_value_loss_history: number[];
+  return_var_cf_share_history: number[];
   inner_epoch: number;
   ppo_batch: number;
   action_counts: Record<string, number>;
@@ -428,6 +447,9 @@ export interface TamiyoState {
   value_min: number;
   value_max: number;
   initial_value_spread: number | null;
+  value_target_scale: number;
+  return_mean: number;
+  return_std: number;
   op_q_values: number[];
   op_valid_mask: boolean[];
   q_variance: number;
@@ -508,32 +530,6 @@ export interface EnvState {
   rolled_back: boolean;
   rollback_reason: string;
   rollback_timestamp: string | null;
-}
-
-export interface GovernorRollbackRecord {
-  env_id: number;
-  epoch: number;
-  timestamp: string | null;
-  panic_reason: string;
-  loss_at_panic: number | null;
-  loss_threshold: number | null;
-  consecutive_panics: number | null;
-  triggering_action_id: string | null;
-  attributed: boolean;
-  rollback_severity: number | null;
-}
-
-// Safety-gate state, independent of the policy (sibling of tamiyo, not nested).
-export interface GovernorState {
-  present: boolean;
-  armed_env_count: number;
-  warming_env_count: number;
-  total_env_count: number;
-  rollback_attempt_count: number;
-  rollback_unattributed_count: number;
-  total_rollbacks: number;
-  rollbacks_by_reason: Record<string, number>;
-  rollback_ledger: GovernorRollbackRecord[];
 }
 
 export interface SanctumSnapshot {
