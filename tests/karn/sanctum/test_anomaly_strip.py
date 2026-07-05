@@ -80,3 +80,83 @@ def test_anomaly_strip_memory_pressure():
 
     assert strip.has_anomalies is True
     assert strip.memory_alarm is True
+
+
+# =============================================================================
+# EV-stab Stage-0 rules (residual breach = anomaly; gate trip = info chip)
+# =============================================================================
+
+
+def test_residual_share_breach_is_an_anomaly():
+    """|residual share| above the leyline alarm threshold = decomposition broken."""
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.return_var_residual_share = 0.09  # > 0.05 alarm
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.has_anomalies is True
+    assert strip.residual_breach is True
+    text = strip.render().plain
+    assert "decomp" in text
+
+
+def test_residual_share_within_epsilon_is_clean():
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.return_var_residual_share = 0.01
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.has_anomalies is False
+    assert strip.residual_breach is False
+
+
+def test_residual_share_none_is_clean():
+    """Flags-off legs (None) must not alarm."""
+    strip = AnomalyStrip()
+    strip.update_snapshot(SanctumSnapshot())
+
+    assert strip.has_anomalies is False
+    assert strip.residual_breach is False
+
+
+def test_gate_trip_is_informational_not_anomaly():
+    """CF share over the Stage-0 gate shows as info chip WITHOUT tripping the strip."""
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.rvt_leg_active = True
+    snapshot.tamiyo.return_var_cf_share = 0.53
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.has_anomalies is False  # a diagnosis, not a failure
+    text = strip.render().plain
+    assert "S0 gate" in text
+    assert "0.53" in text
+
+
+def test_gate_untripped_shows_no_chip():
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.rvt_leg_active = True
+    snapshot.tamiyo.return_var_cf_share = 0.22
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert "S0 gate" not in strip.render().plain
+
+
+def test_gate_chip_coexists_with_anomalies():
+    """Info chip still renders when real anomalies are present."""
+    snapshot = SanctumSnapshot()
+    snapshot.envs[0] = EnvState(env_id=0, status="stalled")
+    snapshot.tamiyo.return_var_cf_share = 0.61
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.has_anomalies is True
+    text = strip.render().plain
+    assert "stalled" in text
+    assert "S0 gate" in text

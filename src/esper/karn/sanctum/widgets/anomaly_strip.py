@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 from rich.text import Text
 from textual.widgets import Static
 
+from esper.leyline import RETURN_VAR_CF_SHARE_GATE, RETURN_VAR_RESIDUAL_ALARM_SHARE
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
@@ -40,6 +42,14 @@ class AnomalyStrip(Static):
         self.dead_layers: int = 0
         self.exploding_layers: int = 0
         self.nan_grad_count: int = 0
+        # EV-stab Stage-0: residual-share breach = the additend decomposition is
+        # leaking untracked reward mass (a real anomaly). The cf-share gate trip is
+        # a DIAGNOSIS (de-shaping justified), rendered as a persistent info chip
+        # that must never trip the red strip.
+        self.residual_breach: bool = False
+        self.residual_share_value: float = 0.0
+        self.gate_tripped: bool = False
+        self.gate_cf_share: float = 0.0
 
     @property
     def has_anomalies(self) -> bool:
@@ -53,6 +63,7 @@ class AnomalyStrip(Static):
             or self.dead_layers > 0
             or self.exploding_layers > 0
             or self.nan_grad_count > 0
+            or self.residual_breach
         )
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
@@ -111,13 +122,30 @@ class AnomalyStrip(Static):
         # Check memory pressure
         self.memory_alarm = self._snapshot.vitals.has_memory_alarm
 
+        # EV-stab Stage-0 telemetry (None = leg off; never alarm on absence)
+        self.residual_breach = False
+        self.residual_share_value = 0.0
+        residual = tamiyo.return_var_residual_share
+        if residual is not None and abs(residual) > RETURN_VAR_RESIDUAL_ALARM_SHARE:
+            self.residual_breach = True
+            self.residual_share_value = residual
+
+        self.gate_tripped = False
+        self.gate_cf_share = 0.0
+        cf_share = tamiyo.return_var_cf_share
+        if cf_share is not None and cf_share > RETURN_VAR_CF_SHARE_GATE:
+            self.gate_tripped = True
+            self.gate_cf_share = cf_share
+
     def render(self) -> Text:
         """Render the anomaly strip."""
         if self._snapshot is None:
             return Text("Waiting for data...", style="dim")
 
         if not self.has_anomalies:
-            return Text("ALL CLEAR ✓", style="bold green")
+            result = Text("ALL CLEAR ✓", style="bold green")
+            self._append_gate_chip(result)
+            return result
 
         # Build anomaly summary
         parts: list[tuple[str, int | None, str]] = []
@@ -140,6 +168,10 @@ class AnomalyStrip(Static):
             parts.append(("PPO", None, "yellow"))
         if self.memory_alarm:
             parts.append(("MEM", None, "red"))
+        if self.residual_breach:
+            parts.append(
+                (f"decomp resid {self.residual_share_value:+.2f}", None, "red")
+            )
 
         result = Text()
         result.append("ANOMALIES: ", style="bold red")
@@ -152,4 +184,15 @@ class AnomalyStrip(Static):
             else:
                 result.append(f"{label} ⚠", style=color)
 
+        self._append_gate_chip(result)
         return result
+
+    def _append_gate_chip(self, result: Text) -> None:
+        """Append the Stage-0 gate info chip (diagnosis, not a failure state)."""
+        if not self.gate_tripped:
+            return
+        result.append("  ·  ", style="dim")
+        result.append(
+            f"S0 gate: cf {self.gate_cf_share:.2f} ▲>{RETURN_VAR_CF_SHARE_GATE:.2f}",
+            style="magenta",
+        )
