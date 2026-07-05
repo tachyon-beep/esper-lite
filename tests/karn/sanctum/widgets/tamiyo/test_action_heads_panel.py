@@ -248,3 +248,26 @@ def test_heads_panel_shows_all_clear_when_no_nan_inf():
     inf_line = next((line for line in lines if line.strip().startswith("Inf")), "")
     assert "●" not in nan_line
     assert "●" not in inf_line
+
+
+def test_per_head_learnability_rows_render():
+    """aca0: Clip + Learn rows surface per-head trust-region + learnability."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.karn.sanctum.widgets.tamiyo.action_heads_panel import ActionHeadsPanel
+
+    snap = SanctumSnapshot()
+    snap.tamiyo.head_clip_fraction["op"] = 0.45          # → red
+    snap.tamiyo.head_gradient_state["slot"] = "missing"  # action-head wiring bug → red
+    snap.tamiyo.head_gradient_state["op"] = "finite"
+    snap.tamiyo.head_learnable_fraction["op"] = 0.77
+    snap.tamiyo.head_gradient_state["blueprint"] = "not_learnable"  # sparse-expected
+
+    panel = ActionHeadsPanel()
+    panel.update_snapshot(snap)
+    text = panel.render().plain
+    assert "Clip" in text
+    assert "Learn" in text
+    assert "0.45" in text   # op clip fraction
+    assert "miss" in text   # slot missing gradient
+    assert "n-l" in text    # blueprint not_learnable
+    assert "0.77" in text   # op finite → learnable_fraction

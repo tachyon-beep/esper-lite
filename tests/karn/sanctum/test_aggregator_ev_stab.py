@@ -199,3 +199,23 @@ def test_value_target_scale_and_return_stats_round_trip():
     assert abs(tamiyo.value_target_scale - 2.5) < 1e-9
     assert abs(tamiyo.return_mean - 12.0) < 1e-9
     assert abs(tamiyo.return_std - 8.0) < 1e-9
+
+
+def test_per_head_learnability_round_trips():
+    """aca0: per-head clip_fraction / learnable_fraction / gradient_state mirror."""
+    agg = SanctumAggregator(num_envs=4)
+    agg.process_event(
+        _ppo_event(
+            head_op_clip_fraction=0.42,
+            head_op_learnable_fraction=0.8,
+            head_op_gradient_state="finite",
+            head_blueprint_gradient_state="not_learnable",
+            head_slot_gradient_state="missing",
+        )
+    )
+    tamiyo = agg.get_snapshot().tamiyo
+    assert abs(tamiyo.head_clip_fraction["op"] - 0.42) < 1e-9
+    assert tamiyo.head_learnable_fraction["op"] == 0.8
+    assert tamiyo.head_gradient_state["op"] == "finite"
+    assert tamiyo.head_gradient_state["blueprint"] == "not_learnable"
+    assert tamiyo.head_gradient_state["slot"] == "missing"

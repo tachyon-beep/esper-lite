@@ -1133,6 +1133,23 @@ class TamiyoState:
     head_op_ratio_max: float = 1.0
     joint_ratio_max: float = 1.0  # Product of per-head ratios
 
+    # Per-head trust-region + learnability (aca0). clip_fraction is the per-head PPO
+    # clip rate (the joint clip_fraction hides a single heavily-clipped head).
+    # gradient_state is the authoritative learnability verdict
+    # (finite/nonfinite/missing/not_learnable); learnable_fraction is the share of
+    # timesteps the head had a real gradient-carrying decision (0 => not_learnable).
+    # Intrinsically-sparse heads (blueprint/tempo/style/alpha_*) legitimately sit near
+    # 0 — a sustained zero is alarming only on the dense heads (op, slot).
+    head_clip_fraction: dict[str, float] = field(
+        default_factory=lambda: {head: 0.0 for head in HEAD_NAMES}
+    )
+    head_learnable_fraction: dict[str, float | None] = field(
+        default_factory=lambda: {head: None for head in HEAD_NAMES}
+    )
+    head_gradient_state: dict[str, str | None] = field(
+        default_factory=lambda: {head: None for head in HEAD_NAMES}
+    )
+
     # Episode return tracking (PRIMARY RL METRIC - per DRL review)
     episode_return_history: deque[float] = field(
         default_factory=lambda: deque(maxlen=20)

@@ -414,6 +414,34 @@ class ActionHeadsPanel(Static):
                 result.append(" " * self._column_gutter(label))
         result.append("\n")
 
+        # Row 7b: Per-head PPO clip fraction (trust-region pressure). The joint
+        # clip_fraction hides a single heavily-clipped head; this shows each.
+        result.append("Clip  ", style="dim")
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (label, ent_field, _, width, _) in enumerate(HEAD_CONFIG):
+            head_key = _get_head_key(ent_field)
+            clip = tamiyo.head_clip_fraction[head_key]
+            result.append(f"{clip:>{width}.2f}", style=self._clip_color(clip))
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(label))
+        result.append("\n")
+
+        # Row 7c: Per-head learnability. gradient_state is the authoritative verdict
+        # (finite/nonfinite/missing/not_learnable); intrinsically-sparse heads sit at
+        # n-l legitimately, so it is only alarming (red) for nonfinite/missing.
+        result.append("Learn ", style="dim")
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (label, ent_field, _, width, _) in enumerate(HEAD_CONFIG):
+            head_key = _get_head_key(ent_field)
+            text, style_str = self._learnability_cell(
+                tamiyo.head_gradient_state[head_key],
+                tamiyo.head_learnable_fraction[head_key],
+            )
+            result.append(f"{text:>{width}}", style=style_str)
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(label))
+        result.append("\n")
+
         # Row 8: NaN indicator row
         result.append("NaN   ", style="dim")
         result.append(" " * self._PRE_OP_GUTTER, style="dim")
@@ -957,6 +985,39 @@ class ActionHeadsPanel(Static):
         bar.append("█" * filled, style=color)
         bar.append("░" * empty, style="dim")
         return bar
+
+    def _clip_color(self, clip_fraction: float) -> str:
+        """Color a per-head PPO clip fraction (higher = more of the batch clipped)."""
+        if clip_fraction > 0.3:
+            return "red"
+        if clip_fraction > 0.15:
+            return "yellow"
+        return "dim"
+
+    def _learnability_cell(
+        self, gradient_state: str | None, learnable_fraction: float | None
+    ) -> tuple[str, str]:
+        """Per-head learnability cell keyed off the authoritative gradient_state.
+
+        finite → the head trained (show its learnable_fraction); nonfinite/missing →
+        red (NaN/Inf grad, or a causally-relevant head that got NO gradient — a
+        wiring bug); not_learnable → dim (an intrinsically-sparse head had zero
+        learnable timesteps this update, which is expected). Unknown strings render
+        raw rather than being assumed a known state.
+        """
+        if gradient_state == "nonfinite":
+            return "NF", "red bold"
+        if gradient_state == "missing":
+            return "miss", "red"
+        if gradient_state == "not_learnable":
+            return "n-l", "dim"
+        if gradient_state == "finite":
+            if learnable_fraction is None:
+                return "ok", "green"
+            return f"{learnable_fraction:.2f}", "green"
+        if gradient_state is None:
+            return "—", "dim"
+        return str(gradient_state)[:4], "dim"
 
     def _ratio_color(self, ratio: float) -> str:
         """Get color for probability ratio based on PPO clip range.

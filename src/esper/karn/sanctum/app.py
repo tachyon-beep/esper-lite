@@ -141,6 +141,14 @@ GLOSSARY_TEXT = """\
   [cyan]Policy[/cyan]        Heuristic state label from entropy/clip correlation (collapse-risk pattern detector).
   [cyan]Value Range[/cyan]   [min,max] of critic predictions + std. Collapse (range≈0) or explosion are critical.
 
+[bold]Action Heads (Policy tab)[/bold]
+  [cyan]Clip[/cyan]          Per-head PPO clip fraction. The joint Clip Frac hides a single hot head; this
+                  shows each (yellow >0.15, red >0.30).
+  [cyan]Learn[/cyan]         Per-head learnability from gradient_state: a fraction = finite (trained, value is
+                  learnable_fraction); [red]miss[/red] = a causally-relevant head got NO gradient (wiring bug);
+                  [red]NF[/red] = NaN/Inf grad; [dim]n-l[/dim] = not_learnable (zero learnable steps — expected for
+                  intrinsically-sparse heads like blueprint/tempo, alarming only on op/slot).
+
 [bold]Observation Health[/bold]
   [cyan]Out[/cyan]           Fraction of raw obs values outside 3σ (batch z-score). Higher = distribution issues.
   [cyan]Sat/Clip[/cyan]      Fractions on [italic]normalized+clipped[/italic] obs. Sat≈near bound, Clip==at bound.

@@ -69,6 +69,7 @@ from esper.leyline import (
     EpisodeOutcomePayload,
     GovernorRollbackPayload,
     MorphologyCausalLogPayload,
+    HEAD_NAMES,
     TEMPO_NAMES,
 )
 
@@ -1070,6 +1071,20 @@ class SanctumAggregator:
         self._tamiyo.head_alpha_curve_ratio_max = payload.head_alpha_curve_ratio_max
         self._tamiyo.head_op_ratio_max = payload.head_op_ratio_max
         self._tamiyo.joint_ratio_max = payload.joint_ratio_max
+
+        # Per-head trust-region + learnability (aca0). Mirror the 8 action heads;
+        # gradient_state/learnable_fraction are float|str | None on the payload
+        # (None until the trainer emits them), preserved as-is (presence-gated in UI).
+        for head in HEAD_NAMES:
+            self._tamiyo.head_clip_fraction[head] = getattr(
+                payload, f"head_{head}_clip_fraction"
+            )
+            self._tamiyo.head_learnable_fraction[head] = getattr(
+                payload, f"head_{head}_learnable_fraction"
+            )
+            self._tamiyo.head_gradient_state[head] = getattr(
+                payload, f"head_{head}_gradient_state"
+            )
 
         # Learning rate and entropy coefficient - optional with None
         if payload.lr is not None:
