@@ -974,6 +974,30 @@ class TamiyoState:
     value_nrmse: float = 1.0
     ev_low_return_variance: bool = False
     ev_return_variance: float | None = None
+    # EV-stab Stage 0/2 telemetry (pure telemetry, never gate inputs for training).
+    # None = the emitting leg is off or the event predates the fields.
+    # HRA leg (hra_value_decomposition): per-stream EV + cf-head loss.
+    # RVT leg (return_variance_telemetry): value-free return-variance shares; the
+    # cf share reading vs RETURN_VAR_CF_SHARE_GATE is the Stage-0 diagnosis.
+    # Deliberately NOT mirrored (PDR-0028): cov_rcf_return_share / r_main_cov are
+    # V_cf-contaminated Karn-only diagnostics; ev_sum is redundant with
+    # explained_variance on the ON leg. Keep them off operator surfaces.
+    cf_value_loss: float | None = None
+    ev_main: float | None = None
+    ev_cf: float | None = None
+    return_var_cf_share: float | None = None
+    return_var_main_share: float | None = None
+    return_var_residual_share: float | None = None
+    # Leg identity, latched from field presence (survives events that omit the
+    # fields, e.g. a skipped-update gap): once a leg emits, it stays active.
+    hra_leg_active: bool = False
+    rvt_leg_active: bool = False
+    # Per-head advantage normalization observability. min_sparse_head_advantage_std
+    # is meaningful even with the per-head ablation OFF (the "sparse head crushed by
+    # op's variance" signal); fellback_count is structurally 0 until the flag is ON.
+    advantage_per_head_normalized: bool = False
+    advantage_norm_fellback_count: int = 0
+    min_sparse_head_advantage_std: float = 0.0
     # Rollback observability (per-rollout aggregates; pure telemetry, never gate inputs).
     # Only the attempt/unattributed pair is mirrored on the live dashboard state: it is the
     # rollback-starvation health signal. rollback_count/rollback_steps_zeroed (forfeited-signal
@@ -1124,6 +1148,11 @@ class TamiyoState:
     explained_variance_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     kl_divergence_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     clip_fraction_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    # EV-stab sparkline histories (append only when the emitting leg supplies a value)
+    ev_main_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    ev_cf_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    cf_value_loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    return_var_cf_share_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
 
     # PPO inner loop context
     inner_epoch: int = 0  # Current inner optimization epoch
@@ -1421,6 +1450,7 @@ class RunConfig:
     param_budget: int = 0  # Seed parameter budget
     resume_path: str = ""  # Checkpoint resume path (empty if fresh run)
     entropy_anneal: dict[str, float] = field(default_factory=dict)  # Entropy schedule config
+    proof_profile: str | None = None  # Proof-packet profile identity (A/B leg labelling)
 
 
 @dataclass

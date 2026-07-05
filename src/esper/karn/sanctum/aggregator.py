@@ -784,6 +784,7 @@ class SanctumAggregator:
             param_budget=payload.param_budget,
             resume_path=payload.resume_path,
             entropy_anneal=entropy_anneal_config,
+            proof_profile=payload.proof_profile,
         )
 
         # Capture slot configuration from event
@@ -992,6 +993,33 @@ class SanctumAggregator:
         self._tamiyo.ev_return_variance = payload.ev_return_variance
         self._tamiyo.rollback_attempt_count = payload.rollback_attempt_count
         self._tamiyo.rollback_unattributed_count = payload.rollback_unattributed_count
+
+        # EV-stab Stage 0/2 telemetry. Scalars mirror the LATEST update honestly
+        # (None when it did not emit them); leg-identity flags latch on presence so
+        # the UI knows which experiment leg produced this run even across gaps.
+        # cov_rcf_return_share / r_main_cov / ev_sum are deliberately not mirrored
+        # (PDR-0028: contaminated / redundant — Karn-only).
+        self._tamiyo.cf_value_loss = payload.cf_value_loss
+        self._tamiyo.ev_main = payload.ev_main
+        self._tamiyo.ev_cf = payload.ev_cf
+        self._tamiyo.return_var_cf_share = payload.return_var_cf_share
+        self._tamiyo.return_var_main_share = payload.return_var_main_share
+        self._tamiyo.return_var_residual_share = payload.return_var_residual_share
+        if payload.ev_main is not None:
+            self._tamiyo.hra_leg_active = True
+            self._tamiyo.ev_main_history.append(payload.ev_main)
+        if payload.ev_cf is not None:
+            self._tamiyo.ev_cf_history.append(payload.ev_cf)
+        if payload.cf_value_loss is not None:
+            self._tamiyo.cf_value_loss_history.append(payload.cf_value_loss)
+        if payload.return_var_cf_share is not None:
+            self._tamiyo.rvt_leg_active = True
+            self._tamiyo.return_var_cf_share_history.append(payload.return_var_cf_share)
+
+        # Per-head advantage normalization observability
+        self._tamiyo.advantage_per_head_normalized = payload.advantage_per_head_normalized
+        self._tamiyo.advantage_norm_fellback_count = payload.advantage_norm_fellback_count
+        self._tamiyo.min_sparse_head_advantage_std = payload.min_sparse_head_advantage_std
 
         grad_norm = payload.grad_norm
         self._tamiyo.grad_norm = grad_norm
