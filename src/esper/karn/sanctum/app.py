@@ -223,12 +223,18 @@ class RunInfoScreen(ModalScreen[None]):
         super().__init__()
         self._snapshot = snapshot
 
-    def compose(self) -> ComposeResult:
-        """Compose the run info screen."""
+    def _build_info_text(self) -> str:
+        """Build the full, untruncated run info body (also the test seam)."""
         s = self._snapshot
         runtime_str = format_runtime(s.runtime_seconds, include_seconds_in_hours=True)
 
-        info_text = f"""\
+        def on_off(active: bool) -> str:
+            return "[green]on[/green]" if active else "[dim]off[/dim]"
+
+        tamiyo = s.tamiyo
+        profile = s.run_config.proof_profile or "(not set)"
+
+        return f"""\
 [bold cyan]Run Information[/bold cyan]
 
 [bold]Task Name[/bold]
@@ -239,6 +245,12 @@ class RunInfoScreen(ModalScreen[None]):
   Epoch:      {s.current_epoch} / {s.max_epochs if s.max_epochs > 0 else '∞'}
   Round:      {s.current_batch} / {s.max_batches}
   Runtime:    {runtime_str}
+
+[bold]Experiment[/bold]
+  Proof profile:              [magenta]{profile}[/magenta]
+  HRA value decomposition:    {on_off(tamiyo.hra_leg_active)}
+  Return-variance telemetry:  {on_off(tamiyo.rvt_leg_active)}
+  Per-head advantage norm:    {on_off(tamiyo.advantage_per_head_normalized)}
 
 [bold]Throughput[/bold]
   Epochs/sec:   {s.vitals.epochs_per_second:.2f}
@@ -251,8 +263,11 @@ class RunInfoScreen(ModalScreen[None]):
 
 [dim]Press Esc, i, or q to close[/dim]
 """
+
+    def compose(self) -> ComposeResult:
+        """Compose the run info screen."""
         with Container(id="info-container"):
-            yield Static(info_text)
+            yield Static(self._build_info_text())
 
     def on_click(self) -> None:
         """Dismiss on click."""

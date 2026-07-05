@@ -109,3 +109,25 @@ class TestFormatRuntimeFunction:
     def test_format_runtime_exact_minute(self):
         """Exact minute should show 0 seconds."""
         assert format_runtime(60) == "1m 0s"
+
+
+class TestRunInfoScreenExperimentSection:
+    """RunInfoScreen surfaces the experiment/config identity untruncated."""
+
+    def test_info_text_includes_proof_profile_and_leg_flags(self):
+        snapshot = SanctumSnapshot(task_name="ab_run")
+        snapshot.run_config.proof_profile = "ev-stab-s2"
+        snapshot.tamiyo.hra_leg_active = True
+        snapshot.tamiyo.rvt_leg_active = True
+
+        modal = RunInfoScreen(snapshot)
+        text = modal._build_info_text()
+        assert "ev-stab-s2" in text
+        assert "HRA value decomposition" in text
+        assert "Return-variance telemetry" in text
+        assert "Per-head advantage norm" in text
+
+    def test_info_text_flags_off_run(self):
+        modal = RunInfoScreen(SanctumSnapshot())
+        text = modal._build_info_text()
+        assert "(not set)" in text or "off" in text

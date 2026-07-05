@@ -303,3 +303,58 @@ def test_run_header_border_blue_normally():
 # NOTE: A/B comparison functionality has been removed from RunHeader.
 # A/B comparison is now handled at the app level with multiple policy tabs.
 # These tests have been removed as the functionality no longer exists.
+
+
+# =============================================================================
+# Experiment leg-identity chips (EV-stab)
+# =============================================================================
+
+
+def test_experiment_chips_inactive_by_default():
+    """No EV-stab legs active -> placeholder chip block, dim style."""
+    widget = RunHeader()
+    widget._snapshot = SanctumSnapshot()
+    label, style = widget._format_experiment_chips()
+    assert "EXP:—" in label
+    assert style == "dim"
+    assert len(label) == widget.EXPERIMENT_CHIPS_WIDTH
+
+
+def test_experiment_chips_show_latched_legs():
+    """Latched leg flags render as fixed-width chips."""
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.hra_leg_active = True
+    snapshot.tamiyo.rvt_leg_active = True
+    snapshot.tamiyo.advantage_per_head_normalized = True
+
+    widget = RunHeader()
+    widget._snapshot = snapshot
+    label, style = widget._format_experiment_chips()
+    assert "HRA" in label
+    assert "RVT" in label
+    assert "PHN" in label
+    assert style != "dim"
+    assert len(label) == widget.EXPERIMENT_CHIPS_WIDTH
+
+
+def test_experiment_chips_or_across_groups():
+    """In A/B mode, a leg active in ANY group shows (identity is run-wide)."""
+    leg_a = SanctumSnapshot()
+    leg_b = SanctumSnapshot()
+    leg_b.tamiyo.hra_leg_active = True
+
+    widget = RunHeader()
+    widget._snapshot = leg_a
+    widget._snapshots_by_group = {"A": leg_a, "B": leg_b}
+    label, _ = widget._format_experiment_chips()
+    assert "HRA" in label
+
+
+def test_render_includes_experiment_chips_segment():
+    snapshot = SanctumSnapshot(connected=True)
+    snapshot.tamiyo.rvt_leg_active = True
+
+    widget = RunHeader()
+    widget._snapshot = snapshot
+    text = widget.render().plain
+    assert "RVT" in text

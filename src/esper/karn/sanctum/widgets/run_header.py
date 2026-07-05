@@ -219,6 +219,37 @@ class RunHeader(Static):
             label = label[: max_width - 1] + "…"
         return (f"{label:<{max_width}}", "magenta")
 
+    # Fixed-width experiment chip block: "EXP:HRA+RVT+PHN" is the widest case (15)
+    # plus one pad column so the segment never jitters as legs latch on.
+    EXPERIMENT_CHIPS_WIDTH = 16
+
+    def _format_experiment_chips(self) -> tuple[str, str]:
+        """Fixed-width EV-stab leg-identity chips (run-wide across A/B groups).
+
+        Leg flags latch on first emission (aggregator), so this segment changes
+        width at most once per leg per run — compatible with the no-jitter rule.
+        """
+        width = self.EXPERIMENT_CHIPS_WIDTH
+        if self._snapshot is None:
+            return (f"{'EXP:—':<{width}}", "dim")
+
+        snapshots = (
+            list(self._snapshots_by_group.values())
+            if self._snapshots_by_group
+            else [self._snapshot]
+        )
+        chips: list[str] = []
+        if any(s.tamiyo.hra_leg_active for s in snapshots):
+            chips.append("HRA")
+        if any(s.tamiyo.rvt_leg_active for s in snapshots):
+            chips.append("RVT")
+        if any(s.tamiyo.advantage_per_head_normalized for s in snapshots):
+            chips.append("PHN")
+
+        if not chips:
+            return (f"{'EXP:—':<{width}}", "dim")
+        return (f"{'EXP:' + '+'.join(chips):<{width}}", "bold magenta")
+
     def _format_throughput(self, eps: float, bpm: float) -> str:
         """Format throughput metrics to fixed width.
 
@@ -282,6 +313,12 @@ class RunHeader(Static):
         # === Segment 3b: Reward mode (18 chars fixed) ===
         reward_label, reward_style = self._format_reward_mode()
         row.append(reward_label, style=reward_style)
+
+        row.append(" │ ", style="dim")
+
+        # === Segment 3c: Experiment leg-identity chips (16 chars fixed) ===
+        chips_label, chips_style = self._format_experiment_chips()
+        row.append(chips_label, style=chips_style)
 
         row.append(" │ ", style="dim")
 
