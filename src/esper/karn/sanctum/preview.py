@@ -18,7 +18,12 @@ from __future__ import annotations
 import random
 
 from esper.karn.sanctum.app import SanctumApp
-from esper.karn.sanctum.schema import EnvState, GovernorRollbackRecord, SanctumSnapshot
+from esper.karn.sanctum.schema import (
+    EnvState,
+    GovernorRollbackRecord,
+    SanctumSnapshot,
+    SeedState,
+)
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
 
@@ -62,6 +67,10 @@ def _build_leg(
     t.log_prob_min, t.log_prob_max = -14.2, -0.4
     t.value_mean, t.value_std, t.value_min, t.value_max = 3.2, 6.1, -8.4, 14.1
     t.min_sparse_head_advantage_std = 0.07
+    # Rollout-time (behaviour-policy) LSTM hidden-state health — healthy reading.
+    t.rollout_lstm_h_rms, t.rollout_lstm_c_rms = 0.62, 0.71
+    t.rollout_lstm_h_env_rms_max, t.rollout_lstm_c_env_rms_max = 0.74, 0.83
+    t.rollout_lstm_h_max, t.rollout_lstm_c_max = 2.1, 2.4
     for i in range(10):
         t.entropy_history.append(1.45 - 0.013 * i)
         t.explained_variance_history.append(ev - 0.10 + 0.011 * i)
@@ -97,6 +106,17 @@ def _build_leg(
         env.host_accuracy = acc + rng.uniform(-3.0, 3.0)
         env.episode_return = 11.0 + rng.uniform(-2.0, 3.0)
         s.envs[i] = env
+    # Showcase the prune-attribution panel on the Governor & Growth tab: one slot
+    # the system/governor auto-pruned (a health intervention) and one the policy
+    # chose to prune. Currently-pruned slots persist in env.seeds until re-germinated.
+    s.envs[0].seeds["slot_1"] = SeedState(
+        slot_id="slot_1", stage="PRUNED", blueprint_id="conv3x3",
+        prune_reason="gradient_explosion", auto_pruned=True,
+    )
+    s.envs[2].seeds["slot_0"] = SeedState(
+        slot_id="slot_0", stage="PRUNED", blueprint_id="attn_lite",
+        prune_reason="stagnation", auto_pruned=False,
+    )
     s.mean_accuracy_history.extend(acc - 8 + 0.4 * j for j in range(20))
     return s
 
@@ -126,6 +146,11 @@ class PreviewBackend:
         b_env = self._legs["B"].envs[0]
         b_env.rolled_back = True
         b_env.rollback_reason = "governor_nan"
+        # The behaviour policy went unstable at sampling time — surface it on the
+        # rollout-LSTM health row so the health panel corroborates the NaN rollback.
+        b_tamiyo = self._legs["B"].tamiyo
+        b_tamiyo.rollout_lstm_h_rms, b_tamiyo.rollout_lstm_c_rms = 0.9, 1.1
+        b_tamiyo.rollout_lstm_has_nan = True
         gov_b = self._legs["B"].governor
         gov_b.total_rollbacks = 1
         gov_b.rollbacks_by_reason = {"governor_nan": 1}

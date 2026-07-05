@@ -148,6 +148,7 @@ async def test_overview_tamiyo_is_a_digest():
 async def test_governor_tab_hosts_panels_and_routes_snapshot():
     from esper.karn.sanctum.widgets.governor_screen import GovernorScreen
     from esper.karn.sanctum.widgets.governor_ledger_panel import GovernorLedgerPanel
+    from esper.karn.sanctum.widgets.prune_attribution_panel import PruneAttributionPanel
 
     app = SanctumApp(backend=_mock_backend())
     async with app.run_test() as pilot:
@@ -155,6 +156,7 @@ async def test_governor_tab_hosts_panels_and_routes_snapshot():
         await pilot.pause()
         governor = app.query_one("#governor-screen", GovernorScreen)
         assert governor.query_one(GovernorLedgerPanel) is not None
+        assert governor.query_one(PruneAttributionPanel) is not None  # prune attribution promoted
         assert governor.snapshot is not None  # routed through _apply_view
 
 

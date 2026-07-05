@@ -4,12 +4,15 @@ from datetime import datetime, timezone
 from rich.console import Console
 
 from esper.karn.sanctum.schema import (
+    EnvState,
     GovernorRollbackRecord,
     GovernorState,
     SanctumSnapshot,
+    SeedState,
 )
 from esper.karn.sanctum.widgets.governor_ledger_panel import GovernorLedgerPanel
 from esper.karn.sanctum.widgets.governor_status_panel import GovernorStatusPanel
+from esper.karn.sanctum.widgets.prune_attribution_panel import PruneAttributionPanel
 
 
 def _plain(renderable) -> str:
@@ -106,3 +109,60 @@ def test_ledger_threshold_hidden_for_non_divergence():
     panel.update_snapshot(snap)
     # threshold is not rendered for a nan panic (only divergence uses it)
     assert "8.00" not in _plain(panel.render())
+
+
+# --- prune attribution panel ------------------------------------------------
+
+
+def test_prune_panel_empty_state_is_a_why_empty_hint():
+    snap = SanctumSnapshot()
+    snap.envs[0] = EnvState(env_id=0)
+    panel = PruneAttributionPanel()
+    panel.update_snapshot(snap)
+    text = _plain(panel.render())
+    assert "No pruned slots" in text
+
+
+def test_prune_panel_shows_initiator_and_reason():
+    snap = SanctumSnapshot()
+    env = EnvState(env_id=3)
+    env.seeds["slot_1"] = SeedState(
+        slot_id="slot_1", stage="PRUNED", blueprint_id="conv3x3",
+        prune_reason="gradient_explosion", auto_pruned=True,
+    )
+    env.seeds["slot_2"] = SeedState(
+        slot_id="slot_2", stage="PRUNED", blueprint_id="attn_lite",
+        prune_reason="stagnation", auto_pruned=False,
+    )
+    env.seeds["slot_3"] = SeedState(slot_id="slot_3", stage="TRAINING")
+    snap.envs[3] = env
+    panel = PruneAttributionPanel()
+    panel.update_snapshot(snap)
+    text = _plain(panel.render())
+    # auto_pruned -> "system" (governor/safety), deliberate -> "policy"
+    assert "system" in text
+    assert "policy" in text
+    assert "gradient_explosion" in text
+    assert "stagnation" in text
+    # non-pruned (TRAINING) slot must not appear
+    assert "slot_3" not in text
+
+
+def test_prune_panel_spans_multiple_envs():
+    snap = SanctumSnapshot()
+    e0 = EnvState(env_id=0)
+    e0.seeds["slot_0"] = SeedState(
+        slot_id="slot_0", stage="PRUNED", prune_reason="stagnation", auto_pruned=True
+    )
+    e1 = EnvState(env_id=1)
+    e1.seeds["slot_0"] = SeedState(
+        slot_id="slot_0", stage="PRUNED", prune_reason="low_yield", auto_pruned=False
+    )
+    snap.envs[0] = e0
+    snap.envs[1] = e1
+    panel = PruneAttributionPanel()
+    panel.update_snapshot(snap)
+    text = _plain(panel.render())
+    assert "0/slot_0" in text
+    assert "1/slot_0" in text
+    assert "low_yield" in text

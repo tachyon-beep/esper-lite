@@ -375,6 +375,18 @@ export interface TamiyoState {
   lstm_c_max: number | null;
   lstm_has_nan: boolean;
   lstm_has_inf: boolean;
+  rollout_lstm_h_l2_total: number | null;
+  rollout_lstm_c_l2_total: number | null;
+  rollout_lstm_h_rms: number | null;
+  rollout_lstm_c_rms: number | null;
+  rollout_lstm_h_env_rms_mean: number | null;
+  rollout_lstm_h_env_rms_max: number | null;
+  rollout_lstm_c_env_rms_mean: number | null;
+  rollout_lstm_c_env_rms_max: number | null;
+  rollout_lstm_h_max: number | null;
+  rollout_lstm_c_max: number | null;
+  rollout_lstm_has_nan: boolean;
+  rollout_lstm_has_inf: boolean;
   update_time_ms: number;
   early_stop_epoch: number | null;
   head_slot_entropy: number;

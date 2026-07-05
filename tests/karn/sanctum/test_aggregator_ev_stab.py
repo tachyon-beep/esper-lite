@@ -219,3 +219,44 @@ def test_per_head_learnability_round_trips():
     assert tamiyo.head_gradient_state["op"] == "finite"
     assert tamiyo.head_gradient_state["blueprint"] == "not_learnable"
     assert tamiyo.head_gradient_state["slot"] == "missing"
+
+
+def test_rollout_lstm_health_mirrors_and_round_trips():
+    """Behaviour-policy (rollout-time) LSTM health mirrors onto TamiyoState and
+    survives the snapshot copy (scalars pass through replace()).
+
+    These are the emitters.py rollout_lstm_* fields that were previously dropped
+    by the Sanctum schema — the crash-relevant sampling-time hidden-state signal.
+    """
+    agg = SanctumAggregator(num_envs=2)
+    agg.process_event(
+        _ppo_event(
+            rollout_lstm_h_rms=0.62,
+            rollout_lstm_c_rms=0.71,
+            rollout_lstm_h_env_rms_max=0.74,
+            rollout_lstm_c_env_rms_max=0.83,
+            rollout_lstm_h_max=2.1,
+            rollout_lstm_c_max=2.4,
+            rollout_lstm_has_nan=True,
+            rollout_lstm_has_inf=False,
+        )
+    )
+    tamiyo = agg.get_snapshot().tamiyo
+    assert tamiyo.rollout_lstm_h_rms == 0.62
+    assert tamiyo.rollout_lstm_c_rms == 0.71
+    assert tamiyo.rollout_lstm_h_env_rms_max == 0.74
+    assert tamiyo.rollout_lstm_c_env_rms_max == 0.83
+    assert tamiyo.rollout_lstm_h_max == 2.1
+    assert tamiyo.rollout_lstm_c_max == 2.4
+    assert tamiyo.rollout_lstm_has_nan is True
+    assert tamiyo.rollout_lstm_has_inf is False
+
+
+def test_rollout_lstm_absent_defaults_to_none():
+    """Non-recurrent / no-data path leaves rollout-LSTM fields as None (never a
+    fabricated 0), so the health panel can show a why-empty placeholder."""
+    agg = SanctumAggregator(num_envs=2)
+    agg.process_event(_ppo_event())
+    tamiyo = agg.get_snapshot().tamiyo
+    assert tamiyo.rollout_lstm_h_rms is None
+    assert tamiyo.rollout_lstm_has_nan is False

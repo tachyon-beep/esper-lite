@@ -141,6 +141,9 @@ GLOSSARY_TEXT = """\
   [cyan]Entropy D[/cyan]     d(entropy)/d(batch). Negative = entropy collapsing; used for countdown.
   [cyan]Policy[/cyan]        Heuristic state label from entropy/clip correlation (collapse-risk pattern detector).
   [cyan]Value Range[/cyan]   [min,max] of critic predictions + std. Collapse (range≈0) or explosion are critical.
+  [cyan]LSTM RMS[/cyan]      Update-time recurrent hidden-state health (h/c RMS, scale-free). [red]NaN/Inf[/red] = corruption.
+  [cyan]LSTM roll[/cyan]     Rollout-time (behaviour-policy) hidden-state health — the sampling-time signal the
+                  update-time row can't see; a [red]NaN[/red] here is the policy going unstable while collecting.
 
 [bold]Action Heads (Policy tab)[/bold]
   [cyan]Clip[/cyan]          Per-head PPO clip fraction. The joint Clip Frac hides a single hot head; this
@@ -191,6 +194,8 @@ GLOSSARY_TEXT = """\
                   and the triggering action ([yellow](unattr)[/yellow] = the death penalty reached no transition).
   [cyan]Causal log[/cyan]   The growth lifecycle chain: proposal → verdict → commit → rollback / fossilization,
                   with the governor's verdict per proposal ([green]✓ approved[/green] / [red]✗ blocked[/red]).
+  [cyan]Prune attr.[/cyan]  Currently-pruned slots with who pruned them ([yellow]system[/yellow] = governor/safety auto-prune,
+                  [cyan]policy[/cyan] = a Tamiyo decision) and why — promoted out of the per-seed detail modal.
 
 [bold]Transforms[/bold]
   [cyan]symlog[/cyan]        Signed log transform on large-magnitude signals (compresses spikes, preserves order).

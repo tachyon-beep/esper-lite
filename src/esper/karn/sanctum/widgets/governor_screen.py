@@ -15,6 +15,7 @@ from textual.containers import Container, Horizontal
 from esper.karn.sanctum.widgets.governor_ledger_panel import GovernorLedgerPanel
 from esper.karn.sanctum.widgets.governor_status_panel import GovernorStatusPanel
 from esper.karn.sanctum.widgets.morphology_causal_panel import MorphologyCausalPanel
+from esper.karn.sanctum.widgets.prune_attribution_panel import PruneAttributionPanel
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
@@ -46,6 +47,15 @@ class GovernorScreen(Container):
         min-height: 12;
     }
 
+    GovernorScreen #governor-prunes {
+        width: 100%;
+        height: auto;
+        min-height: 4;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
     /* Child selector, NOT a class: the panels overwrite self.classes with
        "panel" in __init__, so classes passed at construction are lost. */
     GovernorScreen #governor-lower > * {
@@ -67,6 +77,7 @@ class GovernorScreen(Container):
         with Horizontal(id="governor-lower"):
             yield GovernorLedgerPanel(id="governor-ledger")
             yield MorphologyCausalPanel(id="governor-causal")
+        yield PruneAttributionPanel(id="governor-prunes")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Fan the snapshot out to all governor/growth panels."""
@@ -74,6 +85,7 @@ class GovernorScreen(Container):
         self.query_one("#governor-status", GovernorStatusPanel).update_snapshot(snapshot)
         self.query_one("#governor-ledger", GovernorLedgerPanel).update_snapshot(snapshot)
         self.query_one("#governor-causal", MorphologyCausalPanel).update_snapshot(snapshot)
+        self.query_one("#governor-prunes", PruneAttributionPanel).update_snapshot(snapshot)
 
     @property
     def snapshot(self) -> "SanctumSnapshot | None":

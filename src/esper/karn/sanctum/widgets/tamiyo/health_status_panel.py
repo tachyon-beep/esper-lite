@@ -208,8 +208,10 @@ class HealthStatusPanel(Static):
         result.append(self._render_decision_agency())
         result.append("\n")
 
-        # LSTM hidden state health (B7-DRL-04)
+        # LSTM hidden state health (B7-DRL-04): update-time then rollout-time.
         result.append(self._render_lstm_health())
+        result.append("\n")
+        result.append(self._render_rollout_lstm_health())
 
         return result
 
@@ -493,6 +495,75 @@ class HealthStatusPanel(Static):
         if peak_abs is not None:
             result.append(" ", style="dim")
             result.append(f"|x|max:{peak_abs:.1f}", style="dim")
+
+        if worst_status != "OK":
+            result.append(" !", style=self._status_style(worst_status))
+
+        return result
+
+    def _render_rollout_lstm_health(self) -> Text:
+        """Behaviour-policy (rollout-time) LSTM hidden-state health.
+
+        Sibling of the update-time row above: these RMS/NaN-Inf stats are
+        captured while the behaviour policy collects the on-policy rollout,
+        before the PPO epochs re-evaluate the hidden state. A NaN/Inf here is
+        the policy going unstable at *sampling* time (the R1-crash surface),
+        which the update-time row cannot see. None -> non-recurrent policy or
+        no data yet (shown as an em dash, never a fabricated 0).
+        """
+        result = Text()
+        if self._snapshot is None:
+            return result
+        tamiyo = self._snapshot.tamiyo
+
+        if tamiyo.rollout_lstm_h_rms is None:
+            result.append("LSTM roll    ", style="dim")
+            result.append("---", style="dim")
+            return result
+
+        if tamiyo.rollout_lstm_has_nan or tamiyo.rollout_lstm_has_inf:
+            result.append("LSTM roll    ", style="dim")
+            issues = []
+            if tamiyo.rollout_lstm_has_nan:
+                issues.append("NaN")
+            if tamiyo.rollout_lstm_has_inf:
+                issues.append("Inf")
+            result.append(" ".join(issues), style="red bold")
+            return result
+
+        h_status = self._get_lstm_rms_status(tamiyo.rollout_lstm_h_rms)
+        c_status = self._get_lstm_rms_status(tamiyo.rollout_lstm_c_rms)
+        worst_status = max(
+            [h_status, c_status],
+            key=lambda s: ["OK", "Warning", "Critical"].index(s),
+        )
+
+        result.append("LSTM roll    ", style="dim")
+        result.append(
+            f"h:{tamiyo.rollout_lstm_h_rms:.2f}",
+            style=self._status_style(h_status),
+        )
+        result.append(" ", style="dim")
+        result.append(
+            f"c:{tamiyo.rollout_lstm_c_rms:.2f}",
+            style=self._status_style(c_status),
+        )
+
+        env_rms_max = None
+        if (
+            tamiyo.rollout_lstm_h_env_rms_max is not None
+            and tamiyo.rollout_lstm_c_env_rms_max is not None
+        ):
+            env_rms_max = max(
+                tamiyo.rollout_lstm_h_env_rms_max, tamiyo.rollout_lstm_c_env_rms_max
+            )
+        elif tamiyo.rollout_lstm_h_env_rms_max is not None:
+            env_rms_max = tamiyo.rollout_lstm_h_env_rms_max
+        elif tamiyo.rollout_lstm_c_env_rms_max is not None:
+            env_rms_max = tamiyo.rollout_lstm_c_env_rms_max
+        if env_rms_max is not None:
+            result.append(" ", style="dim")
+            result.append(f"env↑:{env_rms_max:.2f}", style="dim")
 
         if worst_status != "OK":
             result.append(" !", style=self._status_style(worst_status))

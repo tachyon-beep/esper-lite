@@ -284,3 +284,36 @@ class TestRawAdvantageAndGradLabel:
     def test_grad_norm_labelled_pre_clip(self) -> None:
         text = self._panel(TamiyoState(ppo_data_received=True, grad_norm=2.1))
         assert "pre-clip" in text
+
+
+class TestRolloutLstmHealthRow:
+    """The behaviour-policy (rollout-time) LSTM health row."""
+
+    def _panel(self, **tamiyo_kwargs) -> HealthStatusPanel:
+        panel = HealthStatusPanel()
+        panel._snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(ppo_data_received=True, **tamiyo_kwargs)
+        )
+        return panel
+
+    def test_none_shows_placeholder_not_zero(self) -> None:
+        """No rollout-LSTM data -> em dash, never a fabricated 0.0."""
+        text = self._panel()._render_rollout_lstm_health().plain
+        assert "LSTM roll" in text
+        assert "---" in text
+
+    def test_healthy_shows_h_and_c_rms(self) -> None:
+        text = self._panel(
+            rollout_lstm_h_rms=0.60, rollout_lstm_c_rms=0.70
+        )._render_rollout_lstm_health().plain
+        assert "h:0.60" in text
+        assert "c:0.70" in text
+
+    def test_nan_is_flagged_red(self) -> None:
+        """A NaN at sampling time is the R1-crash surface — must be called out."""
+        text = self._panel(
+            rollout_lstm_h_rms=0.9,
+            rollout_lstm_c_rms=1.1,
+            rollout_lstm_has_nan=True,
+        )._render_rollout_lstm_health().plain
+        assert "NaN" in text

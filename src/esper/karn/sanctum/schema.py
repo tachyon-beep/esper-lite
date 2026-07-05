@@ -1079,6 +1079,26 @@ class TamiyoState:
     lstm_has_nan: bool = False  # NaN detected in LSTM hidden state
     lstm_has_inf: bool = False  # Inf detected in LSTM hidden state
 
+    # Rollout-time (behaviour-policy) LSTM hidden-state health (SIMIC-PROD-003).
+    # The lstm_* fields above are UPDATE-time (hidden states re-evaluated under the
+    # updated params during the PPO epochs); these are the health of the hidden
+    # state captured during on-policy rollout collection. Distinct, separable
+    # signal — a NaN/Inf here is the behaviour policy going unstable at sampling
+    # time (before the update). Emitted at emitters.py; mirrored so the health
+    # panel can show both.
+    rollout_lstm_h_l2_total: float | None = None
+    rollout_lstm_c_l2_total: float | None = None
+    rollout_lstm_h_rms: float | None = None
+    rollout_lstm_c_rms: float | None = None
+    rollout_lstm_h_env_rms_mean: float | None = None
+    rollout_lstm_h_env_rms_max: float | None = None
+    rollout_lstm_c_env_rms_mean: float | None = None
+    rollout_lstm_c_env_rms_max: float | None = None
+    rollout_lstm_h_max: float | None = None   # Max absolute value in h
+    rollout_lstm_c_max: float | None = None   # Max absolute value in c
+    rollout_lstm_has_nan: bool = False  # NaN detected in rollout hidden state
+    rollout_lstm_has_inf: bool = False  # Inf detected in rollout hidden state
+
     # Performance timing (for throughput monitoring)
     update_time_ms: float = 0.0  # PPO update duration in milliseconds
     early_stop_epoch: int | None = None  # KL early stopping triggered at this epoch

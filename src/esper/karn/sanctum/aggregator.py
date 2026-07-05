@@ -1140,6 +1140,21 @@ class SanctumAggregator:
         self._tamiyo.lstm_has_nan = payload.lstm_has_nan
         self._tamiyo.lstm_has_inf = payload.lstm_has_inf
 
+        # Rollout-time (behaviour-policy) LSTM hidden-state health — the sibling
+        # of the update-time signal above, captured during rollout collection.
+        self._tamiyo.rollout_lstm_h_l2_total = payload.rollout_lstm_h_l2_total
+        self._tamiyo.rollout_lstm_c_l2_total = payload.rollout_lstm_c_l2_total
+        self._tamiyo.rollout_lstm_h_rms = payload.rollout_lstm_h_rms
+        self._tamiyo.rollout_lstm_c_rms = payload.rollout_lstm_c_rms
+        self._tamiyo.rollout_lstm_h_env_rms_mean = payload.rollout_lstm_h_env_rms_mean
+        self._tamiyo.rollout_lstm_h_env_rms_max = payload.rollout_lstm_h_env_rms_max
+        self._tamiyo.rollout_lstm_c_env_rms_mean = payload.rollout_lstm_c_env_rms_mean
+        self._tamiyo.rollout_lstm_c_env_rms_max = payload.rollout_lstm_c_env_rms_max
+        self._tamiyo.rollout_lstm_h_max = payload.rollout_lstm_h_max
+        self._tamiyo.rollout_lstm_c_max = payload.rollout_lstm_c_max
+        self._tamiyo.rollout_lstm_has_nan = payload.rollout_lstm_has_nan
+        self._tamiyo.rollout_lstm_has_inf = payload.rollout_lstm_has_inf
+
         # Per-head NaN/Inf OR-latch (once True, stays True for entire run)
         if payload.head_nan_detected:
             for head, detected in payload.head_nan_detected.items():
