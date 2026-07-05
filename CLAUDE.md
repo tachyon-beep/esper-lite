@@ -14,6 +14,8 @@ This file contains mandatory rules for Claude Code when working on this codebase
 
 These documents MUST be kept current and provide essential context for understanding the codebase.
 
+**On session start, also execute the `/own-product` skill** (`axiom-product-management:own-product`) as part of orienting: it loads and reconciles the git-versioned product-ownership workspace at `docs/product/`, running the RESUME → ORIENT half of the ownership loop and emitting the current-state brief (the current bet, what is in flight by tracker ID, and any drift) before work begins. Close each working session that made product decisions with `/product-checkpoint`, which writes the workspace back and commits.
+
 ## No Legacy Code Policy
 
 **STRICT REQUIREMENT:** Legacy code, backwards compatibility, and compatibility shims are strictly forbidden.
