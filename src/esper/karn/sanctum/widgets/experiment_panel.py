@@ -81,25 +81,31 @@ class ExperimentPanel(Static):
 
         ordered = self._ordered_group_ids()
 
-        # Metric rows: label, extractor, format spec. None from the extractor
-        # renders as an em dash. Contaminated diagnostics (cov_rcf/r_main_cov)
-        # are deliberately absent (PDR-0028).
+        # Metric rows: label, extractor, format spec, recent-window history attr
+        # (None = no window). None from the extractor renders as an em dash.
+        # Contaminated diagnostics (cov_rcf/r_main_cov) are absent (PDR-0028).
+        # These are single-update POINT ESTIMATES from ONE seed per leg — the Δ is
+        # not a seeded A/B verdict (see the caveat caption). Between-seed variance,
+        # the dominant variance in RL, is entirely unobserved here, so NO cross-leg
+        # CI/SEM/significance is computed — only a negative "within noise" filter.
         def t(group: "SanctumSnapshot") -> Any:
             return group.tamiyo
 
-        rows: list[tuple[str, Callable[["SanctumSnapshot"], float | None], str]] = [
-            ("EV", lambda s: t(s).explained_variance if t(s).ppo_data_received else None, ".2f"),
-            ("EV main", lambda s: t(s).ev_main, ".2f"),
-            ("EV cf", lambda s: t(s).ev_cf, ".2f"),
-            ("cf V.Loss", lambda s: t(s).cf_value_loss, ".3f"),
-            ("CF var share", lambda s: t(s).return_var_cf_share, ".2f"),
-            ("Main var share", lambda s: t(s).return_var_main_share, ".2f"),
-            ("Entropy", lambda s: t(s).entropy if t(s).ppo_data_received else None, ".2f"),
-            ("KL", lambda s: t(s).kl_divergence if t(s).ppo_data_received else None, ".3f"),
-            ("Clip frac", lambda s: t(s).clip_fraction if t(s).ppo_data_received else None, ".2f"),
-            ("Grad norm", lambda s: t(s).grad_norm if t(s).ppo_data_received else None, ".2f"),
-            ("Mean accuracy", lambda s: s.aggregate_mean_accuracy, ".1f"),
-            ("Mean reward", lambda s: s.aggregate_mean_reward, ".2f"),
+        rows: list[
+            tuple[str, Callable[["SanctumSnapshot"], float | None], str, str | None]
+        ] = [
+            ("EV", lambda s: t(s).explained_variance if t(s).ppo_data_received else None, ".2f", "explained_variance_history"),
+            ("EV main", lambda s: t(s).ev_main, ".2f", "ev_main_history"),
+            ("EV cf", lambda s: t(s).ev_cf, ".2f", "ev_cf_history"),
+            ("cf V.Loss", lambda s: t(s).cf_value_loss, ".3f", "cf_value_loss_history"),
+            ("CF var share", lambda s: t(s).return_var_cf_share, ".2f", "return_var_cf_share_history"),
+            ("Main var share", lambda s: t(s).return_var_main_share, ".2f", None),
+            ("Entropy", lambda s: t(s).entropy if t(s).ppo_data_received else None, ".2f", "entropy_history"),
+            ("KL", lambda s: t(s).kl_divergence if t(s).ppo_data_received else None, ".3f", "kl_divergence_history"),
+            ("Clip frac", lambda s: t(s).clip_fraction if t(s).ppo_data_received else None, ".2f", "clip_fraction_history"),
+            ("Grad norm", lambda s: t(s).grad_norm if t(s).ppo_data_received else None, ".2f", "grad_norm_history"),
+            ("Mean accuracy", lambda s: s.aggregate_mean_accuracy, ".1f", None),
+            ("Mean reward", lambda s: s.aggregate_mean_reward, ".2f", None),
         ]
 
         table = Table(expand=False, pad_edge=False, border_style="dim")
@@ -110,9 +116,10 @@ class ExperimentPanel(Static):
             table.add_column(f"{group_id}{marker}", style=color, min_width=10)
         show_delta = len(ordered) == 2
         if show_delta:
-            table.add_column(f"Δ ({ordered[0]}−{ordered[1]})", style="bold", min_width=10)
+            # Not bold: a point-estimate delta must not read as a verdict.
+            table.add_column(f"Δ ({ordered[0]}−{ordered[1]})", style="dim", min_width=12)
 
-        for label, extract, spec in rows:
+        for label, extract, spec, hist_attr in rows:
             values = [extract(self._groups[group_id]) for group_id in ordered]
             if all(v is None for v in values):
                 continue  # neither leg emits this metric: no dead rows
@@ -121,7 +128,34 @@ class ExperimentPanel(Static):
                 if values[0] is None or values[1] is None:
                     cells.append("—")
                 else:
-                    cells.append(format(values[0] - values[1], f"+{spec}"))
+                    delta = values[0] - values[1]
+                    delta_str = format(delta, f"+{spec}")
+                    if self._within_noise(delta, hist_attr, ordered):
+                        delta_str += " ~noise"
+                    cells.append(delta_str)
             table.add_row(*cells)
 
+        table.caption = (
+            "point estimates · 1 seed/leg — not a seeded A/B verdict; Δ needs N "
+            "seeds for significance. ~noise = |Δ| within a leg's recent-window wobble."
+        )
+        table.caption_style = "dim italic"
         return table
+
+    def _within_noise(
+        self, delta: float, history_attr: str | None, ordered: list[str]
+    ) -> bool:
+        """Negative-only filter: is |Δ| inside either leg's recent-window wobble?
+
+        Δ smaller than the update-to-update wobble is indistinguishable from noise.
+        This is used ONLY to demote a Δ (never to promote one to significance): a
+        single autocorrelated run cannot support a positive claim.
+        """
+        if history_attr is None:
+            return False
+        wobbles: list[float] = []
+        for group_id in ordered:
+            history = list(getattr(self._groups[group_id].tamiyo, history_attr))
+            if len(history) >= 2:
+                wobbles.append(max(history) - min(history))
+        return bool(wobbles) and abs(delta) <= max(wobbles)
