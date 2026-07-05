@@ -41,6 +41,7 @@ from esper.leyline import (
     TempoAction,
 )
 from esper.leyline.slot_config import SlotConfig
+from esper.simic.rewards.partition import COMPONENT_TERMS
 
 
 ROLLBACK_TRANSITION_NONE: int = 0
@@ -184,6 +185,10 @@ class TamiyoRolloutBuffer:
     cf_values: torch.Tensor = field(init=False)
     cf_bootstrap_values: torch.Tensor = field(init=False)
     r_cf_norm: torch.Tensor = field(init=False)
+    # EV-stab Stage 0: per-step SIGNED additend decomposition [num_envs, max_steps,
+    # len(COMPONENT_TERMS)]. Pure telemetry (never read by the loss/GAE/value path);
+    # populated only when return_variance_telemetry is on, so OFF rollouts leave it zero.
+    component_additends: torch.Tensor = field(init=False)
     slot_masks: torch.Tensor = field(init=False)
     blueprint_masks: torch.Tensor = field(init=False)
     style_masks: torch.Tensor = field(init=False)
@@ -294,6 +299,8 @@ class TamiyoRolloutBuffer:
         self.cf_values = torch.zeros(n, m, device=device)
         self.cf_bootstrap_values = torch.zeros(n, m, device=device)
         self.r_cf_norm = torch.zeros(n, m, device=device)
+        # EV-stab Stage 0: per-step signed additends (value-free variance-share gate).
+        self.component_additends = torch.zeros(n, m, len(COMPONENT_TERMS), device=device)
 
         # Action masks - initialize with first action valid per row
         # This prevents InvalidStateMachineError on padded timesteps when
@@ -420,6 +427,9 @@ class TamiyoRolloutBuffer:
         cf_value: float | torch.Tensor = 0.0,
         cf_bootstrap_value: float | torch.Tensor = 0.0,
         r_cf_norm: float = 0.0,
+        # EV-stab Stage 0: per-step signed additend decomposition (value-free gate).
+        # None on the OFF path leaves the SoA row as zeros (byte-identical).
+        component_additends: dict[str, float] | None = None,
         # Phase 2.1: Auxiliary supervision for contribution prediction
         contribution_targets: torch.Tensor | None = None,  # [num_slots] ground truth per slot
         contribution_mask: torch.Tensor | None = None,  # [num_slots] bool - which slots active
@@ -484,6 +494,13 @@ class TamiyoRolloutBuffer:
         self.cf_values[env_id, step_idx] = _detach(cf_value)
         self.cf_bootstrap_values[env_id, step_idx] = _detach(cf_bootstrap_value)
         self.r_cf_norm[env_id, step_idx] = r_cf_norm
+        if component_additends is not None:
+            # Direct indexing (NOT .get): decompose_additends returns exactly
+            # COMPONENT_TERMS by construction; a partial dict is a contract violation.
+            self.component_additends[env_id, step_idx] = torch.tensor(
+                [component_additends[t] for t in COMPONENT_TERMS],
+                device=self.component_additends.device,
+            )
         self.slot_masks[env_id, step_idx] = slot_mask.detach().bool()
         self.blueprint_masks[env_id, step_idx] = blueprint_mask.detach().bool()
         self.style_masks[env_id, step_idx] = style_mask.detach().bool()
@@ -512,6 +529,29 @@ class TamiyoRolloutBuffer:
                 self.contribution_mask[env_id, step_idx] = contribution_mask.detach().bool()
 
         self.step_counts[env_id] = step_idx + 1
+
+    def collect_component_rewards(self) -> tuple[dict[str, list[float]], list[bool]]:
+        """Pool the per-step signed additends across envs for the value-free Stage-0 gate.
+
+        Returns ``({term: per-step signed values}, dones)`` in env-major order over each
+        env's stored steps. The ``done`` at each env's LAST stored step is forced True so
+        the return-to-go in ``compute_return_variance_shares`` resets at the env boundary:
+        pooling raw per-env dones would let a truncated (done=False) boundary bleed env
+        N+1's early returns backwards into env N's tail (silent wrong covariance).
+        """
+        component_rewards: dict[str, list[float]] = {term: [] for term in COMPONENT_TERMS}
+        dones: list[bool] = []
+        for env_id in range(self.num_envs):
+            n = self.step_counts[env_id]
+            if n == 0:
+                continue
+            block = self.component_additends[env_id, :n]  # [n, len(COMPONENT_TERMS)]
+            for term_idx, term in enumerate(COMPONENT_TERMS):
+                component_rewards[term].extend(block[:, term_idx].tolist())
+            env_dones = [bool(d) for d in self.dones[env_id, :n].tolist()]
+            env_dones[-1] = True  # env-boundary reset (return-to-go must not cross envs)
+            dones.extend(env_dones)
+        return component_rewards, dones
 
     @torch.compiler.disable  # type: ignore[untyped-decorator]  # Python loops cause graph breaks; runs once per rollout
     def compute_advantages_and_returns(

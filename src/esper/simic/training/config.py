@@ -110,6 +110,12 @@ class TrainingConfig:
     # constructed). Gate it as a fresh-init paired A/B and accept it on EV_main
     # liftoff/stabilization with no regression vs the single-head baseline.
     hra_value_decomposition: bool = False
+    # EV-stab Stage 0: value-free per-component variance-share gate telemetry. When ON,
+    # the rollout collects the signed additend SoA and the update computes the shares
+    # (share_attribution = the >0.40 gate) on BOTH legs — it reads on the Stage-2-OFF
+    # control run, so it is independent of hra_value_decomposition. Default OFF =
+    # byte-identical to the pre-EV-stab baseline.
+    return_variance_telemetry: bool = False
 
     # === Value function ===
     # Coefficient for value loss in combined PPO loss. Lower values reduce critic
@@ -369,6 +375,7 @@ class TrainingConfig:
             "entropy_coef_per_head": self.entropy_coef_per_head,
             "per_head_advantage_norm": self.per_head_advantage_norm,
             "hra_value_decomposition": self.hra_value_decomposition,
+            "return_variance_telemetry": self.return_variance_telemetry,
             "value_coef": self.value_coef,
             "value_coef_start": self.value_coef_start,
             "value_warmup_steps": value_warmup_steps,
@@ -400,6 +407,7 @@ class TrainingConfig:
             "entropy_coef_per_head": self.entropy_coef_per_head,
             "per_head_advantage_norm": self.per_head_advantage_norm,
             "hra_value_decomposition": self.hra_value_decomposition,
+            "return_variance_telemetry": self.return_variance_telemetry,
             "value_coef": self.value_coef,
             "value_warmup_batches": self.value_warmup_batches,
             "value_coef_start": self.value_coef_start,

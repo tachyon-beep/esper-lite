@@ -136,6 +136,7 @@ class PPOAgent:
         # telemetry is emitted regardless of this flag so the effect is observable.
         per_head_advantage_norm: bool = False,
         hra_value_decomposition: bool = False,
+        return_variance_telemetry: bool = False,
         value_coef: float = DEFAULT_VALUE_COEF,
         # Value coefficient warmup: start low, ramp up to value_coef over warmup_steps.
         # This prevents critic collapse when early returns have low variance (before
@@ -266,6 +267,11 @@ class PPOAgent:
         # EV-stab Stage 2: HRA cf-value-decomposition flag. Read by the GAE call,
         # per-stream targets, EV path, optimizer, and checkpoint (later increments).
         self.hra_value_decomposition = hra_value_decomposition
+        # EV-stab Stage 0: value-free variance-share gate flag. When ON, the rollout
+        # collects the per-component additend SoA and the update computes the shares
+        # (share_attribution = the >0.40 gate). Independent of hra (reads on the OFF
+        # control run). Threaded to ActionExecutionContext by the trainer.
+        self.return_variance_telemetry = return_variance_telemetry
         # Per-head entropy floor penalty (prevents sparse head collapse)
         # Uses ENTROPY_FLOOR_PER_HEAD from leyline as defaults
         self.entropy_floor = entropy_floor if entropy_floor is not None else dict(ENTROPY_FLOOR_PER_HEAD)
