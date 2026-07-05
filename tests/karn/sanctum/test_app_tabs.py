@@ -138,3 +138,20 @@ async def test_overview_tamiyo_is_a_digest():
         assert brain.query_one("#health-panel", HealthStatusPanel) is not None
         assert not brain.query(ActionHeadsPanel)  # moved to Policy tab
         assert not brain.query(CriticCalibrationPanel)  # lives on Critic tab only
+
+
+@pytest.mark.asyncio
+async def test_preview_backend_drives_the_app():
+    """The staged-data preview harness satisfies the backend contract."""
+    from esper.karn.sanctum.preview import PreviewBackend
+
+    app = SanctumApp(backend=PreviewBackend(), num_envs=6)
+    async with app.run_test() as pilot:
+        app._poll_and_refresh()
+        await pilot.pause()
+        # Both staged legs arrive; drift advances between polls
+        assert set(app.view.snapshots_by_group) == {"A", "B"}
+        first_epoch = app.view.primary.current_epoch
+        app._poll_and_refresh()
+        await pilot.pause()
+        assert app.view.primary.current_epoch > first_epoch
