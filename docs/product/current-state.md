@@ -48,6 +48,9 @@ decomposition (the canonical gate metric, reads identically on both legs).
   complete + OFF-leg byte-identity + drl/pytorch review (CLAUDE.md). Do it off-main on a
   scratch branch, verify, then fast-merge — NOT a rushed core-training-path merge.
 - Standing placeholders: north-star / rent TARGETs (metrics.md) still owner-set.
+- **STANDING RULE (PDR-0030):** every experiment ends with an explicit disposition call —
+  merge-to-main (default) / fork-as-enduring-line (dispreferred) / abandon — folded into
+  CHECKPOINT. ev-stab's disposition = merge-to-main, deferred to Stage-0 completion.
 
 ## Last checkpoint did (checkpoint #17)
 - PDR-0028 (reconciliation + branch adoption, owner-ratified) + PDR-0029 (review-gate
