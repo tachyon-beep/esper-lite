@@ -1173,6 +1173,11 @@ class SanctumAggregator:
         self._tamiyo.value_min = payload.value_min
         self._tamiyo.value_max = payload.value_max
 
+        # Value-target scale + raw return distribution (EV-denominator health).
+        self._tamiyo.value_target_scale = payload.value_target_scale
+        self._tamiyo.return_mean = payload.return_mean
+        self._tamiyo.return_std = payload.return_std
+
         # Value function quality metrics (TELE-220 to TELE-228)
         # Update the nested ValueFunctionMetrics dataclass
         vf = self._tamiyo.value_function

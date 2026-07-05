@@ -63,6 +63,11 @@ class CriticCalibrationPanel(Static):
         self._render_value(
             result, f"{tamiyo.explained_variance:.2f}", ev_style, last=True
         )
+        # EV-artifact caveat: a floored return-variance denominator makes EV
+        # meaningless (not a real critic failure). Without this badge EV is
+        # health-styled as if trustworthy.
+        if tamiyo.ev_low_return_variance:
+            result.append(" ⚠lowRV", style="yellow")
         result.append("\n")
 
         # Line 2: TD Mean | TD Std

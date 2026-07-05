@@ -141,3 +141,39 @@ class TestActionHeadsAdvantageNormFooter:
         output = self._panel(snapshot).render().plain
         assert "per-head:on" in output
         assert "fellback:2" in output
+
+
+def test_value_diagnostics_shows_value_target_scale():
+    """b4c1: the EV-denominator (value_target_scale) is rendered on the critic panel."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.karn.sanctum.widgets.tamiyo.value_diagnostics_panel import (
+        ValueDiagnosticsPanel,
+    )
+
+    snap = SanctumSnapshot()
+    snap.tamiyo.ppo_data_received = True
+    snap.tamiyo.value_target_scale = 3.14
+    panel = ValueDiagnosticsPanel()
+    panel.update_snapshot(snap)
+    text = panel.render().plain
+    assert "V-tgt σ" in text
+    assert "3.14" in text
+
+
+def test_critic_calibration_ev_artifact_badge():
+    """b4c1: ev_low_return_variance flags EV as a floored-denominator artifact."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.karn.sanctum.widgets.tamiyo.critic_calibration_panel import (
+        CriticCalibrationPanel,
+    )
+
+    snap = SanctumSnapshot()
+    snap.tamiyo.ppo_data_received = True
+    snap.tamiyo.ev_low_return_variance = True
+    panel = CriticCalibrationPanel()
+    panel.update_snapshot(snap)
+    assert "lowRV" in panel.render().plain
+
+    snap.tamiyo.ev_low_return_variance = False
+    panel.update_snapshot(snap)
+    assert "lowRV" not in panel.render().plain

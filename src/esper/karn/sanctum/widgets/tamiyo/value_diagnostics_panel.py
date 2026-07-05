@@ -106,6 +106,22 @@ class ValueDiagnosticsPanel(Static):
             self._render_value(result, arrow, arrow_style, last=True)
         else:
             self._render_value(result, "—", "dim", last=True)
+        result.append("\n")
+
+        # Line 4: value-target scale (the EV denominator) + per-batch return σ.
+        # value_target_scale is the EMA return-std that normalizes returns; its square
+        # is ~Var(returns), the EV denominator — a collapse toward 0 is the same event
+        # as ev_low_return_variance (EV becomes untrustworthy). A large gap between the
+        # EMA scale and the per-batch σ flags non-stationarity (critic chasing a moving
+        # target). Level is task-scale dependent, so watch stability, not the number.
+        self._render_label(result, "V-tgt σ")
+        vts = tamiyo.value_target_scale
+        vts_style = (
+            "red bold" if (tamiyo.ev_low_return_variance or vts < 0.05) else "cyan"
+        )
+        self._render_value(result, f"{vts:.2f}", vts_style)
+        self._render_label(result, "batch σ")
+        self._render_value(result, f"{tamiyo.return_std:.1f}", "cyan", last=True)
 
         return result
 

@@ -187,3 +187,15 @@ def test_proof_profile_defaults_to_none():
     agg.process_event(_training_started_event())
 
     assert agg.get_snapshot().run_config.proof_profile is None
+
+
+def test_value_target_scale_and_return_stats_round_trip():
+    """b4c1: value_target_scale + return_mean/std mirror onto TamiyoState."""
+    agg = SanctumAggregator(num_envs=4)
+    agg.process_event(
+        _ppo_event(value_target_scale=2.5, return_mean=12.0, return_std=8.0)
+    )
+    tamiyo = agg.get_snapshot().tamiyo
+    assert abs(tamiyo.value_target_scale - 2.5) < 1e-9
+    assert abs(tamiyo.return_mean - 12.0) < 1e-9
+    assert abs(tamiyo.return_std - 8.0) < 1e-9

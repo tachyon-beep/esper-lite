@@ -1190,6 +1190,17 @@ class TamiyoState:
     value_max: float = 0.0
     initial_value_spread: float | None = None  # Set after warmup for relative thresholds
 
+    # Value-target scale + raw return distribution (the EV-stab program's subject).
+    # value_target_scale is the EMA return-std used to normalize returns before the
+    # value loss (normalized_returns = returns / value_target_scale). Its square is
+    # ~Var(returns) = the EV denominator, so a collapse toward 0 is the SAME event as
+    # ev_low_return_variance firing (EV becomes untrustworthy). 1.0 during warmup
+    # (<32 samples) is ambiguous. return_mean/return_std are the per-batch raw return
+    # stats; a large gap between return_std and value_target_scale flags non-stationarity.
+    value_target_scale: float = 1.0
+    return_mean: float = 0.0
+    return_std: float = 0.0
+
     # Op-conditioned Q-values (Policy V2 - Q(s,op) architecture)
     # Vector aligns to LifecycleOp/NUM_OPS ordering.
     op_q_values: tuple[float, ...] = field(

@@ -168,6 +168,10 @@ GLOSSARY_TEXT = """\
                   A tripped gate is a FINDING, not a failure — it never reds the anomaly strip.
   [cyan]Residual[/cyan]      Completeness keystone (~0). ✗ = untracked reward mass is leaking
                   through the additend decomposition (also alarms the anomaly strip).
+  [cyan]V-tgt σ[/cyan]       Value-target scale — the EMA return-std that normalizes returns. Its square is
+                  ~Var(returns), the EV DENOMINATOR: a collapse toward 0 (or the [yellow]⚠lowRV[/yellow]
+                  badge on EV) means return variance vanished and EV / EV main are untrustworthy.
+                  A large gap vs the per-batch "batch σ" flags non-stationarity. ~1.0 may be warmup.
 
 [bold]Transforms[/bold]
   [cyan]symlog[/cyan]        Signed log transform on large-magnitude signals (compresses spikes, preserves order).
