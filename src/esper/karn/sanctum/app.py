@@ -57,6 +57,7 @@ from esper.karn.sanctum.widgets import (
 )
 from esper.karn.sanctum.widgets.critic_screen import CriticScreen
 from esper.karn.sanctum.widgets.experiment_panel import ExperimentPanel
+from esper.karn.sanctum.widgets.policy_screen import PolicyScreen
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.backend import SanctumBackend
@@ -68,7 +69,7 @@ HELP_TEXT = """\
 [bold cyan]Sanctum Keyboard Shortcuts[/bold cyan]
 
 [bold]Navigation[/bold]
-  [cyan][ / ][/cyan]     Switch view: Overview ‹› Critic ‹› Experiment
+  [cyan][ / ][/cyan]     Switch view: Overview ‹› Policy ‹› Critic ‹› Experiment
   [cyan]h/l[/cyan] [cyan]←/→[/cyan]  Switch between left/right panels
   [cyan]j/k[/cyan] [cyan]↑/↓[/cyan]  Navigate rows in table
   [cyan]g/G[/cyan]       Jump to top/bottom
@@ -453,7 +454,7 @@ class SanctumApp(App[None]):
         self._last_primary_group_id: str | None = None
 
     # Tab cycle order for the [ / ] bindings
-    _TAB_ORDER = ("tab-overview", "tab-critic", "tab-experiment")
+    _TAB_ORDER = ("tab-overview", "tab-policy", "tab-critic", "tab-experiment")
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -490,6 +491,9 @@ class SanctumApp(App[None]):
                         # TamiyoBrain container - widgets created dynamically
                         with Horizontal(id="tamiyo-container"):
                             pass  # TamiyoBrain widgets mounted dynamically
+
+            with TabPane("Policy", id="tab-policy"):
+                yield PolicyScreen(id="policy-screen")
 
             with TabPane("Critic", id="tab-critic"):
                 yield CriticScreen(id="critic-screen")
@@ -555,9 +559,12 @@ class SanctumApp(App[None]):
     def _refresh_tamiyo_widgets(
         self,
         snapshots: dict[str, "SanctumSnapshot"],
-        reward_health_by_group: dict[str, RewardHealthData],
     ) -> None:
-        """Refresh TamiyoBrain widgets from multi-group snapshots."""
+        """Refresh TamiyoBrain widgets from multi-group snapshots.
+
+        Reward health no longer routes through TamiyoBrain: the Overview digest
+        shows it in the metrics column, the Policy tab in ActionContext.
+        """
 
         # Handle empty case (no events yet) - create default widget
         if not snapshots:
@@ -565,7 +572,6 @@ class SanctumApp(App[None]):
                 widget = self._get_or_create_tamiyo_widget("default")
                 from esper.karn.sanctum.schema import SanctumSnapshot as SnapshotClass
                 widget.update_snapshot(SnapshotClass())
-                widget.update_reward_health(RewardHealthData())
             except NoMatches:
                 pass
             return
@@ -575,10 +581,6 @@ class SanctumApp(App[None]):
             try:
                 widget = self._get_or_create_tamiyo_widget(group_id)
                 widget.update_snapshot(group_snapshot)
-                if group_id in reward_health_by_group:
-                    widget.update_reward_health(reward_health_by_group[group_id])
-                else:
-                    widget.update_reward_health(RewardHealthData())
             except NoMatches:
                 pass  # Container hasn't mounted yet
 
@@ -805,8 +807,7 @@ class SanctumApp(App[None]):
             self._last_heavy_widget_update_ts = now
 
         # Update TamiyoBrain widgets using multi-group snapshots.
-        # Pass per-group reward health (displayed in ActionContext).
-        self._refresh_tamiyo_widgets(view.snapshots_by_group, view.reward_health_by_group)
+        self._refresh_tamiyo_widgets(view.snapshots_by_group)
         self._sync_tamiyo_visibility(view.primary_group_id, view.snapshots_by_group)
         self._last_primary_group_id = view.primary_group_id
 
@@ -825,6 +826,14 @@ class SanctumApp(App[None]):
             self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(
                 primary_reward_health
             )
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+
+        # Policy tab: full-width actor diagnostics for the primary group
+        try:
+            policy = self.query_one("#policy-screen", PolicyScreen)
+            policy.update_snapshot(snapshot)
+            policy.update_reward_health(primary_reward_health)
         except NoMatches:
             pass  # Widget hasn't mounted yet
 

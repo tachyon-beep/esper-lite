@@ -46,6 +46,7 @@ from rich.text import Text
 from textual.widgets import Static
 
 from esper.leyline import (
+    ADVANTAGE_STD_FLOOR,
     DEFAULT_HOST_LSTM_LAYERS,
     HEAD_MAX_ENTROPIES,
 )
@@ -267,6 +268,10 @@ class ActionHeadsPanel(Static):
 
         # Section 3: Gradient flow footer
         result.append(self._render_flow_footer())
+
+        # Section 4: Advantage-normalization observability (EV-stab / Stage 1)
+        result.append("\n")
+        result.append(self._render_adv_norm_footer())
 
         return result
 
@@ -780,6 +785,42 @@ class ActionHeadsPanel(Static):
         result.append(f"NaN:{nan_count}", style=nan_style)
         result.append("  ")
         result.append(f"Inf:{inf_count}", style=inf_style)
+
+        return result
+
+    def _render_adv_norm_footer(self) -> Text:
+        """Render per-head advantage-normalization observability (one line).
+
+        min sparse σ is the smallest PRE-norm advantage std across non-op heads:
+        op rides the global ~1 scale, so a sparse head far below 1 is being
+        "normalized into oblivion" by op's variance — measurable even while the
+        per-head ablation (PHN) is OFF. The fellback count only exists when the
+        ablation is ON (heads sent back to the global scale by the low-count
+        guard), so it renders only then — no structurally-zero dead chip.
+        """
+        if self._snapshot is None:
+            return Text()
+
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        result.append("AdvNorm: ", style="dim")
+        min_std = tamiyo.min_sparse_head_advantage_std
+        if min_std < ADVANTAGE_STD_FLOOR:
+            std_style = "red bold"  # at/below the degenerate-batch floor
+        elif min_std < 3 * ADVANTAGE_STD_FLOOR:
+            std_style = "yellow"
+        else:
+            std_style = "dim"
+        result.append(f"min sparse σ {min_std:.2f}", style=std_style)
+
+        if tamiyo.advantage_per_head_normalized:
+            result.append("   per-head:on", style="cyan")
+            fellback = tamiyo.advantage_norm_fellback_count
+            fellback_style = "yellow" if fellback > 0 else "dim"
+            result.append(f"   fellback:{fellback}", style=fellback_style)
+        else:
+            result.append("   per-head:off", style="dim")
 
         return result
 

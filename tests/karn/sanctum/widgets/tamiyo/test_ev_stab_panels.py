@@ -108,3 +108,36 @@ class TestCriticCalibrationPerStreamEV:
 
         assert "EV main" not in output
         assert "EV cf" not in output
+
+
+class TestActionHeadsAdvantageNormFooter:
+    """Per-head advantage-norm observability rides the ACTION HEADS footer."""
+
+    def _panel(self, snapshot: SanctumSnapshot):
+        from esper.karn.sanctum.widgets.tamiyo.action_heads_panel import (
+            ActionHeadsPanel,
+        )
+
+        panel = ActionHeadsPanel()
+        panel.update_snapshot(snapshot)
+        return panel
+
+    def test_min_sparse_std_shown_even_with_ablation_off(self) -> None:
+        snapshot = _snapshot_with_ppo()
+        snapshot.tamiyo.min_sparse_head_advantage_std = 0.07
+
+        output = self._panel(snapshot).render().plain
+        assert "AdvNorm" in output
+        assert "0.07" in output
+        assert "per-head:off" in output
+        assert "fellback" not in output  # structurally 0 when PHN off: no dead chip
+
+    def test_fellback_count_shown_when_ablation_on(self) -> None:
+        snapshot = _snapshot_with_ppo()
+        snapshot.tamiyo.advantage_per_head_normalized = True
+        snapshot.tamiyo.advantage_norm_fellback_count = 2
+        snapshot.tamiyo.min_sparse_head_advantage_std = 0.04
+
+        output = self._panel(snapshot).render().plain
+        assert "per-head:on" in output
+        assert "fellback:2" in output

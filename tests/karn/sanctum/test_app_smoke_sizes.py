@@ -56,6 +56,12 @@ async def test_all_tabs_render_at_documented_sizes(size: tuple[int, int]):
         # Cycle through the other tabs; rendering must not raise at either size
         await pilot.press("right_square_bracket")
         await pilot.pause()
+        policy = app.query_one("#policy-screen")
+        assert policy.query_one("#policy-action-heads").display
+        assert policy.query_one("#policy-action-context").display
+
+        await pilot.press("right_square_bracket")
+        await pilot.pause()
         critic = app.query_one("#critic-screen")
         assert critic.query_one("#critic-tab-return-variance").display
 

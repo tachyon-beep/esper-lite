@@ -14,19 +14,19 @@ composable sub-widgets for better maintainability.
    - warning metrics: yellow
    - critical metrics: red bold
 
+Overview-tab DIGEST since the tab split: the deep actor panels (ActionHeads,
+ActionContext, InnerLoop, TorchStability) live on the Policy tab; the critic
+panels (ValueDiagnostics, CriticCalibration) live on the Critic tab.
+
 Layout (CSS dimensions):
-    ┌──────────────────────────────────────────────────────────────────────────────┐
-    ├───────────────────────────────────────────────────────────────────┬──────────┤
-    │ VitalsColumn (w:4fr)                                              │ Decisions│
-    │ ┌─────────┬────────────┬───────────────┐                         │ (1fr)   │
-    │ │Narrative│ PPOLosses  │ Slots (52ch)  │ h13                     │          │
-    │ ├──────────────────────┬──────────┬──────────────┐              │          │
-    │ │ ActionHeadsPanel     │ Health   │ ActionContext │             │          │
-    │ │ ┌────────┬─────────┐ │ Value    │ (52ch)        │              │          │
-    │ │ │Episode │ Torch   │ │ Calib    │               │              │          │
-    │ │ └────────┴─────────┘ │ (54ch)   │               │              │          │
-    │ └──────────────────────┴──────────┴──────────────┘              │ EventLog │
-    └───────────────────────────────────────────────────────────────────┴──────────┘
+    ┌──────────────────────────────────────────────────────────────────┬──────────┐
+    │ VitalsColumn (w:4fr)                                             │ Decisions│
+    │ ┌───────────┬────────────┬────────────┐                          │ (1fr)    │
+    │ │ Narrative │ PPOLosses  │ Slots      │ h14                      │          │
+    │ ├───────────┴────────────┴────────────┤                          │          │
+    │ │ Health (full width)                 │ 1fr                      ├──────────┤
+    │ └─────────────────────────────────────┘                          │ EventLog │
+    └──────────────────────────────────────────────────────────────────┴──────────┘
 """
 
 from __future__ import annotations
@@ -41,13 +41,7 @@ from esper.karn.sanctum.widgets.event_log import EventLog
 from .narrative_panel import NarrativePanel
 from .ppo_losses_panel import PPOLossesPanel
 from .health_status_panel import HealthStatusPanel
-from .torch_stability_panel import TorchStabilityPanel
-from .action_heads_panel import ActionHeadsPanel
-from .action_distribution import ActionContext
-from .critic_calibration_panel import CriticCalibrationPanel
 from .slots_panel import SlotsPanel
-from .episode_metrics_panel import EpisodeMetricsPanel
-from .value_diagnostics_panel import ValueDiagnosticsPanel
 from .decisions_column import (
     DecisionDetailRequested,
     DecisionsColumn,
@@ -55,7 +49,6 @@ from .decisions_column import (
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
-    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
 
 class TamiyoBrain(Container):
@@ -140,25 +133,11 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
-    #health-column {
-        width: 1fr;
-        min-width: 44;
-        height: 100%;
-    }
-
+    /* Row 2: full-width health digest (deep actor panels: Policy tab) */
     #health-panel {
         width: 100%;
-        min-width: 0;
-        height: 2fr;
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #value-diagnostics-panel {
-        width: 100%;
-        min-width: 0;
         height: 1fr;
+        min-height: 10;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
@@ -168,66 +147,6 @@ class TamiyoBrain(Container):
         width: 1fr;
         min-width: 40;
         height: 1fr;
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    /* Bottom section: Left column (ActionHeads + metrics) | Health | ActionContext */
-    #bottom-row {
-        height: 1fr;
-        width: 100%;
-        margin: 0;
-    }
-
-    #left-column {
-        width: 1fr;  /* Expand to fill remaining space */
-        height: 100%;
-    }
-
-    #action-heads-panel {
-        width: 100%;
-        height: 1fr;
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    /* Bottom metrics row: Episode Health (left) | Torch Stability (right) */
-    #bottom-metrics-row {
-        width: 100%;
-        height: 9;
-    }
-
-    #episode-metrics-panel {
-        width: 1fr;
-        height: 1fr;
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #torch-stability-panel {
-        width: 1fr;
-        height: 1fr;
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #critic-calibration-panel {
-        width: 100%;
-        height: auto;   /* grows by 2 lines on the HRA leg (per-stream EV) */
-        min-height: 9;
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #action-context {
-        width: 1fr;
-        min-width: 40;
-        height: 100%;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
@@ -286,19 +205,8 @@ class TamiyoBrain(Container):
                     yield NarrativePanel(id="narrative-panel")
                     yield PPOLossesPanel(id="ppo-losses-panel")
                     yield SlotsPanel(id="slots-panel")
-                # Bottom section: Left column (ActionHeads + metrics) | Health | ActionContext
-                with Horizontal(id="bottom-row"):
-                    with Vertical(id="left-column"):
-                        yield ActionHeadsPanel(id="action-heads-panel")
-                        # Bottom metrics: Episode Health | Value Diagnostics
-                        with Horizontal(id="bottom-metrics-row"):
-                            yield EpisodeMetricsPanel(id="episode-metrics-panel")
-                            yield TorchStabilityPanel(id="torch-stability-panel")
-                    with Vertical(id="health-column"):
-                        yield HealthStatusPanel(id="health-panel")
-                        yield ValueDiagnosticsPanel(id="value-diagnostics-panel")
-                        yield CriticCalibrationPanel(id="critic-calibration-panel")
-                    yield ActionContext(id="action-context")
+                # Row 2: full-width health digest
+                yield HealthStatusPanel(id="health-panel")
 
             with Vertical(id="right-column"):
                 yield DecisionsColumn(id="decisions-panel")
@@ -337,32 +245,9 @@ class TamiyoBrain(Container):
         # That's a bug in calling code - fix the caller, not the symptom.
         self.query_one("#ppo-losses-panel", PPOLossesPanel).update_snapshot(snapshot)
         self.query_one("#health-panel", HealthStatusPanel).update_snapshot(snapshot)
-        self.query_one(
-            "#torch-stability-panel", TorchStabilityPanel
-        ).update_snapshot(snapshot)
-        self.query_one("#action-heads-panel", ActionHeadsPanel).update_snapshot(
-            snapshot
-        )
-        self.query_one("#action-context", ActionContext).update_snapshot(snapshot)
         self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
-        self.query_one("#episode-metrics-panel", EpisodeMetricsPanel).update_snapshot(
-            snapshot
-        )
-        self.query_one(
-            "#value-diagnostics-panel", ValueDiagnosticsPanel
-        ).update_snapshot(snapshot)
-        self.query_one(
-            "#critic-calibration-panel", CriticCalibrationPanel
-        ).update_snapshot(snapshot)
         self.query_one("#decisions-panel", DecisionsColumn).update_snapshot(snapshot)
         self.query_one(EventLog).update_snapshot(snapshot)
-
-    def update_reward_health(self, data: "RewardHealthData") -> None:
-        """Update ActionContext with reward health data.
-
-        Called by SanctumApp to pass reward health metrics to ActionContext.
-        """
-        self.query_one("#action-context", ActionContext).update_reward_health(data)
 
     def on_decision_detail_requested(self, event: DecisionDetailRequested) -> None:
         """Open drill-down screen for a decision."""
