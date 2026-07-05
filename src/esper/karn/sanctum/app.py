@@ -786,9 +786,12 @@ class SanctumApp(App[None]):
         except NoMatches:
             pass  # Widget hasn't mounted yet
 
-        # Update anomaly strip (after run header)
+        # Update anomaly strip (after run header). Feed EVERY leg, not just the
+        # primary — a critical unique to leg B must still fire the strip.
         try:
-            self.query_one("#anomaly-strip", AnomalyStrip).update_snapshot(snapshot)
+            self.query_one("#anomaly-strip", AnomalyStrip).update_snapshots(
+                view.snapshots_by_group, view.primary_group_id
+            )
         except NoMatches:
             pass  # Widget hasn't mounted yet
 

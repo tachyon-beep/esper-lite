@@ -329,3 +329,79 @@ def test_rollback_unattributed_is_a_warning():
     assert strip.rollback_unattributed is True
     assert strip.has_warning is True
     assert strip.has_critical is False
+
+
+# =============================================================================
+# Cross-leg aggregation: a critical unique to a non-primary leg must fire
+# =============================================================================
+
+
+def _leg_with_ev_collapse() -> SanctumSnapshot:
+    s = SanctumSnapshot()
+    s.tamiyo.ppo_data_received = True
+    s.tamiyo.explained_variance = -0.2
+    s.tamiyo.value_min, s.tamiyo.value_max = -8.0, 14.0
+    s.tamiyo.value_std, s.tamiyo.value_mean = 6.0, 3.0
+    return s
+
+
+def _healthy_leg() -> SanctumSnapshot:
+    s = SanctumSnapshot()
+    s.tamiyo.ppo_data_received = True
+    s.tamiyo.explained_variance = 0.5
+    s.tamiyo.value_min, s.tamiyo.value_max = -8.0, 14.0
+    s.tamiyo.value_std, s.tamiyo.value_mean = 6.0, 3.0
+    s.envs[0] = EnvState(env_id=0, status="healthy")
+    return s
+
+
+def test_critical_in_non_primary_leg_fires_the_strip():
+    """Primary leg A is clean; leg B has EV<=0 — the strip must still fire."""
+    strip = AnomalyStrip()
+    strip.update_snapshots(
+        {"A": _healthy_leg(), "B": _leg_with_ev_collapse()},
+        primary_group_id="A",
+    )
+
+    assert strip.has_critical is True
+    text = strip.render().plain
+    assert "EV≤0 (B)" in text  # attributed to the offending leg
+
+
+def test_single_leg_via_update_snapshots_has_no_leg_tag():
+    strip = AnomalyStrip()
+    strip.update_snapshots({"default": _leg_with_ev_collapse()}, primary_group_id="default")
+
+    text = strip.render().plain
+    assert "EV≤0" in text
+    assert "(default)" not in text  # one leg → no attribution noise
+
+
+def test_governor_rollback_attributed_to_leg():
+    healthy = _healthy_leg()
+    rolled = SanctumSnapshot()
+    e = EnvState(env_id=0, status="healthy")
+    e.rolled_back = True
+    e.rollback_reason = "nan"
+    rolled.envs[0] = e
+
+    strip = AnomalyStrip()
+    strip.update_snapshots({"A": healthy, "B": rolled}, primary_group_id="A")
+
+    assert strip.governor_rollback_count == 1
+    text = strip.render().plain
+    assert "GOV ROLLBACK ×1 [nan] (B)" in text
+
+
+def test_counts_sum_across_legs():
+    a, b = SanctumSnapshot(), SanctumSnapshot()
+    a.envs[0] = EnvState(env_id=0, status="stalled")
+    b.envs[0] = EnvState(env_id=0, status="stalled")
+    b.envs[1] = EnvState(env_id=1, status="stalled")
+
+    strip = AnomalyStrip()
+    strip.update_snapshots({"A": a, "B": b}, primary_group_id="A")
+
+    assert strip.stalled_count == 3  # 1 + 2
+    assert strip.has_warning is True
+    assert strip.has_critical is False
