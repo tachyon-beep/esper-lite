@@ -35,6 +35,7 @@ class CriticScreen(Container):
         layout: vertical;
         height: 1fr;
         padding: 0 1;
+        overflow-y: auto;
     }
 
     CriticScreen Horizontal {

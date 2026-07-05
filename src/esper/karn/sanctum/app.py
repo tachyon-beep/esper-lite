@@ -1021,8 +1021,34 @@ class SanctumApp(App[None]):
             return
         self.push_screen(RunInfoScreen(self._snapshot))
 
+    # The scrollable content region for each non-Overview tab. Overview is
+    # absent: there j/k/g/G drive the env-table cursor instead of scrolling.
+    _TAB_SCROLL_TARGET = {
+        "tab-policy": "#policy-action-heads",
+        "tab-critic": "#critic-screen",
+        "tab-experiment": "#experiment-panel",
+    }
+
+    def _active_scroll_target(self):
+        """Return the scrollable widget for the active tab, or None on Overview."""
+        try:
+            tabs = self.query_one("#main-tabs", TabbedContent)
+        except NoMatches:
+            return None
+        target_id = self._TAB_SCROLL_TARGET.get(tabs.active)
+        if target_id is None:
+            return None
+        try:
+            return self.query_one(target_id)
+        except NoMatches:
+            return None
+
     def action_cursor_down(self) -> None:
-        """Move cursor down in EnvOverview table (vim: j)."""
+        """Scroll the active tab down, or move the env-table cursor (vim: j)."""
+        target = self._active_scroll_target()
+        if target is not None:
+            target.scroll_down()
+            return
         try:
             overview = self.query_one("#env-overview", EnvOverview)
             overview.table.action_cursor_down()
@@ -1030,7 +1056,11 @@ class SanctumApp(App[None]):
             pass
 
     def action_cursor_up(self) -> None:
-        """Move cursor up in EnvOverview table (vim: k)."""
+        """Scroll the active tab up, or move the env-table cursor (vim: k)."""
+        target = self._active_scroll_target()
+        if target is not None:
+            target.scroll_up()
+            return
         try:
             overview = self.query_one("#env-overview", EnvOverview)
             overview.table.action_cursor_up()
@@ -1038,7 +1068,11 @@ class SanctumApp(App[None]):
             pass
 
     def action_cursor_top(self) -> None:
-        """Move cursor to top of EnvOverview table (vim: gg)."""
+        """Scroll the active tab to top, or jump the env-table cursor (vim: gg)."""
+        target = self._active_scroll_target()
+        if target is not None:
+            target.scroll_home()
+            return
         try:
             overview = self.query_one("#env-overview", EnvOverview)
             overview.table.move_cursor(row=0)
@@ -1046,7 +1080,11 @@ class SanctumApp(App[None]):
             pass
 
     def action_cursor_bottom(self) -> None:
-        """Move cursor to bottom of EnvOverview table (vim: G)."""
+        """Scroll the active tab to bottom, or jump the env-table cursor (vim: G)."""
+        target = self._active_scroll_target()
+        if target is not None:
+            target.scroll_end()
+            return
         try:
             overview = self.query_one("#env-overview", EnvOverview)
             overview.table.move_cursor(row=overview.table.row_count - 1)

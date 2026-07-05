@@ -184,6 +184,28 @@ async def test_tab_badges_clear_when_healthy():
 
 
 @pytest.mark.asyncio
+async def test_scroll_keys_are_tab_aware():
+    """j/k/g/G scroll the active tab's content; on Overview they drive the table."""
+    from textual.widgets import TabbedContent
+
+    app = SanctumApp(backend=_mock_backend())
+    async with app.run_test() as pilot:
+        tabs = app.query_one("#main-tabs", TabbedContent)
+
+        tabs.active = "tab-overview"
+        await pilot.pause()
+        assert app._active_scroll_target() is None  # env-table cursor path
+
+        tabs.active = "tab-critic"
+        await pilot.pause()
+        assert app._active_scroll_target().id == "critic-screen"
+
+        tabs.active = "tab-policy"
+        await pilot.pause()
+        assert app._active_scroll_target().id == "policy-action-heads"
+
+
+@pytest.mark.asyncio
 async def test_preview_backend_drives_the_app():
     """The staged-data preview harness satisfies the backend contract."""
     from esper.karn.sanctum.preview import PreviewBackend
