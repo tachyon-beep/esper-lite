@@ -122,3 +122,30 @@ def compute_return_variance_shares(
         "shares_sum": float(sum(shares.values())),
         "n_steps": n,
     }
+
+
+def compute_return_variance_metrics(
+    buffer: Any, gamma: float, *, cf_term: str = "bounded_attribution"
+) -> dict[str, float]:
+    """Read the value-free Stage-0 gate off a finished rollout buffer.
+
+    Pools the per-component signed additend SoA across envs (with env-boundary resets) and
+    returns the flat gate metrics:
+
+    - ``return_var_cf_share``       = ``Cov(R_cf, R)/Var(R)`` — THE Stage-0 gate (``> 0.40``).
+    - ``return_var_main_share``     = ``Var(R_main)/Var(R)`` — the smoothness leg.
+    - ``return_var_residual_share`` = the ``~0`` reconciliation diagnostic.
+
+    Returns ``{}`` when the buffer collected no steps: ``compute_return_variance_shares``
+    raises on an empty batch, so a flag-on update with no stored transitions must not crash.
+    ``buffer`` is duck-typed on ``collect_component_rewards()`` (no import — avoids a cycle).
+    """
+    component_rewards, dones = buffer.collect_component_rewards()
+    if not dones:
+        return {}
+    shares = compute_return_variance_shares(component_rewards, dones, gamma, cf_term=cf_term)
+    return {
+        "return_var_cf_share": shares["share_attribution"],
+        "return_var_main_share": shares["r_main_var_share"],
+        "return_var_residual_share": shares["residual_share"],
+    }

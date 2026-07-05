@@ -902,17 +902,21 @@ class PPOUpdatePayload:
     # divergence means the aux head is not converging.
     q_aux_loss: float | None = None
 
-    # EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics. ON-leg-only (emitted
-    # only when hra_value_decomposition is on), hence Optional[float] defaulting to None:
-    # None on the OFF leg / on events predating this plan. ev_sum == explained_variance on
-    # the ON leg. cov_rcf_return_share = Cov(returns_cf, returns_total)/Var(returns_total)
-    # (epic gate >0.40); r_main_cov = std(returns_main)/(|mean(returns_main)|+eps).
+    # EV-stab Stage 0/2 per-stream EV + cf-head loss + gate metrics. Optional[float] = None
+    # on legs/events that do not emit them. ev_sum == explained_variance on the ON leg.
+    # cov_rcf_return_share / r_main_cov are ON-leg (hra_value_decomposition) λ-return
+    # DIAGNOSTICS — V_cf-contaminated, NOT the gate (PDR-0028). The TRUE Stage-0 gate is the
+    # value-free return_var_cf_share below (gated on return_variance_telemetry, both legs);
+    # the gap between return_var_cf_share and cov_rcf_return_share measures V_cf contamination.
     cf_value_loss: float | None = None
     ev_main: float | None = None
     ev_cf: float | None = None
     ev_sum: float | None = None
     cov_rcf_return_share: float | None = None
     r_main_cov: float | None = None
+    return_var_cf_share: float | None = None  # Cov(R_cf, R)/Var(R) — the >0.40 Stage-0 gate
+    return_var_main_share: float | None = None  # Var(R_main)/Var(R) — smoothness leg
+    return_var_residual_share: float | None = None  # ~0 reconciliation diagnostic
 
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
@@ -1145,6 +1149,9 @@ class PPOUpdatePayload:
             ev_sum=data.get("ev_sum"),
             cov_rcf_return_share=data.get("cov_rcf_return_share"),
             r_main_cov=data.get("r_main_cov"),
+            return_var_cf_share=data.get("return_var_cf_share"),
+            return_var_main_share=data.get("return_var_main_share"),
+            return_var_residual_share=data.get("return_var_residual_share"),
             # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],

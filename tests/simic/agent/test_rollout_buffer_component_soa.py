@@ -24,6 +24,10 @@ from esper.simic.rewards.partition import (
     RESIDUAL_KEY,
     decompose_additends,
 )
+from esper.simic.telemetry.reward_variance import (
+    compute_return_variance_metrics,
+    compute_return_variance_shares,
+)
 
 
 def test_component_terms_ordering() -> None:
@@ -80,6 +84,36 @@ def test_collect_component_rewards_pools_with_env_boundary_reset() -> None:
     assert component_rewards["bounded_attribution"] == [1.0, 2.0, 3.0, 4.0]
     # env0's last step (index 1) forced True despite done=False; env1's already True.
     assert dones == [False, True, False, True]
+
+
+def test_compute_return_variance_metrics_reads_gate_from_buffer() -> None:
+    """compute_return_variance_metrics reads the value-free gate off a finished buffer,
+    matching compute_return_variance_shares on the pooled component data."""
+    b = _buf(num_envs=1, steps=4)
+    for r_cf in (1.0, 0.0, 0.0):
+        _add_wait_step(
+            b, 0, reward=r_cf, component_additends=_terms(bounded_attribution=r_cf), done=False
+        )
+
+    metrics = compute_return_variance_metrics(b, gamma=0.5)
+    assert set(metrics) == {
+        "return_var_cf_share",
+        "return_var_main_share",
+        "return_var_residual_share",
+    }
+
+    # Cross-check: identical to reading the shares directly off the pooled data.
+    component_rewards, dones = b.collect_component_rewards()
+    ref = compute_return_variance_shares(component_rewards, dones, 0.5)
+    assert metrics["return_var_cf_share"] == ref["share_attribution"]
+    assert metrics["return_var_main_share"] == ref["r_main_var_share"]
+    assert metrics["return_var_residual_share"] == ref["residual_share"]
+
+
+def test_compute_return_variance_metrics_empty_buffer_returns_empty() -> None:
+    """No collected steps -> empty dict (compute_return_variance_shares raises on an empty
+    batch; a flag-on update with no CONTRIBUTION steps must not crash)."""
+    assert compute_return_variance_metrics(_buf(), gamma=0.5) == {}
 
 
 # --------------------------------------------------------------------------- helpers

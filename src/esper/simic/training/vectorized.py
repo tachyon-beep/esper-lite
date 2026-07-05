@@ -201,6 +201,11 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     # updates like explained_variance; the strict whitelist requires a declared reducer.
     "cov_rcf_return_share",
     "r_main_cov",
+    # EV-stab Stage 0 value-free GATE (gated on return_variance_telemetry, both legs). Each a
+    # single scalar per update, mean-reduced over updates like the ON-leg diagnostics above.
+    "return_var_cf_share",
+    "return_var_main_share",
+    "return_var_residual_share",
     "entropy_floor_penalty",
     "approx_kl",
     "clip_fraction",
