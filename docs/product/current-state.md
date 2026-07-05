@@ -1,75 +1,63 @@
-# Current State — Esper        Checkpoint: 2026-07-05 ~18:30 (checkpoint #18 — branch consolidation executed (4→2, pushed to main) + experiment-disposition discipline; PDR-0030, PDR-0031)
+# Current State — Esper        Checkpoint: 2026-07-05 ~23:30 (checkpoint #19 — EV Stage-0 instrumentation DELIVERED + gate PASSES; PDR-0032)
 
 ## The bet right now
-**EV-stabilization** (esper-lite-f25b71c165, Now bet per PDR-0027). Metric =
-the **value-free EV Stage-0 gate** `Cov(R_cf, R)/Var(R) > 0.40` on a Stage-2-OFF
-control run, + low `r_main_var_share`. **Delivery is on branch
-`feat/ev-stab-stage2-hra`** (adopted PDR-0028 — that branch, not this one, holds
-the real EV implementation).
+**EV-stabilization** (esper-lite-f25b71c165, Now bet). **Stage-0 is DELIVERED and the
+advance gate PASSED (PDR-0032):** the value-free `Cov(R_cf,R)/Var(R)` reads **median ~1.02,
+12/13 cf-active updates > 0.40** on a Stage-2-OFF control run — the counterfactual stream
+dominates value-target variance, so **Stage-2 de-shaping is justified and the epic proceeds
+to Stage-2** (it is NOT re-scoped to Stage-1-only). Delivery lives on
+`feat/ev-stab-stage2-hra`.
 
 ## What just happened (this session)
-The "implement Stage-0" task was really a **branch-divergence + methodology**
-problem (PDR-0028). Stage-0's control-run gate was implemented NOWHERE: the existing
-metric only fires on the Stage-2 ON leg and decomposes V_cf-contaminated GAE
-λ-returns (leg-b biased toward passing) — invalid as a gate. **Two independent DRL
-reviews converged** on this (opus plan-gate + fable specialist). Owner ratified
-"do it right on ev-stab". **Landed** (ev-stab commit `f721a5b3`, TDD 4/4 green):
-`compute_return_variance_shares` — the value-free, raw-scale, per-return covariance
-decomposition (the canonical gate metric, reads identically on both legs).
+Built the Stage-0 instrument to a rigorous bar and read the gate. **5 TDD-green commits on
+`feat/ev-stab-stage2-hra`** (`562cb5bf`→`70753923`, ~2400 tests green, no regressions):
+decompose_additends + completeness keystone (falsified/has-teeth); per-component buffer SoA
++ `return_variance_telemetry` flag (byte-identity proven DIRECTLY — not inferred);
+value-free gate computed in `ppo_agent.update()` + the ON-leg λ-metric DEMOTED to a
+V_cf-contaminated diagnostic (PDR-0028); 6-file telemetry contract; full-loop reducer smoke.
+No checkpoint/schema bump (telemetry-only). Then read the gate on a canonical baseline
+Stage-2-OFF control run (2×4060 Ti, gpu_preload) → decisive PASS.
 
 ## In flight
-- **Stage-0 remaining plumbing on `feat/ev-stab-stage2-hra`** (esper-lite-3d67b09687,
-  in_progress): per-component buffer SoA → both-legs ppo_agent wiring (demote the
-  ON-leg λ-return metric to a Stage-2 diagnostic) → the 6-file telemetry contract →
-  read the gate on a control run. Nothing running on GPU.
-- Review gate esper-lite-cfbdfdf040 CLOSED (PDR-0029): Stage 3 scoped out (needs its
-  own authored plan); MAJOR-1 (`ev_sum` hard floor) + MAJOR-3 (provenance) folded into
-  the Stage-2 acceptance criteria.
+- **Control run still accumulating** the full gate distribution (backgrounded; reading is
+  PRELIMINARY at n≈14 updates but decisive — 12/13 ≫ 0.40, residual ~2e-17).
+- **Stage-0 task esper-lite-3d67b09687** (in_progress): advance-gate MET; comment added with
+  the reading. **Closes on control-run completion** with the final median/IQR.
+- **Stage-2 now unblocked** by the gate pass: esper-lite-2a4b56e719 (Stage-2 acceptance,
+  incl. MAJOR-1 `ev_sum` hard floor + MAJOR-3 provenance) and esper-lite-e6382020d2.
 
 ## Facts the next session must not relitigate
-- Do NOT read the Stage-0 gate from the ON-leg λ-return metric — it is V_cf-contaminated
-  (PDR-0028). The value-free `compute_return_variance_shares` is the gate.
-- Shapley A/B evidence ≠ HRA Stage-0 gate evidence (shapley⊕HRA mutually exclusive;
-  MAJOR-3). Capture the value-free gate BEFORE any HRA ON-leg run.
-- Two diverging copies of `partition.py`/`reward_variance.py` exist (per-step on this
-  Shapley branch; per-return on ev-stab). Reconcile ONLY at owner-gated unification.
-- Marginal-V (Stage 1) is ALREADY satisfied (directly-learned op-independent V(s)) —
-  approved, do not re-open.
+- **The gate PASSED** (~1.02 ≫ 0.40) — do NOT re-read the premise as unproven; Stage-2 is
+  justified. The reading is value-free (PDR-0028), not the contaminated ON-leg λ-metric.
+- The instrument is DONE (5 commits). Do not rebuild it. `return_variance_telemetry=True` +
+  `reward_mode=SHAPED` + `hra_value_decomposition=False` = the control posture.
+- **UNIFICATION delta:** ev-stab decomposes `synergy_bonus`; the Shapley/main line renamed it
+  `interaction_bonus` (`5910c5e6`). The two `ADDITEND_SIGN_MAP` copies diverge on that key.
+- Honor MAJOR-3 sequencing: the value-free gate on the OFF control run comes BEFORE any HRA
+  ON run (done — this reading is the OFF control).
 
 ## Open questions / blocked-on-owner
-- **Branch consolidation DONE (2026-07-05, owner-authorized + pushed):** product
-  workspace + Shapley/Phase-0 line + squashed Stage-2 merged onto `origin/main`
-  (`f3758236`). `feat/phase-minus1-scale-falsifier` is now fully contained in main
-  (redundant — safe to delete; not done unilaterally). Live branches reduced 4 → 2.
-- **REMAINING unification (deliberately deferred):** `feat/ev-stab-stage2-hra` (23
-  commits, the active EV WIP) reconciles onto main via a per-hunk merge (Shapley-TOPUP
-  → main; Stage-0 SoA → ev-stab; Stage-2 → ev-stab's newer post-`fab280c0`; `partition.py`
-  = main superset; `reward_variance.py` = UNION per-step + per-return). Gated on: Stage-0
-  complete + OFF-leg byte-identity + drl/pytorch review (CLAUDE.md). Do it off-main on a
-  scratch branch, verify, then fast-merge — NOT a rushed core-training-path merge.
+- **Full-distribution median/IQR** — pending the control run finishing (reversal trigger:
+  final median < 0.40 reopens; remote given 12/13 ≫ 0.40).
+- **ev-stab→main unification** — still OWNER-GATED / deferred (PDR-0031); with Stage-0 now
+  complete it is closer to ready (gated on OFF-leg byte-identity + drl/pytorch review).
+- **Housekeeping (surface, not mine):** the ev-stab working tree has hook-modified
+  `AGENTS.md`, `CLAUDE.md`, `.claude|.agents/skills/loomweave-workflow/*` (loomweave
+  session-start refresh) — uncommitted, untouched by this checkpoint. Owner decides.
 - Standing placeholders: north-star / rent TARGETs (metrics.md) still owner-set.
-- **STANDING RULE (PDR-0030):** every experiment must reach a KNOWN disposition at its end
-  — merge-to-main (default) / justified enduring fork / abandon — to avoid a pile-up of
-  incomplete-data orphans (NOT to force premature retirement). Reproducibility is a valid
-  reason to keep a fork forever, BUT the fork must STAND ALONE (deps/config/data + a
-  reproduce recipe = a checkout-and-run, not a 6-week reintegration). Folded into
-  CHECKPOINT. ev-stab's disposition = merge-to-main, deferred to Stage-0 completion.
 
-## Last checkpoint did (checkpoint #18)
-- PDR-0031 (branch consolidation executed, owner-authorized) + PDR-0030 (experiment-
-  disposition discipline: a KNOWN merge/fork/abandon call per experiment; reproducibility
-  is a valid fork reason but the fork must STAND ALONE). CLAUDE.md: run `/own-product` on
-  orientation.
-- Consolidation: docs/product + Shapley/feature line merged & PUSHED to `origin/main`
-  (`fd0246bc`, `f3758236` → now `66ee4768`); 4 → 2 live branches; ev-stab deferred
-  merge-to-main. Backup tags `backup-preconsolidation/*` retained.
-- (Earlier same session, #17: PDR-0028/0029 — EV Stage-0 methodology correction; the
-  value-free gate core landed on ev-stab `f721a5b3`, TDD 4/4; cfbdfdf040 review gate closed.)
-- No new metric readings; no roadmap horizon change.
+## Last checkpoint did (checkpoint #19)
+- PDR-0032 (Stage-0 instrument delivered; gate PASSES ~1.02 ≫ 0.40 → Stage-2 justified,
+  epic proceeds; launch-locally = canonical-host call).
+- metrics.md EV Stage-0 gate row: NO VALID READING → PASSED (median 1.02, preliminary).
+- roadmap.md Now bullet: first leg (Stage-0) → delivered + gate passed; next leg = Stage-2.
+- Tracker: comment on esper-lite-3d67b09687 with the reading (leave in_progress; closes on
+  run completion). No horizon change (EV-stab stays Now).
 
 ## Next session, start here
-**Continue Stage-0 on `feat/ev-stab-stage2-hra`** (checkout it first). TDD backlog:
-port `decompose_additends` + `ADDITEND_SIGN_MAP` into ev-stab's `partition.py` → the
-per-component buffer SoA (both legs) → both-legs `ppo_agent` wiring → 6-file contract
-→ read `Cov(R_cf,R)/Var(R)` on a capable-host control run. Memory pointers:
+**Read the final gate distribution** from the completed control run (telemetry in scratchpad;
+or re-run if the process was reaped) — confirm median ≥ 0.40, close esper-lite-3d67b09687.
+Then **proceed to Stage-2 acceptance** (esper-lite-2a4b56e719): Stage-2 HRA is already built
+on `feat/ev-stab-stage2-hra`; the work is its acceptance criteria (MAJOR-1 `ev_sum` hard
+floor + MAJOR-3 provenance) and the paired fresh-init A/B on EV_main liftoff. Memory pointers:
 `ev-stab-stage2-impl-state` (updated this session), `ev-variance-research-verdict`.

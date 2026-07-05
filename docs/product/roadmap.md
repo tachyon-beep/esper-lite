@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-05 (PDR-0027)
+# Roadmap — Esper            Updated: 2026-07-05 (PDR-0032)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -9,10 +9,12 @@
   factored-action PPO.** Moved Next → Now 2026-07-05 (PDR-0027) after the owner parked
   the Committed-Shapley term. Rationale: advantage noise is the live suspect for
   suppressed commitment; fixing it may organically widen the k≥2 co-fossilization
-  channel the A/B found too narrow (1.1% of episodes). First leg = Stage-0
-  instrumentation (esper-lite-3d67b09687). · tracker: esper-lite-f25b71c165 (epic)
-  · metric: per-stream EV / value-target variance; watch fossilize/ep + k≥2 frequency
-  as the organic-coverage signal
+  channel the A/B found too narrow (1.1% of episodes). **Stage-0 DELIVERED + gate PASSED
+  (PDR-0032): `Cov(R_cf,R)/Var(R)` median ~1.02 >> 0.40 on a Stage-2-OFF control run — the
+  cf stream dominates value-target variance, so de-shaping is justified. Next leg = Stage-2
+  (HRA cf value head, already built on `feat/ev-stab-stage2-hra`) + its acceptance criteria
+  (ev_sum floor / provenance).** · tracker: esper-lite-f25b71c165 (epic) · metric: EV
+  Stage-0 gate (PASSED); watch fossilize/ep + k≥2 frequency as the organic-coverage signal
 
 ## Parked (banked, not dead)
 - **Committed-Shapley top-up (reward credit-assignment redesign)** — PARKED 2026-07-05
