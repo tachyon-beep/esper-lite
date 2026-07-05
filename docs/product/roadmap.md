@@ -1,41 +1,35 @@
-# Roadmap — Esper            Updated: 2026-07-03 (PDR-0021)
+# Roadmap — Esper            Updated: 2026-07-05 (PDR-0027)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
 > schedule. Do not compute WSJF here; hand the committed bet over for sequencing.
 
 ## Now  (committed, in-flight)
-- **Reward credit-assignment redesign — design the credit term for the enabling stem.** The (a)/(b)
-  fork is **RESOLVED**: the n=5 J-read banks **(b)** — r0c0 is an efficiency-enabling stem
-  (suppressing it ~halves system param-efficiency, 5/5 seeds, PDR-0009), and the optimizer is
-  adequate so the defect is reward-side (PDR-0008). ⇒ the reward must CREDIT the enabling
-  contribution the per-step LOO undervalues. **The reward-credit term is BUILT (PDR-0013,
-  2026-07-02, owner-signed): default-OFF Committed-Shapley top-up, retro-write delivery,
-  specialist-reviewed + reviewer re-pass approved + adversarial code review clean;
-  esper-lite-254175df90 CLOSED.** Flag stays shapley_synergy_scale=0.0 everywhere. **ENABLEMENT gate OPEN and advancing (PDR-0014
-  → PDR-0018): tau = +0.28 pp ACCEPT-PROVISIONAL/LOWER-BOUND (owner-ratified); zero-GPU
-  occurrence probes DONE — coverage YELLOW in J currency, F1/F5 not exploited (no pre-A/B
-  fixes), A/B scoped as terminal commitment-credit (metric: `fossilize_payable_J`).**
-  F2 FROZEN (PDR-0020: scale=1.0, cap=5.0, std_floor=0.25, ncap=3.0; guards G1–G4);
-  pre-A/B build ACCEPTED after drl review + TDD + 4-lens adversarial review (PDR-0021);
-  **the paired n=5 OFF/ON A/B is LAUNCHED (owner GPU-go 2026-07-03)** — scored per
-  PDR-0019 (criteria (i)–(v) primary; episode-level Δcorr ≥ +0.10 floor; asymmetric
-  null). ON-run tau recalibration MANDATORY before n=10 magnitude claims. Enabling
-  scale>0 beyond this experiment stays owner-gated.
-  (Pointer correction: earlier revisions mis-cited esper-lite-3d67b09687, which is the EV
-  Stage-0 telemetry task.) · tracker: esper-lite-f22a1d48a7 (enablement, blocked_by
-  esper-lite-94869250f1), esper-lite-425dcc4ca2 (telemetry hygiene) · metric:
-  committed-J / corr(reward,J) in the A/B
+- **EV-stabilization — joint value-target variance reduction for recurrent
+  factored-action PPO.** Moved Next → Now 2026-07-05 (PDR-0027) after the owner parked
+  the Committed-Shapley term. Rationale: advantage noise is the live suspect for
+  suppressed commitment; fixing it may organically widen the k≥2 co-fossilization
+  channel the A/B found too narrow (1.1% of episodes). First leg = Stage-0
+  instrumentation (esper-lite-3d67b09687). · tracker: esper-lite-f25b71c165 (epic)
+  · metric: per-stream EV / value-target variance; watch fossilize/ep + k≥2 frequency
+  as the organic-coverage signal
+
+## Parked (banked, not dead)
+- **Committed-Shapley top-up (reward credit-assignment redesign)** — PARKED 2026-07-05
+  (owner call, PDR-0027) after the n=5 A/B scored **null-not-informative**
+  (coverage-bound; PDR-0026). The instrument is BANKED as validated: criteria (i)/(ii)
+  pass, zero deadband violations, guards clear, no farming signature, design priors hit
+  within a point (P(pay|k≥2) 44.7% vs 45.4%). `shapley_synergy_scale` stays 0.0 and
+  owner-gated. Re-run licensing + τ-placebo preconditions live in PDR-0026/0027
+  reversal triggers. · tracker: esper-lite-f22a1d48a7 (closed) · full history:
+  PDR-0009 → 0013 → 0018 → 0021 → 0023 → 0025 → 0026
 
 ## Next (shaped, decreasing certainty)
-- **Credit-assignment redesign itself** — a two-term targeted credit (enabling/synergy
-  term + survival-without-contribution penalty), *gated on the (a)/(b) fork resolution*
-  (freeloader defect vs LOO-undervalued enabling stem). Hypothesis, not yet committed.
-  · metric: corr(reward,J), committed-J
-- **EV-stabilization** — joint value-target variance reduction for recurrent
-  factored-action PPO. · tracker: esper-lite-f25b71c165 (epic)
 - **PPO learning-gate / reward-efficiency statistics** — paired multi-seed lockstep ROI
   verdicts. · tracker: esper-lite-a2abff5ec5
+- **A/B re-run at organic coverage** — only if the EV track raises k≥2 frequency
+  materially (PDR-0027 reversal trigger); a ≥10× coverage null would then be
+  informative and count against the term.
 
 ## Later (directional bets, no order, no dates)
 - **Three-phase curriculum scale-up** — University (CIFAR/TinyStories) → Internship
