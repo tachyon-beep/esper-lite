@@ -75,3 +75,5 @@ image.png
 
 # Legis — local working dir / config (regenerated/local; never commit)
 .weft/legis/
+.wardline/
+findings.jsonl
