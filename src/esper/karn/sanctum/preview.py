@@ -116,6 +116,12 @@ class PreviewBackend:
                 ev=0.18, ev_main=None, cf_share=0.53, acc=70.9,
             ),
         }
+        # Showcase the triage spine: leg B has one env in a governor-rollback
+        # state, so the strip leads with GOV ROLLBACK (B) and the Overview tab
+        # carries a red severity badge — the headline of the design review.
+        b_env = self._legs["B"].envs[0]
+        b_env.rolled_back = True
+        b_env.rollback_reason = "nan"
 
     def _drift(self, s: SanctumSnapshot) -> None:
         """Small random walk so trends/sparklines move between polls."""
