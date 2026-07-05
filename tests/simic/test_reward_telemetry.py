@@ -80,7 +80,7 @@ class TestRewardComponentsTelemetry:
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus
-            + components.synergy_bonus
+            + components.interaction_bonus
         )
         assert abs(computed_sum - components.total_reward) < 1e-6
 

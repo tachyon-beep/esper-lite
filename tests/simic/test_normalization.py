@@ -183,6 +183,43 @@ class TestRewardNormalizer:
         normalizer.update_and_normalize(1.0)
         assert normalizer.normalize_only(3.0) == 3.0  # Still not enough for variance
 
+    def test_divide_by_std_no_clip_and_no_stat_update(self):
+        """divide_by_std divides by the current std with NO clip and NO stat update.
+
+        EV-stab Stage 2 §5: the cf reward stream must be normalized by the SAME
+        per-step std as the total, but WITHOUT the clip (the clip stays a total-only
+        property), so r_main_norm := reward_norm_total - r_cf_norm is exact.
+        """
+        from esper.simic.control import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=10.0)
+        for s in [2.0, 4.0, 6.0, 8.0]:
+            normalizer.update_and_normalize(s)
+
+        std = max(normalizer.epsilon, (normalizer.m2 / (normalizer.count - 1)) ** 0.5)
+        count_before = normalizer.count
+
+        # Divides by std exactly...
+        assert normalizer.divide_by_std(5.0) == 5.0 / std
+        # ...and does NOT clip even when the result exceeds the clip bound, unlike
+        # normalize_only which DOES clip the same input.
+        big = 100.0 * std  # so big / std == 100.0 >> clip=10.0
+        assert normalizer.divide_by_std(big) == 100.0
+        assert normalizer.normalize_only(big) == 10.0  # clipped (regression guard)
+
+        # No stat update: count/m2 unchanged by divide_by_std.
+        assert normalizer.count == count_before
+
+    def test_divide_by_std_before_enough_samples_returns_raw_unclipped(self):
+        """With <2 samples there is no std, so divide_by_std returns the raw value
+        UNCLIPPED (the count<2 branch must not clip, unlike normalize_only)."""
+        from esper.simic.control import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=5.0)
+        assert normalizer.divide_by_std(3.0) == 3.0
+        assert normalizer.divide_by_std(50.0) == 50.0  # NOT clipped to 5.0
+        assert normalizer.normalize_only(50.0) == 5.0  # normalize_only still clips
+
     def test_sparse_zeros_then_spike_stays_finite(self):
         """Sparse episodes (many zeros then spike) should not produce NaN/Inf."""
         import math
@@ -204,3 +241,35 @@ class TestRewardNormalizer:
             rewards = [0.0] * 24 + [0.7 + 0.02 * ep]
             normalized = [normalizer.update_and_normalize(r) for r in rewards]
             assert all(math.isfinite(n) for n in normalized)
+
+
+class TestRewardNormalizerCurrentStd:
+    """Committed-Shapley build (WI-4/WI-5): the delivery seam needs the running
+    std EXPOSED so the credit divisor can be floored (max(std, std_floor)) —
+    divide_by_std cannot express the F2 bound (it floors at epsilon only)."""
+
+    def test_current_std_matches_divide_by_std_divisor(self):
+        from esper.simic.control import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=10.0)
+        for s in [2.0, 4.0, 6.0, 8.0]:
+            normalizer.update_and_normalize(s)
+
+        std = normalizer.current_std()
+        assert std is not None
+        # Same divisor divide_by_std uses (epsilon-floored sample std).
+        assert normalizer.divide_by_std(5.0) == 5.0 / std
+        # Read-only: no stat update.
+        count_before = normalizer.count
+        normalizer.current_std()
+        assert normalizer.count == count_before
+
+    def test_current_std_is_none_below_two_samples(self):
+        from esper.simic.control import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=10.0)
+        assert normalizer.current_std() is None
+        normalizer.update_and_normalize(1.0)
+        assert normalizer.current_std() is None
+        normalizer.update_and_normalize(2.0)
+        assert normalizer.current_std() is not None

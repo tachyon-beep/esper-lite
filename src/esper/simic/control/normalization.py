@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import torch
 
+from esper.leyline import REWARD_NORMALIZER_CLIP
+
 
 class RunningMeanStd:
     """Running mean and std for observation normalization.
@@ -198,7 +200,7 @@ class RewardNormalizer:
         normalized_reward = normalizer.update_and_normalize(raw_reward)
     """
 
-    def __init__(self, clip: float = 10.0, epsilon: float = 1e-8):
+    def __init__(self, clip: float = REWARD_NORMALIZER_CLIP, epsilon: float = 1e-8):
         self.mean = 0.0
         self.m2 = 0.0  # Sum of squared deviations (Welford's M2)
         self.count = 0  # Start at 0, not epsilon
@@ -237,6 +239,37 @@ class RewardNormalizer:
         std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
         normalized = reward / std
         return float(max(-self.clip, min(self.clip, normalized)))
+
+    def divide_by_std(self, reward: float) -> float:
+        """Divide by the current running std with NO stat update and NO clip.
+
+        EV-stabilization Stage 2 (§5): the counterfactual reward stream must be
+        normalized by the SAME per-step std as the total reward, but WITHOUT the
+        clip — the clip stays a total-only property so that
+        ``r_main_norm := reward_norm_total - r_cf_norm`` is exact (the clip residual
+        lands in R_main). This deliberately differs from ``normalize_only`` (which
+        clips); do not substitute one for the other.
+
+        With <2 samples there is no variance yet, so the raw value is returned
+        unclipped (the std-undefined case, without imposing the clip).
+        """
+        if self.count < 2:
+            return float(reward)
+        std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
+        return float(reward / std)
+
+    def current_std(self) -> float | None:
+        """The running std ``divide_by_std`` would divide by, or None below 2 samples.
+
+        Committed-Shapley delivery (WI-4) needs the divisor exposed so the F2
+        safety floor can be applied as ``max(current_std(), std_floor)`` —
+        ``divide_by_std`` itself floors at epsilon only and silently passes the
+        raw value through below 2 samples, so it cannot express the bound.
+        Read-only: no stat update.
+        """
+        if self.count < 2:
+            return None
+        return float(max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5))
 
     def state_dict(self) -> dict[str, float | int]:
         """Return state dictionary for checkpointing."""

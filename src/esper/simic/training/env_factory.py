@@ -130,6 +130,9 @@ class EnvFactoryContext:
     hub: Any
     signal_tracker_cls: type[SignalTracker]
     group_id: str
+    # Causal-contribution harness RNG split (ExperimentRngDomains | None). None on
+    # all normal runs => slots use the unchanged global-default RNG path.
+    experiment_rng: Any = None
 
 
 def create_env_state(
@@ -167,6 +170,12 @@ def create_env_state(
     )
     for slot_module in model.seed_slots.values():
         slot = cast(SeedSlotProtocol, slot_module)
+        # Causal-contribution harness: give each slot its per-env host generator
+        # + content-addressed blueprint-init (domains B + C). No-op when None.
+        if context.experiment_rng is not None:
+            slot.attach_experiment_rng(
+                context.experiment_rng, env_idx=env_idx, env_seed=env_seed
+            )
         slot.on_telemetry = telemetry_cb
         # fast_mode toggled per epoch via apply_slot_telemetry (telemetry-enabled by default)
         slot.fast_mode = False

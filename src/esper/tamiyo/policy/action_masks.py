@@ -155,6 +155,7 @@ def compute_action_masks(
     topology: Topology = "cnn",
     allow_governor_override: bool = False,
     disable_advance: bool = False,
+    extra_blueprints: frozenset[BlueprintAction] = frozenset(),
 ) -> dict[str, torch.Tensor]:
     """Compute action masks based on slot states.
 
@@ -243,6 +244,12 @@ def compute_action_masks(
     valid_blueprints = TRANSFORMER_BLUEPRINTS if topology == "transformer" else CNN_BLUEPRINTS
     for bp in valid_blueprints:
         # NOOP is technically in the sets but we force it masked out anyway below
+        blueprint_mask[bp] = True
+
+    # Declared proof-baseline schedules may germinate blueprints that are
+    # deliberately absent from the topology sets (e.g. PLACEBO): the run-level
+    # union keeps the forced germination legal without polluting normal runs.
+    for bp in extra_blueprints:
         blueprint_mask[bp] = True
 
     # NOOP is a placeholder seed with no trainable parameters - always disable
@@ -369,6 +376,7 @@ def compute_batch_masks(
     topology: Topology = "cnn",
     allow_governor_override: bool = False,
     disable_advance: bool = False,
+    extra_blueprints: frozenset[BlueprintAction] = frozenset(),
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
 
@@ -420,6 +428,7 @@ def compute_batch_masks(
             topology=topology,
             allow_governor_override=allow_governor_override,
             disable_advance=disable_advance,
+            extra_blueprints=extra_blueprints,
         )
         for i, slot_states in enumerate(batch_slot_states)
     ]
@@ -609,6 +618,37 @@ def _normalized_entropy_from_masked_logits(
     safe_max_entropy = torch.where(num_valid > 1, max_entropy, torch.ones_like(max_entropy))
     normalized = raw_entropy / safe_max_entropy.clamp(min=1e-8)
     return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)
+
+
+def _nan_safe_sampling_probs(probs: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Substitute masked-uniform for any non-finite sampling row (rollout guard only).
+
+    ``torch.multinomial`` raises a CUDA device-side assert -- ``probability tensor
+    contains either inf, nan or element < 0`` -- if any sampled row holds a non-finite
+    value. A single non-finite *logit* from the policy network (e.g. an activation
+    overflow under autocast) makes ``F.softmax`` emit NaN across that entire row, which
+    would abort the run mid-rollout, before the PPO finiteness gate (update path) can
+    observe the non-finite log-probs and skip the update.
+
+    This guard keeps only the ROLLOUT sampler from crashing on such a row, by drawing the
+    fallback action from a uniform distribution over the valid actions. It deliberately
+    does NOT touch the logits/log-probs that feed the loss: the row's stored
+    ``old_log_prob`` stays NaN, so the downstream finiteness gate still trips and skips
+    the resulting update -- no silent training on sanitized garbage. It is therefore a
+    numerical-robustness boundary guard, not a suppressor of the upstream instability.
+
+    Byte-identical for well-conditioned inputs: a row whose probabilities are already all
+    finite is returned unchanged (``torch.where`` selects the original values exactly, and
+    the helper consumes no RNG, so the ``multinomial`` draw and the generator advance are
+    untouched).
+    """
+    row_finite = torch.isfinite(probs).all(dim=-1, keepdim=True)
+    # Uniform over the valid actions. The clamp(min=1.0) only guards a divide-by-zero on a
+    # fully-empty mask, which is already rejected upstream (InvalidStateMachineError); it
+    # never fires for a real, non-empty mask, so it does not perturb the fallback.
+    uniform = mask.float()
+    uniform = uniform / uniform.sum(dim=-1, keepdim=True).clamp(min=1.0)
+    return torch.where(row_finite, probs, uniform)
 
 
 class MaskedCategorical:

@@ -95,6 +95,9 @@ def test_view_definitions_exist():
         "morphology_causal_log",
         "topology_manifests",
         "phase_occupancy",
+        # Phase 0 reward-redesign instrumentation (commit 406aeb25): the
+        # per-seed J-integrand view (esper-lite-obs-7240279be3).
+        "seed_residency",
     }
     assert set(VIEW_DEFINITIONS.keys()) == expected
 
@@ -649,7 +652,7 @@ def test_rewards_view_extracts_all_fields(tmp_path):
                 # Bonuses
                 "stage_bonus": 0.1,
                 "pbrs_bonus": 0.03,
-                "synergy_bonus": 0.02,
+                "interaction_bonus": 0.02,
                 "action_shaping": 0.05,
                 "terminal_bonus": 0.0,
                 "fossilize_terminal_bonus": 0.0,
@@ -687,7 +690,7 @@ def test_rewards_view_extracts_all_fields(tmp_path):
             -- Penalties
             compute_rent, alpha_shock, blending_warning, holding_warning,
             -- Bonuses
-            stage_bonus, pbrs_bonus, synergy_bonus, action_shaping,
+            stage_bonus, pbrs_bonus, interaction_bonus, action_shaping,
             terminal_bonus, fossilize_terminal_bonus, hindsight_credit,
             num_fossilized_seeds, num_contributing_fossilized,
             -- Context fields
@@ -734,7 +737,7 @@ def test_rewards_view_extracts_all_fields(tmp_path):
     # Bonuses
     assert result[22] == 0.1  # stage_bonus
     assert result[23] == 0.03  # pbrs_bonus (key field per task)
-    assert result[24] == 0.02  # synergy_bonus
+    assert result[24] == 0.02  # interaction_bonus
     assert result[25] == 0.05  # action_shaping
     assert result[26] == 0.0  # terminal_bonus
     assert result[27] == 0.0  # fossilize_terminal_bonus
@@ -1817,3 +1820,67 @@ def test_episode_outcomes_view_extracts_required_proof_fields(tmp_path):
         1,
         3,
     )
+
+
+def test_ppo_updates_view_extracts_ev_stream_gate_metrics(tmp_path):
+    """EV-stab Stage 0: per-stream EV + cf-head loss + GATE metrics are queryable as
+    finite DOUBLE columns on the ppo_updates Karn view (ON-leg event), and NULL when the
+    OFF-leg event omits them."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "ev_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    on_event = {
+        "event_id": "ppo-on",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "epoch": 10,
+        "group_id": "treatment",
+        "data": {
+            "inner_epoch": 3,
+            "batch": 1,
+            "explained_variance": 0.31,
+            "cf_value_loss": 0.11,
+            "ev_main": 0.42,
+            "ev_cf": -0.05,
+            "ev_sum": 0.31,
+            "cov_rcf_return_share": 0.55,
+            "r_main_cov": 0.9,
+        },
+    }
+    off_event = {
+        "event_id": "ppo-off",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "epoch": 11,
+        "group_id": "control",
+        "data": {
+            "inner_epoch": 3,
+            "batch": 1,
+            "explained_variance": 0.30,
+        },
+    }
+    events_file.write_text(
+        json.dumps(on_event) + "\n" + json.dumps(off_event) + "\n"
+    )
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    on_row = conn.execute(
+        """
+        SELECT cf_value_loss, ev_main, ev_cf, ev_sum, cov_rcf_return_share, r_main_cov
+        FROM ppo_updates WHERE event_id = 'ppo-on'
+        """
+    ).fetchone()
+    assert on_row == (0.11, 0.42, -0.05, 0.31, 0.55, 0.9)
+
+    off_row = conn.execute(
+        """
+        SELECT cf_value_loss, ev_main, ev_cf, ev_sum, cov_rcf_return_share, r_main_cov
+        FROM ppo_updates WHERE event_id = 'ppo-off'
+        """
+    ).fetchone()
+    assert off_row == (None, None, None, None, None, None)

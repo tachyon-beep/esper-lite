@@ -66,8 +66,8 @@ def seed_infos(draw, stage=None):
     min_age = max(epochs_in_stage, 1)
     seed_age = draw(st.integers(min_age, 50))
 
-    # Synergy fields: sometimes generate positive values to test synergy_bonus path
-    # interaction_sum > 0 triggers synergy_bonus computation in rewards.py
+    # Interaction fields: sometimes generate positive values to test interaction_bonus path
+    # interaction_sum > 0 triggers interaction_bonus computation in rewards.py
     interaction_sum = draw(st.floats(0.0, 5.0, allow_nan=False))
     boost_received = draw(st.floats(0.0, interaction_sum, allow_nan=False)) if interaction_sum > 0 else 0.0
 

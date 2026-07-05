@@ -195,6 +195,12 @@ class SeedSlotProtocol(Protocol):
         """Clear any pending causal mutation identity."""
         ...
 
+    def attach_experiment_rng(
+        self, rng_domains: object, *, env_idx: int, env_seed: int
+    ) -> None:
+        """Attach the causal-contribution RNG split (harness only; no-op when absent)."""
+        ...
+
     @contextmanager
     def force_alpha(self, value: float) -> Iterator[None]:
         """Temporarily override alpha for counterfactual evaluation.

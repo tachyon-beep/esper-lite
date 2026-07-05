@@ -17,6 +17,7 @@ import torch
 
 from esper.leyline import LifecycleOp, SeedSlotProtocol
 from esper.simic.rewards import FossilizedSeedDripState
+from esper.simic.rewards.residency import SeedResidencyAccumulator
 
 if TYPE_CHECKING:
     from torch.amp.grad_scaler import GradScaler
@@ -92,6 +93,11 @@ class ParallelEnvState:
     # Pair counterfactual accumulators for 3-4 seeds (key: tuple of slot indices)
     cf_pair_accums: dict[tuple[int, int], torch.Tensor] = field(default_factory=dict)
     cf_pair_totals: dict[tuple[int, int], int] = field(default_factory=dict)
+    # Phase 0 (reward-redesign): per-seed alpha-weighted counterfactual residency = the J
+    # integrand. Keyed by seed_id; accumulated PRE-action each epoch (from the fused-val
+    # baseline_accs); emitted per seed at episode end; reset per episode. TELEMETRY-ONLY —
+    # J is computed offline as a yardstick and does NOT enter the reward.
+    residency_accumulators: dict[str, SeedResidencyAccumulator] = field(default_factory=dict)
     telemetry_cb: "TelemetryCallback | None" = None  # Callback wired when telemetry is enabled
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
@@ -121,6 +127,13 @@ class ParallelEnvState:
     # after fossilization, drip becomes negative (penalty).
     # DRL Expert review 2026-01-12: Per-epoch counterfactual is the correct signal.
     fossilized_drip_states: list[FossilizedSeedDripState] = field(default_factory=list)
+
+    # Committed-Shapley top-up (PDR-0012): (slot_id, buffer_step_idx) for every
+    # SUCCESSFUL fossilize this episode — the exact step index buffer.add used
+    # for the FOSSILIZE decision, recorded at execution time (never epoch
+    # arithmetic). Always on: a pure bookkeeping append, only read when
+    # shapley_synergy_scale > 0 (the documented no-op deviation, plan WI-3).
+    fossilize_step_records: list[tuple[str, int]] = field(default_factory=list)
 
     # === Obs V3 Action Feedback (Phase 2a½) ===
     # last_action_success: True = no prior action to fail (first step has none)
@@ -250,8 +263,11 @@ class ParallelEnvState:
         self.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
         self.scaffold_boost_ledger.clear()
         self.pending_hindsight_credit = 0.0
+        # Phase 0: fresh per-seed residency integral each episode.
+        self.residency_accumulators.clear()
         # Clear drip states on episode reset (BASIC_PLUS mode accountability)
         self.fossilized_drip_states.clear()
+        self.fossilize_step_records.clear()
 
         # Reset Obs V3 action feedback (Phase 2a½)
         self.last_action_success = True  # No prior action to fail

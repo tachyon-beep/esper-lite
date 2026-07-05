@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from contextlib import AbstractContextManager, nullcontext
+from itertools import combinations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, cast
 
@@ -13,7 +14,9 @@ import torch.nn as nn
 
 from esper.leyline import (
     AlphaAlgorithm,
+    BlueprintAction,
     FactoredAction,
+    FossilizeRateGuardTrippedPayload,
     HEAD_NAMES,
     LifecycleOp,
     SeedSlotProtocol,
@@ -22,18 +25,18 @@ from esper.leyline import (
     TelemetryEventType,
     TopologyManifestPayload,
 )
+from esper.leyline.causal_intervention import (
+    SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY,
+    SUPPRESS_SLOT_TARGET_SLOT_ID,
+)
 from esper.leyline.proof_baselines import (
-    FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT,
-    FIXED_SCHEDULE_GERMINATE_R0C0_HASH,
-    FIXED_SCHEDULE_GERMINATE_R0C0_VERSION,
-    FIXED_SCHEDULE_GERMINATE_R0C0_V1,
+    DECLARED_SCHEDULES,
     STATIC_FINAL_SOURCE_LIFECYCLE_POLICY,
     STATIC_FINAL_SOURCE_TOPOLOGY_ACTION_COUNT,
     STATIC_FINAL_SOURCE_TOPOLOGY_HASH,
     STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
     STATIC_FINAL_SOURCE_TOPOLOGY_V1,
-    fixed_schedule_action_for_epoch,
-    static_final_source_action_for_epoch,
+    declared_schedule_germinate_blueprints,
 )
 from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry import (
@@ -48,6 +51,16 @@ from esper.simic.telemetry import (
 from esper.simic.telemetry.phase_profiler import NullProfiler, PhaseProfiler
 from esper.simic.telemetry.emitters import check_performance_degradation
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
+from esper.simic.training.fossilize_rate_guard import FossilizeRateGuard
+from esper.simic.rewards.committed_shapley import (
+    MAX_EXACT_COALITION_SLOTS,
+    CommittedShapleyEnvCredits,
+    compute_committed_shapley_topup,
+)
+from esper.simic.rewards.residency import (
+    SlotResidencySample,
+    accumulate_residency_for_env,
+)
 from esper.tamiyo.policy.action_masks import (
     MaskedCategorical,
     build_slot_states,
@@ -59,6 +72,7 @@ from esper.utils.data import augment_cifar10_batch
 from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .helpers import policy_amp_context
+from .intervention import SuppressSlotResult, apply_suppress_slot_mask
 from .normalizer_checkpoint import obs_normalizer_metadata
 from .counterfactual_eval import process_fused_val_batch
 from .parallel_env_state import ParallelEnvState
@@ -168,6 +182,65 @@ def _pair_interaction_index(
     return pair_acc - solo_on_a - solo_on_b + all_off_acc
 
 
+def build_committed_shapley_env_credits(
+    committed_shapley_accs: dict[int, dict[frozenset[str], float]],
+    committed_shapley_sets: dict[int, tuple[str, ...]],
+    env_states: list[ParallelEnvState],
+    *,
+    scale: float,
+    cap: float,
+    tau: float,
+    episodes_completed: int,
+) -> list[CommittedShapleyEnvCredits]:
+    """Fold the terminal 2^k coalition accs into per-env credits (PDR-0012).
+
+    Built at the terminal fused-val pass for the PPO coordinator's pre-GAE
+    retro-write. t_f comes from the execution-time records — a fossilized slot
+    without a record is a bug, not a skippable case. Episode identity is the
+    batch-start convention ``episodes_completed + env_idx``, matching the
+    per-env episode context and emitters — never the batch index
+    (esper-lite-e780981fe7).
+    """
+    credits: list[CommittedShapleyEnvCredits] = []
+    for i, coalition_accs in committed_shapley_accs.items():
+        env_state = env_states[i]
+        committed_set = committed_shapley_sets[i]
+        topup_result = compute_committed_shapley_topup(
+            coalition_accs,
+            committed_set,
+            scale=scale,
+            cap=cap,
+            tau=tau,
+        )
+        t_f_by_slot = dict(env_state.fossilize_step_records)
+        missing = [s for s in committed_set if s not in t_f_by_slot]
+        if missing:
+            raise ValueError(
+                f"env {i}: fossilized slots {missing} have no "
+                f"fossilize_step_records entry — t_f recording is broken"
+            )
+        alpha_algorithm_by_slot: dict[str, str] = {}
+        for s in committed_set:
+            slot_s = cast(SeedSlotProtocol, env_state.model.seed_slots[s])
+            if slot_s.state is None:
+                raise ValueError(
+                    f"env {i}: committed slot {s} has no seed state — "
+                    f"the coalition set is stale"
+                )
+            alpha_algorithm_by_slot[s] = slot_s.state.alpha_algorithm.name
+        credits.append(
+            CommittedShapleyEnvCredits(
+                env_idx=i,
+                result=topup_result,
+                t_f_by_slot={s: t_f_by_slot[s] for s in committed_set},
+                coalition_accs=coalition_accs,
+                alpha_algorithm_by_slot=alpha_algorithm_by_slot,
+                episode_idx=episodes_completed + i,
+            )
+        )
+    return credits
+
+
 def compute_forced_head_flags(
     masks_batch: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
@@ -196,6 +269,14 @@ def _masked_op_probs_for_telemetry(
     op_min_prob = None
     if probability_floor is not None and "op" in probability_floor:
         op_min_prob = probability_floor["op"]
+    # A rare transient non-finite op-logit (BF16 rollout artifact) must not crash this
+    # telemetry readout (MaskedCategorical._validate_logits hard-raises on non-finite).
+    # Sanitize non-finite entries to 0 (→ masked-uniform for that row); byte-identical when
+    # all finite (the guard is skipped). Training is unaffected (telemetry-only) and the
+    # real non-finite still trips the PPO update finiteness gate — the signal is recorded,
+    # not swallowed.
+    if not torch.isfinite(op_logits).all():
+        op_logits = torch.nan_to_num(op_logits, nan=0.0, posinf=0.0, neginf=0.0)
     return MaskedCategorical(op_logits, op_mask, min_prob=op_min_prob).probs
 
 
@@ -250,8 +331,41 @@ def apply_proof_baseline_action_controls(
     schedule_action_count: int | None = None,
     epoch: int,
     static_final_replay_validated: bool = False,
-) -> None:
-    """Apply proof-baseline lifecycle controls before action sampling."""
+    slot_config: Any = None,
+    suppression_enabled: bool = False,
+) -> SuppressSlotResult | None:
+    """Apply proof-baseline lifecycle controls before action sampling.
+
+    Returns a ``SuppressSlotResult`` ONLY for an active SUPPRESS-SLOT
+    intervention (so the caller can emit the forced-step split telemetry);
+    None for every other policy and for a no-op (suppression OFF).
+    """
+    if lifecycle_policy == SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY:
+        # Causal-contribution harness PRIMARY arm. A stationary mask making the
+        # target slot un-committable for the whole run. NOT a
+        # _PROOF_CONTROLLED_LIFECYCLE_POLICY (must not zero actor gradients).
+        if (
+            schedule_id is not None
+            or schedule_hash is not None
+            or schedule_version is not None
+            or schedule_action_count is not None
+        ):
+            raise ValueError(
+                f"{SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY} must not carry schedule provenance"
+            )
+        # Literal OFF gate: byte-identical no-op (no mask mutation, no extra RNG).
+        if not suppression_enabled:
+            return None
+        if slot_config is None:
+            raise ValueError(
+                f"{SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY} requires slot_config to "
+                "resolve the suppressed slot index"
+            )
+        suppressed_idx = slot_config.index_for_slot_id(SUPPRESS_SLOT_TARGET_SLOT_ID)
+        return apply_suppress_slot_mask(
+            masks_batch, suppressed_slot_index=suppressed_idx
+        )
+
     if lifecycle_policy is None:
         if (
             schedule_id is not None
@@ -262,7 +376,7 @@ def apply_proof_baseline_action_controls(
             raise ValueError(
                 "proof_baseline schedule provenance requires a proof baseline lifecycle policy"
             )
-        return
+        return None
     if lifecycle_policy == "paired_lockstep_reward_comparison":
         if (
             schedule_id is not None
@@ -273,7 +387,7 @@ def apply_proof_baseline_action_controls(
             raise ValueError(
                 "paired_lockstep_reward_comparison must not carry schedule provenance"
             )
-        return
+        return None
     if lifecycle_policy == STATIC_FINAL_SOURCE_LIFECYCLE_POLICY:
         if (
             schedule_id != STATIC_FINAL_SOURCE_TOPOLOGY_V1
@@ -286,13 +400,15 @@ def apply_proof_baseline_action_controls(
                 f"proof_baseline_schedule_id={STATIC_FINAL_SOURCE_TOPOLOGY_V1!r}, "
                 "the matching hash, version, and action count"
             )
-        action = static_final_source_action_for_epoch(epoch)
+        action = DECLARED_SCHEDULES[STATIC_FINAL_SOURCE_TOPOLOGY_V1].action_for_epoch(
+            epoch
+        )
         _force_scheduled_action_masks(
             masks_batch=masks_batch,
             action=action,
             epoch=epoch,
         )
-        return
+        return None
 
     if lifecycle_policy == "freeze_replayed_final_topology":
         if (
@@ -320,7 +436,7 @@ def apply_proof_baseline_action_controls(
         controlled_op_mask = torch.zeros_like(masks_batch["op"])
         controlled_op_mask[:, wait_idx] = True
         masks_batch["op"] = controlled_op_mask
-        return
+        return None
 
     unsupported_policies: tuple[str, ...] = ()
     if lifecycle_policy in unsupported_policies:
@@ -334,24 +450,30 @@ def apply_proof_baseline_action_controls(
         )
 
     if lifecycle_policy == "apply_declared_lifecycle_schedule":
+        if schedule_id not in DECLARED_SCHEDULES:
+            raise ValueError(
+                "apply_declared_lifecycle_schedule requires a registered "
+                f"proof_baseline_schedule_id; got {schedule_id!r}, "
+                f"known: {sorted(DECLARED_SCHEDULES)}"
+            )
+        schedule = DECLARED_SCHEDULES[schedule_id]
         if (
-            schedule_id != FIXED_SCHEDULE_GERMINATE_R0C0_V1
-            or schedule_hash != FIXED_SCHEDULE_GERMINATE_R0C0_HASH
-            or schedule_version != FIXED_SCHEDULE_GERMINATE_R0C0_VERSION
-            or schedule_action_count != FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
+            schedule_hash != schedule.hash
+            or schedule_version != schedule.version
+            or schedule_action_count != schedule.action_count
         ):
             raise ValueError(
-                "apply_declared_lifecycle_schedule requires "
-                f"proof_baseline_schedule_id={FIXED_SCHEDULE_GERMINATE_R0C0_V1!r}, "
-                "the matching hash, version, and action count"
+                "apply_declared_lifecycle_schedule provenance mismatch for "
+                f"{schedule_id!r}: hash, version, and action count must match "
+                "the registered schedule"
             )
-        action = fixed_schedule_action_for_epoch(epoch)
+        action = schedule.action_for_epoch(epoch)
         _force_scheduled_action_masks(
             masks_batch=masks_batch,
             action=action,
             epoch=epoch,
         )
-        return
+        return None
 
     wait_only_policies = (
         "force_wait_only",
@@ -373,6 +495,7 @@ def apply_proof_baseline_action_controls(
     controlled_op_mask = torch.zeros_like(masks_batch["op"])
     controlled_op_mask[:, wait_idx] = True
     masks_batch["op"] = controlled_op_mask
+    return None
 
 
 def _force_scheduled_action_masks(
@@ -583,6 +706,7 @@ class ActionInputBundle:
     masks_batch: dict[str, torch.Tensor]
     actions_np: np.ndarray
     values: list[float]
+    cf_values: list[float] | None
     head_confidences_cpu: np.ndarray | None
     head_entropies_cpu: np.ndarray | None
     op_probs_cpu: np.ndarray | None
@@ -691,12 +815,42 @@ class VectorizedPPOTrainer:
     effective_max_seeds: int
     device: str
     logger: logging.Logger
+    # Causal-contribution harness (defaults keep all existing runs unchanged).
+    # suppression toggle is SEPARATE from the lifecycle policy: a SUPPRESS-SLOT
+    # arm with suppression OFF is the CRN no-op control (literal byte-identical
+    # mask path); experiment_rng (ExperimentRngDomains | None) drives the split.
+    proof_baseline_suppression_enabled: bool = False
+    experiment_rng: Any = None
     action_execution_context: ActionExecutionContext = field(init=False)
+    # PIN-E: germinate blueprints of the active declared schedule (mask union).
+    schedule_extra_blueprints: frozenset[BlueprintAction] = field(init=False)
     ppo_coordinator: PPOCoordinator = field(init=False)
     # Tier-0 phase-profiler handle. NullProfiler until run() enters the real
     # instrument; safe to call .phase()/.drain() before run() (no-op).
     _phase_profiler: PhaseProfiler | NullProfiler = field(
         init=False, default_factory=NullProfiler
+    )
+    # Causal-contribution harness: epoch the suppression first bit (first step
+    # with >=1 intervention-forced env), for the divergence-onset assertion.
+    _first_suppression_epoch: int | None = field(init=False, default=None)
+    # Stride for the GPU-sync compare-point state hashes (state hashes emitted at
+    # suppression events, the warm-up window, and every Nth step; cheap draw
+    # counts every step). Tunable so a short smoke can force frequent hashes.
+    compare_point_hash_stride: int = 50
+    # Within-run no-offset tracking: previous cumulative controller draw count and
+    # the pinned constant per-step delta (RuntimeError on deviation).
+    _prev_controller_draw_count: int | None = field(init=False, default=None)
+    _controller_stride_delta: int | None = field(init=False, default=None)
+    # Committed-Shapley top-up (PDR-0012): terminal credits computed by the
+    # fused val pass, consumed (and cleared) by _run_batch's run_update call.
+    # Always empty at shapley_synergy_scale == 0.
+    _pending_committed_shapley: list[CommittedShapleyEnvCredits] = field(
+        init=False, default_factory=list
+    )
+    # G1 fossilize-rate guard (pre-A/B build WI-3): consulted ONLY at
+    # shapley_synergy_scale > 0 — the OFF arm never observes a batch.
+    _fossilize_rate_guard: FossilizeRateGuard = field(
+        init=False, default_factory=FossilizeRateGuard
     )
 
     def __post_init__(self) -> None:
@@ -705,6 +859,14 @@ class VectorizedPPOTrainer:
         # deprecated torch.backends.cuda.matmul.allow_tf32 (a redundant second path).
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.allow_tf32 = True
+        # PIN-E: a declared schedule may germinate blueprints (e.g. PLACEBO)
+        # that are absent from the topology availability sets; union them into
+        # the blueprint mask for this run so the forced germination is legal.
+        self.schedule_extra_blueprints = (
+            declared_schedule_germinate_blueprints(self.proof_baseline_schedule_id)
+            if self.proof_baseline_schedule_id is not None
+            else frozenset()
+        )
         self.action_execution_context = ActionExecutionContext(
             slots=self.slots,
             ordered_slots=validate_slot_ids(list(self.slots)),
@@ -728,6 +890,9 @@ class VectorizedPPOTrainer:
             fossilize_active_seed=self.fossilize_active_seed,
             resolve_target_slot=self.resolve_target_slot,
             host_params_baseline=self.host_params_baseline,
+            # EV-stab Stage 2: construction-time constant; gates the cf reward split.
+            hra_value_decomposition=self.agent.hra_value_decomposition,
+            extra_blueprints=self.schedule_extra_blueprints,
         )
 
         # Create PPO coordinator for update phase
@@ -1062,6 +1227,62 @@ class VectorizedPPOTrainer:
                     shapley_cfg["_tuple"] = config_tuple
                     configs.append(shapley_cfg)
 
+            # Committed-Shapley top-up (PDR-0012): the 2^k coalition family
+            # over the FOSSILIZED set at the terminal epoch. Gated ONLY on the
+            # flag — never on use_telemetry or the counterfactual helper (bug
+            # esper-lite-4fe98055f7 posture). v(S): coalition members keep
+            # natural alpha; fossilized non-members AND all non-fossilized
+            # active slots are masked 0.0 (v(empty) = host only).
+            if (
+                self.reward_config.shapley_synergy_scale > 0.0
+                and epoch == max_epochs
+            ):
+                committed_slot_list: list[str] = []
+                for sid in slots:
+                    if not model.has_active_seed_in_slot(sid):
+                        continue
+                    slot_c = cast(SeedSlotProtocol, model.seed_slots[sid])
+                    if slot_c.state is None:
+                        continue
+                    if slot_c.state.stage == SeedStage.FOSSILIZED:
+                        # GATE fossilized slots are admitted: a GATE seed keeps
+                        # its trained alpha_schedule for life (the GATE forward
+                        # requires it at every stage), and coalition masking
+                        # composes as amplitude x gate (the force_alpha
+                        # contract) — alpha 0.0 is host-only, alpha 1.0 is the
+                        # natural fossilized forward. The fused pass never
+                        # materializes a schedule for FOSSILIZED slots.
+                        committed_slot_list.append(sid)
+                if committed_slot_list:
+                    if self.reward_config.drip_fraction > 0.0:
+                        # BASIC_PLUS puts fossilized slots back into
+                        # active_slot_list (solo/committed overlap); the
+                        # coalition family is not defined for that regime
+                        # (plan review, pytorch F4).
+                        raise ValueError(
+                            "shapley_synergy_scale > 0 requires "
+                            "drip_fraction == 0"
+                        )
+                    if len(committed_slot_list) > MAX_EXACT_COALITION_SLOTS:
+                        raise ValueError(
+                            f"committed-Shapley is exact-factorial only "
+                            f"(k <= {MAX_EXACT_COALITION_SLOTS}); got "
+                            f"k={len(committed_slot_list)}"
+                        )
+                    committed_set = tuple(sorted(committed_slot_list))
+                    for r in range(len(committed_set) + 1):
+                        for combo in combinations(committed_set, r):
+                            cs_cfg: dict[str, Any] = {
+                                sid: 0.0 for sid in active_slot_list
+                            }
+                            for sid in committed_set:
+                                if sid not in combo:
+                                    cs_cfg[sid] = 0.0
+                            cs_cfg["_kind"] = "committed_shapley"
+                            cs_cfg["_subset"] = frozenset(combo)
+                            cs_cfg["_committed_set"] = committed_set
+                            configs.append(cs_cfg)
+
             env_configs.append(configs)
 
         # baseline_accs[env_idx][slot_id] = accuracy with that slot's seed disabled
@@ -1098,6 +1319,48 @@ class VectorizedPPOTrainer:
             val_batch_counts,
             env_cfg_correct_accums,
         )
+    def _accumulate_residency(
+        self,
+        env_states: list[ParallelEnvState],
+        baseline_accs: list[dict[str, Any]],
+    ) -> None:
+        """Phase 0: fold one epoch of PRE-action per-slot state into each env's per-seed
+        residency accumulators (the J integrand).
+
+        Builds a SlotResidencySample per slot from the live model (CPU scalars — no GPU sync)
+        and delegates the per-seed LOO computation + on-output-path gate to
+        ``accumulate_residency_for_env``. Dormant slots (state is None) yield seed_id=None and
+        are skipped. Telemetry-only; J is computed offline and never enters the reward.
+        """
+        for env_idx, env_state in enumerate(env_states):
+            model = env_state.model
+            slot_samples: list[SlotResidencySample] = []
+            for slot_id in self.slots:
+                slot = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                state = slot.state
+                if state is None:
+                    slot_samples.append(
+                        SlotResidencySample(
+                            slot_id=slot_id, seed_id=None, stage=0, alpha=0.0, params=0
+                        )
+                    )
+                else:
+                    slot_samples.append(
+                        SlotResidencySample(
+                            slot_id=slot_id,
+                            seed_id=state.seed_id,
+                            stage=state.stage.value,
+                            alpha=slot.alpha,
+                            params=slot.active_seed_params,
+                        )
+                    )
+            accumulate_residency_for_env(
+                env_state.residency_accumulators,
+                val_acc=env_state.val_acc,
+                baseline_accs_env=baseline_accs[env_idx],
+                slot_samples=slot_samples,
+            )
+
     def _run_fused_val_pass(
         self,
         *,
@@ -1107,6 +1370,7 @@ class VectorizedPPOTrainer:
         envs_this_batch: int,
         val_criterion: nn.CrossEntropyLoss,
         batch_idx: int,
+        episodes_completed: int,
     ) -> tuple[FusedValResult, float]:
         """Run the fused validation + counterfactual ablation pass for one epoch.
 
@@ -1243,10 +1507,15 @@ class VectorizedPPOTrainer:
 
                     # P4-FIX: Ensure alpha_schedule exists for GATE algorithm during fused pass.
                     # This can happen if a seed is in HOLD mode and its schedule was cleared.
+                    # Never for FOSSILIZED: a fossilized GATE seed keeps its trained
+                    # schedule for life, so a missing one is a broken invariant —
+                    # a fresh untrained gate here would silently corrupt v(S) and
+                    # persist on the permanent slot; the GATE forward fails loud.
                     if (
                         slot.state
                         and slot.state.alpha_algorithm
                         == AlphaAlgorithm.GATE
+                        and slot.state.stage != SeedStage.FOSSILIZED
                         and slot_concrete.alpha_schedule is None
                     ):
                         from esper.kasmina.blending import BlendCatalog
@@ -1341,6 +1610,10 @@ class VectorizedPPOTrainer:
 
         # Process results for each config
         val_corrects = [0] * envs_this_batch
+        # Committed-Shapley (PDR-0012): per-env 2^k coalition accs + coalition
+        # set, filled by the "committed_shapley" unpack branch at terminal.
+        committed_shapley_accs: dict[int, dict[frozenset[str], float]] = {}
+        committed_shapley_sets: dict[int, tuple[str, ...]] = {}
 
         for i, env_state in enumerate(env_states):
             correct_counts = env_cfg_correct_accums_cpu[i].tolist()
@@ -1408,6 +1681,16 @@ class VectorizedPPOTrainer:
                     shapley_results[i][shapley_tuple] = (0.0, acc)
                 elif kind == "committed":
                     env_state.committed_val_acc = acc
+                elif kind == "committed_shapley":
+                    if i not in committed_shapley_accs:
+                        committed_shapley_accs[i] = {}
+                        committed_shapley_sets[i] = cfg["_committed_set"]
+                    committed_shapley_accs[i][cfg["_subset"]] = acc
+                else:
+                    # Fail loud (plan review, pytorch F2): a forgotten branch
+                    # would silently leave a coalition acc unpopulated and
+                    # corrupt phi downstream.
+                    raise ValueError(f"Unknown fused-val config kind: {kind!r}")
 
             env_state.committed_acc_history.append(
                 env_state.committed_val_acc
@@ -1550,6 +1833,22 @@ class VectorizedPPOTrainer:
                     self.logger.warning(
                         f"Shapley computation failed for env {i}: {e}"
                     )
+
+        # Committed-Shapley top-up (PDR-0012): fold the terminal 2^k coalition
+        # accs into per-env credits for the coordinator's pre-GAE retro-write.
+        # Only populated at epoch == max_epochs with scale > 0 (the unpack
+        # branch is the sole writer of committed_shapley_accs).
+        self._pending_committed_shapley.extend(
+            build_committed_shapley_env_credits(
+                committed_shapley_accs,
+                committed_shapley_sets,
+                env_states,
+                scale=self.reward_config.shapley_synergy_scale,
+                cap=self.reward_config.shapley_synergy_cap,
+                tau=self.reward_config.shapley_synergy_noise_floor,
+                episodes_completed=episodes_completed,
+            )
+        )
 
         return (
             FusedValResult(
@@ -1703,7 +2002,14 @@ class VectorizedPPOTrainer:
                             f"gpu_preload={self.gpu_preload_augment}"
                         )
 
-                collect_gradients = self.use_telemetry and (
+                # Gradient stats are CONTROL-PATH state, not observability:
+                # they feed the G2 blending gate (seed_gradient_norm_ratio EMA
+                # + gradient health; KTS-001 denies unmeasured seeds). Coupling
+                # collection to use_telemetry silently disabled ALL blending/
+                # fossilization in telemetry-off runs (esper-lite-4fe98055f7).
+                # The stride caps measurement cost; telemetry EMISSION stays
+                # gated by use_telemetry downstream.
+                collect_gradients = (
                     batch_step % self.gradient_telemetry_stride == 0
                 )
                 loss_tensor, correct_tensor, total, grad_stats = (
@@ -1712,7 +2018,7 @@ class VectorizedPPOTrainer:
                         inputs,
                         targets,
                         criterion,
-                        use_telemetry=collect_gradients,
+                        collect_gradients=collect_gradients,
                         slots=self.slots,
                         max_grad_norm=self.max_grad_norm,
                         task_spec=self.task_spec,
@@ -1804,7 +2110,6 @@ class VectorizedPPOTrainer:
         obs_normalizer = self.obs_normalizer
         initial_obs_normalizer_mean = self.initial_obs_normalizer_mean
         ops_telemetry_enabled = self.ops_telemetry_enabled
-        use_telemetry = self.use_telemetry
         emitters = self.emitters
         device = self.device
         effective_max_seeds = self.effective_max_seeds
@@ -1862,10 +2167,12 @@ class VectorizedPPOTrainer:
                     continue
                 slot_state.metrics.record_accuracy(val_acc)
 
-            # Sync gradient telemetry after record_accuracy so telemetry reflects this epoch's metrics.
+            # Sync gradient stats into seed state after record_accuracy so they
+            # reflect this epoch's metrics. This is gate input (G2/KTS-001), so
+            # it runs regardless of use_telemetry (esper-lite-4fe98055f7).
             grad_stats_for_env = env_grad_stats[env_idx]
             synced_slot_ids: set[str] = set()
-            if use_telemetry and grad_stats_for_env is not None:
+            if grad_stats_for_env is not None:
                 for slot_id, async_stats in grad_stats_for_env.items():
                     if not model.has_active_seed_in_slot(slot_id):
                         continue
@@ -1972,6 +2279,7 @@ class VectorizedPPOTrainer:
                 device=torch.device(device),
                 topology=task_spec.topology,
                 disable_advance=disable_advance,
+                extra_blueprints=self.schedule_extra_blueprints,
             )
             all_masks.append(mask)
 
@@ -1996,7 +2304,7 @@ class VectorizedPPOTrainer:
         masks_batch["slot_by_op"] = torch.stack(
             [m["slot_by_op"] for m in all_masks]
         ).to(device)
-        apply_proof_baseline_action_controls(
+        suppress_slot_result = apply_proof_baseline_action_controls(
             masks_batch=masks_batch,
             lifecycle_policy=self.proof_baseline_lifecycle_policy,
             schedule_id=self.proof_baseline_schedule_id,
@@ -2007,7 +2315,18 @@ class VectorizedPPOTrainer:
             ),
             epoch=epoch,
             static_final_replay_validated=static_final_replay_validated,
+            slot_config=self.slot_config,
+            suppression_enabled=self.proof_baseline_suppression_enabled,
         )
+        # Causal-contribution harness telemetry: per-step compare-point (§5.6) +
+        # forced-step split (§5.7). Only when the instrumented RNG split is wired.
+        if self.experiment_rng is not None:
+            self._emit_intervention_step(
+                epoch=epoch,
+                suppress_slot_result=suppress_slot_result,
+                op_mask=masks_batch["op"],
+                num_envs=len(env_states),
+            )
 
         # Accumulate raw states for deferred normalizer update
         raw_states_for_normalizer_update.append(states_batch.detach())
@@ -2052,6 +2371,14 @@ class VectorizedPPOTrainer:
         # get_action returns ActionResult dataclass.
         # P1-BF16: wrap in the SAME BF16 autocast as the PPO update so the
         # stored old_log_probs share the BF16 backbone (unbiased ratio).
+        # Causal-contribution harness (domain A): route controller sampling
+        # through the dedicated controller generator so it is insulated from
+        # blueprint/host draw counts. None (no harness) => unchanged global stream.
+        controller_generator = (
+            self.experiment_rng.controller_generator
+            if self.experiment_rng is not None
+            else None
+        )
         with rollout_autocast():
             action_result = agent.policy.get_action(
                 states_batch_normalized,
@@ -2060,10 +2387,15 @@ class VectorizedPPOTrainer:
                 hidden=batched_lstm_hidden,
                 deterministic=False,
                 probability_floor=agent.probability_floor,
+                generator=controller_generator,
             )
         actions_dict = action_result.action
         head_log_probs = action_result.log_prob
         values_tensor = action_result.value
+        # Causal-contribution harness: account this controller draw (one fixed-size
+        # multinomial set per step). Device-portable; underpins the no-offset proof.
+        if self.experiment_rng is not None:
+            self.experiment_rng.record_controller_invocation()
 
         # OPTIMIZATION: Update batched hidden state directly (eliminates per-env slice/cat)
         batched_lstm_hidden = action_result.hidden
@@ -2079,6 +2411,18 @@ class VectorizedPPOTrainer:
         values = (
             values_tensor.cpu().tolist()
         )  # .tolist() on CPU tensor is free
+
+        # EV-stab Stage 2: per-step head-only V_cf(s). Pulled from the SAME get_action
+        # result as values (shared mask/hidden), only on the ON leg (explicit flag gate);
+        # None on the OFF leg so execute_actions stays byte-identical to today.
+        cf_values: list[float] | None = None
+        if agent.hra_value_decomposition:
+            cf_value_tensor = action_result.cf_value
+            if cf_value_tensor is None:
+                raise RuntimeError(
+                    "hra_value_decomposition=True but get_action returned cf_value=None"
+                )
+            cf_values = cf_value_tensor.cpu().tolist()
 
         # Batch compute mask stats for telemetry
         masked_np: np.ndarray | None = None  # [num_heads, num_envs]
@@ -2160,6 +2504,7 @@ class VectorizedPPOTrainer:
             masks_batch=masks_batch,
             actions_np=actions_np,
             values=values,
+            cf_values=cf_values,
             head_confidences_cpu=head_confidences_cpu,
             head_entropies_cpu=head_entropies_cpu,
             op_probs_cpu=op_probs_cpu,
@@ -2216,6 +2561,7 @@ class VectorizedPPOTrainer:
             step_records=step_records,
             actions_np=aib.actions_np,
             values=aib.values,
+            cf_values=aib.cf_values,
             all_signals=aib.all_signals,
             all_slot_reports=aib.all_slot_reports,
             states_batch_normalized=aib.states_batch_normalized,
@@ -2264,6 +2610,9 @@ class VectorizedPPOTrainer:
 
         # PHASE 2: Compute all bootstrap values in single batched forward pass
         bootstrap_values: list[float] = []
+        # EV-stab Stage 2: cf bootstrap mirrors the main bootstrap (same get_action,
+        # same shared mask); populated only on the ON leg.
+        cf_bootstrap_values: list[float] = []
         if all_post_action_signals:
             # Unpack Obs V3 tuple (obs, blueprint_indices)
             post_action_features_batch, post_action_bp_indices = (
@@ -2317,6 +2666,17 @@ class VectorizedPPOTrainer:
             # PERF: Move to CPU before .tolist() to avoid per-value GPU sync
             bootstrap_values = bootstrap_result.value.cpu().tolist()
 
+            # EV-stab Stage 2: read the cf bootstrap from the SAME get_action result
+            # (shared mask) so returns_cf's truncation bootstrap matches the main one.
+            if agent.hra_value_decomposition:
+                cf_bootstrap_tensor = bootstrap_result.cf_value
+                if cf_bootstrap_tensor is None:
+                    raise RuntimeError(
+                        "hra_value_decomposition=True but bootstrap get_action "
+                        "returned cf_value=None"
+                    )
+                cf_bootstrap_values = cf_bootstrap_tensor.cpu().tolist()
+
         if truncated_bootstrap_targets:
             if not bootstrap_values:
                 raise RuntimeError(
@@ -2326,6 +2686,20 @@ class VectorizedPPOTrainer:
                 truncated_bootstrap_targets, bootstrap_values, strict=True
             ):
                 agent.buffer.bootstrap_values[env_id, step_idx] = bootstrap_val
+
+            # EV-stab Stage 2: write the cf bootstrap with the SAME indices/handling
+            # as the main bootstrap above (ON leg only).
+            if agent.hra_value_decomposition:
+                if not cf_bootstrap_values:
+                    raise RuntimeError(
+                        "Missing cf bootstrap values for truncated transitions."
+                    )
+                for (env_id, step_idx), cf_bootstrap_val in zip(
+                    truncated_bootstrap_targets, cf_bootstrap_values, strict=True
+                ):
+                    agent.buffer.cf_bootstrap_values[env_id, step_idx] = (
+                        cf_bootstrap_val
+                    )
 
         return ActionTransactionResult(
             truncated_bootstrap_targets=truncated_bootstrap_targets,
@@ -2428,6 +2802,7 @@ class VectorizedPPOTrainer:
                 envs_this_batch=envs_this_batch,
                 val_criterion=val_criterion,
                 batch_idx=batch_idx,
+                episodes_completed=episodes_completed,
             )
         dataloader_wait_ms_epoch += val_dataloader_wait_ms
 
@@ -2440,6 +2815,13 @@ class VectorizedPPOTrainer:
         baseline_accs = fused_result.baseline_accs
         val_corrects = fused_result.val_corrects
         val_totals = fused_result.val_totals
+
+        # Phase 0 (reward-redesign): fold this epoch's PRE-action per-slot state into each
+        # env's per-seed residency integral (the J integrand). Placed here — after the fused
+        # val pass (so baseline_accs + env_state.val_acc are fresh) and BEFORE action
+        # execution (so stage/alpha are pre-action, aligned with the LOO they multiply).
+        # Telemetry-only; emitted per seed at episode end.
+        self._accumulate_residency(env_states, baseline_accs)
 
         # ===== Compute epoch metrics and get BATCHED actions =====
         # Extracted to _build_action_inputs(): collects per-env signals/slot
@@ -2707,6 +3089,11 @@ class VectorizedPPOTrainer:
         )
 
         # Execute PPO updates
+        # Committed-Shapley (PDR-0012): hand the terminal credits to the
+        # pre-GAE retro-write seam and clear the per-batch carry either way
+        # (an update-skipped batch drops its credits with the batch).
+        committed_shapley_credits = self._pending_committed_shapley
+        self._pending_committed_shapley = []
         with self._phase_profiler.phase("ppo_update"):
             metrics, update_skipped, ppo_update_time_ms = ppo_coordinator.run_update(
                 raw_states_for_normalizer_update=raw_states_for_normalizer_update,
@@ -2714,6 +3101,7 @@ class VectorizedPPOTrainer:
                 envs_this_batch=envs_this_batch,
                 throughput_step_time_ms_sum=throughput_step_time_ms_sum,
                 throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
+                committed_shapley_credits=committed_shapley_credits,
             )
 
         # Tier-0: ppo_update accrues here in _run_batch, AFTER the per-epoch drain at
@@ -2858,6 +3246,46 @@ class VectorizedPPOTrainer:
             )
             prev_rolling_avg_acc = rolling_avg_acc
 
+            # G1 fossilize-rate guard (pre-A/B build WI-3; gate criterion 3):
+            # the in-run RUNAWAY breaker for the committed-Shapley ON arm.
+            # Emit-then-raise: the trainer's shutdown `finally` (hub.close())
+            # flushes the event, so the trip context survives the abort.
+            if self.reward_config.shapley_synergy_scale > 0.0:
+                batch_fossilized = sum(es.seeds_fossilized for es in env_states)
+                if self._fossilize_rate_guard.observe_batch(batch_fossilized):
+                    guard = self._fossilize_rate_guard
+                    if self.hub is not None:
+                        self.hub.emit(
+                            TelemetryEvent(
+                                event_type=(
+                                    TelemetryEventType.FOSSILIZE_RATE_GUARD_TRIPPED
+                                ),
+                                group_id=self.group_id,
+                                severity="critical",
+                                message=(
+                                    f"G1 fossilize-rate guard tripped: "
+                                    f"{batch_fossilized} fossilizations in batch "
+                                    f"{batch_idx} (threshold {guard.trip_count}, "
+                                    f"{guard.consecutive} consecutive batches)"
+                                ),
+                                data=FossilizeRateGuardTrippedPayload(
+                                    batch_idx=batch_idx,
+                                    fossilize_count=batch_fossilized,
+                                    trip_count_threshold=guard.trip_count,
+                                    consecutive_batches=guard.consecutive,
+                                    episodes_in_batch=len(env_states),
+                                ),
+                            )
+                        )
+                    raise RuntimeError(
+                        f"committed-Shapley ON-arm aborted by the G1 "
+                        f"fossilize-rate guard: {batch_fossilized} "
+                        f"fossilizations/batch >= {guard.trip_count} for "
+                        f"{guard.consecutive} consecutive batches (5x the "
+                        f"banked 0.207/ep control baseline). Commit-spam "
+                        f"regime — the run is not a valid A/B arm."
+                    )
+
             # B7-DRL-02: Check for performance degradation (was previously unwired)
             # Detects catastrophic forgetting, reward hacking, and training decay
             training_progress = batch_epoch_id / self.total_env_episodes
@@ -2948,6 +3376,96 @@ class VectorizedPPOTrainer:
             prof_steps,
             static_final_replay_validated,
             shutdown,
+        )
+
+    def _emit_intervention_step(
+        self,
+        *,
+        epoch: int,
+        suppress_slot_result: SuppressSlotResult | None,
+        op_mask: torch.Tensor,
+        num_envs: int,
+    ) -> None:
+        """Emit the per-step compare-point (§5.6) + forced-step split (§5.7).
+
+        ``op_mask`` is the POST-hook batched op mask [num_envs, num_ops]. The
+        WAIT-saturation component is a property of THAT mask (exactly one valid
+        op), so it is computable for EVERY instrumented arm — control and
+        suppress_slot_off included — which is what lets §5.7's expected-parity
+        check on WAIT-saturation actually run across arms. intervention-forced is
+        only meaningful for an active suppression (it comes from the result).
+        """
+        if not self.hub or self.experiment_rng is None:
+            return
+        from esper.leyline import InterventionStepPayload
+
+        intervention_forced = (
+            suppress_slot_result.intervention_forced_count
+            if suppress_slot_result is not None
+            else 0
+        )
+        # Total WAIT-only (forced) steps from the post-hook mask; the natural
+        # WAIT-saturation component is the remainder after intervention-forcing.
+        total_wait_only = int((op_mask.sum(dim=-1) == 1).sum().item())
+        wait_saturation = total_wait_only - intervention_forced
+        suppressed_index = (
+            suppress_slot_result.suppressed_slot_index
+            if suppress_slot_result is not None
+            else None
+        )
+        is_suppression_event = intervention_forced > 0
+        if is_suppression_event and self._first_suppression_epoch is None:
+            self._first_suppression_epoch = epoch
+
+        # WITHIN-RUN no-offset assertion: the controller draws a fixed number of
+        # times per step, so the per-step delta of the cumulative draw count must
+        # be constant. A deviation means the controller stream was offset (e.g. a
+        # stray draw) inside this single run — catch it loudly, without needing the
+        # cross-arm join. The delta is pinned from the first observed step.
+        draw_count = self.experiment_rng.controller_draw_count
+        if self._prev_controller_draw_count is not None:
+            delta = draw_count - self._prev_controller_draw_count
+            if self._controller_stride_delta is None:
+                self._controller_stride_delta = delta
+            elif delta != self._controller_stride_delta:
+                raise RuntimeError(
+                    "Causal-contribution no-offset invariant violated: controller "
+                    f"draw-count delta {delta} != expected {self._controller_stride_delta} "
+                    f"at epoch {epoch}. The controller stream was offset within the "
+                    "run (a stray/missing draw) — Δ_struct would carry an RNG artifact."
+                )
+        self._prev_controller_draw_count = draw_count
+
+        # Stride the GPU-sync state hashes: emit them only at suppression events,
+        # at a fixed stride, and for the early warm-up window (so the pre-first-
+        # suppression parity check has samples). The cheap counts go EVERY step.
+        stride = self.compare_point_hash_stride
+        include_hashes = (
+            is_suppression_event
+            or epoch <= stride
+            or (stride > 0 and epoch % stride == 0)
+        )
+        compare = self.experiment_rng.compare_point(include_state_hashes=include_hashes)
+        self.hub.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.INTERVENTION_STEP,
+                group_id=self.group_id,
+                epoch=epoch,
+                data=InterventionStepPayload(
+                    epoch=epoch,
+                    controller_draw_count=compare["controller_draw_count"],
+                    blueprint_draw_count=compare["blueprint_draw_count"],
+                    intervention_forced_count=intervention_forced,
+                    wait_saturation_count=wait_saturation,
+                    num_envs=num_envs,
+                    controller_state_hash=compare["controller_state_hash"],
+                    host_state_hash=compare["host_state_hash"],
+                    suppressed_slot_index=suppressed_index,
+                    first_suppression_epoch=self._first_suppression_epoch,
+                ),
+                severity="debug",
+                message="Causal-contribution intervention step",
+            )
         )
 
     def run(self) -> list[dict[str, Any]]:

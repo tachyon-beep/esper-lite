@@ -93,7 +93,7 @@ def test_reward_components_all_fields_serialized(tmp_path):
         holding_warning=0.0,
         stage_bonus=0.1,
         pbrs_bonus=0.05,
-        synergy_bonus=0.03,
+        interaction_bonus=0.03,
         action_shaping=0.05,
         terminal_bonus=0.2,
         fossilize_terminal_bonus=0.15,
@@ -149,7 +149,7 @@ def test_reward_components_all_fields_serialized(tmp_path):
             holding_warning,
             stage_bonus,
             pbrs_bonus,
-            synergy_bonus,
+            interaction_bonus,
             action_shaping,
             terminal_bonus,
             fossilize_terminal_bonus,
@@ -179,7 +179,7 @@ def test_reward_components_all_fields_serialized(tmp_path):
     assert abs(result[9] - 0.0) < 1e-6   # holding_warning
     assert abs(result[10] - 0.1) < 1e-6  # stage_bonus
     assert abs(result[11] - 0.05) < 1e-6 # pbrs_bonus
-    assert abs(result[12] - 0.03) < 1e-6 # synergy_bonus
+    assert abs(result[12] - 0.03) < 1e-6 # interaction_bonus
     assert abs(result[13] - 0.05) < 1e-6 # action_shaping
     assert abs(result[14] - 0.2) < 1e-6  # terminal_bonus
     assert abs(result[15] - 0.15) < 1e-6 # fossilize_terminal_bonus

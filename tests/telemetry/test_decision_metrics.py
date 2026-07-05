@@ -617,7 +617,7 @@ class TestTELE800RewardComponents:
             holding_warning=0.0,
             stage_bonus=0.1,
             pbrs_bonus=0.08,
-            synergy_bonus=0.05,
+            interaction_bonus=0.05,
             action_shaping=0.02,
             terminal_bonus=0.0,
             fossilize_terminal_bonus=0.0,
@@ -671,7 +671,7 @@ class TestTELE800RewardComponents:
         assert rc.holding_warning == 0.0
         assert rc.stage_bonus == 0.1
         assert rc.pbrs_bonus == 0.08
-        assert rc.synergy_bonus == 0.05
+        assert rc.interaction_bonus == 0.05
         assert rc.action_shaping == 0.02
         assert rc.terminal_bonus == 0.0
         assert rc.fossilize_terminal_bonus == 0.0

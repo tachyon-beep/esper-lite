@@ -84,6 +84,26 @@ def _make_head_telemetry() -> "T.HeadTelemetry":
     return T.HeadTelemetry(**{f.name: float(50 + i) for i, f in enumerate(fields)})
 
 
+def _make_seed_residency() -> Any:
+    from esper.leyline.telemetry_contracts import SeedResidencyTelemetry
+
+    # Distinctive, non-default values on every field so the round-trip
+    # exercises the full nested contract (esper-lite-obs-52b8d18afc).
+    return SeedResidencyTelemetry(
+        env_id=4,
+        episode_idx=17,
+        seed_id="ep17_env4_seed_2",
+        params=12345,
+        cf_weighted_integral=6.25,
+        cf_weighted_integral_committed=1.25,
+        cf_weighted_integral_uncommitted=5.0,
+        raw_alpha_integral=9.5,
+        n_on_path_steps=42,
+        n_none_steps=7,
+        j_per_param=0.000506,
+    )
+
+
 def _make_reward_components() -> Any:
     from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 
@@ -156,6 +176,8 @@ def _make_field_value(cls: type, f: "dataclasses.Field[Any]", idx: int) -> Any:
         return _make_reward_components()
     if name == "observation_stats":
         return _make_observation_stats()
+    if name == "seed_residency":
+        return _make_seed_residency()
 
     # --- Generic, annotation-driven ------------------------------------------
     base = idx + 1

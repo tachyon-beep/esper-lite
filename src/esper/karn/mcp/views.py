@@ -167,12 +167,26 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.q_variance')::DOUBLE as q_variance,
             json_extract(data, '$.q_spread')::DOUBLE as q_spread,
             json_extract(data, '$.q_aux_loss')::DOUBLE as q_aux_loss,
+            -- EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics (ON-leg-only;
+            -- NULL on the OFF/HRA-off leg). ev_sum == explained_variance on the ON leg.
+            -- cov_rcf_return_share is the epic gate (>0.40 => cf stream dominates Var[return]);
+            -- r_main_cov is the "is R_main smoother" gate. Pure telemetry, never gate inputs.
+            json_extract(data, '$.cf_value_loss')::DOUBLE as cf_value_loss,
+            json_extract(data, '$.ev_main')::DOUBLE as ev_main,
+            json_extract(data, '$.ev_cf')::DOUBLE as ev_cf,
+            json_extract(data, '$.ev_sum')::DOUBLE as ev_sum,
+            json_extract(data, '$.cov_rcf_return_share')::DOUBLE as cov_rcf_return_share,
+            json_extract(data, '$.r_main_cov')::DOUBLE as r_main_cov,
             -- D5 slot-saturation / actor-agency diagnostics
             json_extract(data, '$.forced_step_ratio')::DOUBLE as forced_step_ratio,
             json_extract(data, '$.usable_actor_timesteps')::INTEGER as usable_actor_timesteps,
             json_extract(data, '$.decision_density')::DOUBLE as decision_density,
             json_extract(data, '$.advantage_std_floored')::BOOLEAN as advantage_std_floored,
             json_extract(data, '$.d5_pre_norm_advantage_std')::DOUBLE as d5_pre_norm_advantage_std,
+            -- Per-head advantage normalization observability
+            json_extract(data, '$.advantage_per_head_normalized')::BOOLEAN as advantage_per_head_normalized,
+            json_extract(data, '$.advantage_norm_fellback_count')::INTEGER as advantage_norm_fellback_count,
+            json_extract(data, '$.min_sparse_head_advantage_std')::DOUBLE as min_sparse_head_advantage_std,
             -- Rollback observability (per-rollout aggregates; pure telemetry)
             json_extract(data, '$.rollback_count')::INTEGER as rollback_count,
             json_extract(data, '$.rollback_steps_zeroed')::INTEGER as rollback_steps_zeroed,
@@ -502,10 +516,15 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.reward_components.alpha_shock')::DOUBLE as alpha_shock,
             json_extract(data, '$.reward_components.blending_warning')::DOUBLE as blending_warning,
             json_extract(data, '$.reward_components.holding_warning')::DOUBLE as holding_warning,
+            -- D2 capacity rents: stored as POSITIVE magnitudes the reward SUBTRACTS, so a
+            -- Σ(additends)==total_reward reconciliation must apply them as (-occupancy_rent
+            -- -fossilized_rent). Required for multi-seed additend reconciliation (Phase 0 §4).
+            json_extract(data, '$.reward_components.occupancy_rent')::DOUBLE as occupancy_rent,
+            json_extract(data, '$.reward_components.fossilized_rent')::DOUBLE as fossilized_rent,
             -- Bonuses
             json_extract(data, '$.reward_components.stage_bonus')::DOUBLE as stage_bonus,
             json_extract(data, '$.reward_components.pbrs_bonus')::DOUBLE as pbrs_bonus,
-            json_extract(data, '$.reward_components.synergy_bonus')::DOUBLE as synergy_bonus,
+            json_extract(data, '$.reward_components.interaction_bonus')::DOUBLE as interaction_bonus,
             json_extract(data, '$.reward_components.action_shaping')::DOUBLE as action_shaping,
             json_extract(data, '$.reward_components.terminal_bonus')::DOUBLE as terminal_bonus,
             json_extract(data, '$.reward_components.fossilize_terminal_bonus')::DOUBLE as fossilize_terminal_bonus,
@@ -524,6 +543,30 @@ VIEW_DEFINITIONS: dict[str, str] = {
         WHERE
             event_type = 'ANALYTICS_SNAPSHOT'
             AND json_extract_string(data, '$.kind') = 'last_action'
+    """,
+    "seed_residency": """
+        CREATE OR REPLACE VIEW seed_residency AS
+        SELECT
+            event_id,
+            timestamp,
+            run_dir,
+            group_id,
+            json_extract(data, '$.seed_residency.env_id')::INTEGER as env_id,
+            json_extract(data, '$.seed_residency.episode_idx')::INTEGER as episode_idx,
+            json_extract_string(data, '$.seed_residency.seed_id') as seed_id,
+            json_extract(data, '$.seed_residency.params')::INTEGER as params,
+            -- J integrand (Phase 0): J = SUM(j_per_param) GROUP BY run_dir, episode_idx
+            json_extract(data, '$.seed_residency.cf_weighted_integral')::DOUBLE as cf_weighted_integral,
+            json_extract(data, '$.seed_residency.cf_weighted_integral_committed')::DOUBLE as cf_weighted_integral_committed,
+            json_extract(data, '$.seed_residency.cf_weighted_integral_uncommitted')::DOUBLE as cf_weighted_integral_uncommitted,
+            json_extract(data, '$.seed_residency.raw_alpha_integral')::DOUBLE as raw_alpha_integral,
+            json_extract(data, '$.seed_residency.n_on_path_steps')::INTEGER as n_on_path_steps,
+            json_extract(data, '$.seed_residency.n_none_steps')::INTEGER as n_none_steps,
+            json_extract(data, '$.seed_residency.j_per_param')::DOUBLE as j_per_param
+        FROM raw_events
+        WHERE
+            event_type = 'ANALYTICS_SNAPSHOT'
+            AND json_extract_string(data, '$.kind') = 'seed_residency'
     """,
     "batch_stats": """
         CREATE OR REPLACE VIEW batch_stats AS

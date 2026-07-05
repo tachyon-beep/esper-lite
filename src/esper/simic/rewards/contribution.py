@@ -14,6 +14,7 @@ from esper.leyline import (
     LifecycleOp,
     MIN_HOLDING_EPOCHS,
     MIN_PRUNE_AGE,
+    REWARD_NORMALIZER_CLIP,
     SeedStage,
 )
 from esper.nissa import get_hub
@@ -303,6 +304,47 @@ class ContributionRewardConfig:
     # - "minimum": min(progress, contribution) - very conservative
     attribution_formula: Literal["harmonic", "minimum"] = "harmonic"
 
+    # === Phase −1 cheap-lever scale-falsifier knobs (experiment flags, default OFF) ===
+    # See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5 (Phase −1).
+    # These are EXPERIMENT knobs (analogous to disable_timing_discount / attribution_formula),
+    # NOT backwards-compat shims: with both OFF the SHAPED dense-attribution path is
+    # byte-identical to status quo (there is no old behaviour to preserve a flag for). They
+    # falsify whether the verified per-step SCALE pathology (un-clipped bounded_attribution over
+    # a 0–100-point counterfactual) is the root cause of the farmable-tail + churn behaviour.
+    # NOTE: a clip is itself an optimum-changing nonlinearity — an experimental arm, never the
+    # default. If the verdict is STOP→adopt, the follow-up is to make the chosen behaviour the
+    # single code path and delete the un-clipped branch + this flag (no-legacy policy).
+    #
+    # shaped_attribution_clip: per-step UPPER cap on the SHAPED dense bounded_attribution
+    #   (clean-counterfactual + proxy positive channels), applied after all discounts and
+    #   before the FOSSILIZE/PRUNE/ratio post-processing. 0.0 = OFF. Mirrors the ESCROW
+    #   escrow_delta_clip magnitude (2.0) but is POSITIVE-ONLY: it caps the farmable positive
+    #   tail and leaves the negative-contribution penalty intact (on the cited run negatives
+    #   reach −15.3, so a symmetric clamp would confound the arm).
+    shaped_attribution_clip: float = 0.0
+    # attribution_unit_normalize: express the SHAPED dense counterfactual term in accuracy-
+    #   FRACTION units (divide by 100) so it lives in ~[0,1] instead of 0–100 points. Applied
+    #   to the unified bounded_attribution (clean-counterfactual + proxy, both signs) for
+    #   dimensional consistency. False = OFF.
+    attribution_unit_normalize: bool = False
+
+    # === Committed-Shapley synergy top-up (experiment, default OFF) ===
+    # PDR-0010/0012; plan docs/plans/ready/2026-07-02-committed-shapley-topup-build.md.
+    # A terminal-only, additive credit over the FOSSILIZED coalition, delivered
+    # by retro-write into the rollout buffer at each seed's FOSSILIZE step
+    # (pre-GAE) — NOT a per-step additend of this reward function. scale=0.0
+    # skips the entire 2^k apparatus (byte-identical status quo). When scale>0
+    # the two sibling synergy channels (interaction bonus; hindsight credit)
+    # are structurally disabled — the top-up replaces them (double-pay guard).
+    # Units: noise_floor (tau) and cap are accuracy PERCENTAGE POINTS;
+    # std_floor is raw-reward units (floor on the divide_by_std divisor);
+    # normalized_cap is buffer units (the PRIMARY bound on the written credit).
+    shapley_synergy_scale: float = 0.0
+    shapley_synergy_noise_floor: float = 0.0
+    shapley_synergy_cap: float = 0.0
+    shapley_synergy_std_floor: float = 0.0
+    shapley_synergy_normalized_cap: float = 0.0
+
     # === Drip Reward Configuration (BASIC_PLUS mode) ===
     # Post-fossilization accountability: drip reward paid over remaining epochs
     # based on continued seed contribution. DRL Expert review 2026-01-12.
@@ -337,6 +379,40 @@ class ContributionRewardConfig:
             raise ValueError("min_drip_epochs must be >= 1")
         if self.negative_drip_ratio < 0 or self.negative_drip_ratio > 1.0:
             raise ValueError("negative_drip_ratio must be in [0.0, 1.0]")
+
+        for name, value in (
+            ("shapley_synergy_scale", self.shapley_synergy_scale),
+            ("shapley_synergy_noise_floor", self.shapley_synergy_noise_floor),
+            ("shapley_synergy_cap", self.shapley_synergy_cap),
+            ("shapley_synergy_std_floor", self.shapley_synergy_std_floor),
+            ("shapley_synergy_normalized_cap", self.shapley_synergy_normalized_cap),
+        ):
+            if value < 0.0:
+                raise ValueError(f"{name} must be >= 0 (got {value})")
+        if self.shapley_synergy_normalized_cap > REWARD_NORMALIZER_CLIP:
+            # Pre-A/B build WI-4: the credit channel is clip-free
+            # (divide_by_std), so normalized_cap is its SOLE operative bound.
+            raise ValueError(
+                f"shapley_synergy_normalized_cap must be <= the reward-"
+                f"normalizer clip ({REWARD_NORMALIZER_CLIP}); got "
+                f"{self.shapley_synergy_normalized_cap}"
+            )
+        if self.shapley_synergy_scale > 0.0:
+            # F2 (reviewer): the credit bound must be structurally ON whenever
+            # the term can pay. cap bounds raw(s) in pp; normalized_cap bounds
+            # the retro-written credit in buffer units (the PRIMARY bound,
+            # since divide_by_std is the one unclipped reward channel).
+            if self.shapley_synergy_cap <= 0.0:
+                raise ValueError(
+                    "shapley_synergy_scale > 0 requires shapley_synergy_cap > 0 "
+                    "(a zero per-seed cap pays nothing; a missing cap is unbounded)"
+                )
+            if self.shapley_synergy_normalized_cap <= 0.0:
+                raise ValueError(
+                    "shapley_synergy_scale > 0 requires "
+                    "shapley_synergy_normalized_cap > 0 (the normalized-space "
+                    "bound on the retro-written credit must be ON)"
+                )
 
     @staticmethod
     def default() -> "ContributionRewardConfig":
@@ -611,6 +687,23 @@ def compute_contribution_reward(
             ):
                 bounded_attribution = config.proxy_contribution_weight * stage_improvement
 
+        # Phase −1 cheap-lever experiment knobs (default OFF => byte-identical status quo).
+        # Applied to the unified SHAPED dense attribution term (clean-counterfactual OR proxy
+        # sub-branch) AFTER all discounts and BEFORE the FOSSILIZE-suppression / PRUNE
+        # sign-inversion / ratio_penalty post-processing below, so they bound/normalize BOTH
+        # farmable positive channels without altering prune/fossilize/ratio economics. The
+        # ESCROW branch is excluded (this is inside the non-escrow `else`; ESCROW has its own
+        # escrow_delta_clip). See reward-redesign-methodology.md §5 (Phase −1) / GATE −1.
+        if config.attribution_unit_normalize:
+            # Express the counterfactual in accuracy-FRACTION units (0–100 points -> ~[0,1]).
+            # Both signs scale identically (no penalty:credit asymmetry).
+            bounded_attribution /= 100.0
+        if config.shaped_attribution_clip > 0.0:
+            # POSITIVE-ONLY cap: bound the farmable positive tail; leave the negative-
+            # contribution penalty intact (a symmetric clamp would be a confound orthogonal
+            # to the scale hypothesis — the cited run has negatives reaching −15.3).
+            bounded_attribution = min(config.shaped_attribution_clip, bounded_attribution)
+
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         # Suppress attribution only when the seed's CLEAN counterfactual is
         # negative (it genuinely harmed), not when the host merely drifted down.
@@ -695,14 +788,22 @@ def compute_contribution_reward(
     if components:
         components.pbrs_bonus = pbrs_bonus
 
-    synergy_bonus = 0.0
-    if seed_info is not None and attribution_discount >= 0.5 and bounded_attribution > 0:
-        synergy_bonus = _compute_synergy_bonus(
+    # F1/F8 mutual exclusion (PDR-0012): when the Committed-Shapley top-up is
+    # on it REPLACES the legacy interaction-driven reward channel — paying both
+    # would double-credit the same coalition effect.
+    interaction_bonus = 0.0
+    if (
+        config.shapley_synergy_scale == 0.0
+        and seed_info is not None
+        and attribution_discount >= 0.5
+        and bounded_attribution > 0
+    ):
+        interaction_bonus = _compute_interaction_bonus(
             seed_info.interaction_sum,
         )
-        reward += synergy_bonus
+        reward += interaction_bonus
     if components:
-        components.synergy_bonus = synergy_bonus
+        components.interaction_bonus = interaction_bonus
 
     rent_penalty = 0.0
     growth_ratio = 0.0
@@ -1224,16 +1325,16 @@ def _contribution_pbrs_bonus(
     return config.pbrs_weight * (config.gamma * phi_current - phi_prev)
 
 
-def _compute_synergy_bonus(
+def _compute_interaction_bonus(
     interaction_sum: float,
-    synergy_weight: float = 0.1,
+    interaction_weight: float = 0.1,
 ) -> float:
-    """Compute synergy bonus for scaffolding behavior."""
+    """Compute interaction bonus for scaffolding behavior."""
     if interaction_sum <= 0:
         return 0.0
 
     raw_bonus = math.tanh(interaction_sum * 0.5)
-    return raw_bonus * synergy_weight
+    return raw_bonus * interaction_weight
 
 
 def compute_scaffold_hindsight_credit(

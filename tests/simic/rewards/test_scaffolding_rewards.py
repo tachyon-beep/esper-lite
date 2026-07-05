@@ -4,8 +4,8 @@ from esper.leyline import LifecycleOp, SeedStage
 from esper.simic.rewards import ContributionRewardConfig, SeedInfo, compute_contribution_reward
 
 
-def test_synergy_bonus_added_for_positive_interaction():
-    """Verify synergy bonus is added when interaction_sum > 0."""
+def test_interaction_bonus_added_for_positive_interaction():
+    """Verify interaction bonus is added when interaction_sum > 0."""
     config = ContributionRewardConfig()
 
     seed_info = SeedInfo(
@@ -22,7 +22,7 @@ def test_synergy_bonus_added_for_positive_interaction():
         counterfactual_total_improvement=0.05,
     )
 
-    reward_with_synergy = compute_contribution_reward(
+    reward_with_interaction = compute_contribution_reward(
         action=LifecycleOp.WAIT,
         seed_contribution=0.05,
         val_acc=70.0,
@@ -35,7 +35,7 @@ def test_synergy_bonus_added_for_positive_interaction():
     )
 
     # Same but with no interaction
-    seed_info_no_synergy = SeedInfo(
+    seed_info_no_interaction = SeedInfo(
         stage=SeedStage.BLENDING.value,
         improvement_since_stage_start=0.05,
         total_improvement=0.05,
@@ -49,11 +49,11 @@ def test_synergy_bonus_added_for_positive_interaction():
         counterfactual_total_improvement=0.05,
     )
 
-    reward_no_synergy = compute_contribution_reward(
+    reward_no_interaction = compute_contribution_reward(
         action=LifecycleOp.WAIT,
         seed_contribution=0.05,
         val_acc=70.0,
-        seed_info=seed_info_no_synergy,
+        seed_info=seed_info_no_interaction,
         epoch=10,
         max_epochs=25,
         total_params=110000,
@@ -61,8 +61,8 @@ def test_synergy_bonus_added_for_positive_interaction():
         config=config,
     )
 
-    assert reward_with_synergy > reward_no_synergy, (
-        f"Expected synergy bonus: {reward_with_synergy} > {reward_no_synergy}"
+    assert reward_with_interaction > reward_no_interaction, (
+        f"Expected interaction bonus: {reward_with_interaction} > {reward_no_interaction}"
     )
 
 
@@ -70,7 +70,7 @@ def test_interaction_metrics_extracted_from_seed_state():
     """Integration test: verify SeedInfo.from_seed_state() extracts interaction metrics.
 
     This is a critical data pipeline test - if interaction_sum and boost_received
-    are not extracted from SeedMetrics, the synergy bonus will always be 0.0 in production.
+    are not extracted from SeedMetrics, the interaction bonus will always be 0.0 in production.
     """
     from esper.kasmina.slot import SeedState, SeedMetrics
 
@@ -111,7 +111,7 @@ def test_interaction_metrics_extracted_from_seed_state():
         f"boost_received not extracted: got {seed_info.boost_received}, expected 1.2"
     )
 
-    # Verify synergy bonus is non-zero when using this SeedInfo
+    # Verify interaction bonus is non-zero when using this SeedInfo
     config = ContributionRewardConfig()
     reward, components = compute_contribution_reward(
         action=LifecycleOp.WAIT,
@@ -126,8 +126,8 @@ def test_interaction_metrics_extracted_from_seed_state():
         return_components=True,
     )
 
-    assert components.synergy_bonus > 0, (
-        f"Synergy bonus should be positive, got {components.synergy_bonus}"
+    assert components.interaction_bonus > 0, (
+        f"Interaction bonus should be positive, got {components.interaction_bonus}"
     )
 
 

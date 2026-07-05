@@ -35,6 +35,47 @@ def create_noop_seed(dim: int, **kwargs: Any) -> nn.Module:
     return NoopSeed(dim)
 
 
+# Init scale for the placebo's single conv: large enough that its delta perturbs
+# logits (non-degenerate leave-one-out) and its gradient clears the 1e-7
+# vanishing threshold with margin, small enough that the seed contributes ~0
+# accuracy. The PIN-E noise-floor analysis certifies this via a downward
+# epsilon ladder (docs/plans/ready/2026-07-03-pin-e-placebo-harness.md §2.6).
+PLACEBO_INIT_STD: float = 1e-3
+
+
+@BlueprintRegistry.register(
+    "placebo",
+    "cnn",
+    param_estimate=576,
+    description="Near-inert measurement placebo - tiny fixed residual delta (PIN-E)",
+)
+def create_placebo_seed(dim: int, **kwargs: Any) -> nn.Module:
+    """Near-inert small-real placebo seed for noise-floor measurement.
+
+    Residual y = x + conv(x) with a single 3x3 depthwise conv (bias=False)
+    initialized tiny-random. Deliberately NO normalizer or activation after the
+    conv: a norm would rescale the tiny delta back to O(1) and an activation
+    would sign-bias the measured contribution mean. Run with seed_lr=0 so the
+    delta stays fixed for the whole run.
+    """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/placebo: {sorted(kwargs)}")
+
+    class PlaceboSeed(nn.Module):
+        def __init__(self, channels: int):
+            super().__init__()
+            self.conv = nn.Conv2d(
+                channels, channels, kernel_size=3, padding=1, groups=channels, bias=False
+            )
+            nn.init.normal_(self.conv.weight, std=PLACEBO_INIT_STD)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            delta: torch.Tensor = self.conv(x)
+            return x + delta
+
+    return PlaceboSeed(dim)
+
+
 def get_num_groups(channels: int, target_group_size: int = TARGET_CHANNELS_PER_GROUP) -> int:
     """Select optimal num_groups for GroupNorm.
 

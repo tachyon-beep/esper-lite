@@ -18,7 +18,11 @@ from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any, Callable, Literal, cast
 
-from esper.leyline.telemetry_contracts import ObservationStatsTelemetry, RewardComponentsTelemetry
+from esper.leyline.telemetry_contracts import (
+    ObservationStatsTelemetry,
+    RewardComponentsTelemetry,
+    SeedResidencyTelemetry,
+)
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -105,6 +109,8 @@ class TelemetryEventType(Enum):
 
     # === Counterfactual Attribution Events ===
     COUNTERFACTUAL_MATRIX_COMPUTED = auto()  # Full factorial matrix for env
+    COMMITTED_SHAPLEY_TOPUP = auto()  # Terminal committed-coalition credit (PDR-0012)
+    FOSSILIZE_RATE_GUARD_TRIPPED = auto()  # G1 in-run abort (pre-A/B build WI-3)
 
     # === Analytics Events ===
     ANALYTICS_SNAPSHOT = auto()       # Full state snapshot for dashboard sync
@@ -114,6 +120,10 @@ class TelemetryEventType(Enum):
 
     # === Memory / Allocator Events ===
     ALLOCATOR_STATS = auto()  # Per-device CUDA caching-allocator stats (frag, retries, OOMs)
+
+    # === Causal-contribution harness Events (SUPPRESS-SLOT) ===
+    INTERVENTION_CONFIGURED = auto()  # Run-start record describing a stationary intervention mask (no action_id)
+    INTERVENTION_STEP = auto()        # Per-step RNG compare-point hashes + forced-step split by reason
 
 
 @dataclass
@@ -898,6 +908,18 @@ class PPOUpdatePayload:
     # divergence means the aux head is not converging.
     q_aux_loss: float | None = None
 
+    # EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics. ON-leg-only (emitted
+    # only when hra_value_decomposition is on), hence Optional[float] defaulting to None:
+    # None on the OFF leg / on events predating this plan. ev_sum == explained_variance on
+    # the ON leg. cov_rcf_return_share = Cov(returns_cf, returns_total)/Var(returns_total)
+    # (epic gate >0.40); r_main_cov = std(returns_main)/(|mean(returns_main)|+eps).
+    cf_value_loss: float | None = None
+    ev_main: float | None = None
+    ev_cf: float | None = None
+    ev_sum: float | None = None
+    cov_rcf_return_share: float | None = None
+    r_main_cov: float | None = None
+
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
     clip_fraction_positive: float = 0.0  # r > 1+ε (probability increases capped)
@@ -959,6 +981,18 @@ class PPOUpdatePayload:
     decision_density: float = 1.0  # Fraction with agency (1 - forced_step_ratio), higher = healthier
     advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
     d5_pre_norm_advantage_std: float | None = None  # Raw std before normalization
+
+    # === Per-head advantage normalization observability ===
+    # advantage_per_head_normalized: per-head advantage standardization was active.
+    # advantage_norm_fellback_count: heads sent back to the global scale by the
+    #   low-count guard (MIN_HEAD_NORM_COUNT) — sparse heads starved of active steps.
+    # min_sparse_head_advantage_std: smallest PRE-norm advantage std across non-op
+    #   heads; op rides the global ~1 scale, so a sparse head << 1 is the
+    #   "normalized into oblivion by op's variance" signal (observable even when the
+    #   per-head ablation is OFF).
+    advantage_per_head_normalized: bool = False
+    advantage_norm_fellback_count: int = 0
+    min_sparse_head_advantage_std: float = 0.0
 
     # === Rollback observability (per-rollout aggregates; pure telemetry) ===
     # rollback_count: governor rollbacks ATTRIBUTED to an executed transition this rollout.
@@ -1107,6 +1141,16 @@ class PPOUpdatePayload:
             q_variance=data["q_variance"],
             q_spread=data["q_spread"],
             q_aux_loss=data.get("q_aux_loss"),
+            # OPTIONAL: EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics.
+            # ON-leg-only / persisted-event boundary -> .get(None): a missing key means the
+            # OFF leg or an event predating this plan, NOT a current-code bug (matches the
+            # explained_variance / q_aux_loss .get pattern above).
+            cf_value_loss=data.get("cf_value_loss"),
+            ev_main=data.get("ev_main"),
+            ev_cf=data.get("ev_cf"),
+            ev_sum=data.get("ev_sum"),
+            cov_rcf_return_share=data.get("cov_rcf_return_share"),
+            r_main_cov=data.get("r_main_cov"),
             # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],
@@ -1176,6 +1220,11 @@ class PPOUpdatePayload:
             decision_density=data.get("decision_density", 1.0),
             advantage_std_floored=data.get("advantage_std_floored", False),
             d5_pre_norm_advantage_std=data.get("d5_pre_norm_advantage_std"),
+            # OPTIONAL: Per-head advantage normalization observability (defaults for
+            # events predating the per-head normalization work).
+            advantage_per_head_normalized=data.get("advantage_per_head_normalized", False),
+            advantage_norm_fellback_count=data.get("advantage_norm_fellback_count", 0),
+            min_sparse_head_advantage_std=data.get("min_sparse_head_advantage_std", 0.0),
             # OPTIONAL: Rollback observability. Persisted-event boundary -> .get(default)
             # per schema evolution (a missing key means an OLD event predating this field).
             rollback_count=data.get("rollback_count", 0),
@@ -1597,6 +1646,120 @@ class CounterfactualMatrixPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class CommittedShapleyTopUpPayload:
+    """Payload for COMMITTED_SHAPLEY_TOPUP (one per credited env, terminal epoch).
+
+    The committed-Shapley credit is retro-written into the rollout buffer at
+    each seed's FOSSILIZE step (pre-GAE) — it is NOT a per-step reward
+    additend, so this event is the sole ledger for the buffer-side delta.
+    Per-slot tuples are index-aligned with ``slot_ids``. Units: phi/c_paid/
+    gap/raw/top_up are accuracy percentage points; credit_buf is buffer
+    (divide_by_std) units; std_used is the divisor actually applied
+    (max(running_std, shapley_synergy_std_floor)).
+
+    Divisor provenance (pre-A/B build, drl condition 4): ``running_std_raw``
+    is the pre-floor ``current_std()`` (None on the dropped_no_std path);
+    ``std_floor_bound`` / ``normalized_cap_bound`` are authoritative
+    computed-at-write flags — bind RATES are offline aggregations over them.
+    ``v_table_masks``/``v_table_accs`` carry the raw 2^k coalition table
+    (bit i of a mask <=> slot_ids[i] in S, masks ascending) so the first ON
+    run retires the transient-factorial calibration proxy.
+    """
+
+    # REQUIRED
+    env_id: int
+    slot_ids: tuple[str, ...]
+    phi: tuple[float, ...]
+    c_paid: tuple[float, ...]
+    gap: tuple[float, ...]
+    raw: tuple[float, ...]
+    top_up: tuple[float, ...]
+    t_f: tuple[int, ...]
+    credit_buf: tuple[float, ...]
+    g: float
+    sum_raw: float
+    clamp_binding: bool
+    std_used: float
+    running_std_raw: float | None
+    std_floor_bound: bool
+    normalized_cap_bound: tuple[bool, ...]
+    v_table_masks: tuple[int, ...]
+    v_table_accs: tuple[float, ...]
+    # Per-slot AlphaAlgorithm names, index-aligned with ``slot_ids`` — the
+    # gate/non-gate stratification key (prereg addendum §5: gate-vs-non-gate
+    # credit split and stratified tau/P99 recalibration ride the TOPUP path
+    # so the OFF stream stays byte-identical).
+    alpha_algorithms: tuple[str, ...]
+    # The noise floor (tau) actually applied in this run's credit computation.
+    tau_used: float
+
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
+    # OPTIONAL
+    # True only on the pathological count<2 normalizer state (no reward-scale
+    # information all batch): the credits were computed but NOT written.
+    dropped_no_std: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CommittedShapleyTopUpPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            slot_ids=_ensure_tuple(data["slot_ids"]),
+            phi=_ensure_tuple(data["phi"]),
+            c_paid=_ensure_tuple(data["c_paid"]),
+            gap=_ensure_tuple(data["gap"]),
+            raw=_ensure_tuple(data["raw"]),
+            top_up=_ensure_tuple(data["top_up"]),
+            t_f=_ensure_tuple(data["t_f"]),
+            credit_buf=_ensure_tuple(data["credit_buf"]),
+            g=data["g"],
+            sum_raw=data["sum_raw"],
+            clamp_binding=data["clamp_binding"],
+            std_used=data["std_used"],
+            running_std_raw=data["running_std_raw"],
+            std_floor_bound=data["std_floor_bound"],
+            normalized_cap_bound=_ensure_tuple(data["normalized_cap_bound"]),
+            v_table_masks=_ensure_tuple(data["v_table_masks"]),
+            v_table_accs=_ensure_tuple(data["v_table_accs"]),
+            alpha_algorithms=_ensure_tuple(data["alpha_algorithms"]),
+            tau_used=data["tau_used"],
+            episode_idx=data["episode_idx"],
+            dropped_no_std=data.get("dropped_no_std", False),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class FossilizeRateGuardTrippedPayload:
+    """Payload for FOSSILIZE_RATE_GUARD_TRIPPED (G1 abort, pre-A/B build WI-3).
+
+    Emitted exactly once, immediately before the guard raises; the trainer's
+    shutdown ``finally`` (hub.close()) flushes it, so the trip context
+    survives the abort. G1 is the fast RUNAWAY breaker only — correctness is
+    adjudicated by G3 + the Δcorr(reward, J) floor at scoring time.
+    """
+
+    # REQUIRED
+    batch_idx: int
+    fossilize_count: int          # fossilizations in the tripping batch
+    trip_count_threshold: int     # FOSSILIZE_RATE_GUARD_TRIP_COUNT at trip time
+    consecutive_batches: int      # consecutive over-threshold batches incl. this one
+    episodes_in_batch: int
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "FossilizeRateGuardTrippedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            batch_idx=data["batch_idx"],
+            fossilize_count=data["fossilize_count"],
+            trip_count_threshold=data["trip_count_threshold"],
+            consecutive_batches=data["consecutive_batches"],
+            episodes_in_batch=data["episodes_in_batch"],
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class HeadTelemetry:
     """Per-head confidence and entropy values for factored action heads.
 
@@ -1748,6 +1911,9 @@ class AnalyticsSnapshotPayload:
     alpha_shock: float | None = None  # Convex penalty on alpha deltas
     # Full reward components dataclass (replaces individual fields)
     reward_components: "RewardComponentsTelemetry | None" = None
+    # For kind="seed_residency": per-seed alpha-weighted counterfactual residency (J integrand)
+    seed_id: str | None = None
+    seed_residency: "SeedResidencyTelemetry | None" = None
     # Observation space health (for early NaN detection)
     observation_stats: "ObservationStatsTelemetry | None" = None
     # Decision context for TamiyoBrain Decision Cards
@@ -1935,8 +2101,11 @@ class AnalyticsSnapshotPayload:
             # kind="shapley_computed": Shapley values
             shapley_values=data.get("shapley_values"),
             num_slots=data.get("num_slots"),
+            # kind="seed_residency": per-seed residency J integrand
+            seed_id=data.get("seed_id"),
             # Nested dataclasses (kind-dependent)
             reward_components=cls._parse_reward_components(data.get("reward_components")),
+            seed_residency=cls._parse_seed_residency(data.get("seed_residency")),
             observation_stats=cls._parse_observation_stats(data.get("observation_stats")),
             head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
@@ -1954,6 +2123,8 @@ class AnalyticsSnapshotPayload:
                 payload[dc_field.name] = value.to_dict() if value is not None else None
             elif dc_field.name == "reward_components":
                 payload[dc_field.name] = value.to_dict() if value is not None else None
+            elif dc_field.name == "seed_residency":
+                payload[dc_field.name] = value.to_dict() if value is not None else None
             elif dc_field.name == "observation_stats":
                 payload[dc_field.name] = value.to_dict() if value is not None else None
             else:
@@ -1968,6 +2139,15 @@ class AnalyticsSnapshotPayload:
         if data is None:
             return None
         return RewardComponentsTelemetry.from_dict(data)
+
+    @staticmethod
+    def _parse_seed_residency(
+        data: dict[str, Any] | None,
+    ) -> SeedResidencyTelemetry | None:
+        """Parse seed_residency from dict if present."""
+        if data is None:
+            return None
+        return SeedResidencyTelemetry.from_dict(data)
 
     @staticmethod
     def _parse_head_telemetry(data: dict[str, Any] | None) -> HeadTelemetry | None:
@@ -2494,6 +2674,102 @@ class GovernorRollbackPayload:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class InterventionConfiguredPayload:
+    """Payload for INTERVENTION_CONFIGURED. Run-start record (NO action_id).
+
+    Describes a stationary intervention mask for the causal-contribution
+    harness. SUPPRESS-SLOT is the only intervention defined; the mask makes
+    ``suppressed_slot_id`` un-committable to every non-WAIT op for the whole run
+    (with the op-validity repair). Emitted once at run start so the analysis can
+    join arms by the declared intervention without a per-step action_id.
+    """
+
+    # REQUIRED — intervention identity
+    proof_baseline_mode: str            # ProofBaselineMode.SUPPRESS_SLOT.value
+    lifecycle_policy: str               # SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY
+    suppressed_slot_id: str             # e.g. "r0c0"
+    suppressed_slot_index: int          # slot_config.index_for_slot_id(slot_id)
+    suppression_enabled: bool           # the literal OFF/ON toggle (no-op when False)
+
+    # REQUIRED — determinism / RNG-split posture
+    determinism_class: str              # DeterminismClass value (crn_statistical)
+    rng_split_enabled: bool             # three-domain split active for this run
+
+    # OPTIONAL — provenance
+    master_seed: int | None = None
+    description: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "InterventionConfiguredPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            proof_baseline_mode=data["proof_baseline_mode"],
+            lifecycle_policy=data["lifecycle_policy"],
+            suppressed_slot_id=data["suppressed_slot_id"],
+            suppressed_slot_index=data["suppressed_slot_index"],
+            suppression_enabled=data["suppression_enabled"],
+            determinism_class=data["determinism_class"],
+            rng_split_enabled=data["rng_split_enabled"],
+            master_seed=data.get("master_seed"),
+            description=data.get("description"),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class InterventionStepPayload:
+    """Payload for INTERVENTION_STEP. Per-rollout-step compare-point + split.
+
+    Carries (i) the RNG compare-point (§5.6): per-domain cumulative draw-count
+    and/or generator-state hash so the intervention-OFF run can be PROVEN CRN
+    identical to the matched control up to the first suppression event; and
+    (ii) the forced-step split by reason (§5.7): intervention-forced vs
+    WAIT-saturation, which a single pooled ratio would conflate.
+    """
+
+    # REQUIRED — step identity
+    epoch: int
+
+    # REQUIRED — cheap device-portable per-step compare-point (§5.6). The
+    # controller draws a fixed number of times per step, so a constant per-step
+    # DELTA in this count (within a run) and equal cumulative counts across paired
+    # arms are the DISPOSITIVE no-offset proof — no GPU sync, no cross-process
+    # state-hash comparability assumption.
+    controller_draw_count: int          # cumulative controller get_action invocations
+    blueprint_draw_count: int           # cumulative content-addressed blueprint-init germinations
+
+    # REQUIRED — forced-step split by reason (§5.7), counts over envs this step.
+    intervention_forced_count: int      # flipped to WAIT-only BY the suppression mask
+    wait_saturation_count: int          # naturally WAIT-only (mask-derived, all arms)
+    num_envs: int
+
+    # OPTIONAL — expensive per-domain generator-state digests. Each costs a
+    # GPU->CPU sync, so they are emitted only at a fixed stride and at suppression
+    # events (None otherwise); a secondary cross-check on the cheap draw counts.
+    controller_state_hash: str | None = None
+    host_state_hash: str | None = None
+
+    # OPTIONAL — context
+    suppressed_slot_index: int | None = None
+    first_suppression_epoch: int | None = None  # set on the step suppression first bites
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "InterventionStepPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            epoch=data["epoch"],
+            controller_draw_count=data["controller_draw_count"],
+            blueprint_draw_count=data["blueprint_draw_count"],
+            intervention_forced_count=data["intervention_forced_count"],
+            wait_saturation_count=data["wait_saturation_count"],
+            num_envs=data["num_envs"],
+            controller_state_hash=data.get("controller_state_hash"),
+            host_state_hash=data.get("host_state_hash"),
+            suppressed_slot_index=data.get("suppressed_slot_index"),
+            first_suppression_epoch=data.get("first_suppression_epoch"),
+        )
+
+
 # =============================================================================
 # Telemetry Payload Type Union
 # =============================================================================
@@ -2517,6 +2793,8 @@ TelemetryPayload = (
     | SeedFossilizedPayload
     | SeedPrunedPayload
     | CounterfactualMatrixPayload
+    | CommittedShapleyTopUpPayload
+    | FossilizeRateGuardTrippedPayload
     | AnalyticsSnapshotPayload
     | AnomalyDetectedPayload
     | PerformanceDegradationPayload
@@ -2525,6 +2803,8 @@ TelemetryPayload = (
     | MorphologyCausalLogPayload
     | TopologyManifestPayload
     | PhaseProfileReport
+    | InterventionConfiguredPayload
+    | InterventionStepPayload
 )
 
 

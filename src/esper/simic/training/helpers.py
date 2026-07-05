@@ -617,10 +617,11 @@ def run_heuristic_episode(
             slot.telemetry_inner_epoch = epoch
             slot.telemetry_global_epoch = epoch
 
-        # Determine if we should collect gradient telemetry this epoch
+        # Determine if we should collect gradient stats this epoch. Gate input
+        # (G2/KTS-001), NOT observability: must not depend on telemetry being
+        # enabled (esper-lite-4fe98055f7). Emission stays telemetry-gated.
         collect_gradients = (
-            ops_telemetry_enabled
-            and gradient_telemetry_stride > 0
+            gradient_telemetry_stride > 0
             and epoch % gradient_telemetry_stride == 0
         )
         grad_async: dict[str, Any] | None = None

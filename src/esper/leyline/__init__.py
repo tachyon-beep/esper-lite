@@ -121,8 +121,14 @@ DEFAULT_LSTM_HIDDEN_DIM = 512
 # pre-v2 checkpoints (with value_head.* but no state_value_head.* / q_head.*)
 # fail strict load BY DESIGN (No-Legacy policy).
 #
+# Version 3 (EV-stab Stage 2) adds an OPTIONAL head-only cf_value_head (V_cf) under
+# the hra_value_decomposition flag, giving a three-head value topology on the ON leg:
+# state_value_head (V_main) + cf_value_head (V_cf, trunk-detached) + q_head (telemetry/
+# aux total). The OFF leg keeps the v2 two-head topology, but the schema id still bumps
+# so v2 and v3 checkpoints are not silently cross-loaded.
+#
 # Used by: simic/agent/ppo_agent.py (checkpoint save/load).
-VALUE_HEAD_SCHEMA_VERSION = 2
+VALUE_HEAD_SCHEMA_VERSION = 3
 
 # Number of LSTM layers in the host model.
 # Used by: Karn TUI widgets (gradient health display), telemetry dashboards.
@@ -167,6 +173,14 @@ DEFAULT_GAE_LAMBDA = 0.98
 # we clamp it to prevent normalization from amplifying noise into huge gradients.
 # Typical healthy std: 0.5-2.0; below 0.1 indicates a degenerate batch.
 ADVANTAGE_STD_FLOOR: float = 0.1
+
+# Per-head advantage normalization: minimum number of causally-active timesteps a
+# head must have in a batch before we standardize that head's advantages over its
+# OWN active subset. Below this count the per-head std estimate is too noisy to
+# trust (unit-variance over a handful of samples is pure noise), so we fall back to
+# the global mean/std for that head. Guards the sparse heads (blueprint/tempo ~18%
+# active, style/alpha_* ~22%) on short rollouts and forced-WAIT corridors.
+MIN_HEAD_NORM_COUNT: int = 32
 
 # Value function loss coefficient in combined PPO loss.
 # 1.0 gives critic equal weight with policy, important when value head
@@ -355,11 +369,14 @@ from esper.leyline.proof_baselines import (
     STATIC_FINAL_SOURCE_TOPOLOGY_V1,
     STATIC_FINAL_SOURCE_TOPOLOGY_VERSION,
     STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS,
+    DECLARED_SCHEDULES,
+    DeclaredSchedule,
     ProofBaselineCohort,
     ProofBaselineMode,
     ProofBaselinePlan,
     StaticFinalSourceManifestRef,
-    static_final_source_action_for_epoch,
+    declared_schedule_action_for_epoch,
+    declared_schedule_germinate_blueprints,
 )
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
@@ -441,6 +458,20 @@ DEFAULT_GRADIENT_EMA_DECAY = 0.9
 # Relative improvement threshold for considering training "stable".
 # Lower = stricter = host stabilizes later (more conservative).
 DEFAULT_STABILIZATION_THRESHOLD = 0.03  # 3% relative improvement
+
+# G1 fossilize-rate guard (pre-A/B build WI-3; gate criterion 3): 5x the
+# banked control fossilize/ep baseline (0.207 +/- 0.006, n=5) over a 12-env
+# batch = 12.42 -> pinned to the integer ABOVE it (drl review NOTE-6). Two
+# consecutive over-threshold batches abort the ON run fail-loud.
+FOSSILIZE_RATE_GUARD_TRIP_COUNT = 13
+FOSSILIZE_RATE_GUARD_CONSECUTIVE_BATCHES = 2
+
+# The RewardNormalizer's symmetric clip on the ordinary (update_and_normalize)
+# path, in buffer units. Also the upper sanity bound for
+# shapley_synergy_normalized_cap: that channel is clip-free (divide_by_std),
+# so its cap is the SOLE operative bound and must not exceed what the
+# ordinary path would ever admit.
+REWARD_NORMALIZER_CLIP = 10.0
 
 # Consecutive epochs below threshold required to declare stability.
 DEFAULT_STABILIZATION_EPOCHS = 3
@@ -625,7 +656,7 @@ BLUEPRINT_NULL_INDEX = NUM_BLUEPRINTS
 # Embedding dimension for blueprint vectors.
 # Small (4) because blueprints are low-cardinality (13 types).
 # Larger dims would overfit; 4 is sufficient for type discrimination.
-# Total embedding params: (NUM_BLUEPRINTS + 1) * EMBED_DIM = 14 * 4 = 56
+# Total embedding params: (NUM_BLUEPRINTS + 1) * EMBED_DIM = 15 * 4 = 60
 DEFAULT_BLUEPRINT_EMBED_DIM = 4
 
 # Obs V3 base observation dimension (before blueprint embeddings are concatenated).
@@ -795,6 +826,8 @@ from esper.leyline.telemetry import (
     SeedFossilizedPayload,
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
+    CommittedShapleyTopUpPayload,
+    FossilizeRateGuardTrippedPayload,
     AnalyticsSnapshotPayload,
     HeadTelemetry,
     AnomalyDetectedPayload,
@@ -806,6 +839,21 @@ from esper.leyline.telemetry import (
     TopologyManifestRole,
     TopologyManifestPayload,
     GovernorPanicReason,
+    InterventionConfiguredPayload,
+    InterventionStepPayload,
+)
+
+# Causal-contribution harness contracts
+from esper.leyline.causal_intervention import (
+    CONTROL_MODE,
+    CONTROLLER_RNG_SEED_OFFSET,
+    HOST_RNG_SEED_OFFSET,
+    INTERVENTION_DETERMINISM_CLASS,
+    SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY,
+    SUPPRESS_SLOT_TARGET_SLOT_ID,
+    DeterminismClass,
+    ForcedStepReason,
+    RngDomain,
 )
 
 # Alpha controller contracts
@@ -883,6 +931,7 @@ __all__ = [
     "DEFAULT_CLIP_RATIO",
     "DEFAULT_GAE_LAMBDA",
     "ADVANTAGE_STD_FLOOR",
+    "MIN_HEAD_NORM_COUNT",
     "DEFAULT_VALUE_COEF",
     "DEFAULT_MAX_GRAD_NORM",
     "DEFAULT_TRAINING_MAX_GRAD_NORM",
@@ -950,7 +999,10 @@ __all__ = [
     "STATIC_FINAL_SOURCE_TOPOLOGY_VERSION",
     "STATIC_FINAL_SOURCE_TRAINING_DWELL_EPOCHS",
     "StaticFinalSourceManifestRef",
-    "static_final_source_action_for_epoch",
+    "DECLARED_SCHEDULES",
+    "DeclaredSchedule",
+    "declared_schedule_action_for_epoch",
+    "declared_schedule_germinate_blueprints",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
     "NUM_ALPHA_SPEEDS",
@@ -993,6 +1045,9 @@ __all__ = [
 
     # Host Stabilization
     "DEFAULT_STABILIZATION_THRESHOLD",
+    "FOSSILIZE_RATE_GUARD_TRIP_COUNT",
+    "FOSSILIZE_RATE_GUARD_CONSECUTIVE_BATCHES",
+    "REWARD_NORMALIZER_CLIP",
     "DEFAULT_STABILIZATION_EPOCHS",
 
     # Governor (Tolaria)
@@ -1134,6 +1189,17 @@ __all__ = [
     "PPOUpdatePayload",
     "MemoryWarningPayload",
     "AllocatorStatsPayload",
+    "InterventionConfiguredPayload",
+    "InterventionStepPayload",
+    "CONTROLLER_RNG_SEED_OFFSET",
+    "HOST_RNG_SEED_OFFSET",
+    "INTERVENTION_DETERMINISM_CLASS",
+    "SUPPRESS_SLOT_R0C0_LIFECYCLE_POLICY",
+    "SUPPRESS_SLOT_TARGET_SLOT_ID",
+    "CONTROL_MODE",
+    "DeterminismClass",
+    "ForcedStepReason",
+    "RngDomain",
     "RewardHackingSuspectedPayload",
     "TamiyoInitiatedPayload",
     "SeedGerminatedPayload",
@@ -1142,6 +1208,8 @@ __all__ = [
     "SeedFossilizedPayload",
     "SeedPrunedPayload",
     "CounterfactualMatrixPayload",
+    "CommittedShapleyTopUpPayload",
+    "FossilizeRateGuardTrippedPayload",
     "AnalyticsSnapshotPayload",
     "HeadTelemetry",
     "AnomalyDetectedPayload",

@@ -2,9 +2,11 @@
 
 import torch
 
-from esper.leyline import HEAD_NAMES, LifecycleOp
+from esper.leyline import HEAD_NAMES, MIN_HEAD_NORM_COUNT, LifecycleOp
 from esper.leyline.causal_masks import compute_causal_masks
 from esper.simic.agent import compute_per_head_advantages
+
+_STAT_KEYS = {"pre_norm_std", "post_norm_std", "n_active", "fellback", "normalized"}
 
 
 class TestPerHeadAdvantages:
@@ -15,7 +17,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.WAIT, LifecycleOp.WAIT])
         base_advantages = torch.tensor([1.0, 2.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         # op always gets advantage
         assert torch.allclose(per_head["op"], base_advantages)
@@ -34,7 +36,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.GERMINATE])
         base_advantages = torch.tensor([1.0, 2.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         # All germination heads active for GERMINATE
         assert torch.allclose(per_head["op"], base_advantages)
@@ -51,7 +53,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.FOSSILIZE])
         base_advantages = torch.tensor([5.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         assert torch.allclose(per_head["op"], base_advantages)
         assert torch.allclose(per_head["slot"], base_advantages)
@@ -67,7 +69,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.PRUNE])
         base_advantages = torch.tensor([3.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         assert torch.allclose(per_head["op"], base_advantages)
         assert torch.allclose(per_head["slot"], base_advantages)
@@ -83,7 +85,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.ADVANCE])
         base_advantages = torch.tensor([4.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         assert torch.allclose(per_head["op"], base_advantages)
         assert torch.allclose(per_head["slot"], base_advantages)
@@ -108,7 +110,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.SET_ALPHA_TARGET])
         base_advantages = torch.tensor([2.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         # Active heads for SET_ALPHA_TARGET
         assert torch.allclose(per_head["op"], base_advantages)
@@ -132,7 +134,7 @@ class TestPerHeadAdvantages:
         ])
         base_advantages = torch.tensor([1.0, 2.0, 3.0, 4.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         # op always active
         assert torch.allclose(per_head["op"], base_advantages)
@@ -165,7 +167,7 @@ class TestPerHeadAdvantages:
         ])
         base_advantages = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         # Only op should receive gradients
         assert torch.allclose(per_head["op"], base_advantages)
@@ -190,7 +192,7 @@ class TestPerHeadAdvantages:
             [3.0, 4.0],
         ])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         # op always active
         assert torch.allclose(per_head["op"], base_advantages)
@@ -213,6 +215,118 @@ class TestPerHeadAdvantages:
         assert torch.allclose(per_head["alpha_target"], expected_blueprint)
         assert torch.allclose(per_head["alpha_speed"], torch.tensor([[0.0, 0.0], [3.0, 0.0]]))
         assert torch.allclose(per_head["alpha_curve"], torch.tensor([[0.0, 0.0], [3.0, 0.0]]))
+
+
+class TestPerHeadNormalization:
+    """Per-head advantage standardization (decouples sparse heads from op's scale).
+
+    The fix addresses the shared-critic scale coupling: one global mean/std denominates
+    every head in the always-active op head's variance units, so a genuinely-signaled
+    sparse head is attenuated. ``per_head_normalize=True`` restandardizes each head over
+    its own causally-active subset, guarded against the adversarial failure modes
+    (low-count noise, fp16 underflow, single/zero-active divide-by-zero).
+    """
+
+    def test_stats_emitted_even_when_flag_off(self):
+        """Observability-first: per-head stats are always returned (flag OFF)."""
+        op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.WAIT])
+        base = torch.tensor([1.0, 2.0])
+
+        per_head, _masks, stats = compute_per_head_advantages(base, op_actions)
+
+        assert set(stats.keys()) == set(HEAD_NAMES)
+        for head, s in stats.items():
+            assert set(s.keys()) == _STAT_KEYS, f"{head} stats keys mismatch"
+            assert s["normalized"] == 0.0, "flag OFF must never renormalize"
+            assert s["fellback"] == 0.0, "fellback is meaningless when flag OFF"
+
+    def test_flag_off_preserves_global_then_mask(self):
+        """With the flag OFF the output is EXACTLY the historical behaviour."""
+        op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE, LifecycleOp.WAIT])
+        base = torch.tensor([1.5, -2.0, 3.0])
+
+        per_head, masks, _stats = compute_per_head_advantages(
+            base, op_actions, per_head_normalize=False
+        )
+
+        assert torch.allclose(per_head["op"], base)
+        for head in HEAD_NAMES:
+            if head == "op":
+                continue
+            assert torch.allclose(per_head[head], base * masks[head])
+
+    def test_per_head_unit_std_on_active_subset(self):
+        """Flag ON: each sufficiently-active head is ~unit-std over its active steps."""
+        n = MIN_HEAD_NORM_COUNT * 2
+        op_actions = torch.full((n,), int(LifecycleOp.GERMINATE))
+        # Deliberately non-unit, non-zero-mean advantages.
+        torch.manual_seed(0)
+        base = torch.randn(n) * 5.0 + 3.0
+
+        per_head, masks, stats = compute_per_head_advantages(
+            base, op_actions, per_head_normalize=True
+        )
+
+        # blueprint is active on every GERMINATE step -> renormalized to ~unit std.
+        assert stats["blueprint"]["normalized"] == 1.0
+        assert stats["blueprint"]["fellback"] == 0.0
+        active = per_head["blueprint"][masks["blueprint"].bool()]
+        assert abs(active.std(correction=0).item() - 1.0) < 1e-2
+        assert abs(active.mean().item()) < 1e-2
+        # Reported post-norm std agrees with the realized tensor.
+        assert abs(stats["blueprint"]["post_norm_std"] - 1.0) < 1e-2
+
+    def test_low_count_head_falls_back_to_global(self):
+        """A sparse head below MIN_HEAD_NORM_COUNT reuses the global scale, not σ_k≈noise."""
+        # Many WAITs, a handful of GERMINATEs (< MIN_HEAD_NORM_COUNT).
+        n_germ = max(1, MIN_HEAD_NORM_COUNT // 4)
+        ops = [int(LifecycleOp.GERMINATE)] * n_germ + [int(LifecycleOp.WAIT)] * 64
+        op_actions = torch.tensor(ops)
+        base = torch.randn(len(ops)) * 2.0
+
+        per_head, masks, stats = compute_per_head_advantages(
+            base, op_actions, per_head_normalize=True
+        )
+
+        # blueprint had too few active steps -> fell back to global*mask (unchanged).
+        assert stats["blueprint"]["fellback"] == 1.0
+        assert stats["blueprint"]["normalized"] == 0.0
+        assert torch.allclose(per_head["blueprint"], base * masks["blueprint"])
+
+    def test_single_and_zero_active_step_no_nan(self):
+        """Single- or zero-active-step heads must never produce NaN/Inf (blocker)."""
+        # All WAIT: blueprint/style/tempo/alpha_* have ZERO active steps; slot too.
+        op_actions = torch.full((MIN_HEAD_NORM_COUNT * 2,), int(LifecycleOp.WAIT))
+        base = torch.randn(MIN_HEAD_NORM_COUNT * 2)
+
+        per_head, _masks, stats = compute_per_head_advantages(
+            base, op_actions, per_head_normalize=True
+        )
+
+        for head, adv in per_head.items():
+            assert torch.isfinite(adv).all(), f"{head} produced non-finite advantage"
+        # Zero-active sparse heads fall back; their advantage stays all-zero.
+        assert stats["blueprint"]["fellback"] == 1.0
+        assert torch.count_nonzero(per_head["blueprint"]) == 0
+
+    def test_fp16_no_underflow_and_dtype_preserved(self):
+        """Per-head stats are computed in fp32 (no variance underflow); output keeps fp16."""
+        n = MIN_HEAD_NORM_COUNT * 2
+        op_actions = torch.full((n,), int(LifecycleOp.GERMINATE))
+        torch.manual_seed(1)
+        # Tiny-magnitude fp16 advantages: fp16 std() over the subset would underflow.
+        base = (torch.randn(n) * 1e-2).to(torch.float16)
+
+        per_head, masks, stats = compute_per_head_advantages(
+            base, op_actions, per_head_normalize=True
+        )
+
+        for head, adv in per_head.items():
+            assert adv.dtype == torch.float16, f"{head}: dtype not preserved"
+            assert torch.isfinite(adv).all(), f"{head}: non-finite under fp16"
+        # fp32 stats recover a real (non-collapsed) std and renormalize.
+        assert stats["blueprint"]["pre_norm_std"] > 0.0
+        assert stats["blueprint"]["normalized"] == 1.0
 
 
 class TestComputeCausalMasks:
@@ -250,7 +364,7 @@ class TestComputeCausalMasks:
         base_advantages = torch.tensor([1.0, 2.0])
 
         masks_standalone = compute_causal_masks(op_actions)
-        advantages, masks_from_fn = compute_per_head_advantages(base_advantages, op_actions)
+        advantages, masks_from_fn, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         assert set(masks_standalone.keys()) == set(advantages.keys()), (
             "compute_causal_masks and compute_per_head_advantages must return same keys"
@@ -272,7 +386,7 @@ class TestDtypePreservation:
         op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
         base_advantages = torch.tensor([1.0, 2.0], dtype=torch.float16)
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         for head, adv in per_head.items():
             assert adv.dtype == torch.float16, (
@@ -284,7 +398,7 @@ class TestDtypePreservation:
         op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
         base_advantages = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         for head, adv in per_head.items():
             assert adv.dtype == torch.bfloat16, (
@@ -296,7 +410,7 @@ class TestDtypePreservation:
         op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
         base_advantages = torch.tensor([1.0, 2.0], dtype=torch.float32)
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         for head, adv in per_head.items():
             assert adv.dtype == torch.float32, (
@@ -311,7 +425,7 @@ class TestDtypePreservation:
         op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
         base_advantages = torch.tensor([1.0, 2.0])
 
-        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks, _stats = compute_per_head_advantages(base_advantages, op_actions)
 
         # Masks should be boolean tensors
         for head, mask in masks.items():

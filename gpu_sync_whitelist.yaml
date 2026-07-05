@@ -348,3 +348,24 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:tolist
   owner: John
   reason: vectorized trainer sync point - build_action_inputs values to host list
+- key: src/esper/simic/agent/advantages.py:compute_per_head_advantages:item
+  owner: John
+  reason: Per-head adv-norm telemetry - post-norm std for the renormalized path; once per PPO update (update preprocessing), not per env step
+- key: src/esper/simic/agent/advantages.py:compute_per_head_advantages:item:2
+  owner: John
+  reason: Per-head adv-norm telemetry - post-norm std fallback (equals pre-norm std when not renormalized); once per PPO update
+- key: src/esper/simic/agent/advantages.py:compute_per_head_advantages:item:3
+  owner: John
+  reason: Per-head adv-norm telemetry - pre_norm_std stat for the per-head stats payload; once per PPO update
+- key: src/esper/simic/training/experiment_rng.py:_hash_state:numpy
+  owner: John
+  reason: False positive - torch Generator.get_state() returns a CPU ByteTensor (also for CUDA generators), so .numpy() involves no device transfer; used to hash RNG state for the R1 compare-point
+- key: src/esper/simic/training/intervention.py:SuppressSlotResult.intervention_forced_count:item
+  owner: John
+  reason: R1 causal-contribution harness compare-point telemetry - small bool-sum reduction; only called from _emit_intervention_step, which requires the rng_three_domain_split experiment flag (OFF in production training)
+- key: src/esper/simic/training/intervention.py:SuppressSlotResult.wait_saturation_count:item
+  owner: John
+  reason: R1 harness forced-step split cross-check - small bool-sum reduction; exercised by the intervention-core tests and the experiment-only telemetry path
+- key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._emit_intervention_step:item
+  owner: John
+  reason: R1 harness per-step forced-step split (total WAIT-only count) - single small reduction; method returns early unless the rng_three_domain_split experiment flag armed experiment_rng (OFF in production training)

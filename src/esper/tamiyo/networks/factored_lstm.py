@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TypedDict, cast
+from typing import NamedTuple, NotRequired, TypedDict, cast
 
 import torch
 import torch.nn as nn
@@ -51,6 +51,7 @@ from esper.tamiyo.policy.action_masks import (
     MaskedCategorical,
     _apply_floor_to_logits,
     _masked_log_prob,
+    _nan_safe_sampling_probs,
     _normalized_entropy_from_masked_logits,
     _validate_action_mask,
     _validate_logits,
@@ -83,6 +84,8 @@ class GetActionResult:
     sampled_op: torch.Tensor
     op_logits: torch.Tensor | None = None
     head_entropies: dict[str, torch.Tensor] | None = None
+    # EV-stab Stage 2: head-only V_cf(s) [batch], or None on the OFF leg.
+    cf_value: torch.Tensor | None = None
 
 
 class _ForwardOutput(TypedDict):
@@ -103,9 +106,29 @@ class _ForwardOutput(TypedDict):
     op_logits: torch.Tensor
     state_value: torch.Tensor  # V(s): op-INDEPENDENT PPO baseline
     q_value: torch.Tensor  # Q(s, sampled_op): op-conditioned telemetry/aux
+    # EV-stab Stage 2: head-only V_cf(s). None when hra_value_decomposition is off
+    # (NotRequired keeps OTHER would-be construction sites type-valid; forward()
+    # always supplies it explicitly).
+    cf_value: NotRequired[torch.Tensor | None]
     lstm_out: torch.Tensor  # [batch, seq, hidden_dim] for value recomputation
     sampled_op: torch.Tensor  # Op driving the action + Q telemetry
     hidden: tuple[torch.Tensor, torch.Tensor]
+
+
+class _EvalOutput(NamedTuple):
+    """Typed return for evaluate_actions() — attribute access for the new cf_value
+    field without a positional 7-tuple footgun (EV-stab Stage 2). Field ORDER matches
+    the historical 6-tuple (log_probs, value, entropy, hidden, pred_contributions,
+    q_value) so any remaining positional unpack stays correct, with cf_value appended.
+    """
+
+    log_probs: dict[str, torch.Tensor]
+    value: torch.Tensor
+    entropy: dict[str, torch.Tensor]
+    hidden: tuple[torch.Tensor, torch.Tensor]
+    pred_contributions: torch.Tensor | None
+    q_value: torch.Tensor | None
+    cf_value: torch.Tensor | None  # head-only V_cf(s); None on the OFF leg
 
 
 class BlueprintEmbedding(nn.Module):
@@ -325,6 +348,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
         lstm_layers: int = 1,
         slot_config: SlotConfig | None = None,
+        hra_value_decomposition: bool = False,
     ):
         super().__init__()
 
@@ -345,6 +369,9 @@ class FactoredRecurrentActorCritic(nn.Module):
         self.num_ops = head_sizes["op"]
         self.lstm_hidden_dim = lstm_hidden_dim
         self.lstm_layers = lstm_layers
+        # EV-stab Stage 2: build the head-only cf value head only when enabled
+        # (true bypass — no dead weights on the default-OFF leg).
+        self.hra_value_decomposition = hra_value_decomposition
 
         # Feature extraction before LSTM (reduces dimensionality)
         # M7: Pre-LSTM LayerNorm stabilizes input distribution to LSTM
@@ -493,6 +520,32 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.Linear(head_hidden // 4, 1),  # 64 -> 1
         )
 
+        # cf_value_head (EV-stab Stage 2): head-only counterfactual value V_cf(s).
+        # Built ONLY when hra_value_decomposition is enabled (true bypass — no dead
+        # weights on the default-OFF leg, where it stays None). Mirrors
+        # state_value_head's architecture; trained head-only (its _compute_cf_value
+        # detaches the LSTM trunk, exactly like _compute_q). The load-bearing invariant
+        # is OFF-leg byte-identity: when OFF this branch is never entered, so zero extra
+        # RNG is consumed and every existing head's init is unchanged vs today. On the
+        # ON leg, building cf_value_head consumes RNG (its own Linear init + an extra
+        # entry in the _init_weights self.modules() loop) BEFORE _init_weights runs, so
+        # ALL downstream heads' init draws shift — this is fine: ON is a fresh-init
+        # paired-A/B path by design (plan §6); only OFF is pinned byte-identical.
+        if hra_value_decomposition:
+            self.cf_value_head: nn.Sequential | None = nn.Sequential(
+                nn.Linear(lstm_hidden_dim, head_hidden),  # 512 -> 256
+                nn.LayerNorm(head_hidden),
+                nn.ReLU(),
+                nn.Linear(head_hidden, head_hidden // 2),  # 256 -> 128
+                nn.LayerNorm(head_hidden // 2),
+                nn.ReLU(),
+                nn.Linear(head_hidden // 2, head_hidden // 4),  # 128 -> 64
+                nn.ReLU(),
+                nn.Linear(head_hidden // 4, 1),  # 64 -> 1
+            )
+        else:
+            self.cf_value_head = None
+
         # Auxiliary contribution predictor head
         # Predicts per-slot counterfactual contributions for auxiliary supervision.
         # Input: lstm_out (lstm_hidden_dim)
@@ -546,7 +599,17 @@ class FactoredRecurrentActorCritic(nn.Module):
         # the contribution predictor (a regression head over similar target scales) makes.
         # This applies identically to the op-INDEPENDENT V(s) baseline (state_value_head)
         # and the retained op-conditioned q_head (telemetry/aux).
-        for value_like_head in (self.state_value_head, self.q_head):
+        # EV-stab Stage 2: append cf_value_head (when built) LAST in the gain=0.1 group.
+        # On the OFF leg cf_value_head is None so this list is exactly the original
+        # (state_value_head, q_head) and the gain=0.1 draws are byte-identical to today.
+        # (On the ON leg the cf head's earlier construction already reshuffled the
+        # upstream draws — see the cf_value_head construction note; ON is fresh-init by
+        # design.) Conditional local list (not a tuple literal) so the OFF leg, where
+        # cf_value_head is None, never references a missing head.
+        value_like_heads = [self.state_value_head, self.q_head]
+        if self.cf_value_head is not None:
+            value_like_heads.append(self.cf_value_head)
+        for value_like_head in value_like_heads:
             last_value_layer = value_like_head[-1]
             if isinstance(last_value_layer, nn.Linear):
                 nn.init.orthogonal_(last_value_layer.weight.data, gain=0.1)
@@ -642,6 +705,28 @@ class FactoredRecurrentActorCritic(nn.Module):
         q_value = cast(torch.Tensor, self.q_head(q_input))
         return q_value.squeeze(-1)
 
+    def _compute_cf_value(self, lstm_out: torch.Tensor) -> torch.Tensor:
+        """Compute the head-only counterfactual value V_cf(s) (EV-stab Stage 2).
+
+        DETACH the LSTM trunk (exactly like _compute_q) so the cf value objective
+        trains only cf_value_head's own parameters and never reshapes the shared LSTM
+        features — the trunk is shaped by V_main + the policy, as it is today. Only
+        valid when hra_value_decomposition is enabled (cf_value_head built).
+
+        Args:
+            lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim], any dtype
+
+        Returns:
+            Counterfactual value estimates [batch, seq_len], same dtype as lstm_out
+        """
+        assert self.cf_value_head is not None, (
+            "_compute_cf_value called but cf_value_head is not built "
+            "(hra_value_decomposition is off)"
+        )
+        lstm_out = lstm_out.detach()
+        value = cast(torch.Tensor, self.cf_value_head(lstm_out))
+        return value.squeeze(-1)
+
     def predict_contributions(
         self,
         state: torch.Tensor,
@@ -709,6 +794,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         alpha_curve_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         probability_floor: dict[str, float] | None = None,
+        generator: torch.Generator | None = None,
     ) -> _ForwardOutput:
         """Forward pass returning logits, value, and new hidden state.
 
@@ -818,7 +904,19 @@ class FactoredRecurrentActorCritic(nn.Module):
                 op_min_prob,
             )
         op_probs_flat = F.softmax(op_logits_flat, dim=-1)  # [batch*seq_len, num_ops]
-        sampled_op_flat = torch.multinomial(op_probs_flat, num_samples=1).squeeze(-1)
+        # NaN-safe rollout sampling (see _nan_safe_sampling_probs): a non-finite network
+        # logit makes softmax emit NaN, which would trip the multinomial device-side assert
+        # and abort the rollout. Substitute masked-uniform for any non-finite row; the
+        # update-path finiteness gate stays the authority on non-finite policy outputs.
+        # Consumes no RNG, so the controller-generator stream advances byte-identically.
+        op_probs_flat = _nan_safe_sampling_probs(op_probs_flat, op_mask_flat)
+        # Causal-contribution harness (domain A): when a dedicated controller
+        # generator is threaded, the op draw consumes ONLY the controller stream,
+        # insulating it from blueprint/host draw counts. generator=None is the
+        # unchanged default (byte-identical to pre-harness behavior).
+        sampled_op_flat = torch.multinomial(
+            op_probs_flat, num_samples=1, generator=generator
+        ).squeeze(-1)
         sampled_op = sampled_op_flat.reshape(batch_size, seq_len)
 
         # Op-INDEPENDENT PPO baseline: V(s). This is the value stored in the rollout
@@ -826,6 +924,11 @@ class FactoredRecurrentActorCritic(nn.Module):
         state_value = self._compute_state_value(lstm_out)
         # Op-conditioned Q(s, sampled_op): telemetry/aux only (NOT the baseline).
         q_value = self._compute_q(lstm_out, sampled_op)
+
+        # EV-stab Stage 2: head-only counterfactual value V_cf(s); None on the OFF leg.
+        cf_value = (
+            self._compute_cf_value(lstm_out) if self.cf_value_head is not None else None
+        )
 
         return {
             "slot_logits": slot_logits,
@@ -838,6 +941,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             "op_logits": op_logits,
             "state_value": state_value,
             "q_value": q_value,
+            "cf_value": cf_value,  # EV-stab Stage 2: V_cf(s) or None (OFF leg)
             "lstm_out": lstm_out,  # Expose for value recomputation in get_action()
             "sampled_op": sampled_op,
             "hidden": new_hidden,
@@ -860,6 +964,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         deterministic: bool = False,
         return_op_logits: bool = False,
         probability_floor: dict[str, float] | None = None,
+        generator: torch.Generator | None = None,
     ) -> GetActionResult:
         """Sample actions from all heads (inference mode).
 
@@ -952,6 +1057,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 hidden=hidden,
                 op_mask=op_mask,
                 probability_floor=probability_floor,
+                generator=generator,
             )
 
             # Sample from each head using MaskedCategorical for safety
@@ -1023,9 +1129,19 @@ class FactoredRecurrentActorCritic(nn.Module):
                 if deterministic:
                     action = masked_logits.argmax(dim=-1)
                 else:
-                    # Direct multinomial sampling (no Categorical overhead)
+                    # Direct multinomial sampling (no Categorical overhead).
+                    # Causal-contribution harness (domain A): the per-head draws
+                    # share the controller generator threaded into get_action;
+                    # generator=None is the unchanged default.
                     probs = F.softmax(masked_logits, dim=-1)
-                    action = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                    # NaN-safe rollout sampling (see _nan_safe_sampling_probs): keep a
+                    # non-finite network logit from aborting the rollout at multinomial.
+                    # The stored log_prob (below) is left NaN for such a row so the PPO
+                    # finiteness gate still skips the resulting update.
+                    probs = _nan_safe_sampling_probs(probs, mask)
+                    action = torch.multinomial(
+                        probs, num_samples=1, generator=generator
+                    ).squeeze(-1)
 
                 actions[key] = action
                 log_probs[key] = _masked_log_prob(masked_logits, action)
@@ -1076,6 +1192,9 @@ class FactoredRecurrentActorCritic(nn.Module):
             # needs no per-op recompute. This is the value stored in the rollout buffer
             # and the truncation bootstrap (get_action(deterministic=True)).
             value = output["state_value"][:, 0]
+            # EV-stab Stage 2: carry V_cf(s) alongside V(s) (None on the OFF leg).
+            cf_value_out = output["cf_value"]
+            cf_value = cf_value_out[:, 0] if cf_value_out is not None else None
 
             actions["op"] = selected_op
             # FP32 log_prob via the shared seam (no Categorical -> no GPU syncs).
@@ -1206,6 +1325,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 sampled_op=sampled_op,
                 op_logits=op_logits_out,
                 head_entropies=ordered_head_entropies,
+                cf_value=cf_value,
             )
 
     def evaluate_actions(
@@ -1224,14 +1344,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         probability_floor: dict[str, float] | None = None,
         aux_stop_gradient: bool = True,
-    ) -> tuple[
-        dict[str, torch.Tensor],
-        torch.Tensor,
-        dict[str, torch.Tensor],
-        tuple[torch.Tensor, torch.Tensor],
-        torch.Tensor,
-        torch.Tensor,
-    ]:
+    ) -> _EvalOutput:
         """Evaluate actions for PPO update.
 
         Computes the op-INDEPENDENT PPO baseline V(s) (full gradient into the LSTM) and,
@@ -1315,6 +1428,10 @@ class FactoredRecurrentActorCritic(nn.Module):
         # _compute_q. Uses the STORED op (consistent with rollout collection).
         stored_op = actions["op"]
         q_value = self._compute_q(lstm_out, stored_op)
+        # EV-stab Stage 2: head-only V_cf(s) on the gradient path; None on the OFF leg.
+        cf_value = (
+            self._compute_cf_value(lstm_out) if self.cf_value_head is not None else None
+        )
 
         log_probs: dict[str, torch.Tensor] = {}
         entropy: dict[str, torch.Tensor] = {}
@@ -1461,7 +1578,15 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "Likely a Kasmina state-machine bug producing an all-masked head."
             )
 
-        return log_probs, value, entropy, new_hidden, pred_contributions, q_value
+        return _EvalOutput(
+            log_probs=log_probs,
+            value=value,
+            entropy=entropy,
+            hidden=new_hidden,
+            pred_contributions=pred_contributions,
+            q_value=q_value,
+            cf_value=cf_value,
+        )
 
 
 __all__ = ["BlueprintEmbedding", "FactoredRecurrentActorCritic", "GetActionResult"]

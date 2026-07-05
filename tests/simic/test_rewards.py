@@ -483,7 +483,7 @@ class TestContributionRewardComponents:
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus
-            + components.synergy_bonus
+            + components.interaction_bonus
         )
         assert abs(reward - component_sum) < 0.001, f"Sum {component_sum} != total {reward}"
         assert components.total_reward == reward

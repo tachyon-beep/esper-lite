@@ -390,3 +390,19 @@ allow_hits:
   - key: "src/esper/tolaria/governor.py:execute_rollback:hasattr"
     owner: "john"
     reason: "Optional model capability - not all models have seed_slots"
+
+  # ============================================================================
+  # REWARD ADDITEND DECOMPOSITION (canonical-map field iteration)
+  # ============================================================================
+  # ADDITEND_SIGN_MAP is the single source of truth for BOTH the additend term
+  # set and each term's sign; decompose_additends iterates it against the typed
+  # RewardComponentsTelemetry dataclass. Unrolling to explicit field access
+  # would duplicate the term list away from the sign map (drift risk). The
+  # getattr has NO default - a map/dataclass drift fails loudly with
+  # AttributeError - and the pairing is pinned by
+  # tests/simic/rewards/test_additend_decomposition.py
+  # (test_additend_sign_map_keys_are_component_fields).
+
+  - key: "src/esper/simic/rewards/partition.py:decompose_additends:getattr"
+    owner: "john"
+    reason: "Typed-dataclass field iteration driven by the canonical ADDITEND_SIGN_MAP; no default (fails loudly); map<->dataclass pairing pinned by test (esper-lite-5d0c1620d7)"

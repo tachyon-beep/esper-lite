@@ -82,7 +82,7 @@ def process_train_batch(
     targets: torch.Tensor,
     criterion: nn.Module,
     *,
-    use_telemetry: bool = False,
+    collect_gradients: bool = False,
     slots: list[str] | None = None,
     max_grad_norm: float | None = None,
     task_spec: Any,
@@ -99,14 +99,16 @@ def process_train_batch(
         inputs: Input tensor
         targets: Target tensor
         criterion: Loss criterion
-        use_telemetry: Whether to collect telemetry
+        collect_gradients: Whether to collect per-slot gradient stats. These
+            feed the G2 blending gate (control path), not just telemetry —
+            see esper-lite-4fe98055f7.
         slots: Enabled slot IDs (train all active slots)
         max_grad_norm: Maximum gradient norm for clipping. None disables clipping.
 
     Returns:
         Tuple of (loss_tensor, correct_tensor, total, grad_stats)
         grad_stats maps slot_id -> async dual-gradient stats dict for that slot.
-        It is None if use_telemetry=False or no slot needs gradient telemetry.
+        It is None if collect_gradients=False or no slot needs gradient stats.
     """
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
@@ -216,7 +218,7 @@ def process_train_batch(
 
         clipping_enabled = max_grad_norm is not None and max_grad_norm > 0
         grads_unscaled = False
-        if env_state.scaler is not None and (use_telemetry or clipping_enabled):
+        if env_state.scaler is not None and (collect_gradients or clipping_enabled):
             env_state.scaler.unscale_(env_state.host_optimizer)
             for slot_id, (seed_opt, has_grads) in seed_opts_with_grads.items():
                 if has_grads:
@@ -226,7 +228,7 @@ def process_train_batch(
         # Collect gradient telemetry (isolated from torch.compile).
         # FP16 GradScaler stores scaled grads after backward; collect only after unscale.
         grad_stats_by_slot = None
-        if use_telemetry:
+        if collect_gradients:
             grad_stats_by_slot = _collect_gradient_telemetry_for_batch(
                 model, slots_with_active_seeds, env_dev
             )

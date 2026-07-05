@@ -83,6 +83,7 @@ from esper.simic.rewards import (
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput, NissaHub
 from esper.simic.telemetry.emitters import VectorizedEmitter
 from .env_factory import EnvFactoryContext
+from .experiment_rng import ExperimentRngDomains
 from .helpers import policy_amp_context
 from .normalizer_checkpoint import (
     restore_obs_normalizer_from_metadata as _restore_obs_normalizer_from_metadata,
@@ -143,8 +144,11 @@ def _resolve_target_slot(
         slot_id = slot_config.slot_id_for_index(slot_idx)
     except IndexError:
         # Out-of-range should be impossible (network head size == slot_config.num_slots),
-        # but return a deterministic slot for logging and mark it invalid.
-        return enabled_slots[0], False
+        # but return a deterministic slot for logging and mark it invalid. Source the
+        # fallback from slot_config (guaranteed non-empty by SlotConfig.__post_init__)
+        # rather than enabled_slots, which may be empty (pre-ready) and would raise a
+        # second IndexError.
+        return slot_config.slot_id_for_index(0), False
     return slot_id, slot_id in enabled_slots
 
 
@@ -185,6 +189,19 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     "policy_loss",
     "value_loss",
     "q_aux_loss",  # P0-1: detached aux q_head regression loss (mean across updates, like value_loss)
+    # EV-stab Stage 2 (HRA): head-only V_cf loss + per-stream EV. ON-leg-only keys (the agent
+    # gates their emission on hra_value_decomposition), each a plain scalar mean over updates,
+    # like value_loss / explained_variance. The strict whitelist below requires a declared
+    # reducer for every emitted key, so these MUST be declared even though they are optional.
+    "cf_value_loss",
+    "ev_main",
+    "ev_cf",
+    "ev_sum",
+    # EV-stab Stage 0 GATE metrics (ON-leg-only, like ev_main/ev_cf above). Each is a single
+    # scalar per update (covariance-share / coefficient-of-variation), mean-reduced over
+    # updates like explained_variance; the strict whitelist requires a declared reducer.
+    "cov_rcf_return_share",
+    "r_main_cov",
     "entropy_floor_penalty",
     "approx_kl",
     "clip_fraction",
@@ -289,6 +306,9 @@ _PPO_FIRST_REDUCED_METRICS = frozenset({
     "ratio_diagnostic",
     "layer_gradient_health",
     "conditional_head_entropies",
+    # Per-head advantage normalization stats: structured dict, invariant across the
+    # update; take the first update's snapshot like the other structured diagnostics.
+    "head_advantage_norm_stats",
 })
 
 _PPO_APPEND_REDUCED_METRICS = frozenset({
@@ -667,6 +687,20 @@ def _finalize_run_scoped_nissa_backends(
 # =============================================================================
 
 
+def apply_seed_lr_override(task_spec: Any, seed_lr_override: float | None) -> Any:
+    """Return the task spec with seed_lr replaced; None leaves it untouched.
+
+    PIN-E harness support: seed_lr=0.0 freezes every germinated seed's
+    parameters (SGD lr=0 is a true no-op incl. momentum) while requires_grad
+    stays True, so gradient-health stays measurable for the G2 stage gate.
+    """
+    if seed_lr_override is None:
+        return task_spec
+    if seed_lr_override < 0.0:
+        raise ValueError(f"seed_lr_override must be >= 0, got {seed_lr_override}")
+    return dataclasses.replace(task_spec, seed_lr=seed_lr_override)
+
+
 def train_ppo_vectorized(
     n_episodes: int = 100,
     n_envs: int = DEFAULT_N_ENVS,
@@ -674,6 +708,7 @@ def train_ppo_vectorized(
     device: str = "cuda:0",
     devices: list[str] | None = None,
     task: str = "cifar_baseline",
+    seed_lr_override: float | None = None,  # PIN-E: 0.0 freezes seed params (delta stays fixed)
     use_telemetry: bool = True,
     lr: float = DEFAULT_LEARNING_RATE,
     clip_ratio: float = DEFAULT_CLIP_RATIO,
@@ -683,6 +718,8 @@ def train_ppo_vectorized(
     entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN,  # From leyline
     entropy_anneal_episodes: int = 0,
     entropy_coef_per_head: dict[str, float] | None = None,  # Per-head multipliers
+    per_head_advantage_norm: bool = False,  # Per-head advantage standardization ablation (default OFF)
+    hra_value_decomposition: bool = False,  # EV-stab Stage 2 HRA cf value head (default OFF)
     value_coef: float = 0.5,  # Value loss coefficient (lower reduces critic dominance)
     value_warmup_batches: int = 0,  # Batches to ramp up value_coef (0 = no warmup)
     value_coef_start: float | None = None,  # Starting value_coef (default: 0.1 * value_coef)
@@ -719,6 +756,17 @@ def train_ppo_vectorized(
     sparse_reward_scale: float = 1.0,
     rent_host_params_floor: int = 200,
     basic_acc_delta_weight: float = 5.0,
+    # Phase −1 cheap-lever scale-falsifier flags (default OFF => status quo).
+    # See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5.
+    shaped_attribution_clip: float = 0.0,
+    attribution_unit_normalize: bool = False,
+    # Committed-Shapley synergy top-up (default OFF => status quo; PDR-0012).
+    # Plan: docs/plans/ready/2026-07-02-committed-shapley-topup-build.md.
+    shapley_synergy_scale: float = 0.0,
+    shapley_synergy_noise_floor: float = 0.0,
+    shapley_synergy_cap: float = 0.0,
+    shapley_synergy_std_floor: float = 0.0,
+    shapley_synergy_normalized_cap: float = 0.0,
     reward_family: str = "contribution",
     permissive_gates: bool = True,
     auto_forward_g1: bool = False,
@@ -752,6 +800,14 @@ def train_ppo_vectorized(
     proof_baseline_schedule_hash: str | None = None,
     proof_baseline_schedule_version: int | None = None,
     proof_baseline_schedule_action_count: int | None = None,
+    # Causal-contribution harness (R1 pilot). Defaults keep all existing runs
+    # byte-identical: no RNG split, no suppression. rng_three_domain_split turns
+    # on the instrumented build (controller/host/blueprint streams + compare-point
+    # telemetry); proof_baseline_suppression_enabled is the SEPARATE literal ON/OFF
+    # toggle for the SUPPRESS-SLOT mask (OFF => CRN no-op control).
+    rng_three_domain_split: bool = False,
+    proof_baseline_suppression_enabled: bool = False,
+    compare_point_hash_stride: int = 50,
     static_final_source_manifest: TopologyManifestPayload | None = None,
     static_final_source_run_dir: str | None = None,
     static_final_source_group_id: str | None = None,
@@ -847,7 +903,7 @@ def train_ppo_vectorized(
     # Lazy import to avoid circular dependency
     from esper.runtime import get_task_spec
 
-    task_spec = get_task_spec(task)
+    task_spec = apply_seed_lr_override(get_task_spec(task), seed_lr_override)
     ActionEnum = task_spec.action_enum
 
     # Derive slot_config from host's injection specs, filtered to requested slots
@@ -929,6 +985,14 @@ def train_ppo_vectorized(
         raise ValueError(
             f"rent_host_params_floor must be >= 1 (got {rent_host_params_floor})"
         )
+    if shapley_synergy_scale > 0.0 and hra_value_decomposition:
+        # Mirrors TrainingConfig._validate for direct callers: the retro-written
+        # credit has no defined CF-stream routing under HRA (GATE 2 probe
+        # asserted HRA-off). TODO: [FUTURE FUNCTIONALITY] - define committed-
+        # Shapley credit routing across HRA reward streams before allowing both.
+        raise ValueError(
+            "shapley_synergy_scale > 0 is not supported with hra_value_decomposition"
+        )
 
     reward_config = ContributionRewardConfig(
         reward_mode=reward_mode_enum,
@@ -937,6 +1001,13 @@ def train_ppo_vectorized(
         sparse_reward_scale=sparse_reward_scale,
         rent_host_params_floor=rent_host_params_floor,
         basic_acc_delta_weight=basic_acc_delta_weight,
+        shaped_attribution_clip=shaped_attribution_clip,
+        attribution_unit_normalize=attribution_unit_normalize,
+        shapley_synergy_scale=shapley_synergy_scale,
+        shapley_synergy_noise_floor=shapley_synergy_noise_floor,
+        shapley_synergy_cap=shapley_synergy_cap,
+        shapley_synergy_std_floor=shapley_synergy_std_floor,
+        shapley_synergy_normalized_cap=shapley_synergy_normalized_cap,
         disable_pbrs=disable_pbrs,
         disable_terminal_reward=disable_terminal_reward,
         disable_anti_gaming=disable_anti_gaming,
@@ -1131,6 +1202,7 @@ def train_ppo_vectorized(
             device=device,
             compile_mode=effective_compile_mode,
             lstm_hidden_dim=lstm_hidden_dim,
+            hra_value_decomposition=hra_value_decomposition,  # EV-stab Stage 2 (builds cf head when ON)
         )
 
         # Create agent with injected policy
@@ -1147,6 +1219,8 @@ def train_ppo_vectorized(
             entropy_coef_min=entropy_coef_min,
             entropy_anneal_steps=entropy_anneal_steps,
             entropy_coef_per_head=entropy_coef_per_head,
+            per_head_advantage_norm=per_head_advantage_norm,
+            hra_value_decomposition=hra_value_decomposition,
             value_coef=value_coef,
             value_coef_start=value_coef_start,
             value_warmup_steps=value_warmup_steps,
@@ -1411,6 +1485,37 @@ def train_ppo_vectorized(
         for dev in env_device_map
     ]
 
+    # Causal-contribution harness (§5.5): build the three-domain RNG split AFTER
+    # controller init + data-order seeding (both key off the global default at
+    # torch.manual_seed(seed) above and the iterators' explicit seed), so the
+    # pairing pillars (shared controller init, shared data order) are preserved.
+    # None on normal runs => every call site threads generator=None (unchanged).
+    experiment_rng = (
+        ExperimentRngDomains(master_seed=seed, controller_device=device)
+        if rng_three_domain_split
+        else None
+    )
+    # Run-start INTERVENTION_CONFIGURED record (no action_id, §5.7). Emitted only
+    # for the instrumented (RNG-split) build; describes the stationary mask so the
+    # analysis joins arms by declared intervention.
+    if experiment_rng is not None and hub is not None:
+        from .intervention import build_intervention_configured_payload
+
+        hub.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.INTERVENTION_CONFIGURED,
+                group_id=group_id,
+                data=build_intervention_configured_payload(
+                    lifecycle_policy=proof_baseline_lifecycle_policy,
+                    suppression_enabled=proof_baseline_suppression_enabled,
+                    slot_config=slot_config,
+                    rng_split_enabled=True,
+                    master_seed=seed,
+                ),
+                message="Causal-contribution intervention configured",
+            )
+        )
+
     env_factory = EnvFactoryContext(
         env_device_map=env_device_map,
         env_streams=env_streams,
@@ -1431,6 +1536,7 @@ def train_ppo_vectorized(
         hub=hub,
         signal_tracker_cls=SignalTracker,
         group_id=group_id,
+        experiment_rng=experiment_rng,
     )
 
     trainer = VectorizedPPOTrainer(
@@ -1494,6 +1600,9 @@ def train_ppo_vectorized(
         proof_baseline_schedule_hash=proof_baseline_schedule_hash,
         proof_baseline_schedule_version=proof_baseline_schedule_version,
         proof_baseline_schedule_action_count=proof_baseline_schedule_action_count,
+        proof_baseline_suppression_enabled=proof_baseline_suppression_enabled,
+        compare_point_hash_stride=compare_point_hash_stride,
+        experiment_rng=experiment_rng,
         static_final_source_manifest=static_final_source_manifest,
         static_final_source_run_dir=static_final_source_run_dir,
         static_final_source_group_id=static_final_source_group_id,

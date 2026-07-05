@@ -77,7 +77,7 @@ class RewardComponentsTelemetry:
     # Bonuses
     stage_bonus: float = 0.0
     pbrs_bonus: float = 0.0
-    synergy_bonus: float = 0.0  # Scaffolding bonus for positive interactions
+    interaction_bonus: float = 0.0  # Scaffolding bonus for positive interactions
     action_shaping: float = 0.0
     terminal_bonus: float = 0.0
     fossilize_terminal_bonus: float = 0.0  # Terminal bonus from fossilized seed count
@@ -140,7 +140,7 @@ class RewardComponentsTelemetry:
             # Bonuses
             self.stage_bonus
             + self.pbrs_bonus
-            + self.synergy_bonus
+            + self.interaction_bonus
             + self.action_shaping
             + self.terminal_bonus
             + self.fossilize_terminal_bonus
@@ -183,7 +183,7 @@ class RewardComponentsTelemetry:
             "holding_warning": self.holding_warning,
             "stage_bonus": self.stage_bonus,
             "pbrs_bonus": self.pbrs_bonus,
-            "synergy_bonus": self.synergy_bonus,
+            "interaction_bonus": self.interaction_bonus,
             "action_shaping": self.action_shaping,
             "terminal_bonus": self.terminal_bonus,
             "fossilize_terminal_bonus": self.fossilize_terminal_bonus,
@@ -246,7 +246,7 @@ class RewardComponentsTelemetry:
             holding_warning=float(data["holding_warning"]),  # type: ignore[arg-type]
             stage_bonus=float(data["stage_bonus"]),  # type: ignore[arg-type]
             pbrs_bonus=float(data["pbrs_bonus"]),  # type: ignore[arg-type]
-            synergy_bonus=float(data["synergy_bonus"]),  # type: ignore[arg-type]
+            interaction_bonus=float(data["interaction_bonus"]),  # type: ignore[arg-type]
             action_shaping=float(data["action_shaping"]),  # type: ignore[arg-type]
             terminal_bonus=float(data["terminal_bonus"]),  # type: ignore[arg-type]
             fossilize_terminal_bonus=float(data["fossilize_terminal_bonus"]),  # type: ignore[arg-type]
@@ -273,6 +273,61 @@ class RewardComponentsTelemetry:
             drip_immediate_bonus=float(data["drip_immediate_bonus"]),  # type: ignore[arg-type]
             drip_deferred_total=float(data["drip_deferred_total"]),  # type: ignore[arg-type]
             num_drip_sources=int(data["num_drip_sources"]),  # type: ignore[arg-type]
+        )
+
+
+@dataclass(slots=True)
+class SeedResidencyTelemetry:
+    """Per-seed alpha-weighted counterfactual residency, emitted once per seed at episode end.
+
+    The J integrand (reward-redesign methodology Phase 0): J = Σ_seed (cf_weighted_integral /
+    params), summed across seeds within an episode. ``j_per_param`` and the committed/uncommitted
+    split are serialized as explicit columns so the offline yardstick is a trivial
+    ``SUM(j_per_param) GROUP BY run_dir, episode_idx``. Measurement-only — does NOT enter reward.
+    """
+
+    env_id: int = 0
+    episode_idx: int = 0
+    seed_id: str = ""
+    params: int = 0
+    cf_weighted_integral: float = 0.0  # Σ c_t·α_t over on-path steps (PIN A: per-seed LOO c_t)
+    cf_weighted_integral_committed: float = 0.0  # subset accrued while stage == FOSSILIZED
+    cf_weighted_integral_uncommitted: float = 0.0  # BLENDING/HOLDING (survival-time bucket)
+    raw_alpha_integral: float = 0.0  # Σ α_t (the REJECTED raw-residency form, diagnostic)
+    n_on_path_steps: int = 0
+    n_none_steps: int = 0  # on-path steps with no measured LOO (the None-fraction)
+    j_per_param: float = 0.0  # cf_weighted_integral / params (this seed's J contribution)
+
+    def to_dict(self) -> dict[str, float | int | str]:
+        return {
+            "env_id": self.env_id,
+            "episode_idx": self.episode_idx,
+            "seed_id": self.seed_id,
+            "params": self.params,
+            "cf_weighted_integral": self.cf_weighted_integral,
+            "cf_weighted_integral_committed": self.cf_weighted_integral_committed,
+            "cf_weighted_integral_uncommitted": self.cf_weighted_integral_uncommitted,
+            "raw_alpha_integral": self.raw_alpha_integral,
+            "n_on_path_steps": self.n_on_path_steps,
+            "n_none_steps": self.n_none_steps,
+            "j_per_param": self.j_per_param,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, float | int | str | None]) -> "SeedResidencyTelemetry":
+        """Reconstruct from dict (inverse of to_dict). Direct key access per CLAUDE.md."""
+        return cls(
+            env_id=int(data["env_id"]),  # type: ignore[arg-type]
+            episode_idx=int(data["episode_idx"]),  # type: ignore[arg-type]
+            seed_id=str(data["seed_id"]),
+            params=int(data["params"]),  # type: ignore[arg-type]
+            cf_weighted_integral=float(data["cf_weighted_integral"]),  # type: ignore[arg-type]
+            cf_weighted_integral_committed=float(data["cf_weighted_integral_committed"]),  # type: ignore[arg-type]
+            cf_weighted_integral_uncommitted=float(data["cf_weighted_integral_uncommitted"]),  # type: ignore[arg-type]
+            raw_alpha_integral=float(data["raw_alpha_integral"]),  # type: ignore[arg-type]
+            n_on_path_steps=int(data["n_on_path_steps"]),  # type: ignore[arg-type]
+            n_none_steps=int(data["n_none_steps"]),  # type: ignore[arg-type]
+            j_per_param=float(data["j_per_param"]),  # type: ignore[arg-type]
         )
 
 
@@ -363,5 +418,6 @@ class ObservationStatsTelemetry:
 
 __all__ = [
     "RewardComponentsTelemetry",
+    "SeedResidencyTelemetry",
     "ObservationStatsTelemetry",
 ]

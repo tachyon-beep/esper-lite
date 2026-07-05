@@ -71,6 +71,40 @@ def test_telemetry_event_serializes_nested_reward_components():
     assert "shaped_reward_ratio" in parsed["data"]["reward_components"]
 
 
+def test_reward_components_interaction_bonus_serde_key_pinned():
+    """WI-8 (F8/No-Legacy): the legacy interaction-driven channel serializes under
+    the ``interaction_bonus`` key, and the retired "synergy"-era key is fully gone
+    from the reward-component contract.
+
+    A bare ``from_dict(to_dict(x)) == x`` round-trip cannot catch a key rename
+    (both sides use the same string), so the drl F-F review mandated a test that
+    pins the literal key. Historical telemetry keeps the old key on purpose — no
+    compat fallback reads it (plan §4 WI-8); ``from_dict`` requires the new key
+    with the same strictness as every other field (no defensive default).
+    """
+    import pytest
+
+    from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
+
+    rc = RewardComponentsTelemetry(interaction_bonus=0.07, total_reward=0.07)
+
+    d = rc.to_dict()
+    assert "interaction_bonus" in d
+    assert d["interaction_bonus"] == 0.07
+    # The retired name must not linger anywhere in the serialized contract.
+    assert not any("synergy" in key for key in d)
+
+    restored = RewardComponentsTelemetry.from_dict(d)
+    assert restored.interaction_bonus == 0.07
+    assert restored == rc
+
+    # No defensive default: dropping the key is a hard KeyError, not a silent 0.0.
+    d_missing = rc.to_dict()
+    del d_missing["interaction_bonus"]
+    with pytest.raises(KeyError):
+        RewardComponentsTelemetry.from_dict(d_missing)
+
+
 def test_epoch_completed_payload_accepts_null_observation_stats() -> None:
     """EpochCompletedPayload.from_dict should accept observation_stats=None."""
     from esper.leyline.telemetry import EpochCompletedPayload

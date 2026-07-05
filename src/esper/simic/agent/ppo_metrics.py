@@ -106,6 +106,10 @@ class PPOUpdateMetricsBuilder:
             if k == "ratio_diagnostic":
                 aggregated_result[k] = v[0]  # type: ignore[literal-required]
                 continue
+            # Per-head advantage normalization stats: structured dict, forwarded verbatim.
+            if k == "head_advantage_norm_stats":
+                aggregated_result[k] = v[0]  # type: ignore[literal-required]
+                continue
             # D5: Integer metrics - sum across batches
             if k == "usable_actor_timesteps":
                 stacked = torch.stack(v)

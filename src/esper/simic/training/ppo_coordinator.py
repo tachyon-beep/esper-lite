@@ -21,14 +21,17 @@ import torch
 
 from esper.leyline import (
     AnomalyDetectedPayload,
+    CommittedShapleyTopUpPayload,
     EpisodeOutcomePayload,
     ROLLBACK_FORFEIT_REWARD,
     TelemetryEvent,
     TelemetryEventType,
 )
+from esper.simic.rewards.committed_shapley import CommittedShapleyEnvCredits
 
 if TYPE_CHECKING:
     from esper.simic.agent import PPOAgent
+    from esper.simic.agent.rollout_buffer import TamiyoRolloutBuffer
     from esper.simic.control import RewardNormalizer
     from esper.simic.telemetry import AnomalyDetector, GradientEMATracker
     from esper.simic.training.parallel_env_state import ParallelEnvState
@@ -37,6 +40,123 @@ if TYPE_CHECKING:
 
 
 _logger = logging.getLogger(__name__)
+
+
+def apply_committed_shapley_credits(
+    *,
+    buffer: "TamiyoRolloutBuffer",
+    reward_normalizer: "RewardNormalizer",
+    env_credits: list[CommittedShapleyEnvCredits],
+    std_floor: float,
+    normalized_cap: float,
+    tau_used: float,
+) -> list[CommittedShapleyTopUpPayload]:
+    """Retro-write terminal committed-Shapley credits into the rollout buffer.
+
+    The pre-GAE seam (GATE 2 mandate): for each credited seed,
+    ``buffer.rewards[env, t_f] += min(normalized_cap, top_up / max(std, std_floor))``
+    — divide_by_std semantics (NO clip, NO normalizer-stat update), with the
+    reviewer-mandated F2 bounds applied here because ``divide_by_std`` itself
+    cannot express them (it floors at epsilon and passes raw through below two
+    samples).
+
+    Exclusions:
+    - Rollback-forfeited envs: ``buffer.rollback_count[env] > 0`` — exactly the
+      set ``mark_terminal_with_penalty`` touched, so the credit never lands on
+      a forfeited reward channel. No event is emitted for excluded envs.
+    - The pathological count<2 normalizer state (no reward-scale information
+      all batch): credits are dropped, and the event says so
+      (``dropped_no_std=True``) rather than inventing a divisor.
+
+    Returns the telemetry payloads (one per credited env) — the caller owns
+    emission; the write itself never depends on telemetry being enabled.
+    """
+    payloads: list[CommittedShapleyTopUpPayload] = []
+    if not env_credits:
+        return payloads
+
+    std = reward_normalizer.current_std()
+    for credits in env_credits:
+        env_idx = credits.env_idx
+        if int(buffer.rollback_count[env_idx]) > 0:
+            continue
+
+        slot_ids = tuple(credits.result.per_slot.keys())
+        valid_steps = int(buffer.step_counts[env_idx])
+        t_f_list: list[int] = []
+        for slot_id in slot_ids:
+            t_f = credits.t_f_by_slot[slot_id]
+            if not 0 <= t_f < valid_steps:
+                raise ValueError(
+                    f"committed-Shapley t_f={t_f} for slot {slot_id} is outside "
+                    f"env {env_idx}'s valid buffer range [0, {valid_steps})"
+                )
+            t_f_list.append(t_f)
+
+        credit_buf_list: list[float] = []
+        ncap_bound_list: list[bool] = []
+        if std is None:
+            credit_buf_list = [0.0 for _ in slot_ids]
+            ncap_bound_list = [False for _ in slot_ids]
+            std_used = 0.0
+            std_floor_bound = False
+            dropped_no_std = True
+        else:
+            std_used = max(std, std_floor)
+            std_floor_bound = std < std_floor
+            dropped_no_std = False
+            for slot_id, t_f in zip(slot_ids, t_f_list):
+                top_up = credits.result.per_slot[slot_id].top_up
+                if top_up <= 0.0:
+                    credit_buf_list.append(0.0)
+                    ncap_bound_list.append(False)
+                    continue
+                unbounded = top_up / std_used
+                credit_buf = min(normalized_cap, unbounded)
+                buffer.rewards[env_idx, t_f] += credit_buf
+                credit_buf_list.append(credit_buf)
+                ncap_bound_list.append(unbounded > normalized_cap)
+
+        # Raw 2^k coalition table, encoded as bitmasks over the slot_ids
+        # ordering (bit i <=> slot_ids[i] in S), masks ascending.
+        v_table = sorted(
+            (
+                sum(1 << slot_ids.index(s) for s in subset),
+                acc,
+            )
+            for subset, acc in credits.coalition_accs.items()
+        )
+
+        per_slot = credits.result.per_slot
+        payloads.append(
+            CommittedShapleyTopUpPayload(
+                env_id=env_idx,
+                slot_ids=slot_ids,
+                phi=tuple(per_slot[s].phi for s in slot_ids),
+                c_paid=tuple(per_slot[s].c_paid for s in slot_ids),
+                gap=tuple(per_slot[s].gap for s in slot_ids),
+                raw=tuple(per_slot[s].raw for s in slot_ids),
+                top_up=tuple(per_slot[s].top_up for s in slot_ids),
+                t_f=tuple(t_f_list),
+                credit_buf=tuple(credit_buf_list),
+                g=credits.result.g,
+                sum_raw=credits.result.sum_raw,
+                clamp_binding=credits.result.clamp_binding,
+                std_used=std_used,
+                running_std_raw=std,
+                std_floor_bound=std_floor_bound,
+                normalized_cap_bound=tuple(ncap_bound_list),
+                v_table_masks=tuple(m for m, _ in v_table),
+                v_table_accs=tuple(a for _, a in v_table),
+                alpha_algorithms=tuple(
+                    credits.alpha_algorithm_by_slot[s] for s in slot_ids
+                ),
+                tau_used=tau_used,
+                episode_idx=credits.episode_idx,
+                dropped_no_std=dropped_no_std,
+            )
+        )
+    return payloads
 
 
 @dataclass
@@ -293,8 +413,13 @@ class PPOCoordinator:
         envs_this_batch: int,
         throughput_step_time_ms_sum: float,
         throughput_dataloader_wait_ms_sum: float,
+        committed_shapley_credits: list[CommittedShapleyEnvCredits] | None = None,
     ) -> tuple[dict[str, Any], bool, float | None]:
         """Execute PPO updates on collected rollout data.
+
+        committed_shapley_credits: terminal committed-Shapley credits from the
+        trainer's fused val pass (PDR-0012). Retro-written into the buffer at
+        the pre-GAE seam below; empty/None at shapley_synergy_scale=0.
 
         Returns:
             Tuple of (metrics dict, update_skipped flag, ppo_update_time_ms)
@@ -320,6 +445,34 @@ class PPOCoordinator:
                 True,
                 None,
             )
+
+        # Committed-Shapley retro-write (PDR-0012): the pre-GAE seam. Must run
+        # BEFORE run_ppo_updates_fn (whose agent.update() computes GAE). The
+        # write never depends on telemetry; only the event emission is
+        # hub-guarded (bug esper-lite-4fe98055f7 posture).
+        if committed_shapley_credits:
+            reward_cfg = self.env_reward_configs[0]
+            topup_payloads = apply_committed_shapley_credits(
+                buffer=self.agent.buffer,
+                reward_normalizer=self.reward_normalizer,
+                env_credits=committed_shapley_credits,
+                std_floor=reward_cfg.shapley_synergy_std_floor,
+                normalized_cap=reward_cfg.shapley_synergy_normalized_cap,
+                tau_used=reward_cfg.shapley_synergy_noise_floor,
+            )
+            if self.hub is not None:
+                for payload in topup_payloads:
+                    self.hub.emit(
+                        TelemetryEvent(
+                            event_type=TelemetryEventType.COMMITTED_SHAPLEY_TOPUP,
+                            data=payload,
+                            severity="info",
+                            message=(
+                                f"Committed-Shapley top-up delivered to env "
+                                f"{payload.env_id} (k={len(payload.slot_ids)})"
+                            ),
+                        )
+                    )
 
         rollout_total_steps = len(self.agent.buffer)
         # P0-3: snapshot the rollback observability counters BEFORE run_ppo_updates_fn,
@@ -615,8 +768,16 @@ class PPOCoordinator:
                 metrics[f"rollout_{key}"] = value
 
         # Per-head entropy collapse detection (Task 6)
-        # Check individual action heads for collapse even when total entropy appears healthy
-        head_entropies_raw = metrics.get("head_entropies")
+        # Check individual action heads for collapse even when total entropy appears healthy.
+        # This MUST read the CHOICE-conditioned series. head_entropies is the unconditional
+        # mean over ALL steps; on forced/single-valid steps normalized entropy is exactly 0,
+        # so head_X_entropy = learnable_fraction × conditional_entropy — a decision-DENSITY
+        # proxy that, for sparse heads (slot decides on ~9% of steps), is born below the 0.10
+        # threshold and can never clear, manufacturing permanent FALSE collapse anomalies.
+        # conditional_head_entropies restricts entropy to causally-relevant steps (the exact
+        # quantity the entropy regularizer optimizes) and reads ~0.3–1.0 when healthy.
+        # See PDR-0006 / docs/analysis/2026-06-30-r1-pilot-result.md.
+        head_entropies_raw = metrics.get("conditional_head_entropies")
         if head_entropies_raw:
             # Convert per-epoch lists to mean per head
             mean_head_entropies = {

@@ -37,6 +37,7 @@ from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_GAE_LAMBDA,
     DEFAULT_EPISODE_LENGTH,
+    REWARD_NORMALIZER_CLIP,
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_N_ENVS,
     DEFAULT_LEARNING_RATE,
@@ -92,6 +93,24 @@ class TrainingConfig:
     # Example: {"blueprint": 2.0, "tempo": 2.0} to boost sparse heads.
     entropy_coef_per_head: dict[str, float] | None = None
 
+    # === Advantage normalization ===
+    # Per-head advantage standardization ablation (default OFF). When True, each head's
+    # advantage is re-standardized over its OWN causally-active subset instead of one
+    # global op-dominated mean/std (shared-critic scale coupling). This is a
+    # policy-gradient scale change: run it as an A/B and accept on EV-liftoff with no
+    # regression vs the global-norm baseline. Per-head advantage-std telemetry is
+    # emitted regardless of this flag so the effect is observable before enabling it.
+    per_head_advantage_norm: bool = False
+
+    # === Value-target decomposition (EV-stab Stage 2) ===
+    # HRA sum-of-heads value decomposition ablation (default OFF). When True, a
+    # head-only counterfactual value head (V_cf) is built alongside V_main so the
+    # noisy counterfactual contribution stream is routed out of the single critic's
+    # value fit. OFF leg is byte-identical to today's single-head path (no cf head
+    # constructed). Gate it as a fresh-init paired A/B and accept it on EV_main
+    # liftoff/stabilization with no regression vs the single-head baseline.
+    hra_value_decomposition: bool = False
+
     # === Value function ===
     # Coefficient for value loss in combined PPO loss. Lower values reduce critic
     # dominance when using shared backbone (LSTM shared between actor/critic).
@@ -133,6 +152,29 @@ class TrainingConfig:
     # BASIC mode: weight for accuracy delta in reward calculation.
     # reward = basic_acc_delta_weight * (acc_delta / 100) - param_penalty_weight * (params / budget)
     basic_acc_delta_weight: float = 5.0
+
+    # === Phase −1 cheap-lever scale-falsifier flags (experiment, default OFF) ===
+    # See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5 (Phase −1).
+    # Both OFF => the SHAPED dense-attribution path is byte-identical to status quo.
+    # shaped_attribution_clip: per-step positive-only cap on the SHAPED dense
+    #   bounded_attribution (0.0 = OFF). attribution_unit_normalize: divide the SHAPED
+    #   dense counterfactual term by 100 (accuracy points -> fraction).
+    shaped_attribution_clip: float = 0.0
+    attribution_unit_normalize: bool = False
+
+    # === Committed-Shapley synergy top-up (experiment, default OFF) ===
+    # PDR-0010/0012; plan docs/plans/ready/2026-07-02-committed-shapley-topup-build.md.
+    # scale=0.0 => the ENTIRE terminal 2^k apparatus is skipped (byte-identical
+    # status quo). Enablement is a separate owner-gated decision; these stay 0.0
+    # in every shipped config. Units: noise_floor (tau) and cap are accuracy
+    # PERCENTAGE POINTS; std_floor is raw-reward units (a floor on the
+    # divide_by_std divisor); normalized_cap is buffer units (the PRIMARY bound
+    # on the retro-written credit). scale>0 REQUIRES cap>0 and normalized_cap>0.
+    shapley_synergy_scale: float = 0.0
+    shapley_synergy_noise_floor: float = 0.0
+    shapley_synergy_cap: float = 0.0
+    shapley_synergy_std_floor: float = 0.0
+    shapley_synergy_normalized_cap: float = 0.0
 
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
@@ -325,6 +367,8 @@ class TrainingConfig:
             "entropy_coef_min": self.entropy_coef_min,
             "entropy_anneal_steps": entropy_steps,
             "entropy_coef_per_head": self.entropy_coef_per_head,
+            "per_head_advantage_norm": self.per_head_advantage_norm,
+            "hra_value_decomposition": self.hra_value_decomposition,
             "value_coef": self.value_coef,
             "value_coef_start": self.value_coef_start,
             "value_warmup_steps": value_warmup_steps,
@@ -354,6 +398,8 @@ class TrainingConfig:
             "entropy_coef_min": self.entropy_coef_min,
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "entropy_coef_per_head": self.entropy_coef_per_head,
+            "per_head_advantage_norm": self.per_head_advantage_norm,
+            "hra_value_decomposition": self.hra_value_decomposition,
             "value_coef": self.value_coef,
             "value_warmup_batches": self.value_warmup_batches,
             "value_coef_start": self.value_coef_start,
@@ -376,6 +422,13 @@ class TrainingConfig:
             "param_budget": self.param_budget,
             "param_penalty_weight": self.param_penalty_weight,
             "sparse_reward_scale": self.sparse_reward_scale,
+            "shaped_attribution_clip": self.shaped_attribution_clip,
+            "attribution_unit_normalize": self.attribution_unit_normalize,
+            "shapley_synergy_scale": self.shapley_synergy_scale,
+            "shapley_synergy_noise_floor": self.shapley_synergy_noise_floor,
+            "shapley_synergy_cap": self.shapley_synergy_cap,
+            "shapley_synergy_std_floor": self.shapley_synergy_std_floor,
+            "shapley_synergy_normalized_cap": self.shapley_synergy_normalized_cap,
             "rent_host_params_floor": self.rent_host_params_floor,
             "basic_acc_delta_weight": self.basic_acc_delta_weight,
             "plateau_threshold": self.plateau_threshold,
@@ -435,6 +488,34 @@ class TrainingConfig:
             raise ValueError("entropy_anneal_episodes cannot be negative")
         if self.value_warmup_batches < 0:
             raise ValueError("value_warmup_batches cannot be negative")
+
+        for name, value in (
+            ("shapley_synergy_scale", self.shapley_synergy_scale),
+            ("shapley_synergy_noise_floor", self.shapley_synergy_noise_floor),
+            ("shapley_synergy_cap", self.shapley_synergy_cap),
+            ("shapley_synergy_std_floor", self.shapley_synergy_std_floor),
+            ("shapley_synergy_normalized_cap", self.shapley_synergy_normalized_cap),
+        ):
+            if value < 0.0:
+                raise ValueError(f"{name} must be >= 0 (got {value})")
+        if self.shapley_synergy_normalized_cap > REWARD_NORMALIZER_CLIP:
+            # Pre-A/B build WI-4: the credit channel is clip-free
+            # (divide_by_std), so normalized_cap is its SOLE operative bound.
+            raise ValueError(
+                f"shapley_synergy_normalized_cap must be <= the reward-"
+                f"normalizer clip ({REWARD_NORMALIZER_CLIP}); got "
+                f"{self.shapley_synergy_normalized_cap}"
+            )
+        if self.shapley_synergy_scale > 0.0 and self.hra_value_decomposition:
+            # A retro-written credit lands only in the total/main reward stream;
+            # CF-stream routing under HRA is undefined (GATE 2 probe asserted
+            # HRA-off). TODO: [FUTURE FUNCTIONALITY] - define committed-Shapley
+            # credit routing across HRA reward streams before allowing both.
+            raise ValueError(
+                "shapley_synergy_scale > 0 is not supported with "
+                "hra_value_decomposition: the retro-written credit has no "
+                "defined CF-stream routing"
+            )
 
         if self.max_seeds is not None and self.max_seeds < 1:
             raise ValueError("max_seeds must be >= 1 when provided")
@@ -516,7 +597,8 @@ class TrainingConfig:
             f"  Rounds: {self.n_episodes} (env episodes={self.n_episodes * self.n_envs}), "
             f"envs={self.n_envs}, max_epochs={self.max_epochs}",
             f"  Entropy: {entropy_start}" + (f" -> {entropy_end}" if entropy_end != entropy_start else ""),
-            f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
+            f"  Updates/batch: {self.ppo_updates_per_batch}, recurrent_epochs={self.recurrent_n_epochs}, "
+            f"amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
             f"  Slots: {','.join(self.slots)} | reward_family={self.reward_family.value} mode={self.reward_mode.value}",
             f"  Telemetry: {'enabled' if self.use_telemetry else 'disabled'}, gates={'permissive' if self.permissive_gates else 'strict'}",

@@ -79,6 +79,16 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_alpha_curve_clip_fraction: float
     head_op_clip_fraction: float
     explained_variance: float
+    # EV-stab Stage 0/2 per-stream EV + cf-head loss + GATE metrics. ON-leg-only (the agent
+    # gates their emission on hra_value_decomposition); absent on the OFF leg. total=False
+    # already makes every key optional, so these inherit NotRequired semantics like the
+    # other optional metrics here. ev_sum == explained_variance on the ON leg.
+    cf_value_loss: float  # EV-stab Stage 2: head-only V_cf regression loss
+    ev_main: float  # EV(V_main, returns_main)
+    ev_cf: float  # EV(V_cf, returns_cf)
+    ev_sum: float  # EV(V_total, returns_total) (== explained_variance on the ON leg)
+    cov_rcf_return_share: float  # Cov(returns_cf, returns_total)/Var(returns_total) GATE
+    r_main_cov: float  # std(returns_main)/(|mean(returns_main)|+eps) GATE
     # EV-telemetry-robustness (additive). value_nrmse: floor-stabilized companion;
     # ev_low_return_variance: per-update floored-denominator flag; ev_return_variance:
     # EV-denominator variance (Bessel, correction=1); ev_low_return_variance_count: per-update
@@ -188,6 +198,11 @@ class PPOUpdateMetrics(TypedDict, total=False):
     usable_actor_timesteps: int  # Count of timesteps where agent had real choice
     advantage_std_floored: bool  # True if advantage std was clamped to floor (degenerate batch)
     d5_pre_norm_advantage_std: float  # Raw std before normalization for slot saturation diagnostics
+    # Per-head advantage normalization stats (head -> {pre_norm_std, post_norm_std,
+    # n_active, fellback, normalized}). Always populated when the advantage split is
+    # reached, even with per-head normalization OFF, so the exploration→return-variance
+    # loop (sparse head normalized into oblivion by op's variance) is observable.
+    head_advantage_norm_stats: dict[str, dict[str, float]]
 
     # Auxiliary contribution supervision metrics (Phase 4.1)
     # DRL Expert: Monitor for prediction collapse and quality

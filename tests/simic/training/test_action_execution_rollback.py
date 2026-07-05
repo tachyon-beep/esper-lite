@@ -192,6 +192,7 @@ def test_rollback_step_skips_stale_lifecycle_action(monkeypatch: pytest.MonkeyPa
         reward_mode=RewardMode.SHAPED,
         rent_host_params_floor=1,
         base_slot_rent_ratio=0.0,
+        shapley_synergy_scale=0.0,  # HandlerContext reads it (PDR-0012)
     )
     context = ActionExecutionContext(
         slots=["r0c0"],
@@ -354,6 +355,7 @@ def test_tolaria_preflight_veto_blocks_lifecycle_mutation(
         reward_mode=RewardMode.SHAPED,
         rent_host_params_floor=1,
         base_slot_rent_ratio=0.0,
+        shapley_synergy_scale=0.0,  # HandlerContext reads it (PDR-0012)
     )
     context = ActionExecutionContext(
         slots=["r0c0"],
@@ -528,6 +530,7 @@ def test_execute_actions_dispatches_lifecycle_mutation_through_handler_registry(
         reward_mode=RewardMode.SHAPED,
         rent_host_params_floor=1,
         base_slot_rent_ratio=0.0,
+        shapley_synergy_scale=0.0,  # HandlerContext reads it (PDR-0012)
     )
     context = ActionExecutionContext(
         slots=["r0c0"],
@@ -694,6 +697,7 @@ def test_execute_actions_emits_joinable_morphology_causal_log(
         reward_mode=RewardMode.SHAPED,
         rent_host_params_floor=1,
         base_slot_rent_ratio=0.0,
+        shapley_synergy_scale=0.0,  # HandlerContext reads it (PDR-0012)
     )
     context = ActionExecutionContext(
         slots=["r0c0"],
@@ -887,6 +891,7 @@ def test_execute_actions_failed_handler_does_not_emit_commit(
         reward_mode=RewardMode.SHAPED,
         rent_host_params_floor=1,
         base_slot_rent_ratio=0.0,
+        shapley_synergy_scale=0.0,  # HandlerContext reads it (PDR-0012)
     )
     context = ActionExecutionContext(
         slots=["r0c0"],
@@ -1046,6 +1051,7 @@ def test_rollback_step_emits_cooldown_and_audit_causal_log(
         reward_mode=RewardMode.SHAPED,
         rent_host_params_floor=1,
         base_slot_rent_ratio=0.0,
+        shapley_synergy_scale=0.0,  # HandlerContext reads it (PDR-0012)
     )
     context = ActionExecutionContext(
         slots=["r0c0"],
@@ -1240,6 +1246,7 @@ def test_pooled_record_rollback_flag_cleared_after_healthy_epoch(
         reward_mode=RewardMode.SHAPED,
         rent_host_params_floor=1,
         base_slot_rent_ratio=0.0,
+        shapley_synergy_scale=0.0,  # HandlerContext reads it (PDR-0012)
     )
     context = ActionExecutionContext(
         slots=["r0c0"],

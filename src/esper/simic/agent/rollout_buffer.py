@@ -180,6 +180,10 @@ class TamiyoRolloutBuffer:
     dones: torch.Tensor = field(init=False)
     truncated: torch.Tensor = field(init=False)
     bootstrap_values: torch.Tensor = field(init=False)
+    # EV-stab Stage 2: per-stream counterfactual arrays (populated only when HRA is on).
+    cf_values: torch.Tensor = field(init=False)
+    cf_bootstrap_values: torch.Tensor = field(init=False)
+    r_cf_norm: torch.Tensor = field(init=False)
     slot_masks: torch.Tensor = field(init=False)
     blueprint_masks: torch.Tensor = field(init=False)
     style_masks: torch.Tensor = field(init=False)
@@ -192,6 +196,9 @@ class TamiyoRolloutBuffer:
     hidden_c: torch.Tensor = field(init=False)
     advantages: torch.Tensor = field(init=False)
     returns: torch.Tensor = field(init=False)
+    # EV-stab Stage 2: per-stream returns (returns == returns_main + returns_cf when ON).
+    returns_main: torch.Tensor = field(init=False)
+    returns_cf: torch.Tensor = field(init=False)
     td_errors: torch.Tensor = field(init=False)
 
     # D5: Forced-step tracking for slot saturation diagnostics
@@ -281,6 +288,12 @@ class TamiyoRolloutBuffer:
         self.dones = torch.zeros(n, m, dtype=torch.bool, device=device)
         self.truncated = torch.zeros(n, m, dtype=torch.bool, device=device)
         self.bootstrap_values = torch.zeros(n, m, device=device)
+        # EV-stab Stage 2: per-stream counterfactual arrays. Populated only when the
+        # HRA flag is on (V_cf head built); bounded by step_counts like every other
+        # per-step array, so OFF rollouts leave these as unused zeros.
+        self.cf_values = torch.zeros(n, m, device=device)
+        self.cf_bootstrap_values = torch.zeros(n, m, device=device)
+        self.r_cf_norm = torch.zeros(n, m, device=device)
 
         # Action masks - initialize with first action valid per row
         # This prevents InvalidStateMachineError on padded timesteps when
@@ -321,6 +334,10 @@ class TamiyoRolloutBuffer:
         # Computed during finalization
         self.advantages = torch.zeros(n, m, device=device)
         self.returns = torch.zeros(n, m, device=device)
+        # EV-stab Stage 2: per-stream returns (self.returns == returns_main + returns_cf
+        # when HRA is on; returns_main/returns_cf stay zero on the OFF leg).
+        self.returns_main = torch.zeros(n, m, device=device)
+        self.returns_cf = torch.zeros(n, m, device=device)
         self.td_errors = torch.zeros(n, m, device=device)
 
         # D5: Track forced steps (where agent has no choice - only WAIT valid)
@@ -398,6 +415,11 @@ class TamiyoRolloutBuffer:
         bootstrap_value: float | torch.Tensor = 0.0,
         forced_step: bool = False,
         action_id: str = "",
+        # EV-stab Stage 2: per-stream cf data (only meaningful when HRA is on; default
+        # 0.0 leaves the OFF leg untouched).
+        cf_value: float | torch.Tensor = 0.0,
+        cf_bootstrap_value: float | torch.Tensor = 0.0,
+        r_cf_norm: float = 0.0,
         # Phase 2.1: Auxiliary supervision for contribution prediction
         contribution_targets: torch.Tensor | None = None,  # [num_slots] ground truth per slot
         contribution_mask: torch.Tensor | None = None,  # [num_slots] bool - which slots active
@@ -458,6 +480,10 @@ class TamiyoRolloutBuffer:
         self.dones[env_id, step_idx] = done
         self.truncated[env_id, step_idx] = truncated
         self.bootstrap_values[env_id, step_idx] = _detach(bootstrap_value)
+        # EV-stab Stage 2: per-stream cf data (zeros on the OFF leg).
+        self.cf_values[env_id, step_idx] = _detach(cf_value)
+        self.cf_bootstrap_values[env_id, step_idx] = _detach(cf_bootstrap_value)
+        self.r_cf_norm[env_id, step_idx] = r_cf_norm
         self.slot_masks[env_id, step_idx] = slot_mask.detach().bool()
         self.blueprint_masks[env_id, step_idx] = blueprint_mask.detach().bool()
         self.style_masks[env_id, step_idx] = style_mask.detach().bool()
@@ -493,6 +519,7 @@ class TamiyoRolloutBuffer:
         gamma: float = DEFAULT_GAMMA,
         gae_lambda: float = 0.95,
         value_normalizer: "ValueNormalizer | None" = None,
+        cf_value_normalizer: "ValueNormalizer | None" = None,
     ) -> None:
         """Compute GAE advantages per-environment (no cross-contamination).
 
@@ -550,6 +577,23 @@ class TamiyoRolloutBuffer:
             if value_normalizer is not None:
                 bootstrap_values = value_normalizer.denormalize(bootstrap_values)
 
+            # EV-stab Stage 2: when cf_value_normalizer is provided (HRA ON), self.values
+            # holds V_main only; the GAE baseline is V_total = V_main + V_cf, so the total
+            # recursion runs on values_total / bootstrap_total. When OFF (None),
+            # values_total == values and bootstrap_total == bootstrap_values exactly, so
+            # the math below is byte-identical to the single-head path.
+            if cf_value_normalizer is not None:
+                cf_values = cf_value_normalizer.denormalize(self.cf_values[env_id, :num_steps])
+                cf_bootstrap = cf_value_normalizer.denormalize(
+                    self.cf_bootstrap_values[env_id, :num_steps]
+                )
+                r_cf = self.r_cf_norm[env_id, :num_steps]
+                values_total = values + cf_values
+                bootstrap_total = bootstrap_values + cf_bootstrap
+            else:
+                values_total = values
+                bootstrap_total = bootstrap_values
+
             advantages = torch.zeros(num_steps, device=self.device)
             td_errors = torch.zeros(num_steps, device=self.device)
             last_gae = zero_tensor.clone()  # Clone to avoid in-place modification
@@ -557,7 +601,7 @@ class TamiyoRolloutBuffer:
             for t in reversed(range(num_steps)):
                 if t == num_steps - 1:
                     # Last step: use bootstrap value if truncated
-                    next_value = torch.where(truncated[t], bootstrap_values[t], zero_tensor)
+                    next_value = torch.where(truncated[t], bootstrap_total[t], zero_tensor)
                     # Truncation is NOT a true terminal - the episode was cut off
                     # by time limit. We MUST use next_non_terminal=1.0 so the
                     # bootstrap value contributes to delta and GAE propagates.
@@ -567,7 +611,7 @@ class TamiyoRolloutBuffer:
                         one_tensor - dones[t].to(dtype=self.values.dtype),
                     )
                 else:
-                    next_value = values[t + 1]
+                    next_value = values_total[t + 1]
                     # For non-terminal steps, only reset on TRUE terminal (not truncation)
                     true_terminal = dones[t] & ~truncated[t]
                     next_non_terminal = one_tensor - true_terminal.to(dtype=self.values.dtype)
@@ -575,7 +619,7 @@ class TamiyoRolloutBuffer:
                 # Reset GAE at true terminal (not truncation)
                 last_gae = last_gae * next_non_terminal
 
-                delta = rewards[t] + gamma_t * next_value * next_non_terminal - values[t]
+                delta = rewards[t] + gamma_t * next_value * next_non_terminal - values_total[t]
                 last_gae = delta + gamma_lambda_t * next_non_terminal * last_gae
                 advantages[t] = last_gae
                 # Store TD error for telemetry (TELE-221/222/223)
@@ -586,8 +630,37 @@ class TamiyoRolloutBuffer:
             # These are the TRUE returns on reward scale, used for:
             # 1. Updating the value normalizer with accurate return distribution
             # 2. Normalizing for critic training (value_normalizer.normalize())
-            self.returns[env_id, :num_steps] = advantages + values
+            returns_total = advantages + values_total
+            self.returns[env_id, :num_steps] = returns_total
             self.td_errors[env_id, :num_steps] = td_errors
+
+            # EV-stab Stage 2: one extra cf recursion (ON only), sharing the SAME
+            # mask/dones/truncated/(gamma,lambda). returns_cf = A_cf + V_cf; by GAE
+            # linearity returns_main := returns_total - returns_cf is the exact per-stream
+            # main lambda-return on (R_main, V_main). Verified against an independent
+            # single-stream GAE in tests/simic/agent/test_rollout_buffer_cf_gae.py.
+            if cf_value_normalizer is not None:
+                cf_adv = torch.zeros(num_steps, device=self.device)
+                last_gae_cf = zero_tensor.clone()
+                for t in reversed(range(num_steps)):
+                    if t == num_steps - 1:
+                        next_cf = torch.where(truncated[t], cf_bootstrap[t], zero_tensor)
+                        next_non_terminal = torch.where(
+                            truncated[t],
+                            one_tensor,
+                            one_tensor - dones[t].to(dtype=self.values.dtype),
+                        )
+                    else:
+                        next_cf = cf_values[t + 1]
+                        true_terminal = dones[t] & ~truncated[t]
+                        next_non_terminal = one_tensor - true_terminal.to(dtype=self.values.dtype)
+                    last_gae_cf = last_gae_cf * next_non_terminal
+                    delta_cf = r_cf[t] + gamma_t * next_cf * next_non_terminal - cf_values[t]
+                    last_gae_cf = delta_cf + gamma_lambda_t * next_non_terminal * last_gae_cf
+                    cf_adv[t] = last_gae_cf
+                returns_cf = cf_adv + cf_values
+                self.returns_cf[env_id, :num_steps] = returns_cf
+                self.returns_main[env_id, :num_steps] = returns_total - returns_cf
 
         # P2 FIX: New advantages computed - they need normalization
         self._advantages_normalized = False
@@ -697,6 +770,12 @@ class TamiyoRolloutBuffer:
             "rewards": self.rewards.to(device, non_blocking=nb),
             "advantages": self.advantages.to(device, non_blocking=nb),
             "returns": self.returns.to(device, non_blocking=nb),
+            # EV-stab Stage 2: per-stream returns + V_cf. On the OFF leg these are all
+            # zero (compute_advantages_and_returns leaves returns_main/returns_cf untouched
+            # and cf_values is never populated), so consumers gate on hra_value_decomposition.
+            "returns_main": self.returns_main.to(device, non_blocking=nb),
+            "returns_cf": self.returns_cf.to(device, non_blocking=nb),
+            "cf_values": self.cf_values.to(device, non_blocking=nb),
             "td_errors": self.td_errors.to(device, non_blocking=nb),
             "slot_masks": self.slot_masks.to(device, non_blocking=nb),
             "blueprint_masks": self.blueprint_masks.to(device, non_blocking=nb),

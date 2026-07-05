@@ -1,5 +1,7 @@
 """Tests for ablation configuration flags."""
 
+import pytest
+
 from esper.leyline import LifecycleOp, SeedStage
 from esper.simic.training.config import TrainingConfig
 from esper.simic.rewards import (
@@ -75,6 +77,42 @@ def test_ablation_flags_in_to_dict():
     assert data["disable_pbrs"] is True
     assert data["disable_terminal_reward"] is True
     assert data["disable_anti_gaming"] is True
+
+
+# =============================================================================
+# Phase −1 cheap-lever scale-falsifier flags
+# (shaped_attribution_clip / attribution_unit_normalize) — config plumbing.
+# See docs/plans/concepts/2026-06-24-reward-redesign-methodology.md §5.
+# =============================================================================
+
+
+def test_phase_minus1_flags_exist_with_off_defaults():
+    """The falsifier flags default to OFF (status quo)."""
+    config = TrainingConfig()
+    assert config.shaped_attribution_clip == 0.0
+    assert config.attribution_unit_normalize is False
+
+
+def test_phase_minus1_flags_settable_and_in_to_train_kwargs():
+    """The falsifier flags thread through to train_ppo_vectorized kwargs."""
+    config = TrainingConfig(shaped_attribution_clip=2.0, attribution_unit_normalize=True)
+    kwargs = config.to_train_kwargs()
+    assert kwargs["shaped_attribution_clip"] == 2.0
+    assert kwargs["attribution_unit_normalize"] is True
+
+
+def test_phase_minus1_flags_from_dict_round_trip():
+    """The falsifier flags load from a config dict and reach to_train_kwargs / to_dict."""
+    config = TrainingConfig.from_dict(
+        {"shaped_attribution_clip": 5.0, "attribution_unit_normalize": True}
+    )
+    assert config.shaped_attribution_clip == 5.0
+    assert config.attribution_unit_normalize is True
+    kwargs = config.to_train_kwargs()
+    assert kwargs["shaped_attribution_clip"] == 5.0
+    assert kwargs["attribution_unit_normalize"] is True
+    assert config.to_dict()["shaped_attribution_clip"] == 5.0
+    assert config.to_dict()["attribution_unit_normalize"] is True
 
 
 # =============================================================================
@@ -301,3 +339,122 @@ def test_all_ablation_flags_combined():
     assert components.terminal_bonus == 0.0
     assert components.ratio_penalty == 0.0
     assert components.alpha_shock == 0.0
+
+
+# =============================================================================
+# Committed-Shapley top-up flags (default-OFF build, PDR-0012)
+# Plan: docs/plans/ready/2026-07-02-committed-shapley-topup-build.md WI-5.
+# =============================================================================
+
+
+def test_shapley_synergy_flags_exist_with_off_defaults():
+    """All five term flags default to 0.0 (byte-identical status quo)."""
+    config = TrainingConfig()
+    assert config.shapley_synergy_scale == 0.0
+    assert config.shapley_synergy_noise_floor == 0.0
+    assert config.shapley_synergy_cap == 0.0
+    assert config.shapley_synergy_std_floor == 0.0
+    assert config.shapley_synergy_normalized_cap == 0.0
+
+    from esper.simic.rewards.contribution import ContributionRewardConfig
+
+    reward_config = ContributionRewardConfig()
+    assert reward_config.shapley_synergy_scale == 0.0
+    assert reward_config.shapley_synergy_noise_floor == 0.0
+    assert reward_config.shapley_synergy_cap == 0.0
+    assert reward_config.shapley_synergy_std_floor == 0.0
+    assert reward_config.shapley_synergy_normalized_cap == 0.0
+
+
+def test_shapley_synergy_flags_round_trip():
+    config = TrainingConfig.from_dict(
+        {
+            "shapley_synergy_scale": 0.5,
+            "shapley_synergy_noise_floor": 0.25,
+            "shapley_synergy_cap": 3.0,
+            "shapley_synergy_std_floor": 0.4,
+            "shapley_synergy_normalized_cap": 5.0,
+        }
+    )
+    kwargs = config.to_train_kwargs()
+    for key, expected in [
+        ("shapley_synergy_scale", 0.5),
+        ("shapley_synergy_noise_floor", 0.25),
+        ("shapley_synergy_cap", 3.0),
+        ("shapley_synergy_std_floor", 0.4),
+        ("shapley_synergy_normalized_cap", 5.0),
+    ]:
+        assert kwargs[key] == expected
+        assert config.to_dict()[key] == expected
+
+
+def test_shapley_synergy_normalized_cap_upper_bound():
+    """Pre-A/B build WI-4 (gate criterion 2 residual): normalized_cap gains
+    the missing upper sanity bound — <= the reward-normalizer clip. It is the
+    SOLE operative bound on the credit channel (the ±10 clip is not in that
+    path), so a value above the clip is a misconfiguration, not headroom."""
+    from esper.leyline import REWARD_NORMALIZER_CLIP
+    from esper.simic.rewards.contribution import ContributionRewardConfig
+
+    with pytest.raises(ValueError, match="normalized_cap"):
+        ContributionRewardConfig(
+            shapley_synergy_normalized_cap=REWARD_NORMALIZER_CLIP + 1.0
+        )
+    with pytest.raises(ValueError, match="normalized_cap"):
+        TrainingConfig(shapley_synergy_normalized_cap=REWARD_NORMALIZER_CLIP + 1.0)
+    # The boundary itself is accepted.
+    ContributionRewardConfig(shapley_synergy_normalized_cap=REWARD_NORMALIZER_CLIP)
+    TrainingConfig(shapley_synergy_normalized_cap=REWARD_NORMALIZER_CLIP)
+
+
+def test_shapley_synergy_scale_requires_both_bounds():
+    """F2 (drl F-A / pytorch F1): the credit bound must be structurally ON
+    whenever the term can pay — scale>0 without cap or normalized_cap is a
+    misconfiguration, not a silent unbounded channel."""
+    from esper.simic.rewards.contribution import ContributionRewardConfig
+
+    # cap missing
+    with pytest.raises(ValueError, match="shapley_synergy"):
+        ContributionRewardConfig(
+            shapley_synergy_scale=0.5, shapley_synergy_normalized_cap=5.0
+        )
+    # normalized_cap missing
+    with pytest.raises(ValueError, match="shapley_synergy"):
+        ContributionRewardConfig(
+            shapley_synergy_scale=0.5, shapley_synergy_cap=3.0
+        )
+    # both present: valid
+    ContributionRewardConfig(
+        shapley_synergy_scale=0.5,
+        shapley_synergy_cap=3.0,
+        shapley_synergy_normalized_cap=5.0,
+    )
+    # scale == 0: no bound requirement (term is off)
+    ContributionRewardConfig()
+
+
+def test_shapley_synergy_negative_values_refused():
+    from esper.simic.rewards.contribution import ContributionRewardConfig
+
+    for field in (
+        "shapley_synergy_scale",
+        "shapley_synergy_noise_floor",
+        "shapley_synergy_cap",
+        "shapley_synergy_std_floor",
+        "shapley_synergy_normalized_cap",
+    ):
+        with pytest.raises(ValueError, match="shapley_synergy"):
+            ContributionRewardConfig(**{field: -0.1})
+
+
+def test_shapley_synergy_scale_excluded_with_hra():
+    """A retro-written credit lands only in the total/main reward stream; CF-stream
+    routing under hra_value_decomposition is undefined (GATE 2 probe asserted
+    HRA-off). Hard exclusion until stream routing is designed."""
+    with pytest.raises(ValueError, match="hra_value_decomposition"):
+        TrainingConfig(
+            shapley_synergy_scale=0.5,
+            shapley_synergy_cap=3.0,
+            shapley_synergy_normalized_cap=5.0,
+            hra_value_decomposition=True,
+        )

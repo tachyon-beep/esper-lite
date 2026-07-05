@@ -6,6 +6,11 @@ from esper.runtime import get_task_spec
 from esper.runtime.tasks import TaskSpec, VALID_TASKS
 from esper.kasmina.blueprints import BlueprintRegistry
 from esper.kasmina.host import CNNHost, TransformerHost
+from esper.leyline.factored_actions import (
+    CNN_BLUEPRINTS,
+    TRANSFORMER_BLUEPRINTS,
+    BlueprintAction,
+)
 
 
 def test_cifar_baseline_spec_builds_model_and_loaders():
@@ -13,10 +18,13 @@ def test_cifar_baseline_spec_builds_model_and_loaders():
 
     model = spec.create_model(device="cpu", slots=["r0c1"])
     assert isinstance(model.host, CNNHost)
-    assert len(spec.action_enum) == (
-        len([s for s in BlueprintRegistry.list_for_topology("cnn") if s.name != "noop"])
-        + 4
-    )
+    # The flat heuristic action space mirrors the AVAILABILITY set (WAIT +
+    # germinates + FOSSILIZE/PRUNE/ADVANCE), not the registry: the registry may
+    # hold measurement-only blueprints (e.g. "placebo") that no policy can pick.
+    assert len(spec.action_enum) == len(CNN_BLUEPRINTS - {BlueprintAction.NOOP}) + 4
+    # Every available blueprint must be registered (availability ⊆ registry).
+    registered = {s.name for s in BlueprintRegistry.list_for_topology("cnn")}
+    assert {bp.to_blueprint_id() for bp in CNN_BLUEPRINTS} <= registered
 
     trainloader, testloader = spec.create_dataloaders(batch_size=8, mock=True, num_workers=0)
     batch_x, batch_y = next(iter(trainloader))
@@ -30,16 +38,12 @@ def test_tinystories_spec_builds_model_and_loaders():
 
     model = spec.create_model(device="cpu", slots=["r0c1"])
     assert isinstance(model.host, TransformerHost)
-    assert len(spec.action_enum) == (
-        len(
-            [
-                s
-                for s in BlueprintRegistry.list_for_topology("transformer")
-                if s.name != "noop"
-            ]
-        )
-        + 4
+    assert (
+        len(spec.action_enum)
+        == len(TRANSFORMER_BLUEPRINTS - {BlueprintAction.NOOP}) + 4
     )
+    registered = {s.name for s in BlueprintRegistry.list_for_topology("transformer")}
+    assert {bp.to_blueprint_id() for bp in TRANSFORMER_BLUEPRINTS} <= registered
 
     trainloader, valloader = spec.create_dataloaders(
         mock=True,
