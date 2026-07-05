@@ -55,6 +55,11 @@ ADDITEND_SIGN_MAP: dict[str, int] = {
 
 RESIDUAL_KEY = "residual"
 
+# EV-stab Stage-0: the exhaustive per-step additend term set (SoA column order in
+# rollout_buffer.component_additends). Derived from the canonical sign map so the SoA
+# columns and decompose_additends() stay in lockstep by construction.
+COMPONENT_TERMS: tuple[str, ...] = (*ADDITEND_SIGN_MAP.keys(), RESIDUAL_KEY)
+
 
 def decompose_additends(
     reward_raw: float, components: RewardComponentsTelemetry
