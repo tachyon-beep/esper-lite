@@ -37,10 +37,16 @@ decomposition (the canonical gate metric, reads identically on both legs).
   approved, do not re-open.
 
 ## Open questions / blocked-on-owner
-- **Branch unification (ESCALATION, flag-only):** how/when to unify `feat/ev-stab-stage2-hra`
-  into the mainline (the "collapse to 0.3.0"). Release-adjacent — owner word required;
-  never merge/rebase/tag without it.
-- Product docs now also live on `main` (this checkpoint). Push remains owner-gated.
+- **Branch consolidation DONE (2026-07-05, owner-authorized + pushed):** product
+  workspace + Shapley/Phase-0 line + squashed Stage-2 merged onto `origin/main`
+  (`f3758236`). `feat/phase-minus1-scale-falsifier` is now fully contained in main
+  (redundant — safe to delete; not done unilaterally). Live branches reduced 4 → 2.
+- **REMAINING unification (deliberately deferred):** `feat/ev-stab-stage2-hra` (23
+  commits, the active EV WIP) reconciles onto main via a per-hunk merge (Shapley-TOPUP
+  → main; Stage-0 SoA → ev-stab; Stage-2 → ev-stab's newer post-`fab280c0`; `partition.py`
+  = main superset; `reward_variance.py` = UNION per-step + per-return). Gated on: Stage-0
+  complete + OFF-leg byte-identity + drl/pytorch review (CLAUDE.md). Do it off-main on a
+  scratch branch, verify, then fast-merge — NOT a rushed core-training-path merge.
 - Standing placeholders: north-star / rent TARGETs (metrics.md) still owner-set.
 
 ## Last checkpoint did (checkpoint #17)
@@ -48,7 +54,9 @@ decomposition (the canonical gate metric, reads identically on both legs).
   disposition). metrics.md: added the EV Stage-0 gate row (reading pending).
 - Committed the Stage-0 core unit on ev-stab (`f721a5b3`) + wardline `.gitignore` hygiene.
 - Tracker: cfbdfdf040 closed; esper-lite-3d67b09687 annotated (core unit landed);
-  Stage-3 authored-plan task filed. Product workspace merged onto `main` (no push).
+  Stage-3 (esper-lite-3defe42928) marked needs-authored-plan.
+- Branch consolidation: docs/product + feature line merged & PUSHED to `origin/main`
+  (`f3758236`); 4 → 2 live branches. Backup tags `backup-preconsolidation/*` retained.
 
 ## Next session, start here
 **Continue Stage-0 on `feat/ev-stab-stage2-hra`** (checkout it first). TDD backlog:
