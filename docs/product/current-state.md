@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-05 ~17:30 (checkpoint #17 — EV Stage-0 reconciliation + methodology correction; PDR-0028, PDR-0029)
+# Current State — Esper        Checkpoint: 2026-07-05 ~18:30 (checkpoint #18 — branch consolidation executed (4→2, pushed to main) + experiment-disposition discipline; PDR-0030, PDR-0031)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet per PDR-0027). Metric =
@@ -55,14 +55,17 @@ decomposition (the canonical gate metric, reads identically on both legs).
   reproduce recipe = a checkout-and-run, not a 6-week reintegration). Folded into
   CHECKPOINT. ev-stab's disposition = merge-to-main, deferred to Stage-0 completion.
 
-## Last checkpoint did (checkpoint #17)
-- PDR-0028 (reconciliation + branch adoption, owner-ratified) + PDR-0029 (review-gate
-  disposition). metrics.md: added the EV Stage-0 gate row (reading pending).
-- Committed the Stage-0 core unit on ev-stab (`f721a5b3`) + wardline `.gitignore` hygiene.
-- Tracker: cfbdfdf040 closed; esper-lite-3d67b09687 annotated (core unit landed);
-  Stage-3 (esper-lite-3defe42928) marked needs-authored-plan.
-- Branch consolidation: docs/product + feature line merged & PUSHED to `origin/main`
-  (`f3758236`); 4 → 2 live branches. Backup tags `backup-preconsolidation/*` retained.
+## Last checkpoint did (checkpoint #18)
+- PDR-0031 (branch consolidation executed, owner-authorized) + PDR-0030 (experiment-
+  disposition discipline: a KNOWN merge/fork/abandon call per experiment; reproducibility
+  is a valid fork reason but the fork must STAND ALONE). CLAUDE.md: run `/own-product` on
+  orientation.
+- Consolidation: docs/product + Shapley/feature line merged & PUSHED to `origin/main`
+  (`fd0246bc`, `f3758236` → now `66ee4768`); 4 → 2 live branches; ev-stab deferred
+  merge-to-main. Backup tags `backup-preconsolidation/*` retained.
+- (Earlier same session, #17: PDR-0028/0029 — EV Stage-0 methodology correction; the
+  value-free gate core landed on ev-stab `f721a5b3`, TDD 4/4; cfbdfdf040 review gate closed.)
+- No new metric readings; no roadmap horizon change.
 
 ## Next session, start here
 **Continue Stage-0 on `feat/ev-stab-stage2-hra`** (checkout it first). TDD backlog:
