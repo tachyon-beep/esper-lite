@@ -25,8 +25,13 @@ The owner's response: prevent the accumulation at the source.
 EXPLICIT disposition call — exactly one of:
 1. **Merge to `main`** — the DEFAULT / preferred outcome for keep-worthy work.
 2. **Fork as a separate enduring line of effort** — legitimate when the work is a
-   genuinely independent, still-active line; the owner prefers to avoid a proliferation
-   of these, so choose it with explicit justification, not as a default parking spot.
+   genuinely independent still-active line OR is kept for **reproducibility** ("we might
+   want to reproduce this specific result"). **HARD CONDITION:** a kept branch MUST stand
+   alone effectively *at the moment it is forked* — self-contained (pinned deps, config,
+   data/seed pointers, a documented reproduce recipe) so that returning to it is a
+   checkout-and-run, NOT a 6-week reintegration to make it work again. A branch that
+   cannot stand alone is NOT a valid enduring fork: merge it, or capture its
+   reproducibility another way (tag + recorded recipe). Avoid a proliferation of these.
 3. **Abandon** — retire the branch (only when the experiment is genuinely done/dead).
 
 This folds into the **CHECKPOINT** step of the ownership loop: a checkpoint is not

@@ -50,8 +50,10 @@ decomposition (the canonical gate metric, reads identically on both legs).
 - Standing placeholders: north-star / rent TARGETs (metrics.md) still owner-set.
 - **STANDING RULE (PDR-0030):** every experiment must reach a KNOWN disposition at its end
   — merge-to-main (default) / justified enduring fork / abandon — to avoid a pile-up of
-  incomplete-data orphans (NOT to force premature retirement). Folded into CHECKPOINT.
-  ev-stab's disposition = merge-to-main, deferred to Stage-0 completion.
+  incomplete-data orphans (NOT to force premature retirement). Reproducibility is a valid
+  reason to keep a fork forever, BUT the fork must STAND ALONE (deps/config/data + a
+  reproduce recipe = a checkout-and-run, not a 6-week reintegration). Folded into
+  CHECKPOINT. ev-stab's disposition = merge-to-main, deferred to Stage-0 completion.
 
 ## Last checkpoint did (checkpoint #17)
 - PDR-0028 (reconciliation + branch adoption, owner-ratified) + PDR-0029 (review-gate
