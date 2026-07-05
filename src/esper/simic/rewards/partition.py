@@ -47,6 +47,12 @@ ADDITEND_SIGN_MAP: dict[str, int] = {
 
 RESIDUAL_KEY = "residual"
 
+# Fixed column order for the per-component SoA (rollout buffer + variance-share read).
+# Signed additends first (ADDITEND_SIGN_MAP order), residual last. This tuple is the
+# single source of truth for the SoA layout — buffer allocation, add(), and the read
+# accessor all index by it, so a term can never land in the wrong column.
+COMPONENT_TERMS: tuple[str, ...] = (*ADDITEND_SIGN_MAP.keys(), RESIDUAL_KEY)
+
 
 def split_reward_streams(
     reward_raw: float, components: RewardComponentsTelemetry

@@ -731,6 +731,7 @@ class VectorizedPPOTrainer:
             host_params_baseline=self.host_params_baseline,
             # EV-stab Stage 2: construction-time constant; gates the cf reward split.
             hra_value_decomposition=self.agent.hra_value_decomposition,
+            return_variance_telemetry=self.agent.return_variance_telemetry,
         )
 
         # Create PPO coordinator for update phase

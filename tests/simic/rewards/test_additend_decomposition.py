@@ -250,3 +250,51 @@ def test_decompose_reconciles_real_contribution_reward_exactly(
         f"reward-additive term in contribution.py; decomposition = {decomposed}"
     )
     assert sum(decomposed.values()) == pytest.approx(reward, abs=1e-9)
+
+
+def test_return_components_does_not_change_reward_scalar_shaped() -> None:
+    """Byte-identity foundation: forcing return_components (which the Stage-0 flag does on
+    the control run) must NOT change the reward scalar — it only ALSO returns the telemetry
+    struct. If this held only approximately, the OFF-leg byte-identity claim would be false.
+
+    SHAPED is the only family where this is a real question: ESCROW *raises* without
+    return_components (state update mandates it — so forcing it is a structural no-op), and
+    non-CONTRIBUTION families (BASIC/LOSS) are rejected by the flag guard entirely.
+    """
+    kwargs = dict(
+        action=LifecycleOp.WAIT,
+        seed_contribution=5.0,
+        val_acc=52.0,
+        seed_info=_training_seed(),
+        epoch=10,
+        max_epochs=100,
+        total_params=120_000,
+        host_params=100_000,
+        acc_at_germination=48.0,
+        acc_delta=0.2,
+        config=ContributionRewardConfig(reward_mode=RewardMode.SHAPED),
+    )
+    scalar = compute_contribution_reward(**kwargs, return_components=False)  # type: ignore[arg-type]
+    with_components = compute_contribution_reward(**kwargs, return_components=True)  # type: ignore[arg-type]
+
+    assert isinstance(scalar, float)
+    # Exact bit-for-bit equality, not approx: the whole byte-identity argument rests on this.
+    assert with_components[0] == scalar
+
+
+def test_escrow_mandates_return_components() -> None:
+    """Documents WHY the invariance test is SHAPED-only: ESCROW cannot run without
+    return_components, so the Stage-0 flag forcing it there is a guaranteed no-op."""
+    with pytest.raises(ValueError, match="ESCROW requires return_components"):
+        compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=5.0,
+            val_acc=52.0,
+            seed_info=_training_seed(),
+            epoch=10,
+            max_epochs=100,
+            config=ContributionRewardConfig(reward_mode=RewardMode.ESCROW),
+            stable_val_acc=55.0,  # satisfy the earlier ESCROW guard to reach the one under test
+            escrow_credit_prev=0.5,
+            return_components=False,
+        )

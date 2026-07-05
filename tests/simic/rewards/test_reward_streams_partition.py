@@ -37,7 +37,10 @@ from esper.leyline import HEAD_NAMES, OP_WAIT, SlotConfig
 from esper.leyline.telemetry_contracts import RewardComponentsTelemetry
 from esper.simic.control import RewardNormalizer
 from esper.simic.rewards import RewardFamily, RewardMode
-from esper.simic.rewards.partition import split_reward_streams
+from esper.simic.rewards.partition import (
+    COMPONENT_TERMS,
+    split_reward_streams,
+)
 from esper.simic.training.action_execution import ActionExecutionContext, execute_actions
 from esper.simic.vectorized_types import (
     ActionMaskFlags,
@@ -167,6 +170,7 @@ def _run_step(
     telemetry_off: bool = False,
     epoch: int = 1,
     max_epochs: int = 5,
+    return_variance_telemetry: bool = False,
 ) -> tuple[ActionOutcome, dict[str, object]]:
     """Drive ONE WAIT step through execute_actions; return (outcome, buffer.add kwargs)."""
     monkeypatch.setattr(
@@ -228,6 +232,7 @@ def _run_step(
         resolve_target_slot=_resolve_target_slot,
         host_params_baseline=100,
         hra_value_decomposition=hra_value_decomposition,
+        return_variance_telemetry=return_variance_telemetry,
     )
 
     actions_np = np.zeros((len(HEAD_NAMES), 1), dtype=np.int64)
@@ -510,6 +515,114 @@ def test_off_leg_omits_cf_buffer_kwargs(monkeypatch: pytest.MonkeyPatch) -> None
     # OFF leg: no cf kwargs threaded into buffer.add at all.
     assert "cf_value" not in add_kwargs
     assert "r_cf_norm" not in add_kwargs
+
+
+# ---------------------------------------------------------------------------
+# §7 (Stage 0, full path): return_variance_telemetry threads the SIGNED additend
+# decomposition into buffer.add on the REAL finalization path. Unlike the
+# compute_contribution_reward keystone (which sees residual==0 pre-terminal-
+# correction), here residual carries the post-hoc terminal corrections, so the
+# invariant is the exhaustive one: sum(additends) == reward_raw.
+# ---------------------------------------------------------------------------
+
+
+def test_component_additends_threaded_on_real_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """return_variance_telemetry ON: buffer.add receives the full signed decomposition,
+    it sums to reward_raw, and its bounded_attribution equals split_reward_streams' r_cf
+    (both read the same field — a cross-check that the wiring is coherent)."""
+    components = RewardComponentsTelemetry(bounded_attribution=2.5)
+    reward_normalizer = _seeded_normalizer()
+
+    outcome, add_kwargs = _run_step(
+        monkeypatch,
+        reward_mode=RewardMode.SHAPED,
+        initial_reward=4.0,
+        components=components,
+        reward_normalizer=reward_normalizer,
+        hra_value_decomposition=False,  # Stage-2 OFF: this is the CONTROL-run gate
+        return_variance_telemetry=True,
+        pending_auto_prune_penalty=-1.0,  # a telemetry-less correction -> lands in residual
+    )
+
+    additends = add_kwargs["component_additends"]
+    assert additends is not None
+    assert set(additends) == set(COMPONENT_TERMS)
+
+    reward_raw = outcome.reward_raw
+    # Exhaustive-by-construction on the REAL post-correction reward.
+    assert sum(additends.values()) == pytest.approx(reward_raw, abs=1e-6)
+
+    # Cross-check: the cf additend is exactly split_reward_streams' r_cf.
+    r_main, r_cf = split_reward_streams(reward_raw, outcome.reward_components)
+    assert additends["bounded_attribution"] == pytest.approx(r_cf)
+
+    # Only bounded_attribution is populated by this stub, so residual absorbs the whole
+    # non-cf remainder (== r_main): the base reward plus the telemetry-less auto-prune
+    # correction. It is non-zero here BECAUSE a terminal correction fired.
+    assert additends["residual"] == pytest.approx(r_main, abs=1e-6)
+    assert additends["residual"] != pytest.approx(0.0)
+
+
+def test_component_additends_omitted_when_telemetry_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """return_variance_telemetry OFF (default): no component_additends kwarg at all,
+    so the SoA stays zero and the path is byte-identical to today."""
+    components = RewardComponentsTelemetry(bounded_attribution=2.5)
+    reward_normalizer = _seeded_normalizer()
+
+    _outcome, add_kwargs = _run_step(
+        monkeypatch,
+        reward_mode=RewardMode.SHAPED,
+        initial_reward=4.0,
+        components=components,
+        reward_normalizer=reward_normalizer,
+        hra_value_decomposition=False,
+        return_variance_telemetry=False,
+    )
+
+    assert "component_additends" not in add_kwargs
+
+
+def test_rollout_byte_identical_across_return_variance_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollout-level byte-identity on the REAL execute_actions path: turning
+    return_variance_telemetry ON adds ONLY the component_additends kwarg — every other
+    buffer.add field (reward, value, log-probs, masks, hidden state, ...) is bit-identical.
+    Proves the Stage-0 collection is non-perturbing where it actually runs (not inferred
+    from a ppo_update golden that never touches the rollout collection path)."""
+
+    def _run(flag: bool) -> dict[str, object]:
+        _outcome, add_kwargs = _run_step(
+            monkeypatch,
+            reward_mode=RewardMode.SHAPED,
+            initial_reward=4.0,
+            components=RewardComponentsTelemetry(bounded_attribution=2.5),
+            reward_normalizer=_seeded_normalizer(),  # fresh, identically seeded each leg
+            hra_value_decomposition=False,
+            return_variance_telemetry=flag,
+            pending_auto_prune_penalty=-1.0,
+            pending_hindsight_credit=2.0,
+        )
+        return add_kwargs
+
+    off = _run(False)
+    on = _run(True)
+
+    # ON adds exactly one key; nothing is removed.
+    assert set(on) - set(off) == {"component_additends"}
+    assert set(off) - set(on) == set()
+
+    # Every shared field is bit-identical (torch.equal for tensors, == for scalars).
+    for key in off:
+        a, b = off[key], on[key]
+        if isinstance(a, torch.Tensor):
+            assert torch.equal(a, b), f"buffer.add[{key!r}] perturbed by the Stage-0 flag"
+        else:
+            assert a == b, f"buffer.add[{key!r}] perturbed by the Stage-0 flag: {a!r} != {b!r}"
 
 
 def test_non_contribution_family_rejects_flag(monkeypatch: pytest.MonkeyPatch) -> None:

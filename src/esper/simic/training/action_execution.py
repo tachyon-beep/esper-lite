@@ -53,7 +53,7 @@ from esper.simic.rewards import (
     SeedInfo,
     STAGE_POTENTIALS,
 )
-from esper.simic.rewards.partition import split_reward_streams
+from esper.simic.rewards.partition import decompose_additends, split_reward_streams
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 
 from .helpers import compute_rent_and_shock_inputs
@@ -324,6 +324,12 @@ class ActionExecutionContext:
     # Defaulted so existing context constructions (and unit-test fakes) stay valid on the
     # OFF leg; the trainer sets it from self.agent.hra_value_decomposition.
     hra_value_decomposition: bool = False
+    # EV-stab Stage 0: when ON, force return_components and collect the per-step SIGNED
+    # additend decomposition into the buffer SoA (the value-free variance-share gate).
+    # Pure telemetry, INDEPENDENT of hra_value_decomposition — the gate reads on the
+    # Stage-2-OFF control run, so it must fire when hra is off. Defaulted so existing
+    # constructions stay valid; the trainer sets it from agent.return_variance_telemetry.
+    return_variance_telemetry: bool = False
 
 
 @dataclass
@@ -516,6 +522,14 @@ def execute_actions(
         raise ValueError(
             "hra_value_decomposition=True requires the CONTRIBUTION reward family "
             f"(R_cf = bounded_attribution is only defined there); got {reward_family_enum}."
+        )
+    # EV-stab Stage 0: the signed additend decomposition is CONTRIBUTION-scoped too
+    # (ADDITEND_SIGN_MAP names CONTRIBUTION-family reward terms); reject the flag otherwise.
+    return_variance_telemetry = context.return_variance_telemetry
+    if return_variance_telemetry and reward_family_enum != RewardFamily.CONTRIBUTION:
+        raise ValueError(
+            "return_variance_telemetry=True requires the CONTRIBUTION reward family "
+            f"(the signed additend decomposition is only defined there); got {reward_family_enum}."
         )
 
     truncated_bootstrap_targets: list[tuple[int, int]] = []
@@ -925,6 +939,9 @@ def execute_actions(
                 # EV-stab Stage 2 (§3.3): the cf split reads components.bounded_attribution,
                 # so components MUST be populated whenever the HRA flag is ON (incl. SHAPED).
                 or hra_value_decomposition
+                # EV-stab Stage 0: the value-free gate decomposes components into signed
+                # additends, so they must be populated on the control run too.
+                or return_variance_telemetry
             )
             reward_inputs = record.contribution_reward_inputs
             reward_inputs.action = action_for_reward
@@ -1102,6 +1119,7 @@ def execute_actions(
         # The buffer keeps storing the CLIPPED normalized TOTAL (normalized_reward);
         # r_cf_norm is the unclipped cf stream threaded into buffer.add below.
         r_cf_norm = 0.0
+        component_additends: dict[str, float] | None = None
         if hra_value_decomposition:
             # return_components is forced True under the flag (§3.3), so components
             # is guaranteed populated for the CONTRIBUTION family here.
@@ -1111,6 +1129,16 @@ def execute_actions(
             )
             _r_main_raw, r_cf_raw = split_reward_streams(reward, reward_components)
             r_cf_norm = reward_normalizer.divide_by_std(r_cf_raw)
+        if return_variance_telemetry:
+            # return_components is forced True under the flag (above), so components is
+            # guaranteed populated for the CONTRIBUTION family here. Decompose the FINAL
+            # (post-terminal-correction) reward: sum(additends) == reward_raw, residual
+            # carrying any telemetry-less correction.
+            assert reward_components is not None, (
+                "return_variance_telemetry=True requires reward_components "
+                "(return_components must be forced on)"
+            )
+            component_additends = decompose_additends(reward, reward_components)
 
         # B11-CR-03 fix: Store RAW rewards for telemetry interpretability
         # PPO buffer uses normalized_reward (for training stability)
@@ -1445,6 +1473,12 @@ def execute_actions(
         if hra_value_decomposition:
             cf_buffer_kwargs["cf_value"] = cf_value
             cf_buffer_kwargs["r_cf_norm"] = r_cf_norm
+        # EV-stab Stage 0: thread the signed additend decomposition into the buffer SoA
+        # ONLY when collecting (independent of the HRA leg). Omitted otherwise, so the
+        # buffer's default None leaves the SoA as zeros (byte-identical).
+        component_buffer_kwargs: dict[str, object] = {}
+        if component_additends is not None:
+            component_buffer_kwargs["component_additends"] = component_additends
         agent.buffer.add(
             env_id=env_idx,
             state=states_batch_normalized[env_idx].detach(),
@@ -1488,6 +1522,7 @@ def execute_actions(
             contribution_mask=contribution_mask_tensor,
             has_fresh_contribution=has_fresh_contribution,
             **cf_buffer_kwargs,
+            **component_buffer_kwargs,
         )
         if truncated:
             truncated_bootstrap_targets.append((env_idx, step_idx))
