@@ -9,7 +9,8 @@ whenever the per-step components sum to the total reward.
 This is deliberately DISTINCT from the per-STEP ``compute_variance_shares`` (which lives
 on the reward-composition side): return variance is ``sum_t sum_s gamma^{t+s} Cov(r_t, r_s)``,
 so temporally persistent streams contribute more than their per-step share suggests. The
-Stage-0 GATE (``Cov(R_cf, R)/Var(R) > 0.40``) reads THIS return-level version.
+Stage-0 GATE (``Cov(R_cf, R)/Var(R) > 0.40``; canonical threshold
+``leyline.RETURN_VAR_CF_SHARE_GATE``) reads THIS return-level version.
 
 It is also VALUE-FREE: unlike the Stage-2 ON-leg metric (which decomposes GAE lambda-returns
 built from the cf value head's bootstrapped predictions), this decomposes the raw discounted

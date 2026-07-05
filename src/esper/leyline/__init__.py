@@ -182,6 +182,19 @@ ADVANTAGE_STD_FLOOR: float = 0.1
 # active, style/alpha_* ~22%) on short rollouts and forced-WAIT corridors.
 MIN_HEAD_NORM_COUNT: int = 32
 
+# EV-stab Stage-0 gate (value-free return-variance decomposition; PDR-0028/0029).
+# return_var_cf_share = Cov(R_cf, R)/Var(R) read on the Stage-2-OFF control run:
+# above this threshold the counterfactual stream dominates return variance and
+# de-shaping (HRA value decomposition) is justified. A DIAGNOSIS threshold for
+# analysts and operator surfaces (Karn/Sanctum) — never a training gate input.
+RETURN_VAR_CF_SHARE_GATE: float = 0.40
+
+# Completeness-keystone alarm for the same decomposition: the residual additend's
+# covariance share should be ~0 when every reward component is tracked. Above this
+# fraction, untracked reward mass is flowing through the decomposition — an
+# invariant breach worth an operator alarm, not a tuning signal.
+RETURN_VAR_RESIDUAL_ALARM_SHARE: float = 0.05
+
 # Value function loss coefficient in combined PPO loss.
 # 1.0 gives critic equal weight with policy, important when value head
 # is underfitting (negative explained variance from batch 1).
@@ -898,6 +911,8 @@ __all__ = [
     "DEFAULT_GAE_LAMBDA",
     "ADVANTAGE_STD_FLOOR",
     "MIN_HEAD_NORM_COUNT",
+    "RETURN_VAR_CF_SHARE_GATE",
+    "RETURN_VAR_RESIDUAL_ALARM_SHARE",
     "DEFAULT_VALUE_COEF",
     "DEFAULT_MAX_GRAD_NORM",
     "DEFAULT_TRAINING_MAX_GRAD_NORM",
