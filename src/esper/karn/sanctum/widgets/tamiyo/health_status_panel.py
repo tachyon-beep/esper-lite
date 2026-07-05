@@ -21,6 +21,7 @@ from rich.text import Text
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
+from esper.karn.sanctum.health import classify_value_health
 
 from .sparkline_utils import render_sparkline
 from .trends import trend_arrow_for_history
@@ -641,40 +642,12 @@ class HealthStatusPanel(Static):
         return "OK"
 
     def _get_value_status(self, tamiyo: "TamiyoState") -> str:
-        """Check if value function is healthy using relative thresholds."""
-        v_range = tamiyo.value_max - tamiyo.value_min
-        v_mean = tamiyo.value_mean
-        v_std = tamiyo.value_std
-        initial = tamiyo.initial_value_spread
+        """Check if value function is healthy using relative thresholds.
 
-        # Collapse detection: values stuck at constant
-        if v_range < 0.1 and v_std < 0.01:
-            return "Critical"
-
-        # Coefficient of variation check (relative instability)
-        if abs(v_mean) > 0.1:
-            cov = v_std / abs(v_mean)
-            if cov > 3.0:
-                return "Critical"
-            if cov > 2.0:
-                return "Warning"
-
-        # Relative threshold (if initial spread known)
-        if initial is not None and initial > 0.1:
-            ratio = v_range / initial
-            if ratio > 10:
-                return "Critical"
-            if ratio > 5:
-                return "Warning"
-            return "OK"
-
-        # Absolute fallback (during warmup or if initial unknown)
-        if v_range > 1000 or abs(tamiyo.value_max) > 10000:
-            return "Critical"
-        if v_range > 500 or abs(tamiyo.value_max) > 5000:
-            return "Warning"
-
-        return "OK"
+        Delegates to the shared classifier so the always-on AnomalyStrip and
+        this panel render the same verdict (single source of truth).
+        """
+        return classify_value_health(tamiyo)
 
     # Status helpers
     def _get_advantage_status(self, adv_std: float) -> str:
