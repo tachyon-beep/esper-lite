@@ -129,9 +129,12 @@ GLOSSARY_TEXT = """\
   [cyan]Lv/Lp[/cyan]         |V.Loss| / |P.Loss| balance. Extremes suggest one objective dominating.
 
 [bold]Health Panel[/bold]
-  [cyan]Advantage[/cyan]     Normalized advantages (mean±std). Healthy: mean≈0, std≈1.
+  [cyan]Advantage[/cyan]     Normalized advantages (mean±std). Healthy: mean≈0, std≈1 (≈0±1 by construction).
+                  [cyan]rawσ[/cyan] = pre-norm advantage std — the real learning-signal magnitude the update
+                  sees (scale-relative; red = normalizer floored σ = noise amplification).
                   sk/kt = skewness/kurtosis (tail/outlier shape). + = fraction positive (healthy ~40–60%).
-  [cyan]Grad Norm[/cyan]     Total gradient norm (pre-clip). Rising trend can precede instability.
+  [cyan]Grad Norm[/cyan]     Gradient norm, pre-clip, worst inner epoch (the explosion signal; no post-clip
+                  norm is captured anywhere). Rising trend can precede instability.
   [cyan]Log Prob[/cyan]      [min,max] logπ(a|s). Very negative min (<-50) predicts numeric underflow → NaNs.
   [cyan]Entropy[/cyan]       Exploration level (PPO entropy bonus). Higher = more random; too low = collapse risk.
   [cyan]Entropy D[/cyan]     d(entropy)/d(batch). Negative = entropy collapsing; used for countdown.

@@ -22,6 +22,7 @@ from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.health import classify_value_health
+from esper.leyline import ADVANTAGE_STD_FLOOR
 
 from .sparkline_utils import render_sparkline
 from .trends import trend_arrow_for_history
@@ -80,6 +81,21 @@ class HealthStatusPanel(Static):
             f"{tamiyo.advantage_mean:+.3f}±{tamiyo.advantage_std:.2f}",
             style=self._status_style(adv_status),
         )
+        # Raw (pre-normalization) advantage std: the actual learning-signal
+        # magnitude the update sees, before standardize-to-unit-σ makes the value
+        # above ≈0±1 by construction. Scale-relative (trends matter); red when the
+        # normalizer floored σ (advantage_std_floored) = noise amplification.
+        # Presence-gated: None until the trainer emits the d5 pre-norm std.
+        raw_std = tamiyo.pre_norm_advantage_std
+        if raw_std is not None:
+            if tamiyo.advantage_std_floored:
+                raw_style = "red bold"
+            elif raw_std < 3 * ADVANTAGE_STD_FLOOR:
+                raw_style = "yellow"
+            else:
+                raw_style = "dim"
+            result.append(" rawσ:", style="dim")
+            result.append(f"{raw_std:.2f}", style=raw_style)
         result.append(" sk:", style="dim")
         # Show "---" for NaN skewness/kurtosis/positive_ratio (no data yet)
         if math.isnan(tamiyo.advantage_skewness):
@@ -139,6 +155,9 @@ class HealthStatusPanel(Static):
                 result.append(arrow, style=arrow_style)
         else:
             result.append("─" * self.SPARKLINE_WIDTH, style="dim")
+        # grad_norm IS the pre-clip norm (worst inner epoch) — no post-clip norm
+        # is captured anywhere. Label it so the explosion signal is unmistakable.
+        result.append(" pre-clip", style="dim")
         result.append("\n")
 
         # Log prob extremes (NaN predictor)

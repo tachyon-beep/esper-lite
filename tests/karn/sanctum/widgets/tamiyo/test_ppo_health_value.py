@@ -263,3 +263,24 @@ class TestPpoPresenceGate:
         assert "pending" not in output
         # Measured grad_norm of 0.0 renders with the standard " 7.3f" format.
         assert "0.000" in output
+
+
+class TestRawAdvantageAndGradLabel:
+    """881d: surface the pre-norm advantage magnitude + honest grad-norm label."""
+
+    def _panel(self, tamiyo: TamiyoState) -> str:
+        panel = HealthStatusPanel()
+        panel._snapshot = SanctumSnapshot(tamiyo=tamiyo)
+        return panel.render().plain
+
+    def test_raw_advantage_std_is_shown_when_present(self) -> None:
+        text = self._panel(TamiyoState(ppo_data_received=True, pre_norm_advantage_std=0.83))
+        assert "rawσ:0.83" in text
+
+    def test_raw_advantage_absent_when_none(self) -> None:
+        text = self._panel(TamiyoState(ppo_data_received=True, pre_norm_advantage_std=None))
+        assert "rawσ" not in text  # presence-gated, no dishonest zero
+
+    def test_grad_norm_labelled_pre_clip(self) -> None:
+        text = self._panel(TamiyoState(ppo_data_received=True, grad_norm=2.1))
+        assert "pre-clip" in text
