@@ -24,9 +24,15 @@
     padding: 0 1;
 }
 
-/* When anomalies exist, make it stand out */
-#anomaly-strip.has-anomalies {
+/* Critical: something is on fire — full error-red so it cannot be missed. */
+#anomaly-strip.has-critical {
     background: $error-darken-2;
+}
+
+/* Warning: worth a look, not an alarm — a muted tint keeps warnings off the
+   error-red background so they do not cause alarm fatigue. */
+#anomaly-strip.has-warning {
+    background: $warning-darken-3;
 }
 
 /* Main tab shell: Overview | Critic | Experiment */

@@ -160,3 +160,172 @@ def test_gate_chip_coexists_with_anomalies():
     text = strip.render().plain
     assert "stalled" in text
     assert "S0 gate" in text
+
+
+# =============================================================================
+# Severity split: critical paints error-red, warnings get a muted tint
+# =============================================================================
+
+
+def test_stalled_is_a_warning_not_a_critical():
+    snapshot = SanctumSnapshot()
+    snapshot.envs[0] = EnvState(env_id=0, status="stalled")
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.has_warning is True
+    assert strip.has_critical is False
+    assert "WARNINGS:" in strip.render().plain
+
+
+def test_degraded_is_a_critical():
+    snapshot = SanctumSnapshot()
+    snapshot.envs[0] = EnvState(env_id=0, status="degraded")
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.has_critical is True
+    assert "ANOMALIES:" in strip.render().plain
+
+
+# =============================================================================
+# Off-tab critical conditions the strip must now cover (glossary "critical")
+# =============================================================================
+
+
+def test_ev_non_positive_is_critical_when_data_present():
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.ppo_data_received = True
+    snapshot.tamiyo.explained_variance = -0.1
+    # Give it a healthy value range so ONLY EV trips.
+    snapshot.tamiyo.value_min, snapshot.tamiyo.value_max = -8.0, 14.0
+    snapshot.tamiyo.value_std, snapshot.tamiyo.value_mean = 6.0, 3.0
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.ev_critical is True
+    assert strip.has_critical is True
+    assert "EV≤0" in strip.render().plain
+
+
+def test_ev_artifact_is_suppressed():
+    """A floored EV denominator is an artifact, not a critic collapse."""
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.ppo_data_received = True
+    snapshot.tamiyo.explained_variance = -0.5
+    snapshot.tamiyo.ev_low_return_variance = True
+    snapshot.tamiyo.value_min, snapshot.tamiyo.value_max = -8.0, 14.0
+    snapshot.tamiyo.value_std, snapshot.tamiyo.value_mean = 6.0, 3.0
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.ev_critical is False
+
+
+def test_value_collapse_is_critical_when_data_present():
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.ppo_data_received = True
+    # All-zero value stats = collapsed value function.
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.value_critical is True
+    assert strip.has_critical is True
+    assert "value collapse" in strip.render().plain
+
+
+def test_ratio_explosion_is_critical_when_data_present():
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.ppo_data_received = True
+    snapshot.tamiyo.joint_ratio_max = 6.0
+    # Healthy value range so only the ratio trips.
+    snapshot.tamiyo.value_min, snapshot.tamiyo.value_max = -8.0, 14.0
+    snapshot.tamiyo.value_std, snapshot.tamiyo.value_mean = 6.0, 3.0
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.ratio_explosion is True
+    assert strip.has_critical is True
+    assert "RatioJnt" in strip.render().plain
+
+
+def test_metric_criticals_gated_on_ppo_data():
+    """A fresh snapshot (no PPO data yet) must NOT paint the strip red.
+
+    EV defaults to 0.0 (<=0) and value stats default to all-zero (a collapse),
+    so ungated these would false-alarm on every run's first seconds — the exact
+    alarm-fatigue failure the strip is meant to kill.
+    """
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.ppo_data_received = False
+    snapshot.tamiyo.explained_variance = -0.5  # would trip if ungated
+    snapshot.tamiyo.joint_ratio_max = 9.0  # would trip if ungated
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.ev_critical is False
+    assert strip.value_critical is False
+    assert strip.ratio_explosion is False
+    assert strip.has_anomalies is False
+
+
+# =============================================================================
+# Governor: the loudest safety event, independent of the policy
+# =============================================================================
+
+
+def test_governor_rollback_is_critical_and_leads():
+    snapshot = SanctumSnapshot()
+    e0 = EnvState(env_id=0, status="healthy")
+    e0.rolled_back = True
+    e0.rollback_reason = "nan"
+    e1 = EnvState(env_id=1, status="healthy")
+    e1.rolled_back = True
+    e1.rollback_reason = "divergence"
+    snapshot.envs[0], snapshot.envs[1] = e0, e1
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.governor_rollback_count == 2
+    assert strip.has_critical is True
+    text = strip.render().plain
+    assert "GOV ROLLBACK ×2" in text
+    assert "nan" in text and "divergence" in text
+    # It leads: nothing renders before the rollback segment.
+    assert text.index("GOV ROLLBACK") < text.index("ANOMALIES:") + len("ANOMALIES: ") + 1
+
+
+def test_governor_rollback_not_gated_on_ppo_data():
+    """A rollback surfaces even before any PPO update — the governor is
+    independent of the policy."""
+    snapshot = SanctumSnapshot()
+    e0 = EnvState(env_id=0, status="healthy")
+    e0.rolled_back = True
+    e0.rollback_reason = "lobotomy"
+    snapshot.envs[0] = e0
+    assert snapshot.tamiyo.ppo_data_received is False
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.governor_rollback_count == 1
+    assert strip.has_critical is True
+
+
+def test_rollback_unattributed_is_a_warning():
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo.rollback_unattributed_count = 3
+
+    strip = AnomalyStrip()
+    strip.update_snapshot(snapshot)
+
+    assert strip.rollback_unattributed is True
+    assert strip.has_warning is True
+    assert strip.has_critical is False
