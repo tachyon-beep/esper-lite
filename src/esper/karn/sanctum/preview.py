@@ -18,7 +18,7 @@ from __future__ import annotations
 import random
 
 from esper.karn.sanctum.app import SanctumApp
-from esper.karn.sanctum.schema import EnvState, SanctumSnapshot
+from esper.karn.sanctum.schema import EnvState, GovernorRollbackRecord, SanctumSnapshot
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
 
@@ -116,12 +116,26 @@ class PreviewBackend:
                 ev=0.18, ev_main=None, cf_share=0.53, acc=70.9,
             ),
         }
-        # Showcase the triage spine: leg B has one env in a governor-rollback
-        # state, so the strip leads with GOV ROLLBACK (B) and the Overview tab
-        # carries a red severity badge — the headline of the design review.
+        # Showcase the triage spine + Governor tab: leg B has one env in a
+        # governor-rollback state (strip leads with GOV ROLLBACK, Governor tab
+        # badges red) with a matching durable ledger entry, and both legs report
+        # the governor armed.
+        for leg in self._legs.values():
+            leg.governor.total_env_count = 6
+            leg.governor.armed_env_count = 6
         b_env = self._legs["B"].envs[0]
         b_env.rolled_back = True
-        b_env.rollback_reason = "nan"
+        b_env.rollback_reason = "governor_nan"
+        gov_b = self._legs["B"].governor
+        gov_b.total_rollbacks = 1
+        gov_b.rollbacks_by_reason = {"governor_nan": 1}
+        gov_b.rollback_ledger.append(
+            GovernorRollbackRecord(
+                env_id=0, epoch=self._legs["B"].current_epoch, timestamp=None,
+                panic_reason="governor_nan", loss_at_panic=float("nan"),
+                consecutive_panics=3, attributed=False,
+            )
+        )
 
     def _drift(self, s: SanctumSnapshot) -> None:
         """Small random walk so trends/sparklines move between polls."""

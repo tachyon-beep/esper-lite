@@ -24,14 +24,16 @@ def _mock_backend(groups: dict[str, SanctumSnapshot] | None = None) -> MagicMock
 
 
 @pytest.mark.asyncio
-async def test_app_has_four_tabs():
+async def test_app_has_five_tabs():
     from textual.widgets import TabbedContent
 
     app = SanctumApp(backend=_mock_backend())
     async with app.run_test():
         tabs = app.query_one("#main-tabs", TabbedContent)
         pane_ids = {pane.id for pane in tabs.query("TabPane")}
-        assert {"tab-overview", "tab-policy", "tab-critic", "tab-experiment"} <= pane_ids
+        assert {
+            "tab-overview", "tab-policy", "tab-critic", "tab-experiment", "tab-governor",
+        } <= pane_ids
         assert tabs.active == "tab-overview"
 
 
@@ -100,10 +102,12 @@ async def test_bracket_keys_cycle_tabs():
         assert tabs.active == "tab-critic"
         await pilot.press("right_square_bracket")
         assert tabs.active == "tab-experiment"
+        await pilot.press("right_square_bracket")
+        assert tabs.active == "tab-governor"
         await pilot.press("right_square_bracket")  # wraps
         assert tabs.active == "tab-overview"
         await pilot.press("left_square_bracket")  # wraps back
-        assert tabs.active == "tab-experiment"
+        assert tabs.active == "tab-governor"
 
 
 @pytest.mark.asyncio
@@ -138,6 +142,36 @@ async def test_overview_tamiyo_is_a_digest():
         assert brain.query_one("#health-panel", HealthStatusPanel) is not None
         assert not brain.query(ActionHeadsPanel)  # moved to Policy tab
         assert not brain.query(CriticCalibrationPanel)  # lives on Critic tab only
+
+
+@pytest.mark.asyncio
+async def test_governor_tab_hosts_panels_and_routes_snapshot():
+    from esper.karn.sanctum.widgets.governor_screen import GovernorScreen
+    from esper.karn.sanctum.widgets.governor_ledger_panel import GovernorLedgerPanel
+
+    app = SanctumApp(backend=_mock_backend())
+    async with app.run_test() as pilot:
+        app._poll_and_refresh()
+        await pilot.pause()
+        governor = app.query_one("#governor-screen", GovernorScreen)
+        assert governor.query_one(GovernorLedgerPanel) is not None
+        assert governor.snapshot is not None  # routed through _apply_view
+
+
+@pytest.mark.asyncio
+async def test_governor_rollback_badges_governor_tab():
+    leg = SanctumSnapshot()
+    e = EnvState(env_id=0, status="healthy")
+    e.rolled_back = True
+    e.rollback_reason = "governor_nan"
+    leg.envs[0] = e
+
+    app = SanctumApp(backend=_mock_backend({"default": leg}))
+    async with app.run_test() as pilot:
+        app._poll_and_refresh()
+        await pilot.pause()
+        assert app._tab_severity_map["tab-governor"] == "critical"
+        assert app._tab_severity_map["tab-overview"] == ""  # rollback no longer badges Overview
 
 
 @pytest.mark.asyncio

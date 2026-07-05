@@ -58,6 +58,7 @@ from esper.karn.sanctum.widgets import (
 )
 from esper.karn.sanctum.widgets.critic_screen import CriticScreen
 from esper.karn.sanctum.widgets.experiment_panel import ExperimentPanel
+from esper.karn.sanctum.widgets.governor_screen import GovernorScreen
 from esper.karn.sanctum.widgets.policy_screen import PolicyScreen
 
 if TYPE_CHECKING:
@@ -70,7 +71,7 @@ HELP_TEXT = """\
 [bold cyan]Sanctum Keyboard Shortcuts[/bold cyan]
 
 [bold]Navigation[/bold]
-  [cyan][ / ][/cyan]     Switch view: Overview ‹› Policy ‹› Critic ‹› Experiment
+  [cyan][ / ][/cyan]     Switch view: Overview ‹› Policy ‹› Critic ‹› Experiment ‹› Governor
   [cyan]h/l[/cyan] [cyan]←/→[/cyan]  Switch between left/right panels
   [cyan]j/k[/cyan] [cyan]↑/↓[/cyan]  Navigate rows in table
   [cyan]g/G[/cyan]       Jump to top/bottom
@@ -180,6 +181,16 @@ GLOSSARY_TEXT = """\
                   ~Var(returns), the EV DENOMINATOR: a collapse toward 0 (or the [yellow]⚠lowRV[/yellow]
                   badge on EV) means return variance vanished and EV / EV main are untrustworthy.
                   A large gap vs the per-batch "batch σ" flags non-stationarity. ~1.0 may be warmup.
+
+[bold]Governor & Growth tab[/bold]
+  [cyan]GOVERNOR[/cyan]      The safety gate — independent of the policy: not trained, cannot be disabled or
+                  retuned by the controller. [green]ARMED[/green] = all panic rules live; [yellow]warming k/N[/yellow] = the
+                  NaN-only window before the statistical rules arm (never overclaimed).
+  [cyan]Rollback ledger[/cyan] Durable trace of each panic (the env-row flash self-erases in ~5s): env/epoch,
+                  panic reason, loss@panic vs the (divergence-only) threshold, consecutive panics,
+                  and the triggering action ([yellow](unattr)[/yellow] = the death penalty reached no transition).
+  [cyan]Causal log[/cyan]   The growth lifecycle chain: proposal → verdict → commit → rollback / fossilization,
+                  with the governor's verdict per proposal ([green]✓ approved[/green] / [red]✗ blocked[/red]).
 
 [bold]Transforms[/bold]
   [cyan]symlog[/cyan]        Signed log transform on large-magnitude signals (compresses spikes, preserves order).
@@ -479,13 +490,16 @@ class SanctumApp(App[None]):
         self._tab_severity_map: dict[str, str] = {}
 
     # Tab cycle order for the [ / ] bindings
-    _TAB_ORDER = ("tab-overview", "tab-policy", "tab-critic", "tab-experiment")
+    _TAB_ORDER = (
+        "tab-overview", "tab-policy", "tab-critic", "tab-experiment", "tab-governor",
+    )
     # Base tab labels (a severity badge is prefixed when that tab owns a fire).
     _TAB_LABELS = {
         "tab-overview": "Overview",
         "tab-policy": "Policy",
         "tab-critic": "Critic",
         "tab-experiment": "Experiment",
+        "tab-governor": "Governor",
     }
 
     def compose(self) -> ComposeResult:
@@ -533,6 +547,9 @@ class SanctumApp(App[None]):
             with TabPane("Experiment", id="tab-experiment"):
                 yield ExperimentPanel(id="experiment-panel")
 
+            with TabPane("Governor", id="tab-governor"):
+                yield GovernorScreen(id="governor-screen")
+
         yield Footer()
 
     def action_next_tab(self) -> None:
@@ -569,9 +586,8 @@ class SanctumApp(App[None]):
             "tab-overview": sev(
                 strip.degraded_count > 0
                 or strip.gradient_issues > 0
-                or strip.governor_rollback_count > 0
                 or strip.memory_alarm,
-                strip.stalled_count > 0 or strip.rollback_unattributed,
+                strip.stalled_count > 0,
             ),
             "tab-policy": sev(
                 strip.ratio_explosion
@@ -584,6 +600,11 @@ class SanctumApp(App[None]):
                 strip.value_warning,
             ),
             "tab-experiment": "",
+            # The governor owns its rollbacks now (they live on the Governor tab).
+            "tab-governor": sev(
+                strip.governor_rollback_count > 0,
+                strip.rollback_unattributed,
+            ),
         }
 
     def _update_tab_badges(self, strip: AnomalyStrip) -> None:
@@ -952,6 +973,12 @@ class SanctumApp(App[None]):
         except NoMatches:
             pass  # Widget hasn't mounted yet
 
+        # Governor & Growth tab: safety-gate status + rollback ledger + causal chain
+        try:
+            self.query_one("#governor-screen", GovernorScreen).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+
         detail_due = primary_changed or (now - self._last_detail_update_ts) >= 0.5
 
         # Update EnvDetailScreen modal if displayed
@@ -1042,6 +1069,7 @@ class SanctumApp(App[None]):
         "tab-policy": "#policy-action-heads",
         "tab-critic": "#critic-screen",
         "tab-experiment": "#experiment-panel",
+        "tab-governor": "#governor-screen",
     }
 
     def _active_scroll_target(self):
