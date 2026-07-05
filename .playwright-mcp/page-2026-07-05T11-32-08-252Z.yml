@@ -1,0 +1,68 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]: esper-lite Â· feat/sanctum-layout Â· captured 160Ã—50
+    - heading "Sanctum layout v2 â€” the EV-stab telemetry gets a home" [level=1] [ref=e5]
+    - paragraph [ref=e6]:
+      - text: Three views now sit behind
+      - generic [ref=e7]: "[ ]"
+      - text: "tabs. Screenshots below are real renders of the rebuilt TUI fed a staged two-leg A/B run (leg A: HRA + RVT on; leg B: control with RVT only)."
+    - generic [ref=e8]:
+      - generic [ref=e9]: EXP:HRA+RVT
+      - generic [ref=e10]: prof:ev-stab-s2
+      - generic [ref=e11]: 514 sanctum tests green
+      - generic [ref=e12]: smoke-tested @ 120Ã—40 + 140Ã—50
+  - generic [ref=e13]:
+    - generic [ref=e14]: Tab 1 Â· Overview
+    - heading "Mission control, with Reward Health finally mounted" [level=2] [ref=e15]
+    - paragraph [ref=e16]: "The familiar layout â€” env table, scoreboard, TamiyoBrain â€” plus two changes worth spotting: the run header now carries the EXP:HRA+RVT leg-identity chips, and the metrics column gains the previously orphaned REWARD HEALTH panel. TamiyoBrain's fixed panel widths are now fractional, so nothing clips invisible at 120â€“140 columns."
+    - figure "Overview tab â€” header chips top-left area, REWARD HEALTH under the scoreboard, TamiyoBrain below at full width." [ref=e17]:
+      - 'img "Sanctum Overview tab: env overview table, scoreboard, reward health panel, TamiyoBrain diagnostics grid" [ref=e18]'
+      - generic [ref=e19]: Overview tab â€” header chips top-left area, REWARD HEALTH under the scoreboard, TamiyoBrain below at full width.
+  - generic [ref=e20]:
+    - generic [ref=e21]: Tab 2 Â· Critic
+    - 'heading "The EV-stab surface: per-stream EV + the Stage-0 gate" [level=2] [ref=e22]'
+    - paragraph [ref=e23]: "The critic story in one place. CRITIC CALIBRATION grows presence-gated EV main / EV cf / cf V.L lines on the HRA leg. RETURN VARIANCE (S0) shows the value-free shares: CF share with the â–²>0.40 gate marker in identity magenta (a diagnosis, not a failure), main share, and the residual keystone with its â—\x8f/âœ— verdict. On a flags-off run this panel names the config flag instead of showing dashes."
+    - 'figure "Critic tab â€” CF share 0.51 â–²>0.40 (gate tripped on the staged data), residual +0.01 â— (decomposition intact)." [ref=e24]':
+      - 'img "Sanctum Critic tab: critic calibration with per-stream EV, value diagnostics, return variance panel with gate marker, reward health" [ref=e25]'
+      - generic [ref=e26]: "Critic tab â€” CF share 0.51 â–²>0.40 (gate tripped on the staged data), residual +0.01 â—\x8f (decomposition intact)."
+  - generic [ref=e27]:
+    - generic [ref=e28]: Tab 3 Â· Experiment
+    - heading "Legs side by side â€” no more comparing from memory" [level=2] [ref=e29]
+    - paragraph [ref=e30]:
+      - text: "One column per policy group, delta column when there are exactly two, em dashes where a leg doesn't emit a metric (leg B has no EV main â€” it has no cf head). The â—\x8f marks the primary leg driving the other tabs;"
+      - generic [ref=e31]: t
+      - text: still switches it.
+    - figure "Experiment tab â€” EV Î” +0.13 toward leg A; CF var share comparable across legs, as Stage-0 expects." [ref=e32]:
+      - 'img "Sanctum Experiment tab: metric rows with one column per A/B leg plus delta column" [ref=e33]'
+      - generic [ref=e34]: Experiment tab â€” EV Î” +0.13 toward leg A; CF var share comparable across legs, as Stage-0 expects.
+  - generic [ref=e35]:
+    - generic [ref=e36]: Also in this build
+    - list [ref=e37]:
+      - listitem [ref=e38]:
+        - strong [ref=e39]: "Anomaly strip:"
+        - text: red
+        - emphasis [ref=e40]: decomp resid
+        - text: alarm on residual-share breach; persistent magenta
+        - emphasis [ref=e41]: S0 gate
+        - text: info chip when CF share > 0.40 (never reds the strip).
+      - listitem [ref=e42]:
+        - strong [ref=e43]:
+          - text: Run info (
+          - generic [ref=e44]: i
+          - text: "):"
+        - text: Experiment section with untruncated proof profile + per-flag on/off.
+      - listitem [ref=e45]:
+        - strong [ref=e46]:
+          - text: Help (
+          - generic [ref=e47]: "?"
+          - text: "):"
+        - text: glossary entries for EV main/cf, CF share, the gate, and the chips.
+      - listitem [ref=e48]:
+        - strong [ref=e49]: "Kept out on purpose (PDR-0028):"
+        - text: cov_rcf_return_share / r_main_cov / ev_sum stay Karn-only; a hasattr tripwire test enforces it.
+      - listitem [ref=e50]:
+        - strong [ref=e51]: "Bug found by screenshotting:"
+        - text: startup auto-focus landed on the
+        - emphasis [ref=e52]: hidden
+        - text: filter input, silently eating keystrokes. Fixed â€” initial focus now goes to the env table.
+  - generic [ref=e53]: "Deferred, deliberately: the POLICY tab (breaking TamiyoBrain apart) waits until you've judged this shape. Branch feat/sanctum-layout in the worktree, seven commits, main tree and the running experiment untouched."

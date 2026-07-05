@@ -68,6 +68,7 @@ HELP_TEXT = """\
 [bold cyan]Sanctum Keyboard Shortcuts[/bold cyan]
 
 [bold]Navigation[/bold]
+  [cyan][ / ][/cyan]     Switch view: Overview ‹› Critic ‹› Experiment
   [cyan]h/l[/cyan] [cyan]←/→[/cyan]  Switch between left/right panels
   [cyan]j/k[/cyan] [cyan]↑/↓[/cyan]  Navigate rows in table
   [cyan]g/G[/cyan]       Jump to top/bottom
@@ -141,6 +142,19 @@ GLOSSARY_TEXT = """\
 
 [bold]Env Overview[/bold]
   [cyan]Ep∑R[/cyan]          Per-env episode return so far (Σ raw step rewards; resets each round).
+
+[bold]EV-stab (Critic + Experiment views)[/bold]
+  [cyan]EXP:HRA+RVT+PHN[/cyan] Header chips: which experiment legs are active this run.
+                  HRA = sum-of-heads value decomposition (V_main + V_cf).
+                  RVT = value-free return-variance telemetry (Stage-0 gate).
+                  PHN = per-head advantage normalization ablation.
+  [cyan]EV main/EV cf[/cyan] Per-stream explained variance on the HRA leg. EV main carries the
+                  acceptance semantics (liftoff = success); low EV cf is EXPECTED (noisy stream).
+  [cyan]CF share[/cyan]      Cov(R_cf, R)/Var(R) — the Stage-0 diagnosis. ▲ marks the >0.40 gate:
+                  the counterfactual stream dominates return variance (de-shaping justified).
+                  A tripped gate is a FINDING, not a failure — it never reds the anomaly strip.
+  [cyan]Residual[/cyan]      Completeness keystone (~0). ✗ = untracked reward mass is leaking
+                  through the additend decomposition (also alarms the anomaly strip).
 
 [bold]Transforms[/bold]
   [cyan]symlog[/cyan]        Signed log transform on large-magnitude signals (compresses spikes, preserves order).

@@ -42,7 +42,9 @@ class CriticScreen(Container):
         width: 100%;
     }
 
-    CriticScreen .critic-panel {
+    /* Child selector, NOT a class: the tamiyo panels overwrite self.classes
+       with "panel" in __init__, so classes passed at construction are lost. */
+    CriticScreen Horizontal > * {
         width: 1fr;
         min-width: 44;
         height: auto;
@@ -59,19 +61,11 @@ class CriticScreen(Container):
 
     def compose(self) -> ComposeResult:
         with Horizontal():
-            yield CriticCalibrationPanel(
-                id="critic-tab-calibration", classes="critic-panel"
-            )
-            yield ValueDiagnosticsPanel(
-                id="critic-tab-value-diagnostics", classes="critic-panel"
-            )
+            yield CriticCalibrationPanel(id="critic-tab-calibration")
+            yield ValueDiagnosticsPanel(id="critic-tab-value-diagnostics")
         with Horizontal():
-            yield ReturnVariancePanel(
-                id="critic-tab-return-variance", classes="critic-panel"
-            )
-            yield RewardHealthPanel(
-                id="critic-tab-reward-health", classes="critic-panel"
-            )
+            yield ReturnVariancePanel(id="critic-tab-return-variance")
+            yield RewardHealthPanel(id="critic-tab-reward-health")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Fan the snapshot out to all critic panels."""
