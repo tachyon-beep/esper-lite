@@ -98,6 +98,33 @@ class CriticCalibrationPanel(Static):
         )
         self._render_value(result, calib_label, calib_style, last=True)
 
+        # HRA-leg per-stream EV (EV-stab Stage 2). Presence-gated: absent lines on
+        # the OFF leg, not dashes. EV_main carries the acceptance semantics (same
+        # thresholds as EV); EV_cf fits the deliberately-noisy cf stream, so it
+        # renders neutral — a low EV_cf is expected, not a health fault.
+        if tamiyo.hra_leg_active:
+            result.append("\n")
+            self._render_label(result, "EV main")
+            if tamiyo.ev_main is None:
+                self._render_value(result, "---", "dim")
+            else:
+                self._render_value(
+                    result, f"{tamiyo.ev_main:.2f}", self._get_ev_style(tamiyo.ev_main)
+                )
+            self._render_label(result, "EV cf")
+            if tamiyo.ev_cf is None:
+                self._render_value(result, "---", "dim", last=True)
+            else:
+                self._render_value(result, f"{tamiyo.ev_cf:.2f}", "cyan", last=True)
+            result.append("\n")
+            self._render_label(result, "cf V.L")
+            if tamiyo.cf_value_loss is None:
+                self._render_value(result, "---", "dim", last=True)
+            else:
+                self._render_value(
+                    result, f"{tamiyo.cf_value_loss:.3f}", "cyan", last=True
+                )
+
         return result
 
     def _render_placeholder(self) -> Text:
