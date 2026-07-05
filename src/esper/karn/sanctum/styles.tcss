@@ -29,9 +29,28 @@
     background: $error-darken-2;
 }
 
+/* Main tab shell: Overview | Critic | Experiment */
+#main-tabs {
+    height: 1fr;
+}
+
+#main-tabs TabPane {
+    padding: 0;
+    height: 1fr;
+}
+
 #sanctum-main {
     height: 1fr;
     padding: 0 1;
+}
+
+/* Experiment tab: A/B leg comparison table */
+#experiment-panel {
+    height: 1fr;
+    border: round $surface-lighten-2;
+    border-title-color: $text-muted;
+    padding: 1 2;
+    overflow-y: auto;
 }
 
 /* Top section: Env Overview + Scoreboard (~26% of main area) */

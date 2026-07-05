@@ -129,8 +129,11 @@ class TamiyoBrain(Container):
         margin: 0;
     }
 
+    /* fr + min-width (not fixed widths): at narrow terminal sizes panels shrink
+       and crop per-line instead of pushing siblings past the clipped edge. */
     #ppo-losses-panel {
-        width: 56;  /* Wider for PPO diagnostics */
+        width: 1fr;
+        min-width: 44;
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -138,7 +141,8 @@ class TamiyoBrain(Container):
     }
 
     #health-column {
-        width: 56;  /* Fixed width for Health + Value Diagnostics + Critic Calibration */
+        width: 1fr;
+        min-width: 44;
         height: 100%;
     }
 
@@ -161,7 +165,8 @@ class TamiyoBrain(Container):
     }
 
     #slots-panel {
-        width: 52;  /* Slightly narrower than PPO/Health */
+        width: 1fr;
+        min-width: 40;
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -212,14 +217,16 @@ class TamiyoBrain(Container):
 
     #critic-calibration-panel {
         width: 100%;
-        height: 9;
+        height: auto;   /* grows by 2 lines on the HRA leg (per-stream EV) */
+        min-height: 9;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
     #action-context {
-        width: 52;  /* Match slots width */
+        width: 1fr;
+        min-width: 40;
         height: 100%;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;

@@ -37,7 +37,7 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Input, Static
+from textual.widgets import DataTable, Footer, Input, Static, TabbedContent, TabPane
 
 from esper.karn.sanctum.errors import SanctumTelemetryFatalError
 from esper.karn.sanctum.formatting import format_runtime
@@ -49,11 +49,14 @@ from esper.karn.sanctum.widgets import (
     EventLogDetail,
     HistoricalEnvDetail,
     RewardHealthData,
+    RewardHealthPanel,
     RunHeader,
     Scoreboard,
     TamiyoBrain,
     ThreadDeathModal,
 )
+from esper.karn.sanctum.widgets.critic_screen import CriticScreen
+from esper.karn.sanctum.widgets.experiment_panel import ExperimentPanel
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.backend import SanctumBackend
@@ -381,6 +384,9 @@ class SanctumApp(App[None]):
         Binding("r", "refresh", "Refresh", show=True),
         Binding("i", "show_run_info", "Info", show=True),
         Binding("?", "toggle_help", "Help", show=True),
+        # Main tab cycling
+        Binding("right_square_bracket", "next_tab", "View ›", show=True),
+        Binding("left_square_bracket", "prev_tab", "‹ View", show=False),
         # Filter
         Binding("/", "start_filter", "Filter", show=True),
         Binding("escape", "clear_filter", "Clear", show=False, priority=True),
@@ -432,14 +438,17 @@ class SanctumApp(App[None]):
         self._active_group_id: str | None = None
         self._last_primary_group_id: str | None = None
 
+    # Tab cycle order for the [ / ] bindings
+    _TAB_ORDER = ("tab-overview", "tab-critic", "tab-experiment")
+
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
 
         Layout structure:
-        - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection, A/B comparison
+        - Run Header: Episode, Epoch, Batch, Runtime, leg chips, Connection
         - Anomaly Strip: Single-line automatic problem surfacing
-        - Top row: EnvOverview (80%) | Scoreboard (20%)
-        - Bottom row: TamiyoBrain (80%) | EventLog (20%)
+        - Tabs: Overview (envs + scoreboard + reward health + Tamiyo),
+                Critic (EV-stab value diagnostics), Experiment (A/B legs)
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")
@@ -452,24 +461,57 @@ class SanctumApp(App[None]):
             classes="hidden",
         )
 
-        with Container(id="sanctum-main"):
-            # Top section: Environment Overview and Scoreboard
-            with Horizontal(id="top-section"):
-                yield EnvOverview(num_envs=self._num_envs, id="env-overview")
-                with Vertical(id="metrics-column"):
-                    yield Scoreboard(id="scoreboard")
+        with TabbedContent(initial="tab-overview", id="main-tabs"):
+            with TabPane("Overview", id="tab-overview"):
+                with Container(id="sanctum-main"):
+                    # Top section: Environment Overview and Scoreboard
+                    with Horizontal(id="top-section"):
+                        yield EnvOverview(num_envs=self._num_envs, id="env-overview")
+                        with Vertical(id="metrics-column"):
+                            yield Scoreboard(id="scoreboard")
+                            yield RewardHealthPanel(id="metrics-reward-health")
 
-            # Bottom section: Tamiyo (full width)
-            with Horizontal(id="bottom-section"):
-                # TamiyoBrain container - widgets created dynamically
-                with Horizontal(id="tamiyo-container"):
-                    pass  # TamiyoBrain widgets mounted dynamically
+                    # Bottom section: Tamiyo (full width)
+                    with Horizontal(id="bottom-section"):
+                        # TamiyoBrain container - widgets created dynamically
+                        with Horizontal(id="tamiyo-container"):
+                            pass  # TamiyoBrain widgets mounted dynamically
+
+            with TabPane("Critic", id="tab-critic"):
+                yield CriticScreen(id="critic-screen")
+
+            with TabPane("Experiment", id="tab-experiment"):
+                yield ExperimentPanel(id="experiment-panel")
 
         yield Footer()
+
+    def action_next_tab(self) -> None:
+        """Cycle to the next main tab (])."""
+        self._cycle_tab(1)
+
+    def action_prev_tab(self) -> None:
+        """Cycle to the previous main tab ([)."""
+        self._cycle_tab(-1)
+
+    def _cycle_tab(self, step: int) -> None:
+        try:
+            tabs = self.query_one("#main-tabs", TabbedContent)
+        except NoMatches:
+            return
+        order = self._TAB_ORDER
+        try:
+            idx = order.index(tabs.active)
+        except ValueError:
+            idx = 0
+        tabs.active = order[(idx + step) % len(order)]
 
     def on_mount(self) -> None:
         """Start refresh timer when app mounts."""
         self._refresh_timer = self.set_interval(self._refresh_interval, self._poll_and_refresh)
+        # Initial focus goes to the env table, NOT the auto-focused first widget:
+        # that is the hidden filter Input, which silently swallows printable keys
+        # (including the [/] tab bindings) as invisible filter text.
+        self.action_focus_left_panel()
 
     def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrain:
         """Get or create TamiyoBrain widget for a policy group.
@@ -753,6 +795,40 @@ class SanctumApp(App[None]):
         self._refresh_tamiyo_widgets(view.snapshots_by_group, view.reward_health_by_group)
         self._sync_tamiyo_visibility(view.primary_group_id, view.snapshots_by_group)
         self._last_primary_group_id = view.primary_group_id
+
+        # Reward health for the primary group (Overview metrics column + Critic tab).
+        # Same explicit membership pattern as _refresh_tamiyo_widgets: a group with
+        # no computed health yet renders the empty defaults, not stale data.
+        if (
+            view.primary_group_id is not None
+            and view.primary_group_id in view.reward_health_by_group
+        ):
+            primary_reward_health = view.reward_health_by_group[view.primary_group_id]
+        else:
+            primary_reward_health = RewardHealthData()
+
+        try:
+            self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(
+                primary_reward_health
+            )
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+
+        # Critic tab: full-width value diagnostics for the primary group
+        try:
+            critic = self.query_one("#critic-screen", CriticScreen)
+            critic.update_snapshot(snapshot)
+            critic.update_reward_health(primary_reward_health)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+
+        # Experiment tab: all legs side by side
+        try:
+            self.query_one("#experiment-panel", ExperimentPanel).update_groups(
+                view.snapshots_by_group, view.primary_group_id
+            )
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
 
         detail_due = primary_changed or (now - self._last_detail_update_ts) >= 0.5
 
