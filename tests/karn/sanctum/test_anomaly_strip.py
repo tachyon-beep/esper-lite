@@ -321,7 +321,7 @@ def test_governor_rollback_not_gated_on_ppo_data():
 
 def test_rollback_unattributed_is_a_warning():
     snapshot = SanctumSnapshot()
-    snapshot.tamiyo.rollback_unattributed_count = 3
+    snapshot.governor.rollback_unattributed_count = 3
 
     strip = AnomalyStrip()
     strip.update_snapshot(snapshot)

@@ -189,8 +189,9 @@ def _compute_leg(snapshot: "SanctumSnapshot", group_id: str | None) -> _LegAnoma
             leg.value_label = _describe_value(tamiyo)
 
     # Governor rollback-attribution starvation (per-rollout aggregate; a
-    # presence-safe default of 0, so no data gate).
-    leg.rollback_unattributed = tamiyo.rollback_unattributed_count > 0
+    # presence-safe default of 0, so no data gate). Lives on the governor (gate),
+    # not the policy.
+    leg.rollback_unattributed = snapshot.governor.rollback_unattributed_count > 0
 
     # EV-stab Stage-0 telemetry (None = leg off; never alarm on absence).
     residual = tamiyo.return_var_residual_share

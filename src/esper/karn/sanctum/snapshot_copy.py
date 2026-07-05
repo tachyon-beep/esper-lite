@@ -22,6 +22,7 @@ from esper.karn.sanctum.schema import (
     DecisionSnapshot,
     EnvState,
     EventLogEntry,
+    GovernorState,
     GPUStats,
     MorphologyCausalLogEntry,
     RewardComponents,
@@ -170,11 +171,22 @@ def copy_best_run_record(record: BestRunRecord) -> BestRunRecord:
     )
 
 
+def copy_governor_state(governor: GovernorState) -> GovernorState:
+    """Copy the governor state, including its ledger deque and reason counters
+    (records are frozen-style dataclasses, so a shallow deque copy is enough)."""
+    return replace(
+        governor,
+        rollbacks_by_reason=dict(governor.rollbacks_by_reason),
+        rollback_ledger=deque(governor.rollback_ledger, maxlen=governor.rollback_ledger.maxlen),
+    )
+
+
 def copy_snapshot(snapshot: SanctumSnapshot) -> SanctumSnapshot:
     return replace(
         snapshot,
         envs={env_id: copy_env_state(env) for env_id, env in snapshot.envs.items()},
         tamiyo=copy_tamiyo_state(snapshot.tamiyo),
+        governor=copy_governor_state(snapshot.governor),
         vitals=copy_system_vitals(snapshot.vitals),
         rewards=copy_reward_components(snapshot.rewards),
         slot_ids=list(snapshot.slot_ids),

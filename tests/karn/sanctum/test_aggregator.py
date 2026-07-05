@@ -970,8 +970,8 @@ def test_aggregator_wires_rollback_counts():
     agg.process_event(event)
 
     snapshot = agg.get_snapshot()
-    assert snapshot.tamiyo.rollback_attempt_count == 7
-    assert snapshot.tamiyo.rollback_unattributed_count == 3
+    assert snapshot.governor.rollback_attempt_count == 7
+    assert snapshot.governor.rollback_unattributed_count == 3
 
 
 def test_aggregator_tracks_previous_gradient_norms():

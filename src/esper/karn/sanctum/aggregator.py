@@ -40,6 +40,8 @@ from esper.karn.sanctum.schema import (
     SeedLifecycleStats,
     SeedLifecycleEvent,
     MorphologyCausalLogEntry,
+    GovernorState,
+    GovernorRollbackRecord,
     ObservationStats,
     EpisodeStats,
     compute_entropy_velocity,
@@ -70,6 +72,7 @@ from esper.leyline import (
     GovernorRollbackPayload,
     MorphologyCausalLogPayload,
     HEAD_NAMES,
+    MIN_GOVERNOR_HISTORY_SAMPLES,
     TEMPO_NAMES,
 )
 
@@ -282,6 +285,7 @@ class SanctumAggregator:
         self._event_log = deque(maxlen=self.max_event_log)
         self._morphology_causal_log = deque(maxlen=200)
         self._tamiyo = TamiyoState()
+        self._governor = GovernorState()
         self._observation_stats = ObservationStats()  # Updated when telemetry provides stats
         self._vitals = SystemVitals()
         self._gpu_devices = []
@@ -671,6 +675,19 @@ class SanctumAggregator:
                 slot_utilization=slot_utilization,
             )
 
+        # Governor arming (interim proxy: envs past the NaN-only warmup window,
+        # after which all panic rules go live). Per-env history fill is not emitted
+        # yet, so use the per-env epoch — this slightly OVER-counts because the real
+        # fill excludes anomalous epochs. Tracked as a follow-up.
+        total_envs = len(self._envs)
+        armed = sum(
+            1 for env in self._envs.values()
+            if env.current_epoch >= MIN_GOVERNOR_HISTORY_SAMPLES
+        )
+        self._governor.total_env_count = total_envs
+        self._governor.armed_env_count = armed
+        self._governor.warming_env_count = total_envs - armed
+
         snapshot = SanctumSnapshot(
             # Run context
             run_id=self._run_id,
@@ -700,6 +717,8 @@ class SanctumAggregator:
             rewards=best_reward,
             # Tamiyo state
             tamiyo=self._tamiyo,
+            # Governor (safety gate) state, independent of the policy
+            governor=self._governor,
             # System vitals
             vitals=self._vitals,
             # Event log
@@ -802,6 +821,7 @@ class SanctumAggregator:
 
         # Reset Tamiyo state
         self._tamiyo = TamiyoState()
+        self._governor = GovernorState()
         self._observation_stats = ObservationStats()
 
         # Compile status (static configuration from training start)
@@ -992,8 +1012,11 @@ class SanctumAggregator:
         )
         self._tamiyo.ev_low_return_variance = payload.ev_low_return_variance
         self._tamiyo.ev_return_variance = payload.ev_return_variance
-        self._tamiyo.rollback_attempt_count = payload.rollback_attempt_count
-        self._tamiyo.rollback_unattributed_count = payload.rollback_unattributed_count
+        # Rollback starvation counters belong to the GATE, not the policy: the
+        # arrival cadence (per PPO update) is where the aggregate is computed, not
+        # whose state it is.
+        self._governor.rollback_attempt_count = payload.rollback_attempt_count
+        self._governor.rollback_unattributed_count = payload.rollback_unattributed_count
 
         # EV-stab Stage 0/2 telemetry. Scalars mirror the LATEST update honestly
         # (None when it did not emit them); leg-identity flags latch on presence so
@@ -2068,15 +2091,43 @@ class SanctumAggregator:
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
-        # Set rollback state - env row flashes briefly after rollback_timestamp
+        timestamp = event.timestamp or datetime.now(timezone.utc)
+        # panic_reason (governor_nan/lobotomy/divergence/rollback) is the true WHY;
+        # payload.reason is a constant banner string ("Structural Collapse"). Key the
+        # flash and the ledger off panic_reason (fixing a long-standing defect).
+        panic_reason = payload.panic_reason or payload.reason
+
+        # Set rollback state - env row flashes briefly after rollback_timestamp,
+        # then clears on the next EPOCH_COMPLETED (the durable trace is the ledger).
         env.rolled_back = True
-        env.rollback_reason = payload.reason
-        env.rollback_timestamp = event.timestamp or datetime.now(timezone.utc)
+        env.rollback_reason = panic_reason
+        env.rollback_timestamp = timestamp
+
+        # Durable ledger entry on the governor (survives the flash self-erase).
+        self._governor.rollback_ledger.append(
+            GovernorRollbackRecord(
+                env_id=env_id,
+                epoch=self._current_epoch,
+                timestamp=timestamp,
+                panic_reason=panic_reason,
+                loss_at_panic=payload.loss_at_panic,
+                loss_threshold=payload.loss_threshold,
+                consecutive_panics=payload.consecutive_panics,
+                triggering_action_id=payload.triggering_action_id,
+                attributed=payload.triggering_action_id is not None,
+                rollback_severity=payload.rollback_severity,
+            )
+        )
+        self._governor.total_rollbacks += 1
+        self._governor.rollbacks_by_reason[panic_reason] = (
+            self._governor.rollbacks_by_reason.get(panic_reason, 0) + 1
+        )
 
         _logger.info(
-            "Governor rollback for env %d: %s",
+            "Governor rollback for env %d: %s (loss_at_panic=%s)",
             env_id,
-            payload.reason,
+            panic_reason,
+            payload.loss_at_panic,
         )
 
     def _handle_morphology_causal_log(self, event: "TelemetryEvent") -> None:

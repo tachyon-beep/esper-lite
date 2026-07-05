@@ -317,8 +317,6 @@ export interface TamiyoState {
   value_nrmse: number;
   ev_low_return_variance: boolean;
   ev_return_variance: number | null;
-  rollback_attempt_count: number;
-  rollback_unattributed_count: number;
   policy_loss: number;
   value_loss: number;
   entropy_loss: number;
@@ -512,9 +510,36 @@ export interface EnvState {
   rollback_timestamp: string | null;
 }
 
+export interface GovernorRollbackRecord {
+  env_id: number;
+  epoch: number;
+  timestamp: string | null;
+  panic_reason: string;
+  loss_at_panic: number | null;
+  loss_threshold: number | null;
+  consecutive_panics: number | null;
+  triggering_action_id: string | null;
+  attributed: boolean;
+  rollback_severity: number | null;
+}
+
+// Safety-gate state, independent of the policy (sibling of tamiyo, not nested).
+export interface GovernorState {
+  present: boolean;
+  armed_env_count: number;
+  warming_env_count: number;
+  total_env_count: number;
+  rollback_attempt_count: number;
+  rollback_unattributed_count: number;
+  total_rollbacks: number;
+  rollbacks_by_reason: Record<string, number>;
+  rollback_ledger: GovernorRollbackRecord[];
+}
+
 export interface SanctumSnapshot {
   envs: Record<number, EnvState>;
   tamiyo: TamiyoState;
+  governor: GovernorState;
   vitals: SystemVitals;
   rewards: RewardComponents;
   slot_ids: string[];

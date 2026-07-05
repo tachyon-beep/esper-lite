@@ -4,6 +4,7 @@ import type {
   DecisionSnapshot,
   EnvState,
   EventLogEntry,
+  GovernorState,
   MorphologyCausalLogEntry,
   RewardComponents,
   RunConfig,
@@ -210,8 +211,6 @@ export function createTamiyoState(overrides: Partial<TamiyoState> = {}): TamiyoS
     value_nrmse: 0.4,
     ev_low_return_variance: false,
     ev_return_variance: 50.0,
-    rollback_attempt_count: 0,
-    rollback_unattributed_count: 0,
     policy_loss: 0.05,
     value_loss: 0.1,
     entropy_loss: -0.02,
@@ -462,6 +461,21 @@ export function createEventLogEntry(
   return Object.assign(defaults, overrides)
 }
 
+export function createGovernorState(overrides: Partial<GovernorState> = {}): GovernorState {
+  const defaults: GovernorState = {
+    present: true,
+    armed_env_count: 0,
+    warming_env_count: 0,
+    total_env_count: 0,
+    rollback_attempt_count: 0,
+    rollback_unattributed_count: 0,
+    total_rollbacks: 0,
+    rollbacks_by_reason: {},
+    rollback_ledger: []
+  }
+  return { ...defaults, ...overrides }
+}
+
 export function createSnapshot(overrides: Partial<SanctumSnapshot> = {}): SanctumSnapshot {
   const defaults: SanctumSnapshot = {
     envs: {
@@ -469,6 +483,7 @@ export function createSnapshot(overrides: Partial<SanctumSnapshot> = {}): Sanctu
       1: createEnvState({ env_id: 1, status: 'stalled' })
     },
     tamiyo: createTamiyoState(),
+    governor: createGovernorState(),
     vitals: createSystemVitals(),
     rewards: createRewardComponents(),
     slot_ids: ['slot_0', 'slot_1', 'slot_2', 'slot_3'],

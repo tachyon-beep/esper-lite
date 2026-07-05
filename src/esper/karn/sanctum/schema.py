@@ -998,12 +998,8 @@ class TamiyoState:
     advantage_per_head_normalized: bool = False
     advantage_norm_fellback_count: int = 0
     min_sparse_head_advantage_std: float = 0.0
-    # Rollback observability (per-rollout aggregates; pure telemetry, never gate inputs).
-    # Only the attempt/unattributed pair is mirrored on the live dashboard state: it is the
-    # rollback-starvation health signal. rollback_count/rollback_steps_zeroed (forfeited-signal
-    # volume) are intentionally karn-view/wandb-only and not surfaced on TamiyoState.
-    rollback_attempt_count: int = 0
-    rollback_unattributed_count: int = 0
+    # Rollback observability moved to GovernorState (the gate, not the policy):
+    # rollback_attempt_count / rollback_unattributed_count live on snapshot.governor.
 
     # Losses (Losses panel)
     policy_loss: float = 0.0
@@ -1561,6 +1557,57 @@ class EventLogEntry:
 
 
 @dataclass
+class GovernorRollbackRecord:
+    """One durable governor rollback event (a ledger entry).
+
+    The transient env-row flash self-erases on the next epoch; this record is
+    the durable trace so "why did env N roll back at epoch M?" stays answerable.
+    """
+
+    env_id: int
+    epoch: int
+    timestamp: datetime | None
+    panic_reason: str  # governor_nan | governor_lobotomy | governor_divergence | governor_rollback
+    loss_at_panic: float | None = None
+    loss_threshold: float | None = None  # statistical bar (only the σ condition; see governor)
+    consecutive_panics: int | None = None
+    triggering_action_id: str | None = None
+    attributed: bool = False  # triggering_action_id is not None
+    rollback_severity: float | None = None  # penalty magnitude (run-constant, NOT event severity)
+
+
+@dataclass
+class GovernorState:
+    """Safety-gate state, independent of the Tamiyo policy.
+
+    The governor is not trained and the policy cannot disable it or tune its
+    thresholds (the controller-cannot-disable-gate invariant). Modeled as a
+    sibling of TamiyoState — never nested under it — so that separation stays
+    legible; nesting its counters under the policy is the mis-filing this
+    remediates.
+    """
+
+    present: bool = True  # governor is wired in
+    # Arming (proxy from epoch until per-env history fill is emitted): envs past
+    # the NaN-only warmup window where all panic rules are live.
+    armed_env_count: int = 0
+    warming_env_count: int = 0
+    total_env_count: int = 0
+    # Per-rollout starvation counters (MOVED off TamiyoState — the subject is the
+    # gate firing, not policy health). Computed per PPO update in the trainer.
+    rollback_attempt_count: int = 0
+    rollback_unattributed_count: int = 0
+    # Cumulative (survive ring eviction).
+    total_rollbacks: int = 0
+    rollbacks_by_reason: dict[str, int] = field(default_factory=dict)
+    # Durable ledger, newest last (render newest-first). Chronological, global
+    # (each entry carries env_id) so correlated same-batch rollbacks stay visible.
+    rollback_ledger: deque[GovernorRollbackRecord] = field(
+        default_factory=lambda: deque(maxlen=64)
+    )
+
+
+@dataclass
 class SanctumSnapshot:
     """Complete snapshot of Sanctum state for rendering.
 
@@ -1571,6 +1618,9 @@ class SanctumSnapshot:
 
     # Policy agent state
     tamiyo: TamiyoState = field(default_factory=TamiyoState)
+
+    # Safety-gate state, independent of the policy (sibling of tamiyo, not nested).
+    governor: GovernorState = field(default_factory=GovernorState)
 
     # System metrics
     vitals: SystemVitals = field(default_factory=SystemVitals)

@@ -177,8 +177,6 @@ function createMockSnapshot(): SanctumSnapshot {
       value_nrmse: 0.4,
       ev_low_return_variance: false,
       ev_return_variance: 50.0,
-      rollback_attempt_count: 0,
-      rollback_unattributed_count: 0,
       policy_loss: -0.02,
       value_loss: 0.1,
       entropy_loss: -0.01,
@@ -341,6 +339,17 @@ function createMockSnapshot(): SanctumSnapshot {
         actual_returns: [0.4],
         td_errors: [0.1]
       }
+    },
+    governor: {
+      present: true,
+      armed_env_count: 0,
+      warming_env_count: 0,
+      total_env_count: 0,
+      rollback_attempt_count: 0,
+      rollback_unattributed_count: 0,
+      total_rollbacks: 0,
+      rollbacks_by_reason: {},
+      rollback_ledger: []
     },
     vitals: {
       gpu_stats: {
