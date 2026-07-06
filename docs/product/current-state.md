@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-05 ~22:45 (checkpoint #20 — EV Stage-0 gate PASSED + ACCEPTED, task CLOSED [PDR-0033]; Stage-0 telemetry DRAINED to main [PDR-0034], push pending)
+# Current State — Esper        Checkpoint: 2026-07-05 ~22:45 (checkpoint #20 — EV Stage-0 gate PASSED + ACCEPTED, task CLOSED [PDR-0033]; Stage-0 telemetry DRAINED to main [PDR-0034], PUSHED to origin 2026-07-06 @ 50af6643)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet). **Stage-0 is DONE: the advance gate
@@ -31,8 +31,12 @@ canonical Stage-2-OFF control run, diagnosed the run's mid-flight death, and clo
 
 ## In flight
 - **Nothing active in code.** Stage-2 is unblocked and ready to pick up (below).
-- **PUSH PENDING (owner-gated):** `main` is **8 commits ahead of `origin/main`** (3 product +
-  5 Stage-0 drain), all local. Never pushed by an agent without an explicit ask — your call.
+- **PUSH DONE (2026-07-06):** owner authorized "merge to main" → pushed `2f95aa04..50af6643`;
+  `origin/main` now at `50af6643` (ahead 0 / behind 0, tachyon-beep). The belt-and-braces gate
+  was **reframed**: the full-suite run is un-reachable (it wedges on the pre-existing GPU
+  `test_data_opt.py` / `test_dual_ab.py` hangs — provably NOT drain importers), so it was
+  replaced by a **complete drained-module importer gate = 862 passed / 0 failed** on the pushed
+  HEAD, atop byte-identity golden 2/2 + pytorch-expert GO.
 
 ## Facts the next session must not relitigate
 - **The gate PASSED and is ACCEPTED** (median 1.017, 41/42 ≫ 0.40, flat across the observed
@@ -48,13 +52,17 @@ canonical Stage-2-OFF control run, diagnosed the run's mid-flight death, and clo
   ON run (done — this reading is the OFF control).
 
 ## Open questions / blocked-on-owner
-- **PUSH `main` to origin** (8 commits ahead) — OWNER-GATED. A longer-timeout `uv run pytest`
-  full-suite run before push is the belt-and-braces check (targeted 410 + goldens + specialist
-  GO already green; the only skip is the pre-existing dual-GPU `test_dual_ab.py` hang).
+- **PUSH — DONE (2026-07-06).** `origin/main` @ `50af6643` (ahead 0 / behind 0). Resolved; see
+  "In flight" for the reframed gate and evidence.
 - **Retire `feat/ev-stab-stage2-hra`** — the remaining unification step, AFTER Stage-2 acceptance.
   Its granular Stage-2 ≡ main's squash (byte-identity confirmed); what still lives ONLY there =
-  the 6 oracle-sandbox WIP commits → finish-or-abandon separately (PDR-0030) before deleting.
-  Note `feat/sanctum-layout` is stacked on it @70753923 (undisturbed by the drain).
+  the oracle-sandbox WIP commits → finish-or-abandon separately (PDR-0030) before deleting.
+  **TOPOLOGY MOVED (2026-07-06 11:41, concurrent session — NOT this session's push):**
+  `feat/ev-stab-stage2-hra` was fast-forwarded to the `feat/sanctum-layout` tip `6120ac9a`
+  ("merge: sync feat/ev-stab-stage2-hra into feat/sanctum-layout") — the two branches now
+  coincide. Retire-ev-stab and the sanctum-layout disposition are therefore now ONE entangled
+  call; reconcile the merged tip before deleting either. (Main is unaffected: the drain landed
+  independently.)
 - Standing placeholders: north-star / rent TARGETs (metrics.md) still owner-set.
 
 ## Last checkpoint did (checkpoint #20)
