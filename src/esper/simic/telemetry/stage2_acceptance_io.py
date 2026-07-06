@@ -166,6 +166,25 @@ def read_run_added_params(
     return host_params * (param_ratio - 1.0)
 
 
+def read_run_uses_per_head_norm(conn: duckdb.DuckDBPyConnection, run_dir: str) -> bool:
+    """§8F(i) — True if per-head advantage normalization was on for ANY update in the run.
+
+    ``per_head_advantage_norm`` must be False on both legs (§10 frozen); it changes
+    ``pre_norm_advantage_std`` semantics and would contaminate the LEG-B comparison. ``BOOL_OR``
+    catches a run that toggled it on at any point, not just at the end.
+    """
+    rows = _rows(
+        conn,
+        "SELECT BOOL_OR(advantage_per_head_normalized) AS value FROM ppo_updates WHERE run_dir = ?",
+        [run_dir],
+    )
+    if not rows or rows[0]["value"] is None:
+        raise ValueError(
+            f"no ppo_updates advantage_per_head_normalized rows for run_dir={run_dir!r}"
+        )
+    return bool(rows[0]["value"])
+
+
 def read_run_churn(conn: duckdb.DuckDBPyConnection, run_dir: str) -> ChurnRates:
     """§6 G3 — per-episode germinate/prune/fossilize means over the whole run."""
     rows = _rows(

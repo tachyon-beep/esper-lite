@@ -222,12 +222,17 @@ def leg_series(
 
 @dataclass(frozen=True)
 class RunMeta:
-    """Run-level provenance for one leg, from the Karn ``runs`` view (§1/§10 config fields)."""
+    """Run-level provenance/config for one leg (§1/§10 frozen fields).
+
+    ``actor_advantage_source`` and ``seed``/``reward_mode`` come from the Karn ``runs`` view;
+    ``uses_per_head_norm`` is derived from ``ppo_updates`` (§8F(i), read_run_uses_per_head_norm).
+    """
 
     run_dir: str
     seed: int
     reward_mode: str
     actor_advantage_source: str
+    uses_per_head_norm: bool
 
 
 @dataclass(frozen=True)
@@ -357,6 +362,12 @@ def validate_pair(
         reasons.append(
             f"reward_mode mismatch: ON={on_meta.reward_mode!r} != OFF={off_meta.reward_mode!r} "
             "(the toggle must be decomposition-only, §10)"
+        )
+    if on_meta.uses_per_head_norm or off_meta.uses_per_head_norm:
+        reasons.append(
+            "per-head advantage normalization active (§8F(i) requires per_head_advantage_norm=False "
+            f"on both legs): ON={on_meta.uses_per_head_norm}, OFF={off_meta.uses_per_head_norm} "
+            "— it changes pre_norm_advantage_std semantics and contaminates the LEG-B comparison"
         )
 
     on_reasons, on_floored = _validate_leg(

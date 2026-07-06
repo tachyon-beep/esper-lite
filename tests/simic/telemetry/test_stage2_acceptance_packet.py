@@ -235,12 +235,14 @@ def _meta(
     seed: int = 7,
     reward_mode: str = "SHAPED",
     actor_advantage_source: str = ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+    uses_per_head_norm: bool = False,
 ) -> RunMeta:
     return RunMeta(
         run_dir=f"/run/{leg.value}",
         seed=seed,
         reward_mode=reward_mode,
         actor_advantage_source=actor_advantage_source,
+        uses_per_head_norm=uses_per_head_norm,
     )
 
 
@@ -277,6 +279,17 @@ def test_validate_pair_rejects_reward_mode_mismatch():
     )
     assert v.valid is False
     assert any("reward_mode" in r for r in v.reasons)
+
+
+def test_validate_pair_rejects_per_head_advantage_norm_on_either_leg():
+    # §8F(i): per_head_advantage_norm must be False on BOTH legs (frozen identical, §10) — it
+    # changes pre_norm_advantage_std semantics and would contaminate the LEG-B comparison.
+    v = validate_pair(
+        _meta(Leg.ON, uses_per_head_norm=True), _clean_on_rows(),
+        _meta(Leg.OFF), _clean_off_rows(), w=0, budget=3,
+    )
+    assert v.valid is False
+    assert any("per-head" in r.lower() or "per_head" in r.lower() for r in v.reasons)
 
 
 def test_validate_pair_rejects_non_total_reconstructed_actor_source():

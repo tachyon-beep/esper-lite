@@ -15,6 +15,7 @@ from esper.simic.telemetry.stage2_acceptance_io import (
     read_leg,
     read_run_added_params,
     read_run_churn,
+    read_run_uses_per_head_norm,
     read_run_val_acc,
     row_to_update,
 )
@@ -34,6 +35,7 @@ def _full_row(**overrides) -> dict:
         ev_return_variance=5.0,
         pre_norm_advantage_std=1.0,
         return_std=3.0,
+        advantage_per_head_normalized=False,
     )
     row.update(overrides)
     return row
@@ -89,17 +91,17 @@ def _conn_with_updates(rows: list[dict]) -> duckdb.DuckDBPyConnection:
         CREATE TABLE ppo_updates (
             run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            pre_norm_advantage_std DOUBLE, return_std DOUBLE
+            pre_norm_advantage_std DOUBLE, return_std DOUBLE, advantage_per_head_normalized BOOLEAN
         )
         """
     )
     for r in rows:
         conn.execute(
-            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [
                 r["run_dir"], r["inner_epoch"], r["batch"], r["explained_variance"], r["ev_sum"],
                 r["ev_main"], r["ev_cf"], r["ev_return_variance"], r["pre_norm_advantage_std"],
-                r["return_std"],
+                r["return_std"], r["advantage_per_head_normalized"],
             ],
         )
     return conn
@@ -139,6 +141,20 @@ def test_read_leg_fails_loud_on_unknown_run_dir():
     conn = _conn_with_updates([_full_row(run_dir="/A")])
     with pytest.raises(ValueError):
         read_leg(conn, "/does-not-exist")
+
+
+def test_read_run_uses_per_head_norm_true_if_any_update_normalized():
+    # §8F(i): BOOL_OR over the run — True if per-head advantage norm was on for ANY update.
+    conn = _conn_with_updates([
+        _full_row(run_dir="/A", batch=0, advantage_per_head_normalized=False),
+        _full_row(run_dir="/A", batch=1, advantage_per_head_normalized=True),
+    ])
+    assert read_run_uses_per_head_norm(conn, "/A") is True
+
+
+def test_read_run_uses_per_head_norm_false_when_all_updates_unnormalized():
+    conn = _conn_with_updates([_full_row(run_dir="/A", advantage_per_head_normalized=False)])
+    assert read_run_uses_per_head_norm(conn, "/A") is False
 
 
 # ---- episode_outcomes safety readers (§6 G1/G2/G3) ----
