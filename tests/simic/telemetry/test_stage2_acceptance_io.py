@@ -180,25 +180,30 @@ def _conn_with_outcomes(rows: list[dict]) -> duckdb.DuckDBPyConnection:
     return conn
 
 
-def test_read_run_val_acc_is_mean_final_accuracy_at_terminal_episode():
-    # §6 G1: run val-acc = mean final_accuracy across envs at the terminal episode_idx (percent).
+def test_read_run_val_acc_is_mean_of_per_env_terminal_final_accuracy():
+    # §6 G1: episode_idx is a DENSE GLOBAL counter (episodes_completed + env_idx), so envs terminate
+    # at DIFFERENT indices. Val-acc = mean over EACH env's OWN terminal episode (not the single
+    # global-max row, which would collapse to one env). drl-expert Finding 1.
     rows = [
-        _outcome_row(env_id=0, episode_idx=0, final_accuracy=30.0),  # earlier, ignored
-        _outcome_row(env_id=1, episode_idx=0, final_accuracy=32.0),
-        _outcome_row(env_id=0, episode_idx=1, final_accuracy=46.0),  # terminal
-        _outcome_row(env_id=1, episode_idx=1, final_accuracy=48.0),  # terminal
+        _outcome_row(env_id=0, episode_idx=0, final_accuracy=30.0),  # env0 earlier
+        _outcome_row(env_id=0, episode_idx=2, final_accuracy=46.0),  # env0 terminal
+        _outcome_row(env_id=1, episode_idx=1, final_accuracy=31.0),  # env1 earlier
+        _outcome_row(env_id=1, episode_idx=3, final_accuracy=48.0),  # env1 terminal (global max)
     ]
+    # mean(env0_terminal=46.0, env1_terminal=48.0) = 47.0 — NOT 48.0 (the single global-max row).
     assert read_run_val_acc(_conn_with_outcomes(rows), "/run") == pytest.approx(47.0)
 
 
-def test_read_run_added_params_derived_from_terminal_param_ratio_and_host_params():
-    # §6 G2: added_params = host_params * (param_ratio - 1); param_ratio at the terminal episode.
+def test_read_run_added_params_uses_per_env_terminal_param_ratio():
+    # §6 G2: per-env terminal param_ratio, averaged over envs; added = host * (mean_ratio - 1).
     rows = [
-        _outcome_row(episode_idx=0, param_ratio=1.10),  # earlier, ignored
-        _outcome_row(episode_idx=1, param_ratio=1.25),  # terminal
+        _outcome_row(env_id=0, episode_idx=0, param_ratio=1.05),  # env0 earlier
+        _outcome_row(env_id=0, episode_idx=2, param_ratio=1.20),  # env0 terminal
+        _outcome_row(env_id=1, episode_idx=3, param_ratio=1.30),  # env1 terminal (global max)
     ]
+    # mean per-env terminal ratio = (1.20 + 1.30)/2 = 1.25 -> 100_000 * 0.25 = 25_000.
     added = read_run_added_params(_conn_with_outcomes(rows), "/run", host_params=100_000)
-    assert added == pytest.approx(25_000.0)  # 100_000 * (1.25 - 1)
+    assert added == pytest.approx(25_000.0)
 
 
 def test_read_run_churn_is_mean_counts_per_episode_over_the_run():

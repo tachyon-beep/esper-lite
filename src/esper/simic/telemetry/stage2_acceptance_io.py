@@ -97,14 +97,19 @@ def read_leg(conn: duckdb.DuckDBPyConnection, run_dir: str) -> list[UpdateRow]:
 
 # --- episode_outcomes safety readers (§6 G1/G2/G3) ---
 #
-# DEFINITIONAL CHOICES (flagged for §6 / drl-expert confirmation — a wrong safety definition is the
-# silent corruption the gate exists to catch):
-#   G1 val-acc  := mean(final_accuracy) at the run's TERMINAL episode_idx, averaged over envs
-#                  (its achieved validation accuracy at end of training; percent, 0-100).
-#   G2 added-params := host_params * (param_ratio - 1) at the terminal episode. `fossilized_params`
-#                  is NOT in the telemetry views (only the Sanctum aggregator), but param_ratio is
-#                  defined as (host_params + fossilized_params)/host_params (leyline), so this is an
-#                  EXACT derivation, not a proxy.
+# DEFINITIONAL CHOICES (§6; owner-ratified where noted; a wrong safety definition is the silent
+# corruption the gate exists to catch):
+#   G1 val-acc  := mean over EACH env's OWN terminal episode of final_accuracy (percent, 0-100).
+#                  `episode_idx` is a DENSE GLOBAL counter (episodes_completed + env_idx), so a plain
+#                  MAX(episode_idx) matches ONE env — we take each env's terminal via a per-env window
+#                  and average, so the per-seed estimate is an env-average not a single-env blip
+#                  (drl-expert Finding 1).
+#   G2 added-params := host_params * (per-env terminal param_ratio - 1) = total_params - host_params.
+#                  This is the TOTAL added-parameter footprint (fossilized + transient active seeds),
+#                  NOT strictly fossilized "permanent" params. `param_ratio` is authoritatively
+#                  total_params/host_params (leyline/episode_outcome.py, telemetry.py) — the direct
+#                  `fossilized_params` is NOT in the telemetry views (only the Sanctum aggregator), so
+#                  this is a conservative PROXY, owner-ratified as "terminal added-parameter footprint".
 #   G3 churn    := mean germinate/prune/fossilize count per episode over the WHOLE run.
 # G4 (guard channels) + the G3/G4 "materially elevated" thresholds are a separate decision, not read here.
 
@@ -118,13 +123,26 @@ class ChurnRates:
     fossilize: float
 
 
-def _terminal_episode_scalar(conn: duckdb.DuckDBPyConnection, run_dir: str, expr: str) -> float:
-    """Aggregate ``expr`` over the rows at the run's terminal (max) episode_idx; fail loud if none."""
+def _per_env_terminal_mean(
+    conn: duckdb.DuckDBPyConnection, run_dir: str, column: str
+) -> float:
+    """Mean of ``column`` over EACH env's terminal (max-episode_idx) row; fail loud if none.
+
+    ``episode_idx`` is a dense global counter, so envs terminate at different indices — a per-env
+    window (``ROW_NUMBER() OVER (PARTITION BY env_id ORDER BY episode_idx DESC)``) selects each env's
+    own last episode, then we average across envs.
+    """
     rows = _rows(
         conn,
-        f"SELECT {expr} AS value FROM episode_outcomes WHERE run_dir = ? "
-        "AND episode_idx = (SELECT MAX(episode_idx) FROM episode_outcomes WHERE run_dir = ?)",
-        [run_dir, run_dir],
+        f"""
+        WITH per_env AS (
+            SELECT {column} AS value,
+                   ROW_NUMBER() OVER (PARTITION BY env_id ORDER BY episode_idx DESC) AS rn
+            FROM episode_outcomes WHERE run_dir = ?
+        )
+        SELECT AVG(value) AS value FROM per_env WHERE rn = 1
+        """,
+        [run_dir],
     )
     if not rows or rows[0]["value"] is None:
         raise ValueError(f"no episode_outcomes at the terminal episode for run_dir={run_dir!r}")
@@ -132,15 +150,19 @@ def _terminal_episode_scalar(conn: duckdb.DuckDBPyConnection, run_dir: str, expr
 
 
 def read_run_val_acc(conn: duckdb.DuckDBPyConnection, run_dir: str) -> float:
-    """§6 G1 — the run's validation accuracy: mean ``final_accuracy`` at the terminal episode (pp)."""
-    return _terminal_episode_scalar(conn, run_dir, "AVG(final_accuracy)")
+    """§6 G1 — the run's validation accuracy: mean over each env's terminal ``final_accuracy`` (pp)."""
+    return _per_env_terminal_mean(conn, run_dir, "final_accuracy")
 
 
 def read_run_added_params(
     conn: duckdb.DuckDBPyConnection, run_dir: str, host_params: int
 ) -> float:
-    """§6 G2 — permanently-added params ``host_params * (param_ratio - 1)`` at the terminal episode."""
-    param_ratio = _terminal_episode_scalar(conn, run_dir, "AVG(param_ratio)")
+    """§6 G2 — terminal added-parameter footprint ``host_params * (param_ratio - 1)``.
+
+    ``param_ratio`` = total_params/host_params (leyline), so this is total added params (fossilized +
+    transient), a conservative proxy for §6's fossilized-only quantity (owner-ratified).
+    """
+    param_ratio = _per_env_terminal_mean(conn, run_dir, "param_ratio")
     return host_params * (param_ratio - 1.0)
 
 

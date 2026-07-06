@@ -437,6 +437,14 @@ class Stage2Report:
     delta_b: tuple[float, ...]
     on_floored_fractions: tuple[float, ...]
     off_floored_fractions: tuple[float, ...]
+    # §4 reported covariates (per seed): the IQR(Var(returns_total)) confound + raw advantage-std IQR.
+    var_returns_vol_on: tuple[float, ...]
+    var_returns_vol_off: tuple[float, ...]
+    raw_adv_std_vol_on: tuple[float, ...]
+    raw_adv_std_vol_off: tuple[float, ...]
+    # §4 confound downgrade: LEG-B PASS demoted to INCONCLUSIVE when the ON adv-residual-vol reduction
+    # is matched by a proportional IQR(Var(returns_total)) drop (a return-regime artifact, not shielding).
+    leg_b_confound_downgraded: bool
     provenance: str
     diagnostic_scalars_available: bool
 
@@ -512,6 +520,11 @@ def score(
             delta_b=(),
             on_floored_fractions=(),
             off_floored_fractions=(),
+            var_returns_vol_on=(),
+            var_returns_vol_off=(),
+            raw_adv_std_vol_on=(),
+            raw_adv_std_vol_off=(),
+            leg_b_confound_downgraded=False,
             provenance=STAGE0_PROVENANCE_BLOCK,
             diagnostic_scalars_available=False,
         )
@@ -530,6 +543,16 @@ def score(
     mech_hold = mech_guard(ev_main_vol_on, expl_vol_off)
     g1 = safety_g1([pair.d_val_acc for pair in pairs], thresholds.tau_acc)
     g2_hold = safety_g2([pair.d_added_params for pair in pairs], thresholds.delta_param_max)
+
+    # §4 confound: if IQR(Var(returns_total)) drops at least as much (relatively) as the gated
+    # residual, a LEG-B PASS is not distinguishable from a return-regime artifact -> INCONCLUSIVE.
+    delta_var = [
+        _relative_reduction(pair.on.var_returns_vol, pair.off.var_returns_vol) for pair in pairs
+    ]
+    leg_b_confound_downgraded = False
+    if leg_b_result is GateResult.PASS and level(delta_var) <= level(delta_b):
+        leg_b_result = GateResult.INCONCLUSIVE
+        leg_b_confound_downgraded = True
 
     verdict = composite_verdict(
         valid=True,
@@ -556,6 +579,11 @@ def score(
         delta_b=tuple(delta_b),
         on_floored_fractions=tuple(pair.on.floored_fraction for pair in pairs),
         off_floored_fractions=tuple(pair.off.floored_fraction for pair in pairs),
+        var_returns_vol_on=tuple(pair.on.var_returns_vol for pair in pairs),
+        var_returns_vol_off=tuple(pair.off.var_returns_vol for pair in pairs),
+        raw_adv_std_vol_on=tuple(pair.on.raw_adv_std_vol for pair in pairs),
+        raw_adv_std_vol_off=tuple(pair.off.raw_adv_std_vol for pair in pairs),
+        leg_b_confound_downgraded=leg_b_confound_downgraded,
         provenance=STAGE0_PROVENANCE_BLOCK,
         diagnostic_scalars_available=False,
     )

@@ -363,6 +363,8 @@ def _legseries(
     ev_vol: float = 0.10,
     ev_main_vol: float | None = None,
     floored_fraction: float = 0.0,
+    var_returns_vol: float = 0.10,
+    raw_adv_std_vol: float = 0.10,
 ) -> LegSeries:
     return LegSeries(
         leg=leg,
@@ -371,9 +373,9 @@ def _legseries(
         ev_level=ev_level,
         ev_vol=ev_vol,
         adv_residual_vol=adv_residual_vol,
-        raw_adv_std_vol=0.10,
+        raw_adv_std_vol=raw_adv_std_vol,
         var_returns_level=1.0,
-        var_returns_vol=0.10,
+        var_returns_vol=var_returns_vol,
         ev_main_vol=ev_main_vol,
         ev_return_variance_min=2.0,
         ev_return_variance_median=5.0,
@@ -493,3 +495,54 @@ def test_score_marks_diagnostic_scalars_unavailable_until_emission_lands():
         _THRESHOLDS, n=10, validity=Validity(True, ()), g3_hold=True, g4_hold=True,
     )
     assert report.diagnostic_scalars_available is False
+
+
+# ---- §4 LEG-B covariates: report + confound downgrade (drl-expert Finding 3) ----
+
+
+def test_score_threads_leg_b_covariates_into_the_report():
+    # §4 mandates reporting IQR(Var(returns_total)) + raw IQR(pre_norm_advantage_std) per leg —
+    # they must travel with the verdict, not be dropped at the report boundary.
+    report = score(
+        [_accept_pair(i) for i in range(10)],
+        _THRESHOLDS, n=10, validity=Validity(True, ()), g3_hold=True, g4_hold=True,
+    )
+    assert len(report.var_returns_vol_on) == 10
+    assert len(report.var_returns_vol_off) == 10
+    assert len(report.raw_adv_std_vol_on) == 10
+    assert len(report.raw_adv_std_vol_off) == 10
+    assert report.var_returns_vol_on[0] == pytest.approx(0.10)
+
+
+def _confounded_pair(seed: int) -> SeedPair:
+    # LEG-B "passes" (adv-residual vol -20%) BUT IQR(Var(returns)) drops the same 20% -> the win is
+    # a return-regime artifact, not actor-path shielding.
+    return SeedPair(
+        seed=seed,
+        on=_legseries(
+            Leg.ON, ev_level=0.85, adv_residual_vol=0.80, ev_main_vol=0.03, var_returns_vol=0.08
+        ),
+        off=_legseries(Leg.OFF, ev_level=0.80, ev_vol=0.10, adv_residual_vol=1.00, var_returns_vol=0.10),
+        d_val_acc=0.0,
+        d_added_params=0.0,
+    )
+
+
+def test_score_downgrades_leg_b_when_var_returns_iqr_drops_as_much_as_the_residual():
+    report = score(
+        [_confounded_pair(i) for i in range(10)],
+        _THRESHOLDS, n=10, validity=Validity(True, ()), g3_hold=True, g4_hold=True,
+    )
+    assert report.leg_b_confound_downgraded is True
+    assert report.leg_b is GateResult.INCONCLUSIVE
+    assert report.verdict is Verdict.INCONCLUSIVE  # was clean->ACCEPT; the confound un-cleans it
+
+
+def test_score_does_not_downgrade_leg_b_when_var_returns_iqr_is_stable():
+    report = score(
+        [_accept_pair(i) for i in range(10)],
+        _THRESHOLDS, n=10, validity=Validity(True, ()), g3_hold=True, g4_hold=True,
+    )
+    assert report.leg_b_confound_downgraded is False
+    assert report.leg_b is GateResult.PASS
+    assert report.verdict is Verdict.ACCEPT
