@@ -110,3 +110,32 @@ metric is honest).
 Per CLAUDE.md RL-domain rule: drl-expert / yzmir-deep-rl review the raw-entropy-
 penalty vs probability-floor interaction (Phase 2) and recalibrated thresholds
 before implementing Phase 2. Phase 1 is telemetry-honest and lower risk.
+
+## Phase 1 validation (2026-07-06, cifar_baseline live smoke — PASS)
+Landed as the ADDITIVE variant (owner call): new `head_{name}_choice_conditional_entropy`
+alongside the raw witness; aggregate `entropy` headline redefinition deferred (it is the
+cross-branch CONTRACT CHANGE above; the Sanctum consumer lives on feat/sanctum-layout).
+
+Live smoke: `--task cifar_baseline --rounds 15 --envs 4 --episode-length 20 --gpu-preload
+--no-tui` (amp off, seed 42). Ran all 15 PPO updates clean.
+- **Crash bug found + fixed (commit 8a037e14):** the new metric key had no reducer in the
+  cross-update whitelist `_aggregate_ppo_metrics` (`vectorized.py`), so every real run
+  KeyError'd at the FIRST PPO update. The per-epoch builder/emitter unit tests never touch
+  that seam — the suite was green while the code crashed on every live run. 2nd occurrence
+  of this class after `deb6b11575`. Added the APPEND reducer + a targeted regression test.
+- **Artifact eliminated:** sparse heads read 0.036–0.10 raw (at/below the ~0.08 per-head
+  collapse threshold — the false-fire source) but 0.97–1.00 choice-conditional across all
+  15 updates. `entropy_collapsed=False` on 15/15; **0 entropy-collapse anomalies (vs the
+  historical ~594).** slot (fraction 0, single-slot host) correctly stays `None` — no
+  fabricated 0. The 10 anomalies present are unrelated (Gradient/NaN/Value-Collapse).
+- **Caveat confirmed:** op choice-conditional ≈0.85–1.00 (post-floor, structural) — silent
+  to real op collapse by construction; that detection is Phase 2, not this change.
+
+### Known fidelity limitation (deferred, out of Phase 1 scope)
+The emitter means `choice_conditional` over the per-epoch series and gates per head only on
+batch-level `mean_fraction<=0`. The upstream `clamp(min=1)` injects a 0.0 for any epoch a
+head had no choice steps, so at `ppo_updates_per_batch>1` (or configs where a head's
+per-epoch choice presence varies) those 0.0 entries dilute the mean toward the raw read we
+are removing. Harmless at `updates_per_batch=1` (validated: kept heads have choices every
+epoch). Honest fix = per-epoch fraction weighting / drop zero-choice epochs. TODO tagged at
+the emitter mean site.

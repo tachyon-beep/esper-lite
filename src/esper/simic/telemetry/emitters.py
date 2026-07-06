@@ -967,6 +967,15 @@ def emit_ppo_update_event(
             mean_fraction = sum(frac_values) / len(frac_values)  # Fail on empty list
             if mean_fraction <= 0.0:
                 continue  # no choice steps -> field stays None (a real 0.0 with fraction>0 is kept)
+            # TODO: [FUTURE FUNCTIONALITY] Per-epoch dilution at ppo_updates_per_batch>1.
+            # The gate is batch-level (mean_fraction over the batch), but `values` is the
+            # per-epoch series and the upstream clamp(min=1) injects a 0.0 for any epoch
+            # where this head had no choice steps. When the head has choices in only some
+            # epochs, those 0.0 entries drag this mean toward the sparse-biased raw read we
+            # are removing. Harmless at updates_per_batch=1 (kept heads have choices every
+            # epoch, validated on cifar_baseline), but a per-epoch fraction weighting (or
+            # dropping zero-choice epochs) would be the honest reduction at >1. Deferred:
+            # out of Phase 1 scope; the detector already gates per-head on choice fraction.
             head_choice_conditional_entropies_avg[f"head_{head}_choice_conditional_entropy"] = sum(values) / len(values)
 
     # Compute per-head gradient norm averages for logging (P4-6)
