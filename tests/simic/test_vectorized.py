@@ -933,6 +933,42 @@ def test_aggregate_ppo_metrics_mean_reduces_per_head_clip_fraction():
     assert metrics["clip_fraction"] == pytest.approx(0.2)
 
 
+def test_aggregate_ppo_metrics_appends_choice_conditional_head_entropies():
+    """choice_conditional_head_entropies must append per-head across updates, not KeyError.
+
+    Regression for esper-lite-425dcc4ca2 (entropy thermometer Phase 1): the honest
+    per-head choice-conditioned entropy is emitted as dict[str, list[float]] -- the same
+    shape as its paired gate signal head_learnable_fractions -- and so must use the same
+    APPEND reducer. The builder/emitter unit tests did not exercise this cross-update seam,
+    so a live cifar_baseline run crashed at the first PPO update with
+    'No PPO metric reducer declared for choice_conditional_head_entropies'.
+    """
+    from esper.simic.training.vectorized import (
+        _aggregate_ppo_metrics,
+        _PPO_HEAD_SERIES_APPEND_REDUCED_METRICS,
+    )
+
+    assert "choice_conditional_head_entropies" in _PPO_HEAD_SERIES_APPEND_REDUCED_METRICS
+
+    metrics = _aggregate_ppo_metrics([
+        {
+            "choice_conditional_head_entropies": {"op": [0.9, 0.8], "blueprint": [1.2]},
+            "head_learnable_fractions": {"op": [1.0, 1.0], "blueprint": [0.25]},
+        },
+        {
+            "choice_conditional_head_entropies": {"op": [0.7], "tempo": [1.4]},
+            "head_learnable_fractions": {"op": [1.0], "tempo": [0.3]},
+        },
+    ])
+
+    # Per-head lists concatenate across updates, exactly like head_learnable_fractions.
+    assert metrics["choice_conditional_head_entropies"] == {
+        "op": [0.9, 0.8, 0.7],
+        "blueprint": [1.2],
+        "tempo": [1.4],
+    }
+
+
 def test_aggregate_ppo_metrics_no_keyerror_on_ev_fields():
     """EV-robustness keys must have declared reducers (else _aggregate_ppo_metrics KeyErrors)."""
     from esper.simic.training.vectorized import _aggregate_ppo_metrics

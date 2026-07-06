@@ -326,6 +326,11 @@ _PPO_HEAD_SERIES_MAX_REDUCED_METRICS = frozenset({
 
 _PPO_HEAD_SERIES_APPEND_REDUCED_METRICS = frozenset({
     "head_learnable_fractions",
+    # esper-lite-425dcc4ca2 (entropy thermometer Phase 1): per-head choice-conditioned
+    # entropy is emitted as dict[str, list[float]] (per-epoch series), identical in shape
+    # to head_learnable_fractions -- its paired gate signal. Concatenate the per-head lists
+    # across PPO updates so the coordinator/emitter mean over all choice steps in the batch.
+    "choice_conditional_head_entropies",
 })
 
 _PPO_HEAD_STATE_APPEND_REDUCED_METRICS = frozenset({
