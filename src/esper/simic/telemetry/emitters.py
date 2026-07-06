@@ -951,6 +951,24 @@ def emit_ppo_update_event(
             avg_entropy = sum(values) / len(values)  # Fail on empty list
             head_entropies_avg[f"head_{head}_entropy"] = avg_entropy
 
+    # Choice-conditioned per-head entropy averages (esper-lite-425dcc4ca2): the honest
+    # read over choice∩causal∩unforced steps, emitted alongside the raw head_{name}_entropy
+    # (kept as the artifact witness: choice_conditional > raw for sparse heads).
+    head_choice_conditional_entropies_avg = {}
+    if "choice_conditional_head_entropies" in metrics:
+        # Gate on choice fraction, mirroring the per-head detector: a head with no
+        # choice steps this batch has no exploration signal, so leave its payload field
+        # None (the clamp(min=1) denominator upstream would otherwise fabricate a 0.0,
+        # which a dashboard reads as collapse — violating the "never a fabricated 0"
+        # contract). head_learnable_fractions is a mandatory metric with the same keys.
+        cc_learnable_fractions = metrics["head_learnable_fractions"]
+        for head, values in metrics["choice_conditional_head_entropies"].items():
+            frac_values = cc_learnable_fractions[head]
+            mean_fraction = sum(frac_values) / len(frac_values)  # Fail on empty list
+            if mean_fraction <= 0.0:
+                continue  # no choice steps -> field stays None (a real 0.0 with fraction>0 is kept)
+            head_choice_conditional_entropies_avg[f"head_{head}_choice_conditional_entropy"] = sum(values) / len(values)
+
     # Compute per-head gradient norm averages for logging (P4-6)
     # No defensive pattern - empty lists should fail loudly (indicates PPO bug)
     head_grad_norms_avg = {}
@@ -1100,6 +1118,14 @@ def emit_ppo_update_event(
             head_alpha_speed_entropy=head_entropies_avg.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=head_entropies_avg.get("head_alpha_curve_entropy"),
             head_op_entropy=head_entropies_avg.get("head_op_entropy"),
+            head_slot_choice_conditional_entropy=head_choice_conditional_entropies_avg.get("head_slot_choice_conditional_entropy"),
+            head_blueprint_choice_conditional_entropy=head_choice_conditional_entropies_avg.get("head_blueprint_choice_conditional_entropy"),
+            head_style_choice_conditional_entropy=head_choice_conditional_entropies_avg.get("head_style_choice_conditional_entropy"),
+            head_tempo_choice_conditional_entropy=head_choice_conditional_entropies_avg.get("head_tempo_choice_conditional_entropy"),
+            head_alpha_target_choice_conditional_entropy=head_choice_conditional_entropies_avg.get("head_alpha_target_choice_conditional_entropy"),
+            head_alpha_speed_choice_conditional_entropy=head_choice_conditional_entropies_avg.get("head_alpha_speed_choice_conditional_entropy"),
+            head_alpha_curve_choice_conditional_entropy=head_choice_conditional_entropies_avg.get("head_alpha_curve_choice_conditional_entropy"),
+            head_op_choice_conditional_entropy=head_choice_conditional_entropies_avg.get("head_op_choice_conditional_entropy"),
             head_slot_learnable_fraction=head_learnable_fractions_avg["head_slot_learnable_fraction"],
             head_blueprint_learnable_fraction=head_learnable_fractions_avg["head_blueprint_learnable_fraction"],
             head_style_learnable_fraction=head_learnable_fractions_avg["head_style_learnable_fraction"],

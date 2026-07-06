@@ -818,6 +818,20 @@ class PPOUpdatePayload:
     head_alpha_curve_entropy: float | None = None
     head_op_entropy: float | None = None
 
+    # Choice-conditioned per-head entropy (esper-lite-425dcc4ca2): mean entropy over
+    # steps where the head had a genuine choice (>1 valid action), was causally relevant,
+    # and was unforced — the HONEST exploration read. The raw head_{name}_entropy above
+    # is sparse-biased (~0 for sparse heads regardless of exploration); this conditions
+    # that out. None when the head had no choice steps this batch (choice fraction 0).
+    head_slot_choice_conditional_entropy: float | None = None
+    head_blueprint_choice_conditional_entropy: float | None = None
+    head_style_choice_conditional_entropy: float | None = None
+    head_tempo_choice_conditional_entropy: float | None = None
+    head_alpha_target_choice_conditional_entropy: float | None = None
+    head_alpha_speed_choice_conditional_entropy: float | None = None
+    head_alpha_curve_choice_conditional_entropy: float | None = None
+    head_op_choice_conditional_entropy: float | None = None
+
     # Per-head learnability diagnostics.
     # learnable_fraction = fraction of valid timesteps where the head was causally
     # relevant and had more than one valid action. gradient_state is one of:
@@ -1084,6 +1098,14 @@ class PPOUpdatePayload:
             head_alpha_speed_entropy=data.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=data.get("head_alpha_curve_entropy"),
             head_op_entropy=data.get("head_op_entropy"),
+            head_slot_choice_conditional_entropy=data.get("head_slot_choice_conditional_entropy"),
+            head_blueprint_choice_conditional_entropy=data.get("head_blueprint_choice_conditional_entropy"),
+            head_style_choice_conditional_entropy=data.get("head_style_choice_conditional_entropy"),
+            head_tempo_choice_conditional_entropy=data.get("head_tempo_choice_conditional_entropy"),
+            head_alpha_target_choice_conditional_entropy=data.get("head_alpha_target_choice_conditional_entropy"),
+            head_alpha_speed_choice_conditional_entropy=data.get("head_alpha_speed_choice_conditional_entropy"),
+            head_alpha_curve_choice_conditional_entropy=data.get("head_alpha_curve_choice_conditional_entropy"),
+            head_op_choice_conditional_entropy=data.get("head_op_choice_conditional_entropy"),
             # OPTIONAL: Per-head learnability diagnostics.
             head_slot_learnable_fraction=data.get("head_slot_learnable_fraction"),
             head_blueprint_learnable_fraction=data.get("head_blueprint_learnable_fraction"),

@@ -614,15 +614,24 @@ class PPOCoordinator:
             for key, value in lstm_health.to_dict().items():
                 metrics[f"rollout_{key}"] = value
 
-        # Per-head entropy collapse detection (Task 6)
-        # Check individual action heads for collapse even when total entropy appears healthy
-        head_entropies_raw = metrics.get("head_entropies")
-        if head_entropies_raw:
-            # Convert per-epoch lists to mean per head
-            mean_head_entropies = {
-                head: sum(values) / len(values) if values else 0.0
-                for head, values in head_entropies_raw.items()
-            }
+        # Per-head entropy collapse detection (Task 6; recalibrated esper-lite-425dcc4ca2)
+        # Read the CHOICE-CONDITIONED per-head entropy (honest, over choice∩causal∩unforced
+        # steps), GATED by the per-head choice fraction (head_learnable_fractions). The old
+        # feed was the raw head_entropies mean, which is ~0 for sparse heads purely because
+        # ~80% of their steps are single-action placeholders (structural entropy 0) — that
+        # false-fired ~594 anomalies/run even when the heads explored fully when they had a
+        # choice. A head with no choice steps this batch (fraction 0) has no exploration
+        # signal, so it is skipped, never scored 0.
+        cc_head_entropies = metrics.get("choice_conditional_head_entropies")
+        head_choice_fractions = metrics.get("head_learnable_fractions")
+        if cc_head_entropies and head_choice_fractions:
+            mean_head_entropies = {}
+            for head, values in cc_head_entropies.items():
+                frac_values = head_choice_fractions.get(head)
+                mean_fraction = (sum(frac_values) / len(frac_values)) if frac_values else 0.0
+                if mean_fraction <= 0.0 or not values:
+                    continue  # no choice steps this batch -> no signal -> skip (not a 0-fire)
+                mean_head_entropies[head] = sum(values) / len(values)
             per_head_report = self.anomaly_detector.check_per_head_entropy_collapse(
                 mean_head_entropies
             )

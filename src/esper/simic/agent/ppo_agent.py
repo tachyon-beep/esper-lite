@@ -1037,6 +1037,11 @@ class PPOAgent:
         # This is the true exploration signal for sparse heads like blueprint/tempo
         conditional_head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
         head_learnable_fraction_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
+        # Choice-conditioned entropy (esper-lite-425dcc4ca2): mean entropy over the learnable_mask
+        # steps (causal ∩ >1-valid-action ∩ unforced) — the honest per-head exploration read. The
+        # raw head_entropies mean reads ~0 for sparse heads purely because ~80% of their steps are
+        # single-action placeholders (structural entropy 0); this conditions those out.
+        choice_conditional_head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
         # P0-1: "value" tracks the op-INDEPENDENT V(s) baseline (state_value_head);
         # "q" tracks the op-conditioned telemetry/aux q_head. Both are surfaced so
         # neither value-like head's grad is dropped from telemetry.
@@ -1369,6 +1374,12 @@ class PPOAgent:
                 head_learnable_fraction_history[key].append(
                     learnable_mask.sum().float() / learnable_denominator
                 )
+                # Choice-conditioned entropy over the SAME learnable_mask steps that back
+                # head_learnable_fraction (its alarm is gated on that fraction downstream:
+                # fraction==0 -> no choice steps this batch -> skip, never a 0-fire).
+                n_learnable = learnable_mask.sum().clamp(min=1)
+                choice_conditional_ent = (entropy[key] * learnable_mask.float()).sum() / n_learnable
+                choice_conditional_head_entropy_history[key].append(choice_conditional_ent)
 
             # Compute per-head ratios
             # data['hidden_h'][:,1:] is never indexed here; the loss path uses only
@@ -1763,6 +1774,7 @@ class PPOAgent:
             epochs_completed=epochs_completed,
             head_entropies=head_entropy_history,
             conditional_head_entropies=conditional_head_entropy_history,
+            choice_conditional_head_entropies=choice_conditional_head_entropy_history,
             head_grad_norms=head_grad_norm_history,
             head_learnable_fractions=head_learnable_fraction_history,
             head_gradient_states=head_gradient_state_history,
