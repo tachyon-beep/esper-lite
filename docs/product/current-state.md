@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-05 ~22:45 (checkpoint #20 — EV Stage-0 gate PASSED + ACCEPTED, task CLOSED [PDR-0033]; Stage-0 telemetry DRAINED + PUSHED to origin, branch topology consolidated 2026-07-06; main @ 127f25cb)
+# Current State — Esper        Checkpoint: 2026-07-06 (checkpoint #21 — EV Stage-0 DRAINED + PUSHED to origin [PDR-0035]; branch topology consolidated 12→7 [PDR-0036]; EV research corpus salvaged to main)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet). **Stage-0 is DONE: the advance gate
@@ -70,13 +70,18 @@ canonical Stage-2-OFF control run, diagnosed the run's mid-flight death, and clo
   ≡ main's squash (byte-identity confirmed). Kept refs: `0.3.0` (release), `backup/0.1.1-pre-p01`.
 - Standing placeholders: north-star / rent TARGETs (metrics.md) still owner-set.
 
-## Last checkpoint did (checkpoint #20)
-- PDR-0033 (control run reaped at 43%; leak RULED OUT; gate PASS on the partial read). **Owner
-  ACCEPTED**; **esper-lite-3d67b09687 CLOSED**.
-- PDR-0034 (unification recommendation + execution): drained the 5 Stage-0 commits to local main
-  (byte-identity golden + 410 tests + pytorch-expert GO); deleted redundant `feat/phase-minus1`.
-- metrics.md EV Stage-0 gate row: confirmed on the 42-update partial read; owner accepted.
-- No horizon change (EV-stab stays Now).
+## Last checkpoint did (checkpoint #21)
+- **PDR-0035** — PUSHED the Stage-0 drain to `origin/main` (owner "ok lets merge to main").
+  Pre-push gate REFRAMED: the full-suite run is unreachable (wedges on env GPU hangs
+  `test_data_opt`/`test_dual_ab` — not drain importers) → replaced by a complete drained-module
+  importer gate = **862 passed / 0 failed**. origin advanced `2f95aa04 → 127f25cb → bb9ae6af`.
+- **PDR-0036** — BRANCH TOPOLOGY CONSOLIDATED **12→7 branches, 8→3 worktrees** (PDR-0030 discipline).
+  Retired 6 absorbed branches + 5 stale/experiment worktrees, all lossless (ancestor-of-main /
+  patch-id). Codex fork-base ARCHIVED → `origin/archive/oracle-sandbox-wip-2026-06`; its unique EV
+  research corpus SALVAGED to main (`127f25cb`).
+- No horizon change (EV-stab stays Now). No new metric readings (housekeeping). No tracker status
+  changes (esper-lite-3d67b09687 already CLOSED at #20; Stage-2 esper-lite-2a4b56e719 still ready).
+- **Checkpoint #21 commit is on LOCAL main (NOT pushed — /product-checkpoint does not push).**
 
 ## Next session, start here
 **Proceed to Stage-2 acceptance** (esper-lite-2a4b56e719). Stage-2 HRA is already built on
