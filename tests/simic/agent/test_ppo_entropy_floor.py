@@ -361,6 +361,7 @@ class TestEntropyFloorIntegration:
             epochs_completed=1,
             head_entropies={"blueprint": [torch.tensor(0.0)]},
             conditional_head_entropies={"blueprint": [torch.tensor(0.0)]},
+            choice_conditional_head_entropies={"blueprint": [torch.tensor(0.0)]},
             head_grad_norms={"blueprint": [torch.tensor(float("nan"))]},
             head_learnable_fractions={"blueprint": [torch.tensor(0.0)]},
             head_gradient_states={"blueprint": ["not_learnable"]},

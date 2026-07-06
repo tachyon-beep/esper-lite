@@ -46,6 +46,7 @@ class TestFinitenessGateAggregation:
             epochs_completed=0,
             head_entropies={},
             conditional_head_entropies={},  # Entropy only when head is causally relevant
+            choice_conditional_head_entropies={},
             head_grad_norms={},
             head_learnable_fractions={},
             head_gradient_states={},
@@ -83,6 +84,7 @@ class TestFinitenessGateAggregation:
             epochs_completed=1,
             head_entropies={},
             conditional_head_entropies={},
+            choice_conditional_head_entropies={},
             head_grad_norms={},
             head_learnable_fractions={},
             head_gradient_states={},

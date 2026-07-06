@@ -325,6 +325,84 @@ def test_emit_ppo_update_event_surfaces_q_head_telemetry() -> None:
     assert payload.head_q_gradient_state == "finite"
 
 
+def test_emit_ppo_update_event_surfaces_choice_conditional_entropy() -> None:
+    """esper-lite-425dcc4ca2: the honest choice-conditioned per-head entropy (mean over
+    choice∩causal∩unforced steps) must reach the payload and survive the persisted round
+    trip, emitted alongside the sparse-biased raw head_{name}_entropy it replaces at the
+    per-head collapse alarm."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            choice_conditional_head_entropies={head: [0.87] for head in HEAD_NAMES},
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.head_op_choice_conditional_entropy == pytest.approx(0.87)
+    assert payload.head_blueprint_choice_conditional_entropy == pytest.approx(0.87)
+
+    from dataclasses import asdict
+
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    restored = PPOUpdatePayload.from_dict(asdict(payload))
+    assert restored.head_op_choice_conditional_entropy == pytest.approx(0.87)
+    assert restored.head_alpha_curve_choice_conditional_entropy == pytest.approx(0.87)
+
+
+def test_emit_ppo_update_event_choice_conditional_entropy_absent_is_none() -> None:
+    """Absent (non-recurrent / degenerate batch) -> None, never a fabricated 0."""
+    hub = MagicMock()
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(),  # no choice_conditional_head_entropies
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+    payload = hub.emit.call_args[0][0].data
+    assert payload.head_op_choice_conditional_entropy is None
+
+
+def test_emit_ppo_update_event_choice_conditional_zero_fraction_is_none() -> None:
+    """No-choice-steps head -> None, but a genuine measured 0.0 (choice fraction > 0) is
+    KEPT. Guards the "never a fabricated 0" contract: the clamp(min=1) denominator would
+    otherwise emit 0.0 for a head that had no choice steps this batch."""
+    hub = MagicMock()
+    learnable = {head: [1.0] for head in HEAD_NAMES}
+    learnable["op"] = [0.0]  # op had no choice steps this batch -> no signal
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            head_learnable_fractions=learnable,
+            choice_conditional_head_entropies={head: [0.0] for head in HEAD_NAMES},
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+    payload = hub.emit.call_args[0][0].data
+    # op: fraction 0 -> fabricated 0 suppressed -> None
+    assert payload.head_op_choice_conditional_entropy is None
+    # slot: fraction 1.0 with a genuinely measured 0.0 -> KEPT (real collapse reading)
+    assert payload.head_slot_choice_conditional_entropy == pytest.approx(0.0)
+
+
 def test_emit_ppo_update_event_surfaces_ev_stream_gate_metrics() -> None:
     """EV-stab Stage 0/2: per-stream EV, cf-head loss, and the GATE metrics
     (cov_rcf_return_share, r_main_cov) must reach the PPOUpdatePayload from the

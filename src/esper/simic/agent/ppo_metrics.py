@@ -30,6 +30,7 @@ class PPOUpdateMetricsBuilder:
     epochs_completed: int
     head_entropies: dict[str, list[torch.Tensor]]
     conditional_head_entropies: dict[str, list[torch.Tensor]]  # Entropy only when head is causally relevant
+    choice_conditional_head_entropies: dict[str, list[torch.Tensor]]  # Entropy over choice∩causal∩unforced steps (honest read)
     head_grad_norms: dict[str, list[torch.Tensor]]
     head_learnable_fractions: dict[str, list[torch.Tensor]]
     head_gradient_states: dict[str, list[str]]
@@ -148,6 +149,13 @@ class PPOUpdateMetricsBuilder:
         aggregated_result["conditional_head_entropies"] = {
             key: [val.item() for val in values]
             for key, values in self.conditional_head_entropies.items()
+        }
+        # Choice-conditioned entropy (esper-lite-425dcc4ca2): the honest per-head read,
+        # over choice∩causal∩unforced steps. The per-head collapse detector reads THIS
+        # (gated by head_learnable_fractions) instead of the sparse-biased raw means.
+        aggregated_result["choice_conditional_head_entropies"] = {
+            key: [val.item() for val in values]
+            for key, values in self.choice_conditional_head_entropies.items()
         }
         aggregated_result["head_grad_norms"] = {
             key: [val.item() for val in values] for key, values in self.head_grad_norms.items()
