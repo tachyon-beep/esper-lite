@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-05 ~22:45 (checkpoint #20 — EV Stage-0 gate PASSED + ACCEPTED, task CLOSED [PDR-0033]; Stage-0 telemetry DRAINED to main [PDR-0034], PUSHED to origin 2026-07-06 @ 50af6643)
+# Current State — Esper        Checkpoint: 2026-07-05 ~22:45 (checkpoint #20 — EV Stage-0 gate PASSED + ACCEPTED, task CLOSED [PDR-0033]; Stage-0 telemetry DRAINED + PUSHED to origin, branch topology consolidated 2026-07-06; main @ 127f25cb)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet). **Stage-0 is DONE: the advance gate
@@ -37,6 +37,9 @@ canonical Stage-2-OFF control run, diagnosed the run's mid-flight death, and clo
   `test_data_opt.py` / `test_dual_ab.py` hangs — provably NOT drain importers), so it was
   replaced by a **complete drained-module importer gate = 862 passed / 0 failed** on the pushed
   HEAD, atop byte-identity golden 2/2 + pytorch-expert GO.
+- **BRANCH TOPOLOGY CONSOLIDATED (2026-07-06):** 12→7 branches, 8→3 worktrees; EV research corpus
+  salvaged to main (`127f25cb`); codex fork-base archived to `origin/archive/oracle-sandbox-wip-2026-06`.
+  Only the live stack remains. Details under Open questions → "Retire `feat/ev-stab-stage2-hra`".
 
 ## Facts the next session must not relitigate
 - **The gate PASSED and is ACCEPTED** (median 1.017, 41/42 ≫ 0.40, flat across the observed
@@ -54,15 +57,17 @@ canonical Stage-2-OFF control run, diagnosed the run's mid-flight death, and clo
 ## Open questions / blocked-on-owner
 - **PUSH — DONE (2026-07-06).** `origin/main` @ `50af6643` (ahead 0 / behind 0). Resolved; see
   "In flight" for the reframed gate and evidence.
-- **Retire `feat/ev-stab-stage2-hra`** — the remaining unification step, AFTER Stage-2 acceptance.
-  Its granular Stage-2 ≡ main's squash (byte-identity confirmed); what still lives ONLY there =
-  the oracle-sandbox WIP commits → finish-or-abandon separately (PDR-0030) before deleting.
-  **TOPOLOGY MOVED (2026-07-06 11:41, concurrent session — NOT this session's push):**
-  `feat/ev-stab-stage2-hra` was fast-forwarded to the `feat/sanctum-layout` tip `6120ac9a`
-  ("merge: sync feat/ev-stab-stage2-hra into feat/sanctum-layout") — the two branches now
-  coincide. Retire-ev-stab and the sanctum-layout disposition are therefore now ONE entangled
-  call; reconcile the merged tip before deleting either. (Main is unaffected: the drain landed
-  independently.)
+- **Retire `feat/ev-stab-stage2-hra`** — the LAST remaining branch disposition, AFTER Stage-2
+  acceptance. **TOPOLOGY CONSOLIDATED this session (2026-07-06): 12→7 branches, 8→3 worktrees.**
+  Retired 6 fully-absorbed dead branches + 5 stale/experiment worktrees (`codex/*`, `post-p01-*`,
+  `wf_*`, both `ab-*`) — each proven lossless by ancestor-of-main or patch-id equivalence. The
+  codex fork-base was preserved as **`archive/oracle-sandbox-wip-2026-06`** on origin (holds the
+  35-file oracle-sandbox WIP); its unique EV research corpus was **SALVAGED to main (`127f25cb`)** —
+  the 4 `docs/research/` variance-reduction reports + reward-redesign + ppo-learning-gate plans.
+  What remains is ONLY the **LIVE STACK**: `feat/ev-stab-stage2-hra` (active — owner landing TUI)
+  with `feat/sanctum-layout` + `feat/entropy-thermometer-fix` folded in as ancestors. These three
+  are ONE unit; they retire together when the stack merges to main after Stage-2. Granular Stage-2
+  ≡ main's squash (byte-identity confirmed). Kept refs: `0.3.0` (release), `backup/0.1.1-pre-p01`.
 - Standing placeholders: north-star / rent TARGETs (metrics.md) still owner-set.
 
 ## Last checkpoint did (checkpoint #20)
