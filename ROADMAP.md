@@ -263,7 +263,7 @@ python -m esper.scripts.train ppo --reward-mode minimal
 
 **Delivered Capabilities:**
 
-* Obs V3: compact obs + blueprint embeddings (116 dims + 12 blueprint embed = 128 total network input)
+* Obs V3: compact obs + blueprint embeddings (120 dims + 12 blueprint embed = 132 total network input)
 * Policy V2: 512/512 feature+LSTM, 150-step horizon
 * V(s) critic: op-independent value baseline (P0-1, commit 6a27b8e3, replaced the original action-conditioned Q(s,op) baseline). Q(s,op) retained as a detached aux/telemetry head.
 * Differential entropy coefficients by head (protect sparse heads from collapse)

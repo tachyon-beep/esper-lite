@@ -351,7 +351,7 @@ def batch_signals_to_features(
     """Consolidated signals-to-features conversion for all environments.
 
     Returns:
-        obs: [batch, obs_dim] - observation features (Obs V3: 116 dims for 3 slots)
+        obs: [batch, obs_dim] - observation features (Obs V3: 120 dims for 3 slots)
         blueprint_indices: [batch, num_slots] - blueprint indices for embedding lookup (int64)
     """
     return batch_obs_to_features(

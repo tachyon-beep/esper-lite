@@ -11,6 +11,7 @@ import torch
 from esper.simic.agent import PPOAgent
 from tests.helpers import create_all_valid_masks
 from esper.tamiyo.policy.features import batch_obs_to_features
+from esper.tamiyo.policy.features import get_feature_size
 from esper.tamiyo.policy.factory import create_policy
 from esper.leyline import (
     NUM_BLUEPRINTS,
@@ -95,14 +96,14 @@ class TestPPOFeatureCompatibility:
             max_epochs=MAX_EPOCHS,
         )
 
-        # Obs V3: 23 base + 31 per slot × 3 slots = 116 dims
-        assert obs.shape == (1, 116), f"Expected (1, 116), got {obs.shape}"
+        state_dim = get_feature_size(slot_config)
+        assert obs.shape == (1, state_dim), f"Expected (1, {state_dim}), got {obs.shape}"
         assert blueprint_indices.shape == (1, 3), f"Expected (1, 3), got {blueprint_indices.shape}"
 
         # Create PPO agent with matching dimensions
         policy = create_policy(
             policy_type="lstm",
-            state_dim=116,
+            state_dim=state_dim,
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",
@@ -110,7 +111,7 @@ class TestPPOFeatureCompatibility:
         agent = PPOAgent(policy=policy, device="cpu")
 
         # Convert to 2D tensor (add sequence dim)
-        state_tensor = obs.unsqueeze(1)  # [1, 1, 116]
+        state_tensor = obs.unsqueeze(1)
         bp_indices = blueprint_indices.unsqueeze(1)  # [1, 1, 3]
         masks = create_all_valid_masks()
 
@@ -147,7 +148,7 @@ class TestPPOEndToEnd:
         # Create PPO agent
         policy = create_policy(
             policy_type="lstm",
-            state_dim=116,
+            state_dim=get_feature_size(slot_config),
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",
@@ -198,7 +199,7 @@ class TestPPOEndToEnd:
 
         policy = create_policy(
             policy_type="lstm",
-            state_dim=116,
+            state_dim=get_feature_size(slot_config),
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",

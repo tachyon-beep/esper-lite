@@ -15,6 +15,8 @@ from esper.leyline import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    OBS_V3_BASE_FEATURE_SIZE,
+    OBS_V3_SLOT_FEATURE_SIZE,
 )
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent
@@ -680,6 +682,8 @@ def test_signals_to_features_with_multislot_params():
         last_action_op = LifecycleOp.WAIT.value
         gradient_health_prev = {}
         epochs_since_counterfactual = {}
+        escrow_credit = {"r0c0": 0.0, "r0c1": 0.0, "r0c2": 0.0}
+        stable_val_acc_for_observation = None
 
     slot_config = SlotConfig.default()  # 3 slots
     batch_signals = [MockSignals()]
@@ -695,10 +699,9 @@ def test_signals_to_features_with_multislot_params():
         max_epochs=100,
     )
 
-    # Obs V3: 23 base + 31*3 slots = 116 dims (excluding blueprint embeddings)
     expected_dim = get_feature_size(slot_config)
     assert obs.shape == (1, expected_dim)
-    assert obs.shape[1] == 116
+    assert obs.shape[1] == expected_dim
 
 
 def test_signals_to_features_telemetry_slot_alignment() -> None:
@@ -729,6 +732,8 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
         last_action_op = LifecycleOp.WAIT.value
         gradient_health_prev = {"r0c1": 0.8}  # Previous gradient health
         epochs_since_counterfactual = {"r0c1": 2}  # 2 epochs since last CF
+        escrow_credit = {"r0c0": 0.0, "r0c1": 0.0, "r0c2": 0.0}
+        stable_val_acc_for_observation = None
 
     mid_telemetry = SeedTelemetry(seed_id="s1", blueprint_id="norm")
     mid_telemetry.gradient_norm = 2.0
@@ -784,17 +789,10 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
         max_epochs=100,
     )
 
-    # V3: Telemetry is embedded in slot features (4 dims: gradient_norm, gradient_health, has_vanishing, has_exploding)
-    # Base features: 23 dims
-    # Slot 0 (r0c0): 31 dims - all zeros (inactive)
-    # Slot 1 (r0c1): 31 dims - active with telemetry
-    # Slot 2 (r0c2): 31 dims - all zeros (inactive)
+    slot1_start = OBS_V3_BASE_FEATURE_SIZE + OBS_V3_SLOT_FEATURE_SIZE
+    slot1_features = obs[0, slot1_start:slot1_start + OBS_V3_SLOT_FEATURE_SIZE].tolist()
 
-    # Extract slot 1 features (r0c1) - starts at index 23 + 31 = 54
-    slot1_start = 23 + 31  # Skip base + slot0
-    slot1_features = obs[0, slot1_start:slot1_start + 31].tolist()
-
-    # Slot features layout (31 dims):
+    # Slot features layout:
     # [0] is_active = 1.0
     # [1-10] stage one-hot
     # [11] current_alpha
@@ -807,6 +805,7 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     # [28] epochs_in_stage_norm
     # [29] counterfactual_fresh
     # [30] seed_age_norm
+    # [31] escrow_credit_prev
 
     # Check telemetry fields are present (indices 23-26 in slot features)
     assert slot1_features[23] > 0.0  # gradient_norm (normalized, should be > 0)
@@ -814,15 +813,16 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     assert slot1_features[25] == 1.0  # has_vanishing = True
     assert slot1_features[26] == 0.0  # has_exploding = False
     assert abs(slot1_features[30] - 0.07) < 1e-6  # seed_age_norm (epochs_total=7, max_epochs=100)
+    assert slot1_features[31] == 0.0
 
     # Check slot 0 and slot 2 are all zeros (inactive)
-    slot0_start = 23
-    slot0_features = obs[0, slot0_start:slot0_start + 31].tolist()
-    assert slot0_features == [0.0] * 31  # r0c0 (disabled)
+    slot0_start = OBS_V3_BASE_FEATURE_SIZE
+    slot0_features = obs[0, slot0_start:slot0_start + OBS_V3_SLOT_FEATURE_SIZE].tolist()
+    assert slot0_features == [0.0] * OBS_V3_SLOT_FEATURE_SIZE  # r0c0 (disabled)
 
-    slot2_start = 23 + 62  # Skip base + slot0 + slot1
-    slot2_features = obs[0, slot2_start:slot2_start + 31].tolist()
-    assert slot2_features == [0.0] * 31  # r0c2 (disabled)
+    slot2_start = OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * 2)
+    slot2_features = obs[0, slot2_start:slot2_start + OBS_V3_SLOT_FEATURE_SIZE].tolist()
+    assert slot2_features == [0.0] * OBS_V3_SLOT_FEATURE_SIZE  # r0c2 (disabled)
 
 
 def test_ppo_agent_accepts_slot_config():

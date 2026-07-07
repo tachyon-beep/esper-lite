@@ -152,28 +152,33 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig) -> None:
 # the new architecture, regenerated and verified stable across repeated runs. (K=1 ratio
 # is now exactly 1.0 -- the new V(s) head leaves the epoch-0 anchored ratio identity
 # cleaner than the prior 0.9999998 float residue.)
+#
+# RE-BASELINED 2026-07-08 (`esper-lite-3defe42928`: Obs V3 schema v2 escrow state).
+# The observation feature vector grew from 116 to 120 non-blueprint dims and the full
+# policy input from 128 to 132 dims. This shifts the deterministic linspace rollout
+# used by this test and the policy network's first-layer initialization shape.
 _GOLDENS: dict[int, dict[str, float]] = {
     1: {
-        "policy_loss": -1.1549229621887207,
-        "value_loss": 0.025900892913341522,
-        "entropy": 6.99962043762207,
+        "policy_loss": 2.065805673599243,
+        "value_loss": 0.05997244268655777,
+        "entropy": 6.799556255340576,
         "approx_kl": 0.0,
         "clip_fraction": 0.0,
         "ratio_mean": 1.0,
-        "ratio_max": 1.0,
+        "ratio_max": 1.0000001192092896,
         "ratio_min": 1.0,
-        "ratio_std": 0.0,
+        "ratio_std": 6.882551417675131e-08,
     },
     4: {
-        "policy_loss": -1.3849077224731445,
-        "value_loss": 0.01459794957190752,
-        "entropy": 6.966041088104248,
-        "approx_kl": 0.007933689281344414,
-        "clip_fraction": 0.3125,
-        "ratio_mean": 1.294655680656433,
-        "ratio_max": 3.2952778339385986,
-        "ratio_min": 0.8902816772460938,
-        "ratio_std": 0.4891107678413391,
+        "policy_loss": 1.7513697147369385,
+        "value_loss": 0.02766212448477745,
+        "entropy": 6.76958703994751,
+        "approx_kl": 0.009003829210996628,
+        "clip_fraction": 0.5,
+        "ratio_mean": 0.9300186634063721,
+        "ratio_max": 1.5954095125198364,
+        "ratio_min": 0.3957776427268982,
+        "ratio_std": 0.2849818170070648,
     },
 }
 

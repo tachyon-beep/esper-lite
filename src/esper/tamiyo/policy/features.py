@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 import threading
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 import torch
 import torch.nn.functional as F
@@ -116,6 +116,19 @@ def _validated_gradient_health(value: float | None, slot_id: str) -> float:
             f"Value: {value}. This indicates malformed seed telemetry."
         )
     return safe(raw_health, 1.0, max_val=1.0)
+
+
+def _stable_val_acc_feature(env_state: Any) -> float:
+    """Encode the escrow stable accuracy visible to the critic."""
+    stable_val_acc = env_state.stable_val_acc_for_observation
+    if stable_val_acc is None:
+        return OBS_V3_UNKNOWN_SENTINEL
+    return cast(float, stable_val_acc) / 100.0
+
+
+def _escrow_credit_feature(env_state: Any, slot_id: str) -> float:
+    """Encode the slot's current escrow credit on reward scale."""
+    return symlog(env_state.escrow_credit[slot_id]) / _SYMLOG_NORM
 
 
 # =============================================================================
@@ -219,7 +232,7 @@ def _extract_base_features_v3(
     slot_config: SlotConfig,
     max_epochs: int,
 ) -> torch.Tensor:
-    """Extract base features (23 dims) for Obs V3.
+    """Extract base features (24 dims) for Obs V3.
 
     Base features:
     - Current epoch (1 dim): normalized to [0, 1] using runtime max_epochs
@@ -229,8 +242,9 @@ def _extract_base_features_v3(
     - Raw accuracy history (5 dims): normalized to [0, 1], left-padded
     - Stage distribution (3 dims): num_training_norm, num_blending_norm, num_holding_norm
     - Action feedback (7 dims): last_action_success (1) + last_action_op one-hot (6)
+    - Escrow stable accuracy (1 dim): min-over-window validation accuracy
 
-    Total: 23 base features
+    Total: 24 base features
 
     Note: Removed host_stabilized - Tamiyo learns stability from raw telemetry.
 
@@ -244,7 +258,7 @@ def _extract_base_features_v3(
         max_epochs: Runtime episode length for normalization
 
     Returns:
-        torch.Tensor with shape (23,)
+        torch.Tensor with shape (24,)
     """
     # Current metrics (3 dims)
     # Normalize epoch to [0, 1] range using runtime max_epochs
@@ -292,7 +306,9 @@ def _extract_base_features_v3(
         num_classes=NUM_OPS
     ).float()
 
-    # Combine all base features (23 dims total)
+    stable_val_acc_norm = _stable_val_acc_feature(env_state)
+
+    # Combine all base features (24 dims total)
     base_features = (
         [epoch_norm] +  # 1 dim - normalized to [0, 1]
         [val_loss_norm] +  # 1 dim
@@ -301,7 +317,8 @@ def _extract_base_features_v3(
         acc_history_norm +   # 5 dims
         [num_training_norm, num_blending_norm, num_holding_norm] +  # 3 dims
         [last_action_success] +  # 1 dim
-        last_op_one_hot.tolist()  # 6 dims
+        last_op_one_hot.tolist() +  # 6 dims
+        [stable_val_acc_norm]  # 1 dim
     )
 
     return torch.tensor(base_features, dtype=torch.float32)
@@ -313,7 +330,7 @@ def _extract_slot_features_v3(
     slot_id: str,
     max_epochs: int,
 ) -> torch.Tensor:
-    """Extract per-slot features (31 dims) for Obs V3.
+    """Extract per-slot features (32 dims) for Obs V3.
 
     Features:
     - is_active (1 dim) - always 1.0 since this function is called for active slots
@@ -328,8 +345,9 @@ def _extract_slot_features_v3(
     - epochs_in_stage_norm (1 dim) - normalized epochs in current stage
     - counterfactual_fresh (1 dim) - DEFAULT_GAMMA ** epochs_since_cf
     - seed_age_norm (1 dim) - normalized epochs since germination (metrics.epochs_total)
+    - escrow_credit_prev (1 dim) - symlog-compressed current escrow credit
 
-    Total: 31 dims
+    Total: 32 dims
 
     Note: boost_received, upstream_alpha_sum, and downstream_alpha_sum from V2 are REMOVED in V3.
 
@@ -340,7 +358,7 @@ def _extract_slot_features_v3(
         max_epochs: Runtime episode length for normalization
 
     Returns:
-        torch.Tensor with shape (30,)
+        torch.Tensor with shape (32,)
     """
     # Stage one-hot encoding (10 dims)
     # _stage_to_one_hot raises ValueError for invalid stages - fail fast, don't mask bugs
@@ -440,7 +458,9 @@ def _extract_slot_features_v3(
     seed_age = slot_report.metrics.epochs_total
     seed_age_norm = min(float(seed_age), max_epochs_den) / max_epochs_den
 
-    # Combine all slot features (31 dims total)
+    escrow_credit_norm = _escrow_credit_feature(env_state, slot_id)
+
+    # Combine all slot features (32 dims total)
     slot_features = (
         [1.0] +  # is_active (1 dim) - always 1.0 for active slots
         stage_one_hot +  # 10 dims
@@ -466,12 +486,13 @@ def _extract_slot_features_v3(
             has_vanishing,
             has_exploding,
         ] +
-        # New Obs V3 fields (3 dims)
+        # New Obs V3 fields (5 dims)
         [
             gradient_health_prev,
             epochs_in_stage_norm,
             counterfactual_fresh,
             seed_age_norm,
+            escrow_credit_norm,
         ]
     )
 
@@ -592,8 +613,8 @@ def _vectorized_op_one_hot(op_indices: torch.Tensor, device: torch.device) -> to
 # =============================================================================
 
 # Obs V3 Constants
-# Base features: 23 dims (epoch, val_loss, val_accuracy, history_5 × 2, stage distribution,
-#                         action feedback: last_action_success + last_action_op one-hot)
+# Base features: 24 dims (epoch, val_loss, val_accuracy, history_5 × 2, stage distribution,
+#                         action feedback, stable escrow accuracy)
 # NOTE: Includes 7 action feedback dims (last_action_success + 6-dim one-hot for last_action_op)
 # NOTE: Removed host_stabilized - Tamiyo learns stability from raw telemetry
 BASE_FEATURE_SIZE = OBS_V3_BASE_FEATURE_SIZE
@@ -611,11 +632,12 @@ BASE_FEATURE_SIZE = OBS_V3_BASE_FEATURE_SIZE
 # + 1 epochs_in_stage_norm
 # + 1 counterfactual_fresh
 # + 1 seed_age_norm (metrics.epochs_total / max_epochs)
-# Total: 1 + 10 + 1 + 1 + 1 + 1 + 8 + 4 + 1 + 1 + 1 + 1 = 31 dims per slot (blueprint moved to embedding)
+# + 1 escrow_credit_prev (symlog reward-scale credit)
+# Total: 1 + 10 + 1 + 1 + 1 + 1 + 8 + 4 + 1 + 1 + 1 + 1 + 1 = 32 dims per slot (blueprint moved to embedding)
 SLOT_FEATURE_SIZE = OBS_V3_SLOT_FEATURE_SIZE
 
-# Obs V3 total for 3 slots: 23 base + 3 slots × 31 features = 116 dims (excludes blueprint embeddings)
-# Blueprint embeddings (4 dims × 3 slots = 12) are added inside the network, making total network input 128
+# Obs V3 total for 3 slots: 24 base + 3 slots × 32 features = 120 dims (excludes blueprint embeddings)
+# Blueprint embeddings (4 dims × 3 slots = 12) are added inside the network, making total network input 132
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
 MULTISLOT_FEATURE_SIZE = OBS_V3_NON_BLUEPRINT_DIM
 
@@ -631,17 +653,17 @@ def get_feature_size(slot_config: SlotConfig) -> int:
     """Feature size excluding blueprint embeddings (added by network).
 
     Obs V3 Breakdown:
-        Base features:     23 dims (epoch, val_loss, val_accuracy,
+        Base features:     24 dims (epoch, val_loss, val_accuracy,
                                     loss_history_5, accuracy_history_5,
                                     stage distribution,
-                                    action feedback: last_action_success + last_action_op one-hot)
-        Per-slot features: 31 dims × num_slots (stage one-hot, alpha, gradient health,
-                                                 contribution, telemetry, etc.)
+                                    action feedback, stable escrow accuracy)
+        Per-slot features: 32 dims × num_slots (stage one-hot, alpha, gradient health,
+                                                 contribution, telemetry, escrow credit, etc.)
 
-    For 3 slots: 23 + (31 × 3) = 116 dims
+    For 3 slots: 24 + (32 × 3) = 120 dims
 
     Note: Blueprint embeddings (4 dims × num_slots) are added inside the network
-    via BlueprintEmbedding module, making total network input 116 + 12 = 128 for 3 slots.
+    via BlueprintEmbedding module, making total network input 120 + 12 = 132 for 3 slots.
 
     Args:
         slot_config: Slot configuration defining number of slots
@@ -678,11 +700,12 @@ def batch_obs_to_features(
     - blueprint_indices: [batch, num_slots] - int64 indices for nn.Embedding lookup
 
     Feature breakdown:
-    - Base features: 23 dims (epoch, loss, accuracy, raw history, stage counts)
+    - Base features: 24 dims (epoch, loss, accuracy, raw history, stage counts,
+      action feedback, stable escrow accuracy)
     - Action feedback: 7 dims (last_action_success + last_action_op one-hot) - INCLUDED in base
-    - Per-slot features: 31 dims × num_slots (stage, alpha, gradient health, contribution, etc.)
+    - Per-slot features: 32 dims × num_slots (stage, alpha, gradient health, contribution, etc.)
 
-    For 3 slots: 23 + (31 × 3) = 116 dims
+    For 3 slots: 24 + (32 × 3) = 120 dims
 
     Args:
         batch_signals: List of TrainingSignals with metrics and history
@@ -735,7 +758,7 @@ def batch_obs_to_features(
             elif stage_val == _HOLDING_VAL or stage_val == _FOSSILIZED_VAL:
                 num_holding += 1
 
-        # === BASE FEATURES (23 dims) ===
+        # === BASE FEATURES (24 dims) ===
         # Fill directly into pre-allocated tensor
 
         # Current metrics (3 dims: epoch, val_loss, val_accuracy)
@@ -776,8 +799,9 @@ def batch_obs_to_features(
         assert 0 <= env_state.last_action_op < NUM_OPS, \
             f"Invalid last_action_op: {env_state.last_action_op} (expected 0-{NUM_OPS-1})"
         obs[env_idx, 17:23] = op_table[env_state.last_action_op]
+        obs[env_idx, 23] = _stable_val_acc_feature(env_state)
 
-        # === SLOT FEATURES (30 dims per slot) ===
+        # === SLOT FEATURES (32 dims per slot) ===
         for slot_idx, slot_id in enumerate(slot_config.slot_ids):
             report = reports.get(slot_id)
             slot_offset = OBS_V3_BASE_FEATURE_SIZE + slot_idx * OBS_V3_SLOT_FEATURE_SIZE
@@ -877,6 +901,9 @@ def batch_obs_to_features(
             # seed_age_norm (1 dim)
             seed_age = report.metrics.epochs_total
             obs[env_idx, slot_offset + 30] = min(float(seed_age), max_epochs_den) / max_epochs_den
+
+            # escrow_credit_prev (1 dim)
+            obs[env_idx, slot_offset + 31] = _escrow_credit_feature(env_state, slot_id)
 
     # Single H2D transfer at end (after all Python-loop filling is complete)
     return obs.to(device), blueprint_indices.to(device)

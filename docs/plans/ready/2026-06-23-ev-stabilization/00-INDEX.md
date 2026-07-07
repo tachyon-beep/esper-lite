@@ -95,11 +95,18 @@ which is unchanged.
 - Config/agent construction: `PPOAgent(...)` at `vectorized.py:1145` (NOT `:926-950`, the reward-config block); flag chain `to_train_kwargs` (`config.py:347`) → `train_ppo_vectorized` signature → `PPOAgent`. CLI `--hra-value-decomposition` on `ppo_parser` (`scripts/train.py:431`, NOT the `--reward-mode` block at `:409`).
 
 ### Observation space + escrow (Stage 3)
-- Obs builder: `tamiyo/policy/features.py:655` `batch_obs_to_features()`; dims = `OBS_V3_BASE_FEATURE_SIZE(23)` + `OBS_V3_SLOT_FEATURE_SIZE(31)*num_slots` (`leyline/__init__.py:644-646`); `get_feature_size()` `features.py:630`.
-- **Escrow is NOT in the observation** — `escrow_credit_prev` is only a reward input (`action_execution.py:866,929`). This is the Stage-3 lever.
-- Escrow clip (breaks telescoping): `contribution.py:531-536` (`escrow_delta_clip=2.0` :150).
+- UPDATED 2026-07-08 (`esper-lite-3defe42928`): escrow state is now in Obs V3
+  schema v2. `OBS_V3_BASE_FEATURE_SIZE=24`, `OBS_V3_SLOT_FEATURE_SIZE=32`,
+  default 3-slot non-blueprint dim = 120. The base block carries
+  `stable_val_acc_for_observation`; each active slot carries symlog-compressed
+  `escrow_credit_prev`.
+- UPDATED 2026-07-08 (`esper-lite-3defe42928`): reward-path escrow delta clipping
+  is removed; `escrow_delta` is the full target difference, so the ledger
+  telescopes over the Markov observation state.
 - PBRS telescoping test: `tests/simic/properties/test_pbrs_properties.py:40-98` (asserts Σ shaping == γΦ(s_n)−Φ(s_0) within 1e-9).
-- Obs-expansion files to touch: `features.py`, `leyline/__init__.py` (dim const), `simic/training/normalizer_checkpoint.py` (shape contract), `simic/telemetry/observation_stats.py` (base/slot boundaries).
+- Obs-expansion verification touchpoints: `features.py`, `leyline/__init__.py`
+  (dim const), `simic/training/normalizer_checkpoint.py` (shape contract),
+  and `simic/telemetry/observation_stats.py` (base/slot boundaries).
 
 ## Review tracking (required before promotion)
 

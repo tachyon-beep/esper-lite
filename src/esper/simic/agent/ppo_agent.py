@@ -68,7 +68,9 @@ logger = logging.getLogger(__name__)
 # Version 3 (EV-stab Stage 2): hra_value_decomposition is recorded; on the ON leg the
 # value_main_normalizer + cf_value_normalizer state dicts are serialized alongside
 # value_normalizer (three-head value topology: V_main + V_cf + the q-aux total).
-CHECKPOINT_VERSION = 3
+# Version 4: Obs V3 schema v2 adds escrow Markov state to the policy input
+# (stable_val_acc_for_observation + per-slot escrow_credit_prev).
+CHECKPOINT_VERSION = 4
 
 # Sparse heads need higher entropy coefficients to maintain exploration
 # when they receive fewer training signals due to causal masking

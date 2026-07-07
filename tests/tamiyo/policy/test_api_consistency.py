@@ -102,7 +102,7 @@ def _make_test_env_state():
         def reset(self):
             pass
 
-    return ParallelEnvState(
+    env_state = ParallelEnvState(
         model=MockModel(),
         host_optimizer=MockOptimizer(),
         signal_tracker=MockSignalTracker(),
@@ -110,6 +110,8 @@ def _make_test_env_state():
         last_action_success=True,
         last_action_op=0,
     )
+    env_state.escrow_credit = {slot_id: 0.0 for slot_id in SlotConfig.default().slot_ids}
+    return env_state
 
 
 def test_feature_extraction_returns_tuple():

@@ -3,7 +3,7 @@
 These tests exercise the parts the OFF-leg golden CANNOT reach: the cf value head in
 the optimizer, the head-only V_cf loss term, the per-stream normalizers + EV keys, the
 trunk-detach gradient isolation (the §2 provable-by-construction safety claim), and the
-v3 checkpoint round-trip (three normalizers + flag-mismatch error).
+v4 checkpoint round-trip (three normalizers + flag-mismatch error).
 
 The OFF-leg byte-identity gate lives in tests/simic/test_ppo_update_golden.py (unchanged)
 and tests/simic/agent/test_rollout_buffer_cf_gae.py.
@@ -351,20 +351,22 @@ def test_return_variance_gate_absent_when_flag_off() -> None:
 # ---------------------------------------------------------------------------
 
 # Pinned 2026-06-24 from the deterministic ON build (seed 123, the _fill_buffer above).
-# These are the new-architecture deterministic output; regenerate + re-pin only on an
+# Re-pinned 2026-07-08 for Obs V3 schema v2 (`esper-lite-3defe42928`): the
+# non-blueprint feature vector grew from 116 to 120 dims, shifting the deterministic
+# linspace rollout and first-layer initialization shape. Regenerate + re-pin only on an
 # intentional ON-leg change. Tolerance mirrors the golden file's strict band.
 _ON_GOLDENS: dict[int, dict[str, float]] = {
     1: {
-        "policy_loss": -2.0044755935668945,
-        "value_loss": 0.007826905697584152,
-        "cf_value_loss": 0.009760173037648201,
-        "entropy": 6.799691200256348,
+        "policy_loss": 0.7471128106117249,
+        "value_loss": 0.026060346513986588,
+        "cf_value_loss": 0.009285787120461464,
+        "entropy": 9.399574279785156,
     },
     4: {
-        "policy_loss": -2.425248146057129,
-        "value_loss": 0.005328205414116383,
-        "cf_value_loss": 0.0037804325111210346,
-        "entropy": 6.764498710632324,
+        "policy_loss": 0.23305809497833252,
+        "value_loss": 0.010555721819400787,
+        "cf_value_loss": 0.0033851461485028267,
+        "entropy": 9.359071731567383,
     },
 }
 
@@ -380,7 +382,7 @@ def test_on_leg_golden_metrics(recurrent_n_epochs: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint round-trip (v3 three normalizers + flag mismatch)
+# Checkpoint round-trip (v4 three normalizers + flag mismatch)
 # ---------------------------------------------------------------------------
 
 def test_on_checkpoint_roundtrip_restores_three_normalizers_and_cf_head(
@@ -437,8 +439,8 @@ def test_loading_on_checkpoint_into_off_build_raises_descriptive_error(
         PPOAgent.load_from_checkpoint_dict(checkpoint, device="cpu")
 
 
-def test_checkpoint_versions_bumped_to_three() -> None:
-    assert CHECKPOINT_VERSION == 3
+def test_checkpoint_versions_bumped_to_four() -> None:
+    assert CHECKPOINT_VERSION == 4
     assert VALUE_HEAD_SCHEMA_VERSION == 3
 
 

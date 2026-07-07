@@ -16,7 +16,6 @@ from esper.simic.rewards import ContributionRewardConfig, RewardMode, SeedInfo
 def escrow_config(
     *,
     contribution_weight: float = 1.0,
-    escrow_delta_clip: float = 0.0,
     disable_anti_gaming: bool = True,
 ) -> ContributionRewardConfig:
     """Return a config that isolates escrow mechanics.
@@ -27,7 +26,6 @@ def escrow_config(
     return ContributionRewardConfig(
         reward_mode=RewardMode.ESCROW,
         contribution_weight=contribution_weight,
-        escrow_delta_clip=escrow_delta_clip,
         disable_pbrs=True,
         disable_terminal_reward=True,
         disable_anti_gaming=disable_anti_gaming,
@@ -163,4 +161,3 @@ __all__ = [
     "stable_val_acc_from_history",
     "with_prune_good_seed_penalty",
 ]
-

@@ -1,9 +1,9 @@
-"""Pins the 23-dim base observation contract for Tamiyo's feature extractor.
+"""Pins the 24-dim base observation contract for Tamiyo's feature extractor.
 
 This is a guard for P1-2 (deletion of the dead grad_norm_host / grad_norm_seed
 fields on TrainingMetrics). The base feature vector width and content must be
 observationally inert with respect to that deletion: removing fields that no
-extractor reads cannot change the obs width (23) or any base value.
+extractor reads cannot change the original base values or feature order.
 
 The base block is built from a TrainingSignals produced by the tamiyo
 SignalTracker, then run through batch_obs_to_features, the production extractor.
@@ -66,16 +66,16 @@ def _signals_from_tracker(final_epoch: int, val_loss: float, val_accuracy: float
     return signals
 
 
-def test_base_feature_vector_is_23_dims():
-    """The base block of the obs vector must be exactly OBS_V3_BASE_FEATURE_SIZE (23)."""
-    assert OBS_V3_BASE_FEATURE_SIZE == 23
+def test_base_feature_vector_is_24_dims():
+    """The base block of the obs vector must be exactly OBS_V3_BASE_FEATURE_SIZE (24)."""
+    assert OBS_V3_BASE_FEATURE_SIZE == 24
 
     slot_config = SlotConfig.default()
     signals = _signals_from_tracker(final_epoch=10, val_loss=0.5, val_accuracy=70.0)
 
     obs, _ = batch_obs_to_features(
         [signals],
-        [{}],  # no active slots -> base block fully determines the first 23 dims
+        [{}],  # no active slots -> base block fully determines the base dims
         [_make_env_state()],
         slot_config,
         torch.device("cpu"),
@@ -90,7 +90,7 @@ def test_base_feature_vector_is_23_dims():
 
 
 def test_base_feature_content_unchanged():
-    """Golden assertion on the 23 base values, proving the deletion is observationally inert."""
+    """Golden assertion on the base values, proving the deletion is observationally inert."""
     slot_config = SlotConfig.default()
 
     epoch = 50
@@ -136,3 +136,7 @@ def test_base_feature_content_unchanged():
     expected_one_hot = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     for i, expected in enumerate(expected_one_hot):
         assert abs(base[17 + i].item() - expected) < 1e-6
+
+    # Index 23: stable_val_acc_for_observation is unknown before vectorized
+    # trainer threads the reward-configured min-over-window value.
+    assert base[23].item() == -1.0

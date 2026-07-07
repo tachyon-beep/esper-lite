@@ -144,10 +144,6 @@ class ContributionRewardConfig:
     # Soft escrow: pay the CHANGE in an "unrealised credit target" so transient spikes are clawed back.
     # Stable accuracy uses min(last_k) to require sustained improvement ("prove it held").
     escrow_stable_window: int = 3
-    # Per-step cap on escrow delta. Clips large reward swings from transient accuracy spikes.
-    # DRL Expert review 2026-01-10: Enabled at 2.0 to reduce PPO variance while allowing
-    # meaningful updates. Set to 0.0 to disable (not recommended).
-    escrow_delta_clip: float = 2.0
 
     # PBRS stage progression
     pbrs_weight: float = 0.3
@@ -529,11 +525,6 @@ def compute_contribution_reward(
                     (config.contribution_weight * attributed) + ratio_penalty,
                 )
                 escrow_delta = escrow_credit_target - escrow_credit_prev
-                if config.escrow_delta_clip > 0:
-                    escrow_delta = max(
-                        -config.escrow_delta_clip,
-                        min(config.escrow_delta_clip, escrow_delta),
-                    )
                 bounded_attribution = escrow_delta
     else:
         if seed_contribution is not None and not seed_is_fossilized:

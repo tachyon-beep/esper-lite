@@ -5,7 +5,7 @@ space and asserting invariants that should *always* hold.
 """
 
 import pytest
-from hypothesis import assume, given
+from hypothesis import given
 from hypothesis import strategies as st
 
 from esper.simic.rewards import compute_contribution_reward
@@ -153,23 +153,46 @@ def test_no_counterfactual_no_proxy_credit_no_ledger_change(
     assert reward == pytest.approx(0.0)
 
 
+def test_escrow_delta_uses_full_target_difference() -> None:
+    config = escrow_config()
+
+    reward, components = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=10.0,
+        val_acc=50.0,
+        seed_info=seed_info(stage=SeedStage.TRAINING),
+        epoch=4,
+        max_epochs=10,
+        total_params=100_000,
+        host_params=100_000,
+        config=config,
+        return_components=True,
+        stable_val_acc=50.0,
+        escrow_credit_prev=0.0,
+        acc_at_germination=None,
+    )
+
+    expected_target = 5.0
+    assert components.escrow_credit_target == pytest.approx(expected_target)
+    assert components.escrow_delta == pytest.approx(expected_target)
+    assert components.escrow_credit_next == pytest.approx(expected_target)
+    assert components.bounded_attribution == pytest.approx(expected_target)
+    assert reward == pytest.approx(expected_target)
+
+
 @given(
     credit_prev=st.floats(min_value=0.0, max_value=10.0, allow_nan=False),
     seed_contribution=st.floats(min_value=0.0, max_value=10.0, allow_nan=False),
-    clip=st.floats(min_value=0.01, max_value=2.0, allow_nan=False),
 )
-def test_delta_clipping_is_applied_to_positive_branch_delta(
+def test_positive_branch_delta_is_unclipped_target_difference(
     credit_prev: float,
     seed_contribution: float,
-    clip: float,
 ) -> None:
-    assume(clip > 0.0)
-    config = escrow_config(escrow_delta_clip=clip)
+    config = escrow_config()
 
     # progress None path is simplest: target = 0.5 * seed_contribution
     expected_target = 0.5 * seed_contribution
-    unclipped = expected_target - credit_prev
-    expected_delta = max(-clip, min(clip, unclipped))
+    expected_delta = expected_target - credit_prev
 
     _, components = compute_contribution_reward(
         action=LifecycleOp.WAIT,
@@ -189,7 +212,7 @@ def test_delta_clipping_is_applied_to_positive_branch_delta(
 
     assert components.escrow_credit_target == pytest.approx(expected_target)
     assert components.escrow_delta == pytest.approx(expected_delta)
-    assert abs(components.escrow_delta) <= clip + 1e-9
+    assert components.escrow_credit_next == pytest.approx(expected_target)
 
 
 @given(
@@ -204,7 +227,7 @@ def test_ratio_penalty_floor_never_mints_negative_credit(
 ) -> None:
     # Force ratio_penalty to be negative and large enough to matter.
     config = with_prune_good_seed_penalty(
-        escrow_config(disable_anti_gaming=False, escrow_delta_clip=0.0),
+        escrow_config(disable_anti_gaming=False),
         prune_good_seed_penalty=penalty,
     )
 
@@ -230,4 +253,3 @@ def test_ratio_penalty_floor_never_mints_negative_credit(
     assert components.escrow_delta == pytest.approx(-credit_prev)
     assert components.escrow_credit_next == pytest.approx(0.0)
     assert reward == pytest.approx(-credit_prev)
-

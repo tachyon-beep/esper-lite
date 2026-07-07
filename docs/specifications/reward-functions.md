@@ -359,7 +359,9 @@ bounded_attribution = escrow_delta
 
 **Config Values:**
 - `escrow_stable_window = 3` (epochs for min() calculation)
-- `escrow_delta_clip = 0.0` (0 = no clip; positive = per-step cap)
+- No reward-path delta clip. The critic observes `stable_val_acc_for_observation`
+  and per-slot `escrow_credit_prev`, so the full target difference remains
+  Markovian and telescoping.
 
 ### Anti-Gaming Properties
 
@@ -665,7 +667,6 @@ class ContributionRewardConfig:
 
     # === Escrow Attribution ===
     escrow_stable_window: int = 3
-    escrow_delta_clip: float = 0.0
 
     # === PBRS ===
     pbrs_weight: float = 0.3

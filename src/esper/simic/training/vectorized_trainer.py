@@ -1959,6 +1959,19 @@ class VectorizedPPOTrainer:
                 available_slots=available_slots,
             )
 
+            stable_window = self.env_reward_configs[env_idx].escrow_stable_window
+            if stable_window <= 0:
+                raise ValueError(
+                    f"escrow_stable_window must be positive, got {stable_window}"
+                )
+            acc_history = signals.accuracy_history
+            if not acc_history:
+                raise RuntimeError(
+                    "Stable accuracy observation requested before any accuracy history exists"
+                )
+            k = stable_window if stable_window <= len(acc_history) else len(acc_history)
+            env_state.stable_val_acc_for_observation = min(acc_history[-k:])
+
             all_signals.append(signals)
             all_slot_reports.append(slot_reports)
             # Cache total_seeds for this env (used in action masking)

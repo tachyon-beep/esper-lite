@@ -76,6 +76,9 @@ class ParallelEnvState:
     acc_at_germination: dict[str, float] = field(default_factory=dict)
     # Escrow attribution ledger (RewardMode.ESCROW): per-slot unrealised credit balance.
     escrow_credit: dict[str, float] = field(default_factory=dict)
+    # Obs V3 escrow Markov state: min-over-window validation accuracy visible to
+    # the critic. None encodes UNKNOWN before the first training signal update.
+    stable_val_acc_for_observation: float | None = None
     # Maximum accuracy achieved during episode (for sparse reward)
     host_max_acc: float = 0.0
     # Pre-allocated accumulators to avoid per-epoch tensor allocation churn
@@ -243,6 +246,7 @@ class ParallelEnvState:
         self.committed_val_acc = 0.0
         self.committed_acc_history.clear()
         self.escrow_credit = {slot_id: 0.0 for slot_id in slots}
+        self.stable_val_acc_for_observation = None
         self.host_max_acc = 0.0
         self.pending_auto_prune_penalty = 0.0
         self.prev_slot_alphas = {slot_id: 0.0 for slot_id in slots}

@@ -1061,8 +1061,8 @@ def train_ppo_vectorized(
     effective_workers = num_workers if num_workers is not None else 4
 
     # State dimension: Obs V3 features from batch_obs_to_features().
-    # For 3 slots: 23 base + 3*31 slot features = 116 dims.
-    # NOTE: Telemetry features are now MERGED into slot features (31 per slot),
+    # For 3 slots: 24 base + 3*32 slot features = 120 dims.
+    # NOTE: Telemetry and escrow-credit features are MERGED into slot features (32 per slot),
     # so we no longer add separate SeedTelemetry.feature_dim() per slot.
     # Blueprint embeddings (4 × num_slots) are added inside the network.
     state_dim = get_feature_size(slot_config)

@@ -5,8 +5,11 @@ Per-slot layout: [is_active(1), stage_one_hot(10), state(15), blueprint(13)] = 3
 State features: alpha, improvement, contribution_velocity, tempo, 7 alpha controller params, 4 scaffolding params
 """
 
+import math
+
 import pytest
 import torch
+from esper.leyline import OBS_V3_BASE_FEATURE_SIZE, OBS_V3_NON_BLUEPRINT_DIM, OBS_V3_SLOT_FEATURE_SIZE
 
 # Slot feature layout constants for test clarity
 _STAGE_ONE_HOT_DIMS = 10
@@ -15,6 +18,7 @@ _BLUEPRINT_ONE_HOT_DIMS = 13
 _SLOT_FEATURE_SIZE = 39  # 1 + 10 + 15 + 13
 
 MAX_EPOCHS = 100
+_TEST_ESCROW_SLOT_IDS = ("r0c0", "r0c1", "r0c2", "r1c0", "r1c1")
 
 
 
@@ -102,7 +106,9 @@ def _make_mock_seed_state_report(slot_id="r0c0", stage=3, alpha=0.5,
 
 def _make_mock_parallel_env_state(last_action_success=True, last_action_op=0,
                                    gradient_health_prev=None,
-                                   epochs_since_counterfactual=None):
+                                   epochs_since_counterfactual=None,
+                                   escrow_credit=None,
+                                   stable_val_acc_for_observation=None):
     """Create mock ParallelEnvState for testing."""
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
@@ -135,6 +141,15 @@ def _make_mock_parallel_env_state(last_action_success=True, last_action_op=0,
 
     if epochs_since_counterfactual is not None:
         env_state.epochs_since_counterfactual = epochs_since_counterfactual
+
+    env_state.escrow_credit = (
+        escrow_credit
+        if escrow_credit is not None
+        else {slot_id: 0.0 for slot_id in _TEST_ESCROW_SLOT_IDS}
+    )
+
+    if stable_val_acc_for_observation is not None:
+        env_state.stable_val_acc_for_observation = stable_val_acc_for_observation
 
     return env_state
 
@@ -179,8 +194,9 @@ def test_batch_obs_to_features_basic():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Obs V3: 23 base + 31 per slot × 3 slots = 116 dims
-    assert obs.shape == (2, 116), f"Expected (2, 116), got {obs.shape}"
+    assert obs.shape == (2, OBS_V3_NON_BLUEPRINT_DIM), (
+        f"Expected (2, {OBS_V3_NON_BLUEPRINT_DIM}), got {obs.shape}"
+    )
     assert blueprint_indices.shape == (2, 3), f"Expected (2, 3), got {blueprint_indices.shape}"
 
     # Check blueprint indices
@@ -193,8 +209,43 @@ def test_batch_obs_to_features_basic():
     assert blueprint_indices[1, 2].item() == -1  # r0c2: inactive
 
 
+def test_batch_obs_to_features_exposes_escrow_markov_state():
+    """Escrow critic observations include stable accuracy and per-slot credit state."""
+    from esper.leyline import OBS_V3_BASE_FEATURE_SIZE, OBS_V3_SLOT_FEATURE_SIZE
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import batch_obs_to_features
+
+    slot_config = SlotConfig.default()
+    env_state = _make_mock_parallel_env_state(
+        escrow_credit={"r0c0": 1.25, "r0c1": 0.5, "r0c2": 0.0},
+        stable_val_acc_for_observation=68.0,
+    )
+
+    obs, _ = batch_obs_to_features(
+        [_make_mock_training_signals()],
+        [{"r0c0": _make_mock_seed_state_report("r0c0", stage=3, blueprint_index=1)}],
+        [env_state],
+        slot_config,
+        torch.device("cpu"),
+        max_epochs=MAX_EPOCHS,
+    )
+
+    assert OBS_V3_BASE_FEATURE_SIZE == 24
+    assert OBS_V3_SLOT_FEATURE_SIZE == 32
+    assert obs.shape == (1, OBS_V3_BASE_FEATURE_SIZE + OBS_V3_SLOT_FEATURE_SIZE * 3)
+    assert obs[0, 23].item() == pytest.approx(0.68)
+
+    slot0_offset = OBS_V3_BASE_FEATURE_SIZE
+    expected_credit = math.log1p(1.25) / 7.0
+    assert obs[0, slot0_offset + 31].item() == pytest.approx(expected_credit)
+
+    inactive_slot_offset = OBS_V3_BASE_FEATURE_SIZE + OBS_V3_SLOT_FEATURE_SIZE
+    inactive_slot = obs[0, inactive_slot_offset:inactive_slot_offset + OBS_V3_SLOT_FEATURE_SIZE]
+    assert torch.all(inactive_slot == 0.0)
+
+
 def test_batch_obs_to_features_base_features():
-    """Base features should be 23 dims with proper normalization."""
+    """Base features should be 24 dims with proper normalization."""
     from esper.tamiyo.policy.features import batch_obs_to_features
     from esper.leyline.slot_config import SlotConfig
     import torch
@@ -229,8 +280,8 @@ def test_batch_obs_to_features_base_features():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Extract base features (first 23 dims)
-    base = obs[0, :23]
+    # Extract base features.
+    base = obs[0, :OBS_V3_BASE_FEATURE_SIZE]
 
     # Check epoch normalization (50 / max_epochs)
     assert abs(base[0].item() - (50.0 / MAX_EPOCHS)) < 1e-6
@@ -264,10 +315,11 @@ def test_batch_obs_to_features_base_features():
     expected_one_hot = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     for i, expected in enumerate(expected_one_hot):
         assert abs(base[17 + i].item() - expected) < 1e-6
+    assert base[23].item() == pytest.approx(-1.0)
 
 
 def test_batch_obs_to_features_slot_features():
-    """Slot features should be 31 dims per slot with proper normalization."""
+    """Slot features should be 32 dims per slot with proper normalization."""
     from esper.tamiyo.policy.features import batch_obs_to_features
     from esper.leyline.slot_config import SlotConfig
     from esper.leyline import DEFAULT_GAMMA
@@ -297,8 +349,8 @@ def test_batch_obs_to_features_slot_features():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Extract first slot features (indices 23-53)
-    slot = obs[0, 23:54]
+    # Extract first slot features.
+    slot = obs[0, OBS_V3_BASE_FEATURE_SIZE:OBS_V3_BASE_FEATURE_SIZE + OBS_V3_SLOT_FEATURE_SIZE]
 
     # is_active (index 0 of slot)
     assert slot[0].item() == 1.0
@@ -329,6 +381,8 @@ def test_batch_obs_to_features_slot_features():
 
     # Check seed_age_norm (index 30) - epochs_total / max_epochs
     assert abs(slot[30].item() - 0.4) < 1e-6
+    # Check escrow_credit_prev (index 31) - default zero credit.
+    assert slot[31].item() == 0.0
 
 
 def test_batch_obs_to_features_normalization_ranges():
@@ -451,8 +505,8 @@ def test_batch_obs_to_features_gradient_health_tracking():
     )
 
     # gradient_health_prev is at slot feature index 27 within slot
-    # Slot starts at 23, gradient_health_prev is at offset 27 within slot
-    gradient_health_prev_idx = 23 + 27  # = 50
+    # Slot starts after the base block, gradient_health_prev is at offset 27 within slot.
+    gradient_health_prev_idx = OBS_V3_BASE_FEATURE_SIZE + 27
     assert abs(obs[0, gradient_health_prev_idx].item() - 0.75) < 1e-6
 
     # Test with no tracked health: missing tracking is "no evidence yet"
@@ -507,7 +561,7 @@ def test_batch_obs_to_features_counterfactual_freshness():
         )
 
         # counterfactual_fresh is at slot feature index 29
-        cf_fresh_idx = 23 + 29  # = 52
+        cf_fresh_idx = OBS_V3_BASE_FEATURE_SIZE + 29
         expected = DEFAULT_GAMMA ** epochs
         assert abs(obs[0, cf_fresh_idx].item() - expected) < 1e-4, \
             f"epochs={epochs}: expected {expected}, got {obs[0, cf_fresh_idx].item()}"
@@ -542,7 +596,7 @@ def test_batch_obs_to_features_missing_counterfactual_tracking_is_unknown():
         max_epochs=MAX_EPOCHS,
     )
 
-    cf_fresh_idx = 23 + 29
+    cf_fresh_idx = OBS_V3_BASE_FEATURE_SIZE + 29
     assert obs[0, cf_fresh_idx].item() == OBS_V3_UNKNOWN_SENTINEL
 
 
@@ -576,8 +630,8 @@ def test_batch_obs_to_features_missing_counterfactual_contribution_is_neutral():
         max_epochs=MAX_EPOCHS,
     )
 
-    contribution_idx = 23 + 12
-    cf_fresh_idx = 23 + 29
+    contribution_idx = OBS_V3_BASE_FEATURE_SIZE + 12
+    cf_fresh_idx = OBS_V3_BASE_FEATURE_SIZE + 29
     assert obs[0, contribution_idx].item() == 0.0
     assert obs[0, cf_fresh_idx].item() == OBS_V3_UNKNOWN_SENTINEL
 
@@ -611,8 +665,10 @@ def test_batch_obs_to_features_dynamic_slots():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Obs V3 with 5 slots: 23 base + 31 × 5 = 178 dims
-    assert obs.shape == (1, 178), f"Expected (1, 178) for 5 slots, got {obs.shape}"
+    expected_dim = OBS_V3_BASE_FEATURE_SIZE + OBS_V3_SLOT_FEATURE_SIZE * 5
+    assert obs.shape == (1, expected_dim), (
+        f"Expected (1, {expected_dim}) for 5 slots, got {obs.shape}"
+    )
     assert blueprint_indices.shape == (1, 5)
 
     # Check blueprint indices
@@ -699,8 +755,8 @@ def test_batch_obs_to_features_all_stages_encodable():
         )
 
         # Verify one-hot encoding has exactly one 1.0
-        # Layout: [base_features(23)][slot0: is_active(1), stage_one_hot(10), ...]
-        slot_offset = 23  # OBS_V3_BASE_FEATURE_SIZE
+        # Layout: [base_features][slot0: is_active(1), stage_one_hot(10), ...]
+        slot_offset = OBS_V3_BASE_FEATURE_SIZE
         stage_one_hot = obs[0, slot_offset + 1:slot_offset + 11]
         assert stage_one_hot.sum().item() == 1.0, f"Stage {stage.name} one-hot sum != 1"
         assert stage_one_hot.max().item() == 1.0, f"Stage {stage.name} one-hot max != 1"
@@ -745,7 +801,7 @@ def test_batch_obs_to_features_batch_processing():
     )
 
     # Check shapes
-    assert obs.shape == (4, 116)
+    assert obs.shape == (4, OBS_V3_NON_BLUEPRINT_DIM)
     assert blueprint_indices.shape == (4, 3)
 
     # Check each environment has different epoch values
@@ -784,12 +840,12 @@ def test_batch_obs_to_features_inactive_slots_are_zeros():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Check r0c1 slot (indices 54-84) is all zeros
-    r0c1_features = obs[0, 54:85]
+    r0c1_start = OBS_V3_BASE_FEATURE_SIZE + OBS_V3_SLOT_FEATURE_SIZE
+    r0c1_features = obs[0, r0c1_start:r0c1_start + OBS_V3_SLOT_FEATURE_SIZE]
     assert torch.all(r0c1_features == 0.0), "Inactive slot should be all zeros"
 
-    # Check r0c2 slot (indices 85-115) is all zeros
-    r0c2_features = obs[0, 85:116]
+    r0c2_start = OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * 2)
+    r0c2_features = obs[0, r0c2_start:r0c2_start + OBS_V3_SLOT_FEATURE_SIZE]
     assert torch.all(r0c2_features == 0.0), "Inactive slot should be all zeros"
 
 
@@ -1098,7 +1154,7 @@ def test_extract_base_features_v3_includes_action_feedback_and_normalization():
         max_epochs=MAX_EPOCHS,
     )
 
-    assert base.shape == (23,)
+    assert base.shape == (OBS_V3_BASE_FEATURE_SIZE,)
     assert base.dtype == torch.float32
 
     # epoch_norm
@@ -1109,6 +1165,7 @@ def test_extract_base_features_v3_includes_action_feedback_and_normalization():
     assert base[16].item() == 0.0
     expected_one_hot = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
     assert base[17:23].tolist() == expected_one_hot
+    assert base[23].item() == pytest.approx(-1.0)
 
 
 def test_extract_base_features_v3_clamps_epoch_norm_above_max():
@@ -1186,7 +1243,7 @@ def test_extract_slot_features_v3_defaults_when_telemetry_absent():
         max_epochs=MAX_EPOCHS,
     )
 
-    assert slot_features.shape == (31,)
+    assert slot_features.shape == (OBS_V3_SLOT_FEATURE_SIZE,)
     assert torch.isfinite(slot_features).all()
     # Telemetry merged (indices 23-26): gradient_norm, gradient_health, has_vanishing, has_exploding
     assert slot_features[23].item() == 0.0  # gradient_norm default
@@ -1242,7 +1299,7 @@ def test_batch_obs_to_features_uses_safe_defaults_when_seed_telemetry_missing():
         max_epochs=MAX_EPOCHS,
     )
 
-    slot_offset = 23  # 23 base dims
+    slot_offset = OBS_V3_BASE_FEATURE_SIZE
     assert obs.shape[0] == 1
     assert torch.isfinite(obs).all()
     assert obs[0, slot_offset + 23].item() == 0.0  # gradient_norm
@@ -1271,7 +1328,7 @@ def test_batch_obs_to_features_zeroes_non_finite_gradient_norm():
         max_epochs=MAX_EPOCHS,
     )
 
-    slot_offset = 23
+    slot_offset = OBS_V3_BASE_FEATURE_SIZE
     assert obs[0, slot_offset + 23].item() == 0.0
 
 
@@ -1346,7 +1403,7 @@ def test_batch_obs_to_features_encodes_unmeasured_gradient_health():
         max_epochs=MAX_EPOCHS,
     )
 
-    slot_offset = 23  # 23 base dims
+    slot_offset = OBS_V3_BASE_FEATURE_SIZE
     assert torch.isfinite(obs).all()
     assert obs[0, slot_offset + 24].item() == 0.0  # unmeasured is not healthy
 
