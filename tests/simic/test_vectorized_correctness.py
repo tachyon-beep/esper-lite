@@ -308,3 +308,71 @@ def test_train_ppo_vectorized_emits_proof_baseline_lifecycle_policy_on_training_
         started_event.data.proof_baseline_schedule_action_count
         == FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
     )
+
+
+@pytest.mark.parametrize(
+    ("bf16_supported", "expected_amp_dtype"),
+    [
+        (True, "bfloat16"),
+        (False, "float16"),
+    ],
+)
+def test_train_ppo_vectorized_emits_resolved_amp_provenance_on_training_started(
+    monkeypatch,
+    bf16_supported: bool,
+    expected_amp_dtype: str,
+) -> None:
+    """Startup telemetry must record resolved AMP precision, not CLI intent."""
+    import esper.runtime as runtime
+    import esper.simic.training.vectorized as vectorized
+    from esper.leyline import TelemetryEventType
+
+    emitted_events: list[object] = []
+    original_get_task_spec = runtime.get_task_spec
+
+    def get_mock_task_spec(name: str):
+        spec = original_get_task_spec(name)
+        return replace(
+            spec,
+            dataloader_defaults={**spec.dataloader_defaults, "mock": True},
+        )
+
+    class StubHub:
+        def add_backend(self, _backend) -> None:
+            return None
+
+        def emit(self, event) -> None:
+            emitted_events.append(event)
+            if event.event_type == TelemetryEventType.TRAINING_STARTED:
+                raise _StopAfterTrainingStarted()
+
+    monkeypatch.setattr(runtime, "get_task_spec", get_mock_task_spec)
+    monkeypatch.setattr(vectorized, "get_hub", lambda: StubHub())
+    monkeypatch.setattr(vectorized.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        vectorized.torch.cuda,
+        "is_bf16_supported",
+        lambda: bf16_supported,
+    )
+
+    with pytest.raises(_StopAfterTrainingStarted):
+        vectorized.train_ppo_vectorized(
+            n_episodes=1,
+            n_envs=1,
+            max_epochs=1,
+            chunk_length=1,
+            device="cpu",
+            devices=["cpu"],
+            task="cifar_baseline",
+            slots=["r0c0"],
+            use_telemetry=False,
+            num_workers=0,
+            quiet_analytics=True,
+            amp=True,
+            amp_dtype="auto",
+        )
+
+    started_event = emitted_events[-1]
+    assert started_event.event_type == TelemetryEventType.TRAINING_STARTED
+    assert started_event.data.amp_enabled is True
+    assert started_event.data.amp_dtype == expected_amp_dtype

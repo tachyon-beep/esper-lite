@@ -213,6 +213,7 @@ def test_oracle_schedule_writes_karn_ingestable_proof_telemetry(
             proof_baseline_schedule_action_count,
             policy_device,
             amp_enabled,
+            amp_dtype,
             compile_enabled,
             host_params,
             n_envs
@@ -228,6 +229,7 @@ def test_oracle_schedule_writes_karn_ingestable_proof_telemetry(
         len(schedule.steps),
         "cpu",
         False,
+        "off",
         False,
         fixture.model.total_params - fixture.model.active_seed_params,
         1,
@@ -279,7 +281,7 @@ def test_oracle_schedule_writes_karn_ingestable_proof_telemetry(
     ).fetchone()
     assert outcome_row == (
         2.0,
-        pytest.approx(fixture.model.total_params / run_row[9]),
+        pytest.approx(fixture.model.total_params / run_row[10]),
         1,
         1,
         "oracle",

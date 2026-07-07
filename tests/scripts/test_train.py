@@ -670,7 +670,14 @@ class TestTrainMainWiring:
         monkeypatch.setattr(karn, "get_collector", lambda: FakeKarnCollector())
 
         config_path = tmp_path / "config.json"
-        config_path.write_text(json.dumps({"n_episodes": 1, "slots": ["r0c1"]}), encoding="utf-8")
+        config_path.write_text(
+            json.dumps({
+                "n_episodes": 1,
+                "slots": ["r0c1"],
+                "amp_dtype": "float16",
+            }),
+            encoding="utf-8",
+        )
 
         ppo_calls: dict[str, object] = {}
 
@@ -702,6 +709,7 @@ class TestTrainMainWiring:
 
         assert hub.closed is True
         assert ppo_calls["task"] == "cifar_baseline"
+        assert ppo_calls["amp_dtype"] == "float16"
         assert ppo_calls["gradient_telemetry_stride"] == 1
 
 

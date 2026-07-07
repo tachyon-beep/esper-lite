@@ -300,6 +300,8 @@ def _emit_oracle_training_started(
             param_budget=host_params,
             policy_device=device,
             env_devices=(device,),
+            amp_enabled=False,
+            amp_dtype="off",
             reward_mode="oracle",
             episode_id=schedule.identity,
             proof_profile=ORACLE_PROOF_PROFILE,

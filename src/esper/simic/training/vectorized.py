@@ -695,6 +695,51 @@ def _finalize_run_scoped_nissa_backends(
         )
 
 
+def _resolve_amp_precision(
+    *,
+    amp: bool,
+    amp_dtype: str,
+) -> tuple[torch.dtype | None, bool, str]:
+    resolved_amp_dtype: torch.dtype | None = None
+    use_grad_scaler = False
+
+    if amp and torch.cuda.is_available():
+        if amp_dtype == "off":
+            resolved_amp_dtype = None
+        elif amp_dtype == "bfloat16":
+            resolved_amp_dtype = torch.bfloat16
+            use_grad_scaler = False
+        elif amp_dtype == "float16":
+            resolved_amp_dtype = torch.float16
+            use_grad_scaler = True
+        elif amp_dtype == "auto":
+            if torch.cuda.is_bf16_supported():
+                resolved_amp_dtype = torch.bfloat16
+                use_grad_scaler = False
+                _logger.info(
+                    "AMP auto-detected BF16 support (Ampere+ GPU) - no GradScaler needed"
+                )
+            else:
+                resolved_amp_dtype = torch.float16
+                use_grad_scaler = True
+                _logger.info(
+                    "AMP using FP16 with GradScaler for host-model training (pre-Ampere GPU). "
+                    "The PPO policy path runs in FP32 (policy_amp_context): the policy optimizer "
+                    "has no GradScaler, so FP16 there would underflow."
+                )
+        else:
+            raise ValueError(f"Invalid amp_dtype: {amp_dtype}")
+
+    if resolved_amp_dtype is torch.bfloat16:
+        telemetry_amp_dtype = "bfloat16"
+    elif resolved_amp_dtype is torch.float16:
+        telemetry_amp_dtype = "float16"
+    else:
+        telemetry_amp_dtype = "off"
+
+    return resolved_amp_dtype, use_grad_scaler, telemetry_amp_dtype
+
+
 # =============================================================================
 # Vectorized PPO Training
 # =============================================================================
@@ -1214,6 +1259,11 @@ def train_ppo_vectorized(
 
     total_batches = n_episodes + start_batch
     total_env_episodes = total_batches * n_envs
+    resolved_amp_dtype, use_grad_scaler, telemetry_amp_dtype = _resolve_amp_precision(
+        amp=amp,
+        amp_dtype=amp_dtype,
+    )
+    amp_enabled = resolved_amp_dtype is not None
 
     # Emit TRAINING_STARTED (max_batches = total PPO update rounds)
     hub.emit(
@@ -1267,6 +1317,8 @@ def train_ppo_vectorized(
                 disable_terminal_reward=disable_terminal_reward,
                 disable_anti_gaming=disable_anti_gaming,
                 max_grad_norm=max_grad_norm,
+                amp_enabled=amp_enabled,
+                amp_dtype=telemetry_amp_dtype,
                 # Optional fields
                 episode_id=f"ppo_{seed}_{total_env_episodes}ep",
                 resume_path=str(resume_path) if resume_path else "",
@@ -1433,45 +1485,6 @@ def train_ppo_vectorized(
     # Signal that DataLoaders are ready (workers spawned) - TUI can now safely start
     if ready_event is not None:
         ready_event.set()
-
-    # AMP enabled gate - actual GradScaler created per-env in ParallelEnvState
-    # to avoid stream race conditions (GradScaler internal state is not stream-safe)
-    #
-    # Resolve amp_dtype: "auto" detects BF16 support, which eliminates GradScaler overhead.
-    # BF16 has same exponent range as FP32, so no loss scaling needed.
-    resolved_amp_dtype: torch.dtype | None = None
-    use_grad_scaler = False
-
-    if amp and torch.cuda.is_available():
-        if amp_dtype == "off":
-            # AMP explicitly disabled via dtype
-            resolved_amp_dtype = None
-        elif amp_dtype == "bfloat16":
-            resolved_amp_dtype = torch.bfloat16
-            use_grad_scaler = False  # BF16 doesn't need scaler
-        elif amp_dtype == "float16":
-            resolved_amp_dtype = torch.float16
-            use_grad_scaler = True  # FP16 needs GradScaler
-        elif amp_dtype == "auto":
-            # Auto-detect: use BF16 if supported (Ampere+ GPUs), else FP16
-            if torch.cuda.is_bf16_supported():
-                resolved_amp_dtype = torch.bfloat16
-                use_grad_scaler = False
-                _logger.info(
-                    "AMP auto-detected BF16 support (Ampere+ GPU) - no GradScaler needed"
-                )
-            else:
-                resolved_amp_dtype = torch.float16
-                use_grad_scaler = True
-                _logger.info(
-                    "AMP using FP16 with GradScaler for host-model training (pre-Ampere GPU). "
-                    "The PPO policy path runs in FP32 (policy_amp_context): the policy optimizer "
-                    "has no GradScaler, so FP16 there would underflow."
-                )
-        else:
-            raise ValueError(f"Invalid amp_dtype: {amp_dtype}")
-
-    amp_enabled = resolved_amp_dtype is not None
 
     # P2-STREAMPOOL: build one persistent CUDA stream per env up front (None on CPU). Indexed
     # by env_idx to match env_device_map; the list is never mutated after construction.

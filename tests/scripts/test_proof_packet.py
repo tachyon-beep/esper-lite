@@ -98,7 +98,7 @@ def _training_started_event(
             "max_epochs": 25,
             "max_batches": 1,
             "amp_enabled": False,
-            "amp_dtype": None,
+            "amp_dtype": "off",
             "proof_baseline_mode": proof_baseline_mode,
             "proof_baseline_pair_id": proof_baseline_pair_id,
             "proof_baseline_lifecycle_policy": proof_baseline_lifecycle_policy,
@@ -166,6 +166,8 @@ def _ppo_update_payload() -> dict:
         "value_loss": 0.2,
         "entropy": 1.0,
         "grad_norm": 0.3,
+        "nan_grad_count": 0,
+        "pre_clip_grad_norm": 0.35,
         "kl_divergence": 0.01,
         "clip_fraction": 0.0,
     }
@@ -360,7 +362,8 @@ def _complete_blueprint_health_baseline_events(
             start=1,
         )
     ]
-    events.append(_ppo_update_event("ppo-1", "off"))
+    for index, group_id in enumerate(outcome_groups, start=1):
+        events.append(_ppo_update_event(f"ppo-{index}", group_id))
     events.append(_fixed_schedule_morphology_causal_log_event())
     for index, (group_id, _proof_baseline_mode, reward_mode, _seed) in enumerate(
         cohort_specs,
@@ -395,7 +398,7 @@ def test_proof_packet_blocks_verdict_when_confounders_present(tmp_path):
                 "max_epochs": 25,
                 "max_batches": 1,
                 "amp_enabled": False,
-                "amp_dtype": None,
+                "amp_dtype": "off",
             },
             "severity": "info",
         },
@@ -471,6 +474,8 @@ def test_proof_packet_blocks_missing_learnability_telemetry(tmp_path):
             "value_loss": 0.2,
             "entropy": 1.0,
             "grad_norm": 0.3,
+            "nan_grad_count": 0,
+            "pre_clip_grad_norm": 0.35,
             "kl_divergence": 0.01,
             "clip_fraction": 0.0,
         },
@@ -499,6 +504,36 @@ def test_proof_packet_blocks_partial_head_learnability_telemetry(tmp_path):
     assert "Verdict: `BLOCKED_INSTRUMENTATION`" in packet
     assert "missing learnability telemetry" in packet
     assert "updates=1" in packet
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "policy_loss",
+        "value_loss",
+        "entropy",
+        "grad_norm",
+        "nan_grad_count",
+        "pre_clip_grad_norm",
+        "kl_divergence",
+        "clip_fraction",
+    ],
+)
+def test_proof_packet_blocks_missing_required_ppo_field(tmp_path, field_name):
+    """Core PPO health fields are proof telemetry, not optional decoration."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    del events[1]["data"][field_name]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_INSTRUMENTATION`" in packet
+    assert "missing PPO instrumentation telemetry" in packet
+    assert field_name in packet
 
 
 def test_proof_packet_accepts_measured_zero_learnability_values(tmp_path):
@@ -1273,6 +1308,48 @@ def test_proof_packet_blocks_missing_episode_outcome(tmp_path):
     assert "BLOCKING no `EPISODE_OUTCOME` events found" in packet
 
 
+def test_proof_packet_blocks_outcome_bearing_run_without_ppo_updates(tmp_path):
+    """A proof cannot pass when an outcome-bearing run has no PPO update rows."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = [
+        _training_started_event("start-1", "A", "static_initial"),
+        _episode_outcome_event("eo-1", "A"),
+    ]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_INSTRUMENTATION`" in packet
+    assert "missing PPO instrumentation telemetry" in packet
+    assert "missing PPO_UPDATE_COMPLETED" in packet
+    assert "PPO updates include per-head learnability telemetry." not in packet
+
+
+def test_proof_packet_blocks_one_outcome_group_without_ppo_updates(tmp_path):
+    """A complete PPO row for one group cannot cover another outcome cohort."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = [
+        _training_started_event("start-1", "A", "static_initial"),
+        _ppo_update_event("ppo-1", "A"),
+        _episode_outcome_event("eo-1", "A"),
+        _training_started_event("start-2", "B", "static_initial"),
+        _episode_outcome_event("eo-2", "B"),
+    ]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_INSTRUMENTATION`" in packet
+    assert "run `proof_run` group `B`" in packet
+    assert "missing PPO_UPDATE_COMPLETED" in packet
+
+
 def test_proof_packet_blocks_incomplete_episode_outcome_payload(tmp_path):
     """An outcome row without required ROI fields is not proof-grade evidence."""
     run_dir = tmp_path / "proof_run"
@@ -1354,6 +1431,24 @@ def test_proof_packet_blocks_missing_precision_provenance(tmp_path):
     assert "Verdict: `BLOCKED_PRECISION`" in packet
     assert "BLOCKING precision provenance" in packet
     assert "missing amp_enabled" in packet
+
+
+@pytest.mark.parametrize("amp_enabled", [True, False])
+def test_proof_packet_blocks_missing_amp_dtype(tmp_path, amp_enabled):
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    events[0]["data"]["amp_enabled"] = amp_enabled
+    del events[0]["data"]["amp_dtype"]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_PRECISION`" in packet
+    assert "BLOCKING precision provenance" in packet
+    assert "missing amp_dtype" in packet
 
 
 def test_proof_packet_revises_positive_but_weak_roi(tmp_path):
@@ -1444,7 +1539,7 @@ def _baseline_run_events() -> list[dict]:
                 "max_epochs": 25,
                 "max_batches": 1,
                 "amp_enabled": False,
-                "amp_dtype": None,
+                "amp_dtype": "off",
             },
             "severity": "info",
         },
@@ -1638,7 +1733,7 @@ def test_proof_packet_roi_uses_total_over_host_param_ratio(tmp_path):
                 "max_epochs": 25,
                 "max_batches": 1,
                 "amp_enabled": False,
-                "amp_dtype": None,
+                "amp_dtype": "off",
             },
             "severity": "info",
         },

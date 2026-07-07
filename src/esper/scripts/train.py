@@ -475,9 +475,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--amp-dtype",
         type=str,
         choices=["auto", "float16", "bfloat16", "off"],
-        default="auto",
+        default=None,
         help="AMP dtype: auto (detect BF16 support), float16, bfloat16, or off. "
-             "BF16 eliminates GradScaler overhead on Ampere+ GPUs. (default: auto)",
+             "BF16 eliminates GradScaler overhead on Ampere+ GPUs. "
+             "(default: training config value)",
     )
     ppo_parser.add_argument(
         "--compile-mode",
@@ -901,9 +902,8 @@ def main() -> None:
                     config.seed = args.seed
                 if args.amp:
                     config.amp = True
-                # CLI amp_dtype overrides config only if explicitly set (not default 'auto')
-                # args.amp_dtype is always defined by argparse (lines 160-166 of this file)
-                if args.amp_dtype:
+                # CLI amp_dtype overrides config only if explicitly supplied.
+                if args.amp_dtype is not None:
                     config.amp_dtype = args.amp_dtype
                 # CLI compile_mode overrides config
                 # args.compile_mode is always defined by argparse (lines 167-174 of this file)

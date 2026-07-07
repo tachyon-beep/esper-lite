@@ -49,6 +49,22 @@ LEARNABILITY_COLUMNS: tuple[str, ...] = (
     "head_value_gradient_state",
 )
 
+PPO_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "policy_loss",
+    "value_loss",
+    "entropy",
+    "grad_norm",
+    "nan_grad_count",
+    "pre_clip_grad_norm",
+    "kl_divergence",
+    "clip_fraction",
+)
+
+PPO_INSTRUMENTATION_COLUMNS: tuple[str, ...] = (
+    *PPO_REQUIRED_COLUMNS,
+    *LEARNABILITY_COLUMNS,
+)
+
 VALID_OUTCOME_PREDICATE = """
     env_id IS NOT NULL
     AND env_id >= 0
@@ -136,16 +152,81 @@ def _reward_mode_evidence_reason(reward_mode: str) -> str:
 
 
 def _missing_learnability_query() -> str:
-    missing_predicate = " OR ".join(f"{column} IS NULL" for column in LEARNABILITY_COLUMNS)
+    missing_predicate = " OR ".join(
+        f"{column} IS NULL" for column in PPO_INSTRUMENTATION_COLUMNS
+    )
+    missing_violations = ",\n                    ".join(
+        (
+            f"CASE WHEN {column} IS NULL "
+            f"THEN 'missing {column}, ' ELSE '' END"
+        )
+        for column in PPO_INSTRUMENTATION_COLUMNS
+    )
     return f"""
+        WITH valid_outcome_runs AS (
+            SELECT
+                run_dir,
+                group_id,
+                COUNT(*) AS valid_outcome_count
+            FROM episode_outcomes
+            WHERE {VALID_OUTCOME_PREDICATE}
+            GROUP BY run_dir, group_id
+        ),
+        ppo_counts AS (
+            SELECT
+                run_dir,
+                group_id,
+                COUNT(*) AS ppo_update_count
+            FROM ppo_updates
+            GROUP BY run_dir, group_id
+        ),
+        missing_update_rows AS (
+            SELECT
+                valid_outcome_runs.run_dir,
+                valid_outcome_runs.group_id,
+                0 AS missing_update_count,
+                valid_outcome_runs.valid_outcome_count,
+                'missing PPO_UPDATE_COMPLETED' AS violations
+            FROM valid_outcome_runs
+            LEFT JOIN ppo_counts
+              ON ppo_counts.run_dir = valid_outcome_runs.run_dir
+             AND COALESCE(ppo_counts.group_id, '') = COALESCE(valid_outcome_runs.group_id, '')
+            WHERE ppo_counts.ppo_update_count IS NULL
+               OR ppo_counts.ppo_update_count = 0
+        ),
+        missing_field_rows AS (
+            SELECT
+                run_dir,
+                group_id,
+                COUNT(*) AS missing_update_count,
+                0 AS valid_outcome_count,
+                STRING_AGG(
+                    TRIM(TRAILING ', ' FROM CONCAT(
+                    {missing_violations}
+                    )),
+                    '; '
+                    ORDER BY episodes_completed, inner_epoch, batch
+                ) AS violations
+            FROM ppo_updates
+            WHERE {missing_predicate}
+            GROUP BY run_dir, group_id
+        )
         SELECT
             run_dir,
             group_id,
-            COUNT(*) AS missing_update_count
-        FROM ppo_updates
-        WHERE {missing_predicate}
-        GROUP BY run_dir, group_id
-        ORDER BY run_dir, group_id
+            missing_update_count,
+            valid_outcome_count,
+            violations
+        FROM missing_update_rows
+        UNION ALL
+        SELECT
+            run_dir,
+            group_id,
+            missing_update_count,
+            valid_outcome_count,
+            violations
+        FROM missing_field_rows
+        ORDER BY run_dir, group_id, violations
     """
 
 
@@ -1320,12 +1401,13 @@ def build_proof_packet(
                     amp_dtype,
                     CASE
                         WHEN amp_enabled IS NULL THEN 'missing amp_enabled'
-                        WHEN amp_enabled AND (amp_dtype IS NULL OR amp_dtype = '')
-                            THEN 'missing amp_dtype for AMP run'
+                        WHEN amp_dtype IS NULL OR amp_dtype = ''
+                            THEN 'missing amp_dtype'
                     END AS violation
                 FROM runs
                 WHERE amp_enabled IS NULL
-                   OR (amp_enabled AND (amp_dtype IS NULL OR amp_dtype = ''))
+                   OR amp_dtype IS NULL
+                   OR amp_dtype = ''
                 ORDER BY run_dir, group_id
                 """,
             )
@@ -1997,9 +2079,12 @@ def build_proof_packet(
     elif missing_learnability:
         for row in missing_learnability:
             lines.append(
-                "- BLOCKING missing learnability telemetry "
+                "- BLOCKING missing PPO instrumentation telemetry "
+                "(missing learnability telemetry) "
                 f"run `{row['run_dir']}` group `{row['group_id']}` "
-                f"updates={row['missing_update_count']}"
+                f"updates={row['missing_update_count']}, "
+                f"valid_outcomes={row['valid_outcome_count']}: "
+                f"{row['violations']}"
             )
     else:
         lines.append("- PPO updates include per-head learnability telemetry.")
