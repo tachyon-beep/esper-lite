@@ -25,11 +25,20 @@ from esper.simic.telemetry.stage2_acceptance_io import (
     read_run_val_acc,
     row_to_update,
 )
+from esper.leyline.telemetry import ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
+from esper.simic.telemetry.stage2_acceptance_io import (
+    calibrate_from_spec,
+    packet_from_spec,
+    read_run_guard_channels,
+    read_run_meta,
+)
 from esper.simic.telemetry.stage2_acceptance_packet import (
-    ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
     FrozenThresholds,
+    GuardChannelCounts,
     RunMeta,
     UpdateRow,
+    g3_hold_from_churn,
+    g4_hold_from_counts,
     render_packet,
 )
 
@@ -473,3 +482,262 @@ def test_build_report_wires_paired_safety_g1_regression_to_reject():
     built = build_report(conn, pairings, _IO_THRESHOLDS, n=10, budget=2, g3_hold=True, g4_hold=True)
     assert built.report.g1 is GateResult.FAIL
     assert built.report.verdict is Verdict.REJECT
+
+
+# ---- S7: read_run_meta — the runs-view provenance reader (§0/§1) ----
+
+
+def _conn_with_runs_meta(rows: list[dict]) -> duckdb.DuckDBPyConnection:
+    """runs + ppo_updates tables for read_run_meta (meta + §8F(i) per-head-norm scan)."""
+    conn = duckdb.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE runs (run_dir VARCHAR, seed INTEGER, reward_mode VARCHAR, "
+        "actor_advantage_source VARCHAR)"
+    )
+    conn.execute(
+        "CREATE TABLE ppo_updates (run_dir VARCHAR, advantage_per_head_normalized BOOLEAN)"
+    )
+    for r in rows:
+        conn.execute(
+            "INSERT INTO runs VALUES (?,?,?,?)",
+            [r["run_dir"], r["seed"], r["reward_mode"], r["actor_advantage_source"]],
+        )
+        conn.execute(
+            "INSERT INTO ppo_updates VALUES (?, ?)",
+            [r["run_dir"], r.get("per_head_norm", False)],
+        )
+    return conn
+
+
+def test_read_run_meta_reads_provenance_from_runs_view():
+    conn = _conn_with_runs_meta([{
+        "run_dir": "/A", "seed": 7, "reward_mode": "SHAPED",
+        "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+    }])
+    meta = read_run_meta(conn, "/A")
+    assert meta == RunMeta(
+        run_dir="/A", seed=7, reward_mode="SHAPED",
+        actor_advantage_source=ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+        uses_per_head_norm=False,
+    )
+
+
+def test_read_run_meta_carries_per_head_norm_scan():
+    conn = _conn_with_runs_meta([{
+        "run_dir": "/A", "seed": 7, "reward_mode": "SHAPED",
+        "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+        "per_head_norm": True,
+    }])
+    assert read_run_meta(conn, "/A").uses_per_head_norm is True
+
+
+def test_read_run_meta_fails_loud_on_pre_s7_telemetry():
+    # Pre-S7 telemetry has no actor_advantage_source (view extracts NULL): the §0 fence
+    # cannot verify provenance it does not have — fail loud, never default.
+    conn = _conn_with_runs_meta([{
+        "run_dir": "/A", "seed": 7, "reward_mode": "SHAPED", "actor_advantage_source": None,
+    }])
+    with pytest.raises(ValueError):
+        read_run_meta(conn, "/A")
+
+
+def test_read_run_meta_fails_loud_on_unknown_run_dir():
+    conn = _conn_with_runs_meta([{
+        "run_dir": "/A", "seed": 7, "reward_mode": "SHAPED",
+        "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+    }])
+    with pytest.raises(ValueError):
+        read_run_meta(conn, "/missing")
+
+
+# ---- S7: G4 guard-channel reader + G3/G4 hold predicates (§6) ----
+
+
+def _conn_with_anomalies(rows: list[tuple[str, str]]) -> duckdb.DuckDBPyConnection:
+    """anomalies view fabricated as a table: (run_dir, event_type) rows."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE anomalies (run_dir VARCHAR, event_type VARCHAR)")
+    for run_dir, event_type in rows:
+        conn.execute("INSERT INTO anomalies VALUES (?, ?)", [run_dir, event_type])
+    return conn
+
+
+def test_read_run_guard_channels_counts_by_channel():
+    conn = _conn_with_anomalies([
+        ("/A", "GOVERNOR_ROLLBACK"),
+        ("/A", "GOVERNOR_ROLLBACK"),
+        ("/A", "VALUE_COLLAPSE_DETECTED"),
+        ("/B", "GRADIENT_ANOMALY"),  # other run — not counted
+    ])
+    counts = read_run_guard_channels(conn, "/A")
+    assert isinstance(counts, GuardChannelCounts)
+    assert counts.governor_rollback == 2
+    assert counts.value_collapse == 1
+    assert counts.gradient_anomaly == 0
+
+
+def test_read_run_guard_channels_excludes_plateau_detected():
+    # PLATEAU_DETECTED is a benign training-progress signal, not a guard channel (§6 G4
+    # names governor rollbacks / value-collapse / gradient-anomaly / instability detectors).
+    conn = _conn_with_anomalies([("/A", "PLATEAU_DETECTED")])
+    counts = read_run_guard_channels(conn, "/A")
+    assert counts.total() == 0
+
+
+def test_g4_hold_passes_when_on_not_materially_elevated():
+    on = GuardChannelCounts(governor_rollback=8, value_collapse=0, ratio_explosion=0,
+                            ratio_collapse=0, gradient_anomaly=1, gradient_pathology=0,
+                            numerical_instability=0)
+    off = GuardChannelCounts(governor_rollback=7, value_collapse=0, ratio_explosion=0,
+                             ratio_collapse=0, gradient_anomaly=1, gradient_pathology=0,
+                             numerical_instability=0)
+    assert g4_hold_from_counts(on, off, ratio_max=2.0, abs_floor=5) is True
+
+
+def test_g4_hold_fails_on_material_channel_elevation():
+    # ON governor rollbacks 3x OFF and +14 absolute -> materially elevated -> hold fails.
+    on = GuardChannelCounts(governor_rollback=21, value_collapse=0, ratio_explosion=0,
+                            ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0,
+                            numerical_instability=0)
+    off = GuardChannelCounts(governor_rollback=7, value_collapse=0, ratio_explosion=0,
+                             ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0,
+                             numerical_instability=0)
+    assert g4_hold_from_counts(on, off, ratio_max=2.0, abs_floor=5) is False
+
+
+def test_g4_hold_zero_off_baseline_uses_abs_floor():
+    # OFF baseline 0: any ratio is infinite, so the absolute floor decides.
+    on_small = GuardChannelCounts(governor_rollback=0, value_collapse=2, ratio_explosion=0,
+                                  ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0,
+                                  numerical_instability=0)
+    on_large = GuardChannelCounts(governor_rollback=0, value_collapse=9, ratio_explosion=0,
+                                  ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0,
+                                  numerical_instability=0)
+    off = GuardChannelCounts(governor_rollback=0, value_collapse=0, ratio_explosion=0,
+                             ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0,
+                             numerical_instability=0)
+    assert g4_hold_from_counts(on_small, off, ratio_max=2.0, abs_floor=5) is True
+    assert g4_hold_from_counts(on_large, off, ratio_max=2.0, abs_floor=5) is False
+
+
+def test_g3_hold_from_churn_passes_when_on_within_ratio():
+    on = ChurnRates(germinate=13.0, prune=12.0, fossilize=0.4)
+    off = ChurnRates(germinate=12.4, prune=11.6, fossilize=0.3)
+    assert g3_hold_from_churn(on, off, ratio_max=1.5) is True
+
+
+def test_g3_hold_from_churn_fails_on_materially_elevated_prune():
+    # ON prunes 2x OFF -> germinate/prune churn decoupled from contribution -> hold fails.
+    on = ChurnRates(germinate=12.0, prune=24.0, fossilize=0.3)
+    off = ChurnRates(germinate=12.0, prune=11.6, fossilize=0.3)
+    assert g3_hold_from_churn(on, off, ratio_max=1.5) is False
+
+
+# ---- S7: CLI core — calibrate_from_spec / packet_from_spec (telemetry -> packet, end to end) ----
+
+
+def _full_stage2_conn(
+    n: int, *, anomaly_rows: list[tuple[str, str]] | None = None
+) -> tuple[duckdb.DuckDBPyConnection, dict]:
+    """Everything the CLI reads, fabricated: runs (meta + n_envs) / ppo_updates (series +
+    per-head flag) / episode_outcomes / anomalies — plus the matching score spec."""
+    conn = duckdb.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE runs (run_dir VARCHAR, seed INTEGER, reward_mode VARCHAR, "
+        "actor_advantage_source VARCHAR, n_envs INTEGER)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE ppo_updates (
+            run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
+            ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
+            pre_norm_advantage_std DOUBLE, return_std DOUBLE,
+            advantage_per_head_normalized BOOLEAN
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE episode_outcomes (
+            run_dir VARCHAR, env_id INTEGER, episode_idx INTEGER, final_accuracy DOUBLE,
+            param_ratio DOUBLE, germinate_count INTEGER, prune_count INTEGER, fossilize_count INTEGER
+        )
+        """
+    )
+    conn.execute("CREATE TABLE anomalies (run_dir VARCHAR, event_type VARCHAR)")
+
+    ev_jitter = [-0.02, 0.0, 0.02, 0.0]
+    std_jitter = [-0.5, 0.0, 0.5, 0.0]
+    pairs_spec = []
+    for seed in range(n):
+        for leg, expl in (("on", 0.85), ("off", 0.80)):
+            run_dir = f"/{leg}/{seed}"
+            conn.execute(
+                "INSERT INTO runs VALUES (?,?,?,?,?)",
+                [run_dir, seed, "SHAPED", ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED, 1],
+            )
+            is_on = leg == "on"
+            for b in range(4):
+                conn.execute(
+                    "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    [
+                        run_dir, 0, b, expl + ev_jitter[b],
+                        expl + ev_jitter[b] if is_on else None,
+                        0.03 if is_on else None,
+                        0.10 if is_on else None,
+                        5.0, 1.0, 3.0 + std_jitter[b], False,
+                    ],
+                )
+            conn.execute(
+                "INSERT INTO episode_outcomes VALUES (?,?,?,?,?,?,?,?)",
+                [run_dir, 0, 0, 50.0, 1.1, 1, 1, 0],
+            )
+        pairs_spec.append({"seed": seed, "on_run_dir": f"/on/{seed}", "off_run_dir": f"/off/{seed}"})
+
+    for run_dir, event_type in anomaly_rows or []:
+        conn.execute("INSERT INTO anomalies VALUES (?, ?)", [run_dir, event_type])
+
+    spec = {
+        "pairs": pairs_spec,
+        "host_params": 100_000,
+        "n": n,
+        "budget": 2,
+        "thresholds": {
+            "delta": 0.05, "eps_rel": 0.10, "tau_acc": 0.3,
+            "delta_param_max": 1e9, "w": 0,
+        },
+        "g3_ratio_max": 1.5,
+        "g4_ratio_max": 2.0,
+        "g4_abs_floor": 5,
+    }
+    return conn, spec
+
+
+def test_packet_from_spec_produces_a_scored_markdown_packet():
+    conn, spec = _full_stage2_conn(5)
+    packet = packet_from_spec(conn, spec)
+    assert "# Stage-2 HRA MAJOR-1 acceptance verdict" in packet
+    assert "Verdict:" in packet
+    assert "INVALID" not in packet.splitlines()[2]  # a clean fixture scores, §1 passes
+    assert "Stage-0 variance gate" in packet  # §0 provenance travels
+
+
+def test_packet_from_spec_material_guard_elevation_fails_g4():
+    # 30 ON-leg governor rollbacks vs 0 OFF on seed 0 -> G4 hold fails for the pairset.
+    conn, spec = _full_stage2_conn(5, anomaly_rows=[("/on/0", "GOVERNOR_ROLLBACK")] * 30)
+    packet = packet_from_spec(conn, spec)
+    assert "G4 guard channels within OFF baseline: False" in packet
+
+
+def test_calibrate_from_spec_freezes_delta_from_off_arms_only():
+    conn, _ = _full_stage2_conn(5)
+    report = calibrate_from_spec(
+        conn,
+        {
+            "off_run_dirs": [f"/off/{seed}" for seed in range(5)],
+            "w": 0,
+            "budget": 2,
+        },
+    )
+    assert "delta" in report.lower() or "δ" in report
+    assert "eps_rel" in report.lower() or "ε_rel" in report

@@ -23,6 +23,7 @@ import enum
 import math
 from dataclasses import dataclass
 
+from esper.leyline.telemetry import ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
 from esper.simic.telemetry.stage2_acceptance import (
     GateResult,
     Verdict,
@@ -49,10 +50,8 @@ class Leg(enum.Enum):
 # V_total = V_main + V_cf; per-stream returns feed the VALUE targets only). Objective B (actor
 # advantage on R_main) is reserved for a later PDR with stricter behavioural gates, so a run whose
 # actor advantage is not the total reconstruction is out of scope and must fail validity.
-# TODO: [FUTURE FUNCTIONALITY] promote to leyline (torch-free home) in S7 when the ppo_agent/emitter
-# emission of `actor_advantage_source` lands — the emitter becomes the second consumer, making this a
-# genuine cross-domain contract per the leyline mandate.
-ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED = "total_reconstructed"
+# The constant lives in leyline (ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED, imported above):
+# the TRAINING_STARTED emitter is its second consumer, making it a cross-domain contract (S7).
 
 
 # §0 / MAJOR-3 provenance block — emitted verbatim in every verdict so Stage-0 variance evidence
@@ -242,6 +241,93 @@ class Validity:
 
     valid: bool
     reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ChurnRates:
+    """Per-episode germinate/prune/fossilize means for one run (§6 G3 input).
+
+    Defined here (pure, torch-free) and produced by the io reader — same layering as
+    ``UpdateRow``."""
+
+    germinate: float
+    prune: float
+    fossilize: float
+
+
+@dataclass(frozen=True)
+class GuardChannelCounts:
+    """§6 G4 — per-channel anomaly counts for one run, from the Karn ``anomalies`` view.
+
+    The channels are the gate doc's guard set (governor rollbacks, value-collapse,
+    gradient-anomaly/pathology, ratio explosion/collapse, numerical instability).
+    PLATEAU_DETECTED is deliberately NOT a channel — it is a benign progress signal.
+    """
+
+    governor_rollback: int
+    value_collapse: int
+    ratio_explosion: int
+    ratio_collapse: int
+    gradient_anomaly: int
+    gradient_pathology: int
+    numerical_instability: int
+
+    def total(self) -> int:
+        return (
+            self.governor_rollback
+            + self.value_collapse
+            + self.ratio_explosion
+            + self.ratio_collapse
+            + self.gradient_anomaly
+            + self.gradient_pathology
+            + self.numerical_instability
+        )
+
+
+def _materially_elevated(on: int, off: int, *, ratio_max: float, abs_floor: int) -> bool:
+    """§6 "materially elevated": BOTH a ratio breach AND an absolute breach.
+
+    The conjunction keeps small-count noise from tripping the gate (1 vs 0 is a 'ratio
+    breach' but noise) while a zero OFF baseline still trips on a real absolute elevation.
+    DEFINITIONAL-PENDING: ratio_max / abs_floor have NO defaults — they must be frozen in
+    the gate doc (§11) before ON scoring; the shape itself is flagged for drl review.
+    """
+    return (on - off) > abs_floor and on > ratio_max * off
+
+
+def g4_hold_from_counts(
+    on: GuardChannelCounts, off: GuardChannelCounts, *, ratio_max: float, abs_floor: int
+) -> bool:
+    """§6 G4 — guard channels not ON-elevated: holds iff NO channel is materially elevated.
+
+    Per PDR-0026, governor-rollback asymmetry is an RCA trigger rather than a lone hard
+    gate — but a MATERIAL elevation (both thresholds breached) still fails the hold here;
+    the packet carries the per-channel counts so the RCA can follow.
+    """
+    pairs = (
+        (on.governor_rollback, off.governor_rollback),
+        (on.value_collapse, off.value_collapse),
+        (on.ratio_explosion, off.ratio_explosion),
+        (on.ratio_collapse, off.ratio_collapse),
+        (on.gradient_anomaly, off.gradient_anomaly),
+        (on.gradient_pathology, off.gradient_pathology),
+        (on.numerical_instability, off.numerical_instability),
+    )
+    return not any(
+        _materially_elevated(on_count, off_count, ratio_max=ratio_max, abs_floor=abs_floor)
+        for on_count, off_count in pairs
+    )
+
+
+def g3_hold_from_churn(on: ChurnRates, off: ChurnRates, *, ratio_max: float) -> bool:
+    """§6 G3 — churn not reward-farmed: ON germinate/prune per-episode rates must not be
+    materially elevated over OFF (rate_on <= ratio_max * rate_off, per channel).
+
+    Fossilize is deliberately excluded: elevated fossilization is judged by G2 (params)
+    and the value legs, and is not per-se farming. DEFINITIONAL-PENDING: ratio_max has no
+    default — freeze it in the gate doc (§11) before ON scoring; shape flagged for drl review.
+    """
+    return on.germinate <= ratio_max * off.germinate and on.prune <= ratio_max * off.prune
 
 
 def _nonfinite_fields(row: UpdateRow, leg: Leg) -> list[str]:

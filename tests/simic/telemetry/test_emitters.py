@@ -487,6 +487,39 @@ def test_emit_ppo_update_event_surfaces_value_free_stage0_gate() -> None:
     assert restored.return_var_residual_share == pytest.approx(-0.02)
 
 
+def test_emit_ppo_update_event_surfaces_per_stream_target_scales() -> None:
+    """Stage-2 §9 (S7): the per-stream normalizer scales must reach the payload from
+    the metrics dict on the ON (HRA) leg and survive the serialize/deserialize round
+    trip the Karn ppo_updates view reads."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            value_main_target_scale=1.7,
+            cf_value_target_scale=6.3,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.value_main_target_scale == pytest.approx(1.7)
+    assert payload.cf_value_target_scale == pytest.approx(6.3)
+
+    from dataclasses import asdict
+
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    restored = PPOUpdatePayload.from_dict(asdict(payload))
+    assert restored.value_main_target_scale == pytest.approx(1.7)
+    assert restored.cf_value_target_scale == pytest.approx(6.3)
+
+
 def test_emit_ppo_update_event_omits_ev_stream_metrics_on_off_leg() -> None:
     """OFF (HRA-off) leg: the per-stream EV + GATE keys are absent from the metrics
     dict, so the payload carries None (byte-identical to pre-Stage-0 behaviour)."""
@@ -513,6 +546,9 @@ def test_emit_ppo_update_event_omits_ev_stream_metrics_on_off_leg() -> None:
     assert payload.return_var_cf_share is None
     assert payload.return_var_main_share is None
     assert payload.return_var_residual_share is None
+    # Stage-2 §9 scalars (S7 emission): same ON-leg-only byte-identity contract.
+    assert payload.value_main_target_scale is None
+    assert payload.cf_value_target_scale is None
 
 
 def test_emit_ppo_update_event_requires_q_head_gradient_norm() -> None:

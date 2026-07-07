@@ -201,6 +201,10 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     # updates like explained_variance; the strict whitelist requires a declared reducer.
     "cov_rcf_return_share",
     "r_main_cov",
+    # Stage-2 §9 diagnostic scalars (S7, ON-leg-only): per-stream normalizer scales,
+    # mean-reduced over updates like their total sibling value_target_scale below.
+    "value_main_target_scale",
+    "cf_value_target_scale",
     # EV-stab Stage 0 value-free GATE (gated on return_variance_telemetry, both legs). Each a
     # single scalar per update, mean-reduced over updates like the ON-leg diagnostics above.
     "return_var_cf_share",

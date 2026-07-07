@@ -834,6 +834,18 @@ class PPOAgent:
             assert valid_returns_main is not None and valid_returns_cf is not None
             self.value_main_normalizer.update(valid_returns_main)
             self.cf_value_normalizer.update(valid_returns_cf)
+            # Stage-2 §9 diagnostic scalars (S7): per-stream normalizer scales, so a reader
+            # can tell "critic got better" from "target got trivially easy". Post-update()
+            # scale, matching the total value_target_scale convention above. ON-leg-only —
+            # inside this hra_value_decomposition block so the OFF-leg metrics dict stays
+            # byte-identical (the §8 contract the acceptance wrapper's §1 signature check
+            # relies on). Descriptive, not gating.
+            metrics["value_main_target_scale"] = [
+                torch.tensor(self.value_main_normalizer.get_scale(), device=valid_returns.device)
+            ]
+            metrics["cf_value_target_scale"] = [
+                torch.tensor(self.cf_value_normalizer.get_scale(), device=valid_returns.device)
+            ]
             normalized_returns_main: torch.Tensor | None = (
                 self.value_main_normalizer.normalize(valid_returns_main).detach()
             )

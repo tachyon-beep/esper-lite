@@ -19,14 +19,20 @@ from typing import Any
 import duckdb
 
 from esper.simic.telemetry.stage2_acceptance_packet import (
+    ChurnRates,
     FrozenThresholds,
+    GuardChannelCounts,
     Leg,
     RunMeta,
     SeedPair,
     Stage2Report,
     UpdateRow,
     Validity,
+    calibrate_off,
+    g3_hold_from_churn,
+    g4_hold_from_counts,
     leg_series,
+    render_packet,
     score,
     validate_pair,
 )
@@ -125,15 +131,6 @@ def read_leg(conn: duckdb.DuckDBPyConnection, run_dir: str) -> list[UpdateRow]:
 # G4 (guard channels) + the G3/G4 "materially elevated" thresholds are a separate decision, not read here.
 
 
-@dataclass(frozen=True)
-class ChurnRates:
-    """Per-episode germinate/prune/fossilize means for one run (§6 G3 input)."""
-
-    germinate: float
-    prune: float
-    fossilize: float
-
-
 def _per_env_terminal_mean(
     conn: duckdb.DuckDBPyConnection, run_dir: str, column: str
 ) -> float:
@@ -194,6 +191,76 @@ def read_run_uses_per_head_norm(conn: duckdb.DuckDBPyConnection, run_dir: str) -
             f"no ppo_updates advantage_per_head_normalized rows for run_dir={run_dir!r}"
         )
     return bool(rows[0]["value"])
+
+
+def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
+    """§0/§1 — the run's provenance/config from the ``runs`` view, plus the §8F(i) scan.
+
+    ``actor_advantage_source`` NULL means pre-S7 telemetry: the §0 scope fence cannot verify
+    provenance it does not have — fail loud, never default (the fence would otherwise pass
+    on trust, the exact pattern PDR-0039 rejected).
+    """
+    rows = _rows(
+        conn,
+        "SELECT seed, reward_mode, actor_advantage_source FROM runs WHERE run_dir = ?",
+        [run_dir],
+    )
+    if not rows:
+        raise ValueError(f"no runs row for run_dir={run_dir!r}")
+    row = rows[0]
+    for column in ("seed", "reward_mode", "actor_advantage_source"):
+        if row[column] is None:
+            raise ValueError(
+                f"runs.{column} is NULL for run_dir={run_dir!r} — "
+                + (
+                    "pre-S7 telemetry lacks the §0 provenance field; this run cannot be "
+                    "scored under the Stage-2 gate"
+                    if column == "actor_advantage_source"
+                    else "a required provenance field is missing"
+                )
+            )
+    return RunMeta(
+        run_dir=run_dir,
+        seed=int(row["seed"]),
+        reward_mode=str(row["reward_mode"]),
+        actor_advantage_source=str(row["actor_advantage_source"]),
+        uses_per_head_norm=read_run_uses_per_head_norm(conn, run_dir),
+    )
+
+
+# The §6 G4 guard channels, keyed by the anomalies-view event_type that feeds each count.
+# PLATEAU_DETECTED is present in the view but deliberately NOT a guard channel (benign
+# training-progress signal).
+_GUARD_CHANNEL_EVENT_TYPES: dict[str, str] = {
+    "GOVERNOR_ROLLBACK": "governor_rollback",
+    "VALUE_COLLAPSE_DETECTED": "value_collapse",
+    "RATIO_EXPLOSION_DETECTED": "ratio_explosion",
+    "RATIO_COLLAPSE_DETECTED": "ratio_collapse",
+    "GRADIENT_ANOMALY": "gradient_anomaly",
+    "GRADIENT_PATHOLOGY_DETECTED": "gradient_pathology",
+    "NUMERICAL_INSTABILITY_DETECTED": "numerical_instability",
+}
+
+
+def read_run_guard_channels(
+    conn: duckdb.DuckDBPyConnection, run_dir: str
+) -> GuardChannelCounts:
+    """§6 G4 — per-channel anomaly counts for one run from the ``anomalies`` view.
+
+    Zero rows is a valid clean run (COUNT semantics), not an error — unlike the meta/safety
+    readers, absence of anomalies is the healthy state.
+    """
+    rows = _rows(
+        conn,
+        "SELECT event_type, COUNT(*) AS c FROM anomalies WHERE run_dir = ? GROUP BY event_type",
+        [run_dir],
+    )
+    counts = dict.fromkeys(_GUARD_CHANNEL_EVENT_TYPES.values(), 0)
+    for row in rows:
+        field_name = _GUARD_CHANNEL_EVENT_TYPES.get(str(row["event_type"]))
+        if field_name is not None:  # non-guard event types (e.g. PLATEAU_DETECTED) are skipped
+            counts[field_name] = int(row["c"])
+    return GuardChannelCounts(**counts)
 
 
 def read_run_churn(conn: duckdb.DuckDBPyConnection, run_dir: str) -> ChurnRates:
@@ -364,3 +431,101 @@ def build_report(
         )
     report = score(pairs, thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
     return BuiltReport(report=report, validity=validity)
+
+
+# --- S7: CLI core (spec -> text), consumed by scripts/stage2_packet.py -------------------------
+#
+# Spec fields use DIRECT key access (KeyError on a missing field is a spec bug, fail loud).
+# Two phases enforce the §10 freeze order at the CLI surface too: `calibrate` reads OFF arms
+# only and prints the δ the owner freezes; `score` consumes the frozen thresholds verbatim.
+
+
+def calibrate_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -> str:
+    """§10 step 2 — freeze δ from the OFF arms only; returns the calibration report text.
+
+    Spec: ``{"off_run_dirs": [...], "w": int, "budget": int}``. An OFF leg scoring fewer
+    updates than ``budget`` would freeze δ from an incomplete series — fail loud.
+    """
+    off_legs = []
+    for run_dir in spec["off_run_dirs"]:
+        series = leg_series(read_leg(conn, run_dir), leg=Leg.OFF, w=spec["w"])
+        if series.n_updates_scored < spec["budget"]:
+            raise ValueError(
+                f"OFF leg {run_dir!r} scores {series.n_updates_scored} updates < budget "
+                f"{spec['budget']} — δ must not be frozen from an incomplete series (§1/§10)"
+            )
+        off_legs.append(series)
+    cal = calibrate_off(off_legs)
+    lines = [
+        "# Stage-2 OFF calibration (§10 step 2)",
+        "",
+        f"delta (δ, freeze this): {cal.delta:.6f}",
+        f"eps_rel (ε_rel, fixed): {cal.eps_rel:.2f}",
+        f"OFF seed-to-seed adv-residual spread anchor: {cal.eps_rel_off_spread_anchor:.4f}"
+        "  (ε_rel should exceed this, §4)",
+        f"OFF ev levels: {', '.join(f'{v:.4f}' for v in cal.off_ev_levels)}",
+        f"OFF ev IQRs:   {', '.join(f'{v:.4f}' for v in cal.off_ev_iqrs)}",
+        "",
+        "Freeze δ + the §11 thresholds in the gate doc BEFORE reading any ON leg.",
+    ]
+    return "\n".join(lines)
+
+
+def packet_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -> str:
+    """§10 step 4 — score the pairing spec against FROZEN thresholds; returns the packet.
+
+    Reads RunMeta from telemetry (read_run_meta — §0 provenance verified, not trusted),
+    computes the §6 G3/G4 holds via the explicit-threshold predicates (conjunction over
+    seeds: one materially-elevated pair fails the pairset's hold), then build_report ->
+    render_packet with the Validity the assembler computed.
+    """
+    thresholds = FrozenThresholds(
+        delta=spec["thresholds"]["delta"],
+        eps_rel=spec["thresholds"]["eps_rel"],
+        tau_acc=spec["thresholds"]["tau_acc"],
+        delta_param_max=spec["thresholds"]["delta_param_max"],
+        w=spec["thresholds"]["w"],
+    )
+
+    pairings: list[SeedPairing] = []
+    g3_holds: list[bool] = []
+    g4_holds: list[bool] = []
+    for pair in spec["pairs"]:
+        on_meta = read_run_meta(conn, pair["on_run_dir"])
+        off_meta = read_run_meta(conn, pair["off_run_dir"])
+        # The spec's declared seed is a cross-check against telemetry, not a trusted input.
+        for meta in (on_meta, off_meta):
+            if meta.seed != pair["seed"]:
+                raise ValueError(
+                    f"spec/telemetry seed mismatch for {meta.run_dir!r}: spec says "
+                    f"{pair['seed']}, runs view says {meta.seed}"
+                )
+        pairings.append(
+            SeedPairing(on_meta=on_meta, off_meta=off_meta, host_params=spec["host_params"])
+        )
+        g3_holds.append(
+            g3_hold_from_churn(
+                read_run_churn(conn, pair["on_run_dir"]),
+                read_run_churn(conn, pair["off_run_dir"]),
+                ratio_max=spec["g3_ratio_max"],
+            )
+        )
+        g4_holds.append(
+            g4_hold_from_counts(
+                read_run_guard_channels(conn, pair["on_run_dir"]),
+                read_run_guard_channels(conn, pair["off_run_dir"]),
+                ratio_max=spec["g4_ratio_max"],
+                abs_floor=spec["g4_abs_floor"],
+            )
+        )
+
+    built = build_report(
+        conn,
+        pairings,
+        thresholds,
+        n=spec["n"],
+        budget=spec["budget"],
+        g3_hold=all(g3_holds),
+        g4_hold=all(g4_holds),
+    )
+    return render_packet(built.report, thresholds=thresholds, validity=built.validity)

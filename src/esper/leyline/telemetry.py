@@ -420,6 +420,17 @@ class SeedTelemetry:
 # See: docs/plans/2025-12-25-typed-telemetry-payloads-design.md
 
 
+# Stage-2 §0 scope fence (gate doc 2026-07-06-stage2-hra-major1-acceptance-gate.md): which
+# advantage the ACTOR optimizes. "total_reconstructed" = objective A — a single GAE on
+# V_total = V_main + V_cf; per-stream returns feed the VALUE targets only. This is the only
+# actor objective the current PPO loss implements, so it is emitted as a run-provenance
+# CONSTANT: an objective-B implementation (actor advantage on R_main) must change the emitted
+# value, and the Stage-2 acceptance validity gate then rejects those runs as out of scope.
+# Shared contract (leyline home): consumed by the TRAINING_STARTED emitter and the Stage-2
+# acceptance wrapper (simic/telemetry/stage2_acceptance_packet.py).
+ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED = "total_reconstructed"
+
+
 @dataclass(slots=True, frozen=True)
 class TrainingStartedPayload:
     """Payload for TRAINING_STARTED event. Emitted once at training start."""
@@ -442,6 +453,11 @@ class TrainingStartedPayload:
 
     # REQUIRED - training context
     reward_mode: str  # e.g. "shaped", "sparse", "minimal", "simplified"
+
+    # Stage-2 §0 run provenance: which advantage the actor optimizes. A property of the
+    # CODE (only objective A is implemented), hence a constant default — an objective-B
+    # implementation must change it (see ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED above).
+    actor_advantage_source: str = ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
 
     # OPTIONAL - legitimate defaults
     episode_id: str = ""
@@ -492,6 +508,11 @@ class TrainingStartedPayload:
             policy_device=data["policy_device"],
             env_devices=_ensure_tuple(data["env_devices"]),
             reward_mode=data["reward_mode"],
+            # Stage-2 §0 provenance: pre-S7 telemetry lacks the field; the constant default
+            # is truthful for it (only objective A has ever been implemented).
+            actor_advantage_source=data.get(
+                "actor_advantage_source", ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
+            ),
             # OPTIONAL: These fields have sensible defaults for single-GPU, non-resume runs.
             # Resume path and episode_id may be empty when starting fresh.
             episode_id=data.get("episode_id", ""),
@@ -931,6 +952,11 @@ class PPOUpdatePayload:
     return_var_cf_share: float | None = None  # Cov(R_cf, R)/Var(R) — the >0.40 Stage-0 gate
     return_var_main_share: float | None = None  # Var(R_main)/Var(R) — smoothness leg
     return_var_residual_share: float | None = None  # ~0 reconciliation diagnostic
+    # Stage-2 §9 diagnostic scalars (S7): per-stream normalizer scales, so a reader can
+    # tell "critic got better" from "target got trivially easy". ON-leg-only (None on OFF),
+    # post-update() scale — same convention as value_target_scale. Descriptive, not gating.
+    value_main_target_scale: float | None = None
+    cf_value_target_scale: float | None = None
 
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
@@ -1174,6 +1200,9 @@ class PPOUpdatePayload:
             return_var_cf_share=data.get("return_var_cf_share"),
             return_var_main_share=data.get("return_var_main_share"),
             return_var_residual_share=data.get("return_var_residual_share"),
+            # OPTIONAL: Stage-2 §9 per-stream target scales (S7) — same ON-leg-only pattern.
+            value_main_target_scale=data.get("value_main_target_scale"),
+            cf_value_target_scale=data.get("cf_value_target_scale"),
             # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],

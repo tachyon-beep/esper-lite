@@ -1881,3 +1881,93 @@ def test_ppo_updates_view_extracts_ev_stream_gate_metrics(tmp_path):
         """
     ).fetchone()
     assert off_row == (None, None, None, None, None, None)
+
+
+def test_ppo_updates_view_extracts_per_stream_target_scales(tmp_path):
+    """Stage-2 §9 (S7): the per-stream normalizer scales are queryable as DOUBLE columns
+    on the ppo_updates view (ON-leg event), NULL when the OFF-leg event omits them."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "scale_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    on_event = {
+        "event_id": "ppo-on",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "epoch": 10,
+        "group_id": "treatment",
+        "data": {
+            "inner_epoch": 3,
+            "batch": 1,
+            "explained_variance": 0.31,
+            "value_main_target_scale": 1.7,
+            "cf_value_target_scale": 6.3,
+        },
+    }
+    off_event = {
+        "event_id": "ppo-off",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "epoch": 11,
+        "group_id": "control",
+        "data": {
+            "inner_epoch": 3,
+            "batch": 1,
+            "explained_variance": 0.30,
+        },
+    }
+    events_file.write_text(json.dumps(on_event) + "\n" + json.dumps(off_event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    on_row = conn.execute(
+        "SELECT value_main_target_scale, cf_value_target_scale "
+        "FROM ppo_updates WHERE event_id = 'ppo-on'"
+    ).fetchone()
+    assert on_row == (1.7, 6.3)
+
+    off_row = conn.execute(
+        "SELECT value_main_target_scale, cf_value_target_scale "
+        "FROM ppo_updates WHERE event_id = 'ppo-off'"
+    ).fetchone()
+    assert off_row == (None, None)
+
+
+def test_runs_view_exposes_actor_advantage_source(tmp_path):
+    """Stage-2 §0/§1 (S7): actor_advantage_source is run provenance on the runs view —
+    the scope-fence field the acceptance gate's validity check reads."""
+    run_dir = tmp_path / "provenance_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "start-1",
+        "event_type": "TRAINING_STARTED",
+        "timestamp": "2026-07-07T00:00:00+00:00",
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": None,
+        "group_id": "stage2",
+        "message": "",
+        "data": {
+            "episode_id": "stage2",
+            "task": "cifar_baseline",
+            "reward_mode": "shaped",
+            "seed": 7,
+            "actor_advantage_source": "total_reconstructed",
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    (source, seed) = conn.execute(
+        "SELECT actor_advantage_source, seed FROM runs"
+    ).fetchone()
+    assert source == "total_reconstructed"
+    assert seed == 7

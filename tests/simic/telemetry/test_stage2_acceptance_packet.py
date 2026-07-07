@@ -9,9 +9,9 @@ to make a run pass.
 
 import pytest
 
+from esper.leyline.telemetry import ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
 from esper.simic.telemetry.stage2_acceptance import GateResult, Verdict, calibrate_delta, level, vol
 from esper.simic.telemetry.stage2_acceptance_packet import (
-    ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
     STAGE0_PROVENANCE_BLOCK,
     CalibrationReport,
     FrozenThresholds,

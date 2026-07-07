@@ -69,6 +69,9 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.task') as task,
             json_extract_string(data, '$.reward_mode') as reward_mode,
             json_extract(data, '$.seed')::INTEGER as seed,
+            -- Stage-2 §0 run provenance (S7): which advantage the actor optimizes
+            -- ("total_reconstructed" = objective A). NULL on pre-S7 telemetry.
+            json_extract_string(data, '$.actor_advantage_source') as actor_advantage_source,
             json_extract(data, '$.n_envs')::INTEGER as n_envs,
             json_extract(data, '$.n_episodes')::INTEGER as n_episodes,
             json_extract(data, '$.max_epochs')::INTEGER as max_epochs,
@@ -186,6 +189,10 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.return_var_cf_share')::DOUBLE as return_var_cf_share,
             json_extract(data, '$.return_var_main_share')::DOUBLE as return_var_main_share,
             json_extract(data, '$.return_var_residual_share')::DOUBLE as return_var_residual_share,
+            -- Stage-2 §9 per-stream target scales (S7, ON-leg-only; NULL on OFF):
+            -- descriptive "did the target get trivially easy" diagnostics, never gate inputs.
+            json_extract(data, '$.value_main_target_scale')::DOUBLE as value_main_target_scale,
+            json_extract(data, '$.cf_value_target_scale')::DOUBLE as cf_value_target_scale,
             -- D5 slot-saturation / actor-agency diagnostics
             json_extract(data, '$.forced_step_ratio')::DOUBLE as forced_step_ratio,
             json_extract(data, '$.usable_actor_timesteps')::INTEGER as usable_actor_timesteps,

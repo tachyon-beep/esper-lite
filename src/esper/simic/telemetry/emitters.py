@@ -1095,6 +1095,10 @@ def emit_ppo_update_event(
             ev_sum=metrics.get("ev_sum"),
             cov_rcf_return_share=metrics.get("cov_rcf_return_share"),
             r_main_cov=metrics.get("r_main_cov"),
+            # Stage-2 §9 per-stream target scales (S7, ON-leg-only — same .get() None
+            # pattern as ev_main above; the OFF-leg payload stays byte-identical).
+            value_main_target_scale=metrics.get("value_main_target_scale"),
+            cf_value_target_scale=metrics.get("cf_value_target_scale"),
             # EV-stab Stage 0 value-free GATE (return_variance_telemetry-gated; absent
             # otherwise -> .get() None, same legitimate optional-numeric pattern).
             return_var_cf_share=metrics.get("return_var_cf_share"),

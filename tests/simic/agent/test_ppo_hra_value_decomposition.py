@@ -275,6 +275,22 @@ def test_on_leg_update_emits_cf_loss_and_per_stream_ev() -> None:
     assert moved, "cf_value_head weights must change after an ON update"
 
 
+def test_on_leg_update_emits_per_stream_target_scales() -> None:
+    """Stage-2 §9 diagnostic scalars (gate doc): the per-stream normalizer scales, so a
+    reader can tell 'critic got better' from 'target got trivially easy'. ON-leg-only;
+    post-update() scale, matching the total value_target_scale convention."""
+    agent, slot_config = _build_agent(hra=True)
+    _fill_buffer(agent, slot_config, hra=True)
+    metrics = agent.update(clear_buffer=True)
+
+    assert metrics["ppo_update_performed"] is True
+    for key in ("value_main_target_scale", "cf_value_target_scale"):
+        assert key in metrics
+        value = torch.tensor(metrics[key])
+        assert torch.isfinite(value)
+        assert value > 0.0  # a normalizer scale is strictly positive
+
+
 def test_off_leg_update_emits_no_cf_or_ev_keys() -> None:
     # OFF-leg byte-identity: the returned metrics dict is a contract site and must gain NO
     # new keys (cf_value_loss / ev_main / ev_cf / ev_sum are ON-leg-only). The dual_ab
@@ -292,6 +308,9 @@ def test_off_leg_update_emits_no_cf_or_ev_keys() -> None:
         "ev_sum",
         "cov_rcf_return_share",
         "r_main_cov",
+        # Stage-2 §9 scalars (S7 emission) are ON-leg-only too.
+        "value_main_target_scale",
+        "cf_value_target_scale",
     ):
         assert key not in metrics
 
