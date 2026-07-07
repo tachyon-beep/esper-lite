@@ -1,23 +1,28 @@
-# Current State — Esper        Checkpoint: 2026-07-07 (checkpoint #26 — S6 verdict packet + env-count validity + assembler landed [PDR-0041]; on feat/ev-stab-stage2-hra)
+# Current State — Esper        Checkpoint: 2026-07-07 (checkpoint #27 — S7 built at `9666fe0c`, pending specialist review [PDR-0042]; on feat/ev-stab-stage2-hra)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet), at **Stage-2 acceptance**
-(esper-lite-2a4b56e719, in_progress — **6/7 slices done, only S7 remains**). Building the MAJOR-1
-telemetry-acceptance harness that must FREEZE before the paired HRA-ON/OFF A/B. Metric it ultimately
-moves: host-accuracy contribution (guardrail, +7.69pp n=6) via the Stage-2 MAJOR-1 acceptance gate.
+(esper-lite-2a4b56e719, in_progress — **7/7 slices code-complete, pending specialist review**).
+The MAJOR-1 telemetry-acceptance harness is built through S7 at `9666fe0c`, but it is **not
+accepted, not frozen, and not A/B-ready** until the holistic + `pytorch-expert` + `drl-expert`
+review finishes and findings are addressed. Metric it ultimately moves: host-accuracy contribution
+(guardrail, +7.69pp n=6) via the Stage-2 MAJOR-1 acceptance gate.
 
 ## In flight
-- **Stage-2 acceptance (esper-lite-2a4b56e719, in_progress — 6/7):** pure scorer (PDR-0037) +
+- **Stage-2 acceptance (esper-lite-2a4b56e719, in_progress — 7/7 built, review gate open):** pure scorer (PDR-0037) +
   wrapper pure layer S1–S4 (PDR-0039) + S5 impure reader & dual-review-hardened (PDR-0040) + **S6 now
   DONE (PDR-0041, commit `890ba364`):** `render_packet` (pure §-structured markdown verdict packet),
   `env_count_completeness_reasons`/`read_run_n_envs` (env-count validity — backstops Finding 1),
   `SeedPairing`/`build_report` (scoring-phase assembler; caller-supplied RunMeta, never calibrates /
   never reads `actor_advantage_source`). **236 telemetry-suite green, torch-free, NO training-code
-  touch.** **REMAINING — S7 ONLY (the training-code tail):** emission (§9 scalars +
-  `actor_advantage_source` near `ppo_agent.py:824`, ON-leg-only) + `read_run_meta` (runs view) + G4
-  guard-channel reader + the runnable CLI (moved S6→S7, PDR-0041) + lr/entropy schedule-match;
-  **GPU-free byte-identity OFF-leg test** (advisor check 2); **drl-expert + pytorch-expert review**.
-  **Gate NOT freezable until S7; no A/B before freeze.**
+  touch.** **S7 BUILT (PDR-0042, commit `9666fe0c`):** §9 `value_main_target_scale` /
+  `value_cf_target_scale` emission inside the HRA-ON block, strict reducer whitelist, leyline
+  `actor_advantage_source` provenance pipe into `TrainingStartedPayload` + runs view, `read_run_meta`,
+  G4 guard-channel reader, explicit G3/G4 threshold predicates, and runnable `scripts/stage2_packet.py`
+  (`calibrate` / `score`, fail-closed JSONL corruption path). **Code-complete is not accepted:**
+  holistic + `pytorch-expert` + `drl-expert` review must confirm/reject OFF-leg byte identity,
+  G1/G2/G3/G4/env-count definitions, G4 reader, and the training-code touch. **Gate NOT freezable
+  until review findings are addressed; no A/B before freeze.**
 - **Branch survivor pick (esper-lite-1f1e55f58f, blocked by Stage-2):** unchanged (PDR-0038).
 
 ## Facts the next session must not relitigate
@@ -31,6 +36,9 @@ moves: host-accuracy contribution (guardrail, +7.69pp n=6) via the Stage-2 MAJOR
   and takes caller-supplied RunMeta; g3/g4 holds are injected. **`build_report` returns
   `BuiltReport{report, validity}`** — the S7 CLI MUST thread `built.validity` into `render_packet`
   (else an INVALID packet lists no breaches; review fix `13589813`). Do NOT re-scope.
+- **S7 built, not accepted — PDR-0042:** `9666fe0c` delivered the emission/provenance/readers/G4/CLI
+  tail, and the task is now review-gated rather than implementation-gated. Do NOT freeze, close, or
+  launch A/B until holistic + drl + pytorch review findings are resolved.
 - **Branch:** continue on ev-stab; survivor pick DEFERRED to Stage-2 completion (PDR-0038). Do NOT
   merge / delete / push.
 - **Verification gate is BROKEN** (full pytest wedges on GPU test_data_opt/test_dual_ab). Verify via
@@ -45,26 +53,26 @@ moves: host-accuracy contribution (guardrail, +7.69pp n=6) via the Stage-2 MAJOR
 - **Freeze-before-ON placeholders:** `Δparam_max` (G2 ceiling) and burn-in `W` still owner-set
   (δ/ε_rel computed by `calibrate_off` on OFF arms at run time); north-star / rent / host-acc-floor
   TARGETs still owner-set (metrics.md).
-- **S7 gate (advisor check 2, still open):** the §9 emission's OFF-leg byte-identity must be verified
-  by a runnable GPU-free test BEFORE it lands.
+- **S7 review gate:** tracker says the 3-agent review is running. Treat the OFF-leg byte-identity
+  evidence and the G1/G2/G3/G4/env-count definitions as **pending specialist acceptance** until the
+  review output is in hand.
 - **Definitional (pending §6/drl — fold into the S7 specialist review):** env-count hard-reject
   threshold; G1/G2/G3/G4 definitions + the G3/G4 "materially elevated" thresholds.
 
-## Last checkpoint did (checkpoint #26)
-- **PDR-0041** — S6 landed (commit `890ba364`): render_packet + env-count validity + build_report;
-  recorded the advisor-reviewed scope correction (runnable CLI moved S6→S7). metrics.md Stage-2 row
-  advanced (6/7 slices). No roadmap horizon change (EV-stab stays Now). No new experimental readings;
-  no reversal trigger tripped.
-- Tracker: Stage-2 task stays in_progress (6/7 slices; S7 remains); progress comment 145 logged.
+## Last checkpoint did (checkpoint #27)
+- **PDR-0042** — reconciled live git/tracker drift after S7 landed at `9666fe0c`: Stage-2 is now
+  **7/7 slices code-complete, pending review**, not 6/7 with S7 remaining. metrics.md Stage-2 row
+  advanced to the review-gated state. No roadmap horizon change (EV-stab stays Now). No new
+  experimental readings; no reversal trigger tripped.
+- Tracker: Stage-2 task stays in_progress; latest progress comment says S7 is built and a 3-agent
+  review is running.
 
 ## Next session, start here
-**S7 — the emission slice (LAST, training-code, specialist-reviewed).** Emit §9 diagnostic scalars +
-`actor_advantage_source` near `ppo_agent.py:824` (ON-leg-only); add `read_run_meta` (runs view →
-RunMeta) + the G4 guard-channel reader; wire the **runnable CLI** (`main()` over `telemetry_dir` +
-pairing spec → build_report → render_packet, two-phase: calibrate OFF → freeze → score ON). MANDATORY
-before it lands: a **GPU-free byte-identity OFF-leg test** (advisor check 2) + **drl-expert +
-pytorch-expert review** (CLAUDE.md simic mandate). Then freeze the gate doc → paired fresh-init HRA
-ON/OFF A/B (owner launches). Pointers: modules `stage2_acceptance_packet.py` (pure) +
-`stage2_acceptance_io.py` (duckdb + assembler) + scorer `stage2_acceptance.py`; gate doc
-`docs/analysis/2026-07-06-stage2-hra-major1-acceptance-gate.md`; reference `scripts/proof_packet.py`
-(CLI idiom); PDR-0039/0040/0041; memory `ev-stab-stage2-impl-state`.
+**Review and accept/rework S7.** Collect the holistic, `pytorch-expert`, and `drl-expert` review
+outputs for `9666fe0c` (changes since `f5f4c7f3`). Fix findings first, with targeted tests. The
+review must explicitly resolve OFF-leg byte identity, G1/G2/G3/G4/env-count definitions, the G4
+reader, and the training-code emission/provenance touch. Only after the reviewed code is clean:
+freeze the gate doc → paired fresh-init HRA ON/OFF A/B (owner launches). Pointers: modules
+`stage2_acceptance_packet.py` (pure) + `stage2_acceptance_io.py` (duckdb + assembler) + scorer
+`stage2_acceptance.py`; script `scripts/stage2_packet.py`; gate doc
+`docs/analysis/2026-07-06-stage2-hra-major1-acceptance-gate.md`; PDR-0039/0040/0041/0042.
