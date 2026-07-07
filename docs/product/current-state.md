@@ -28,7 +28,9 @@ moves: host-accuracy contribution (guardrail, +7.69pp n=6) via the Stage-2 MAJOR
 - **S6 settled — PDR-0041:** render_packet is pure; env-count is an assembly-layer check merged into
   the Validity passed to `score()`; **the runnable CLI is S7, not S6** (RunMeta needs
   `actor_advantage_source`, unreadable honestly in S6). `build_report` never calibrates (no peeking)
-  and takes caller-supplied RunMeta; g3/g4 holds are injected. Do NOT re-scope.
+  and takes caller-supplied RunMeta; g3/g4 holds are injected. **`build_report` returns
+  `BuiltReport{report, validity}`** — the S7 CLI MUST thread `built.validity` into `render_packet`
+  (else an INVALID packet lists no breaches; review fix `13589813`). Do NOT re-scope.
 - **Branch:** continue on ev-stab; survivor pick DEFERRED to Stage-2 completion (PDR-0038). Do NOT
   merge / delete / push.
 - **Verification gate is BROKEN** (full pytest wedges on GPU test_data_opt/test_dual_ab). Verify via
@@ -38,8 +40,8 @@ moves: host-accuracy contribution (guardrail, +7.69pp n=6) via the Stage-2 MAJOR
 ## Open questions / blocked-on-owner
 - **Nothing NEW escalated this session.** Grant holds as written (re-confirmed 2026-07-07).
 - **Standing owner gates (not now):** any push to origin (local ev-stab is ahead by S5 + hardening +
-  S6 `890ba364` + checkpoints #25/#26; local `main` still 2 ahead of origin — all unpushed); the
-  survivor pick / reconciling merge / branch deletion / jettison salvage audit (PDR-0038).
+  S6 `890ba364` + review-fix `13589813` + checkpoints #25/#26; local `main` still 2 ahead of origin
+  — all unpushed); the survivor pick / reconciling merge / branch deletion / jettison salvage audit (PDR-0038).
 - **Freeze-before-ON placeholders:** `Δparam_max` (G2 ceiling) and burn-in `W` still owner-set
   (δ/ε_rel computed by `calibrate_off` on OFF arms at run time); north-star / rent / host-acc-floor
   TARGETs still owner-set (metrics.md).
