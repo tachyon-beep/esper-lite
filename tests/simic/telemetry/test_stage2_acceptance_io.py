@@ -12,6 +12,7 @@ import pytest
 
 from esper.simic.telemetry.stage2_acceptance import GateResult, Verdict
 from esper.simic.telemetry.stage2_acceptance_io import (
+    BuiltReport,
     ChurnRates,
     SeedPairing,
     build_report,
@@ -29,6 +30,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     FrozenThresholds,
     RunMeta,
     UpdateRow,
+    render_packet,
 )
 
 
@@ -427,18 +429,32 @@ def _pairset(
 
 def test_build_report_assembles_valid_pairset_to_a_scored_verdict():
     conn, pairings = _pairset(5)
-    report = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
-    assert report.verdict is not Verdict.INVALID
-    assert len(report.delta_a) == 5
+    built = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
+    assert isinstance(built, BuiltReport)
+    assert built.report.verdict is not Verdict.INVALID
+    assert built.validity.valid is True
+    assert len(built.report.delta_a) == 5
     # Δ_A = ev_level_on (0.85) − ev_level_off (0.80), read straight from the telemetry.
-    assert report.delta_a[0] == pytest.approx(0.05)
+    assert built.report.delta_a[0] == pytest.approx(0.05)
 
 
 def test_build_report_rejects_env_incomplete_pair_as_invalid():
     # ON ran 2 envs but only env 0 appears in episode_outcomes — the per-env safety mean is biased.
     conn, pairings = _pairset(5, n_envs=2, on_env_ids=[0])
-    report = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
-    assert report.verdict is Verdict.INVALID
+    built = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
+    assert built.report.verdict is Verdict.INVALID
+
+
+def test_build_report_returns_validity_so_render_can_list_the_breaches():
+    # The build_report -> render_packet COMPOSE: the assembler must hand back the Validity it
+    # computed, else a caller has nothing truthful to pass and an INVALID packet lists no breaches.
+    conn, pairings = _pairset(5, n_envs=2, on_env_ids=[0])
+    built = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
+    assert built.validity.valid is False
+    assert any("envs" in reason for reason in built.validity.reasons)
+    packet = render_packet(built.report, thresholds=_IO_THRESHOLDS, validity=built.validity)
+    assert "INVALID" in packet
+    assert "1/2 envs" in packet  # the actual env-count breach is rendered, not an empty body
 
 
 def test_build_report_rejects_seed_mismatch_as_invalid():
@@ -447,13 +463,13 @@ def test_build_report_rejects_seed_mismatch_as_invalid():
     pairings[0] = SeedPairing(
         on_meta=bad.on_meta, off_meta=_meta(bad.off_meta.run_dir, 999), host_params=100_000
     )
-    report = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
-    assert report.verdict is Verdict.INVALID
+    built = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
+    assert built.report.verdict is Verdict.INVALID
 
 
 def test_build_report_wires_paired_safety_g1_regression_to_reject():
     # ON val-acc 10pp below OFF on every seed -> paired Δ_G1 median = -10 < -τ_acc -> G1 FAIL -> REJECT.
     conn, pairings = _pairset(10, on_final=40.0, off_final=50.0)
-    report = build_report(conn, pairings, _IO_THRESHOLDS, n=10, budget=2, g3_hold=True, g4_hold=True)
-    assert report.g1 is GateResult.FAIL
-    assert report.verdict is Verdict.REJECT
+    built = build_report(conn, pairings, _IO_THRESHOLDS, n=10, budget=2, g3_hold=True, g4_hold=True)
+    assert built.report.g1 is GateResult.FAIL
+    assert built.report.verdict is Verdict.REJECT

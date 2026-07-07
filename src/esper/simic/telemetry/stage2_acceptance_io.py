@@ -287,6 +287,19 @@ class SeedPairing:
     host_params: int
 
 
+@dataclass(frozen=True)
+class BuiltReport:
+    """The assembler's output: the scored verdict PLUS the ``Validity`` it computed.
+
+    The ``Validity`` must travel with the report — on an INVALID run the breach list lives ONLY here
+    (``Stage2Report`` carries no reasons), so ``render_packet`` needs it to list every §1 breach. A
+    caller does ``built = build_report(...); render_packet(built.report, validity=built.validity)``.
+    """
+
+    report: Stage2Report
+    validity: Validity
+
+
 def build_report(
     conn: duckdb.DuckDBPyConnection,
     pairings: list[SeedPairing],
@@ -298,12 +311,13 @@ def build_report(
     floored_asymmetry_max: float = 0.10,
     g3_hold: bool,
     g4_hold: bool,
-) -> Stage2Report:
+) -> BuiltReport:
     """Assemble frozen-config telemetry into a scored Stage-2 verdict (§10 scoring phase).
 
     Per pairing: read both legs' ``ppo_updates``, run §1 ``validate_pair`` and merge the §6
     env-count-completeness reasons into one ``Validity``; if valid, reduce each leg to a ``LegSeries``,
     read the §6 paired safety deltas (ON − OFF), and ``score`` against the ALREADY-FROZEN thresholds.
+    Returns the report AND the ``Validity`` (the latter carries the breach list ``render_packet`` needs).
 
     It NEVER calibrates (δ is frozen input — "no peeking" is mechanical) and NEVER reads
     ``actor_advantage_source`` from telemetry (caller supplies ``RunMeta``). ``g3_hold``/``g4_hold``
@@ -329,7 +343,8 @@ def build_report(
     validity = Validity(valid=not reasons, reasons=tuple(reasons))
     if not validity.valid:
         # §1: no interpretation on a broken run — score short-circuits before touching pairs.
-        return score([], thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
+        report = score([], thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
+        return BuiltReport(report=report, validity=validity)
 
     pairs: list[SeedPair] = []
     for pairing, on_rows, off_rows in loaded:
@@ -347,4 +362,5 @@ def build_report(
                 d_val_acc=d_val_acc, d_added_params=d_added_params,
             )
         )
-    return score(pairs, thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
+    report = score(pairs, thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
+    return BuiltReport(report=report, validity=validity)
