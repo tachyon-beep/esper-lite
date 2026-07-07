@@ -1,12 +1,13 @@
-# Current State — Esper        Checkpoint: 2026-07-08 01:10 AEST · code commit `0838cc40` · checkpoint #32 (PDR-0046; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-08 03:42 AEST · code commit `89b50a16` · checkpoint #33 (PDR-0047; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet) has its **Stage-2 MAJOR-1
 acceptance harness implementation closed** (esper-lite-2a4b56e719, `closed`) in
-`3669934d`. The harness is **7/7 slices built, review-remediated, and tracker-closed**,
-including OFF calibration validity, run-log traceback validity, advantage-floor reporting,
-and the stale gate doc fix. It is **not an experimental read, not frozen, not pushed, and
-not A/B-ready**.
+`3669934d`, and its escrow telescoping correctness break fixed in `89b50a16`
+(esper-lite-3defe42928). The harness is **7/7 slices built, review-remediated, and
+tracker-closed**, and the reward path no longer clips escrow potential deltas behind a
+non-Markov observation. It is **not an experimental read, not frozen, not pushed, and not
+A/B-ready**.
 
 The metric this leg ultimately moves remains host-accuracy contribution via the
 Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
@@ -22,6 +23,11 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
   diagnostic scalar plumbing, G3 fossilize churn, clearer return-variance diagnostics,
   final-review OFF calibration validity, spec-scoped traceback/run-log invalidation, and
   `advantage_std_floored` contamination reporting.
+- **Escrow telescoping fix (esper-lite-3defe42928, implemented):** PDR-0047 removed the
+  reward-path `escrow_delta_clip`, exposed min-over-window stable validation accuracy and
+  per-slot escrow credit in Obs V3 schema v2, bumped PPO checkpoint compatibility to v4,
+  and updated the Obs V3 contract to 120 non-blueprint dims / 132 full network input dims.
+  This is a correctness fix, not an experiment result.
 - **Stage-2 experiment gate (owner-gated):** freeze thresholds, then owner-approved paired
   fresh-init HRA ON/OFF A/B and packet read. This is the remaining value-validation step.
 - **Branch survivor pick (esper-lite-1f1e55f58f, open/unblocked):** unchanged
@@ -42,10 +48,13 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - **S7 built, then review-remediated and closed — PDR-0042/PDR-0043/PDR-0044.** The harness
   is no longer blocked on the known S7 review findings or the stale-gate/final-review validity
   blockers, but code-complete is not value-landed. No A/B before owner freeze.
-- **Verification baseline remains mixed:** full default pytest passes at `0838cc40`; touched-file
-  ruff, diff check, Wardline, and added-line defensive/GPU-sync guardrail scans pass.
-  Defensive-pattern lint and GPU-sync lint still report existing non-touched failures;
-  full mypy/full ruff were not re-established in this checkpoint.
+- **Escrow shaping state settled — PDR-0047.** Escrow credit deltas are no longer clipped in
+  the reward path; the Markov state needed to predict the dynamic potential is visible through
+  Obs V3 schema v2. Checkpoints older than v4 are intentionally incompatible with the new
+  observation contract.
+- **Verification baseline remains mixed:** full default pytest passes at `89b50a16`; touched-file
+  ruff, diff check, and leyline type lint pass. Defensive-pattern lint, GPU-sync lint, and full
+  mypy still report existing non-touched failures outside this task.
 - **Branch:** stay on `feat/ev-stab-stage2-hra`. Do not push without an explicit owner ask.
 
 ## Open questions / blocked-on-owner
@@ -58,7 +67,18 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - **Standing owner gates:** no push, tag, release, branch deletion, telemetry deletion, or remote
   action without explicit approval.
 
-## Last checkpoint did (checkpoint #32)
+## Last checkpoint did (checkpoint #33)
+- Closed stale verification-only task esper-lite-e6382020d2 against the current branch evidence.
+- Committed the escrow telescoping fix as `89b50a16` and closed esper-lite-3defe42928 with
+  that commit anchor.
+- Removed `escrow_delta_clip` from contribution reward shaping, added escrow stable accuracy
+  and per-slot escrow credit to Obs V3 schema v2, rebased deterministic PPO/HRA goldens, bumped
+  checkpoint compatibility to v4, and updated specs/roadmap/docs for the 120/132-dim contract.
+- Verified with focused feature/reward/golden/checkpoint suites, full default pytest, touched-file
+  ruff, diff check, leyline type lint, and full static guardrails with the known pre-existing
+  non-touched failures still outstanding.
+
+## Previous checkpoint did (checkpoint #32)
 - Committed Karn PPO traceability evidence as `0838cc40` and closed Filigree task
   esper-lite-570d98c451 with that commit anchor.
 - Added `ppo_traceability_evidence` as a Karn public proof surface, expanded `ppo_updates`
@@ -71,7 +91,7 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - Verified with targeted red/green tests, focused Karn/MCP/proof suites, full default
   pytest, touched-file ruff, diff checks, Wardline, and added-line guardrail scans.
 
-## Previous checkpoint did (checkpoint #31)
+## Earlier checkpoint did (checkpoint #31)
 - Committed PPO proof-provenance/missing-evidence fixes as `7ebaff72` and closed Filigree
   task esper-lite-441fbc6810 with that commit anchor.
 - Recorded PDR-0045: PPO reward-efficiency remains Next; its autonomous critical path now
@@ -102,9 +122,9 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 
 ## Next session, start here
 Ask the owner whether to spend the next session freezing and launching the Stage-2 paired
-fresh-init HRA ON/OFF A/B. If yes, freeze `Δparam_max`, exact `W`, floored-EV asymmetry,
-G3/G4 materiality, and advantage-floor policy before any ON run. If no, start
+fresh-init HRA ON/OFF A/B. If yes, freeze `Δparam_max`, exact `W`, floored-EV
+asymmetry, G3/G4 materiality, and advantage-floor policy before any ON run. If no, start
 esper-lite-9678c6d05a (reconcile reward-efficiency ROI verdict semantics) as the serial
 reward-efficiency move; esper-lite-c3cb5338c4 can run in parallel if another agent is
-available. Branch survivor cleanup is unblocked but remains owner-gated for any
-merge/jettison/push action.
+available and remains the Filigree critical path. Branch survivor cleanup is unblocked but
+owner-gated for any merge/jettison/push action.
