@@ -90,6 +90,8 @@ class EnvStateStub:
     last_action_op: int
     gradient_health_prev: dict[str, float] = field(default_factory=dict)
     epochs_since_counterfactual: dict[str, int] = field(default_factory=dict)
+    stable_val_acc_for_observation: float | None = None
+    escrow_credit: dict[str, float] = field(default_factory=dict)
 
 
 @st.composite
@@ -172,6 +174,18 @@ def _obs_v3_batches(draw: st.DrawFn):
         env_state = EnvStateStub(
             last_action_success=draw(st.booleans()),
             last_action_op=draw(st.integers(min_value=0, max_value=NUM_OPS - 1)),
+            stable_val_acc_for_observation=draw(
+                st.one_of(
+                    st.none(),
+                    st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False),
+                )
+            ),
+            escrow_credit={
+                slot_id: draw(
+                    st.floats(min_value=-100.0, max_value=100.0, allow_nan=False, allow_infinity=False)
+                )
+                for slot_id in slot_config.slot_ids
+            },
         )
 
         reports: dict[str, SeedStateReport] = {}
@@ -336,6 +350,13 @@ def test_batch_obs_to_features_shape_and_core_invariants(batch) -> None:
         assert one_hot.sum().item() == pytest.approx(1.0)
         assert one_hot[env_state.last_action_op].item() == pytest.approx(1.0)
 
+        expected_stable_acc = (
+            OBS_V3_UNKNOWN_SENTINEL
+            if env_state.stable_val_acc_for_observation is None
+            else env_state.stable_val_acc_for_observation / 100.0
+        )
+        assert obs[env_idx, 23].item() == pytest.approx(expected_stable_acc)
+
         for slot_idx, slot_id in enumerate(slot_config.slot_ids):
             slot_offset = OBS_V3_BASE_FEATURE_SIZE + slot_idx * OBS_V3_SLOT_FEATURE_SIZE
             if slot_id not in reports:
@@ -371,6 +392,9 @@ def test_batch_obs_to_features_shape_and_core_invariants(batch) -> None:
             else:
                 expected_freshness = OBS_V3_UNKNOWN_SENTINEL
             assert obs[env_idx, slot_offset + 29].item() == pytest.approx(expected_freshness)
+
+            expected_escrow_credit = symlog(env_state.escrow_credit[slot_id]) / 7.0
+            assert obs[env_idx, slot_offset + 31].item() == pytest.approx(expected_escrow_credit)
 
 
 def _signals_with_history(
