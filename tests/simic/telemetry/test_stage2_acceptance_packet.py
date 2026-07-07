@@ -47,9 +47,12 @@ def _update(**overrides) -> UpdateRow:
         ev_sum=None,
         ev_main=None,
         ev_cf=None,
+        value_main_target_scale=None,
+        cf_value_target_scale=None,
         ev_return_variance=10.0,
         pre_norm_advantage_std=1.0,
         return_std=3.0,
+        gradient_cv=0.10,
     )
     fields.update(overrides)
     return UpdateRow(**fields)  # type: ignore[arg-type]
@@ -193,6 +196,39 @@ def test_leg_series_ev_main_vol_present_on_on_leg_absent_on_off_leg():
     assert on.ev_main_vol == pytest.approx(vol([0.10, 0.20, 0.30, 0.40]))
 
 
+def test_leg_series_reports_on_target_scale_levels_when_fully_emitted():
+    on = leg_series(
+        _on_rows(
+            [0.7, 0.8, 0.9],
+            [0.1, 0.2, 0.3],
+            value_main_target_scale=1.7,
+            cf_value_target_scale=6.3,
+        ),
+        leg=Leg.ON,
+        w=0,
+    )
+    off = leg_series(_off_rows([0.4, 0.5, 0.6]), leg=Leg.OFF, w=0)
+    assert on.value_main_target_scale_level == pytest.approx(1.7)
+    assert on.cf_value_target_scale_level == pytest.approx(6.3)
+    assert off.value_main_target_scale_level is None
+    assert off.cf_value_target_scale_level is None
+
+
+def test_leg_series_rejects_partially_emitted_on_target_scale():
+    rows = _on_rows([0.7, 0.8, 0.9], [0.1, 0.2, 0.3])
+    rows[1] = _update(
+        batch=1,
+        explained_variance=0.8,
+        ev_sum=0.8,
+        ev_main=0.2,
+        ev_cf=0.1,
+        value_main_target_scale=1.7,
+        cf_value_target_scale=6.3,
+    )
+    with pytest.raises(ValueError):
+        leg_series(rows, leg=Leg.ON, w=0)
+
+
 def test_leg_series_adv_residual_vol_is_iqr_of_sqrt_unexplained_not_raw_ev():
     # §4 gated statistic: IQR(sqrt(1 - ev)), NOT IQR(ev) and NOT raw pre_norm_advantage_std.
     ev = [0.75, 0.96, 0.51, 0.84]
@@ -208,6 +244,13 @@ def test_leg_series_var_returns_covariate_from_return_std_squared():
     ls = leg_series(rows, leg=Leg.OFF, w=0)
     assert ls.var_returns_level == pytest.approx(level(var_returns_series(stds)))
     assert ls.var_returns_vol == pytest.approx(vol(var_returns_series(stds)))
+
+
+def test_leg_series_reports_gradient_cv_volatility():
+    cvs = [0.10, 0.20, 0.15, 0.30]
+    rows = [_update(batch=i, explained_variance=0.5, gradient_cv=cv) for i, cv in enumerate(cvs)]
+    ls = leg_series(rows, leg=Leg.OFF, w=0)
+    assert ls.gradient_cv_vol == pytest.approx(vol(cvs))
 
 
 def test_leg_series_reports_ev_return_variance_distribution_for_the_caveat():
@@ -312,6 +355,21 @@ def test_validate_pair_rejects_off_arm_carrying_hra_metric():
     assert any("OFF" in r and "hra" in r.lower() for r in v.reasons)
 
 
+def test_validate_pair_rejects_off_arm_carrying_target_scale_metric():
+    off = [
+        _update(
+            explained_variance=0.8,
+            value_main_target_scale=1.7,
+            cf_value_target_scale=6.3,
+            ev_return_variance=5.0,
+        )
+        for _ in range(3)
+    ]
+    v = validate_pair(_meta(Leg.ON), _clean_on_rows(), _meta(Leg.OFF), off, w=0, budget=3)
+    assert v.valid is False
+    assert any("OFF" in r and "HRA metric" in r for r in v.reasons)
+
+
 def test_validate_pair_rejects_on_arm_missing_hra_metric():
     # §1: telemetry missing ev_main/ev_cf/ev_sum on the ON arm.
     on = _off_rows([0.8, 0.8, 0.8], ev_return_variance=5.0)  # ev_* all None -> looks OFF
@@ -367,6 +425,29 @@ def test_validate_pair_reports_all_violations_not_just_first():
     assert len(v.reasons) >= 2
 
 
+def test_validate_pair_rejects_frozen_config_mismatch():
+    on_meta = _meta(Leg.ON)
+    off_meta = RunMeta(
+        run_dir="/run/off",
+        seed=7,
+        reward_mode="SHAPED",
+        actor_advantage_source=ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+        uses_per_head_norm=False,
+        frozen_config=(("lr", 0.002),),
+    )
+    on_meta = RunMeta(
+        run_dir=on_meta.run_dir,
+        seed=on_meta.seed,
+        reward_mode=on_meta.reward_mode,
+        actor_advantage_source=on_meta.actor_advantage_source,
+        uses_per_head_norm=on_meta.uses_per_head_norm,
+        frozen_config=(("lr", 0.001),),
+    )
+    v = validate_pair(on_meta, _clean_on_rows(), off_meta, _clean_off_rows(), w=0, budget=3)
+    assert v.valid is False
+    assert any("frozen run config" in r for r in v.reasons)
+
+
 # ---- S4: assembly + calibrate/score entrypoints + provenance block ----
 
 
@@ -380,6 +461,9 @@ def _legseries(
     floored_fraction: float = 0.0,
     var_returns_vol: float = 0.10,
     raw_adv_std_vol: float = 0.10,
+    gradient_cv_vol: float = 0.10,
+    value_main_target_scale_level: float | None = None,
+    cf_value_target_scale_level: float | None = None,
 ) -> LegSeries:
     return LegSeries(
         leg=leg,
@@ -391,7 +475,10 @@ def _legseries(
         raw_adv_std_vol=raw_adv_std_vol,
         var_returns_level=1.0,
         var_returns_vol=var_returns_vol,
+        gradient_cv_vol=gradient_cv_vol,
         ev_main_vol=ev_main_vol,
+        value_main_target_scale_level=value_main_target_scale_level,
+        cf_value_target_scale_level=cf_value_target_scale_level,
         ev_return_variance_min=2.0,
         ev_return_variance_median=5.0,
         ev_return_variance_max=8.0,
@@ -502,14 +589,45 @@ def test_score_report_carries_stage0_provenance_block_verbatim():
     assert "HRA evidence: NO" in report.provenance
 
 
-def test_score_marks_diagnostic_scalars_unavailable_until_emission_lands():
-    # §9 value_main_target_scale / cf_value_target_scale are not emitted yet (S7); the report
-    # must mark them unavailable, NOT fail and NOT silently default.
+def test_score_marks_diagnostic_scalars_unavailable_when_missing():
+    # §9 value_main_target_scale / cf_value_target_scale are descriptive: old/all-missing
+    # telemetry is marked unavailable, NOT silently defaulted.
     report = score(
         [_accept_pair(i) for i in range(10)],
         _THRESHOLDS, n=10, validity=Validity(True, ()), g3_hold=True, g4_hold=True,
     )
     assert report.diagnostic_scalars_available is False
+
+
+def test_score_threads_diagnostic_scalars_when_present():
+    def with_scales(seed: int) -> SeedPair:
+        pair = _accept_pair(seed)
+        return SeedPair(
+            seed=seed,
+            on=_legseries(
+                Leg.ON,
+                ev_level=0.85,
+                adv_residual_vol=0.80,
+                ev_main_vol=0.03,
+                value_main_target_scale_level=1.7 + seed,
+                cf_value_target_scale_level=6.3 + seed,
+            ),
+            off=pair.off,
+            d_val_acc=0.0,
+            d_added_params=0.0,
+        )
+
+    report = score(
+        [with_scales(i) for i in range(10)],
+        _THRESHOLDS,
+        n=10,
+        validity=Validity(True, ()),
+        g3_hold=True,
+        g4_hold=True,
+    )
+    assert report.diagnostic_scalars_available is True
+    assert report.value_main_target_scale_levels[0] == pytest.approx(1.7)
+    assert report.cf_value_target_scale_levels[0] == pytest.approx(6.3)
 
 
 # ---- §4 LEG-B covariates: report + confound downgrade (drl-expert Finding 3) ----
@@ -551,6 +669,40 @@ def test_score_downgrades_leg_b_when_var_returns_iqr_drops_as_much_as_the_residu
     assert report.leg_b_confound_downgraded is True
     assert report.leg_b is GateResult.INCONCLUSIVE
     assert report.verdict is Verdict.INCONCLUSIVE  # was clean->ACCEPT; the confound un-cleans it
+
+
+def test_score_downgrades_leg_b_when_gradient_cv_volatility_rises():
+    def gradient_confounded(seed: int) -> SeedPair:
+        return SeedPair(
+            seed=seed,
+            on=_legseries(
+                Leg.ON,
+                ev_level=0.85,
+                adv_residual_vol=0.80,
+                ev_main_vol=0.03,
+                gradient_cv_vol=0.30,
+            ),
+            off=_legseries(
+                Leg.OFF,
+                ev_level=0.80,
+                ev_vol=0.10,
+                adv_residual_vol=1.00,
+                gradient_cv_vol=0.10,
+            ),
+            d_val_acc=0.0,
+            d_added_params=0.0,
+        )
+
+    report = score(
+        [gradient_confounded(i) for i in range(10)],
+        _THRESHOLDS,
+        n=10,
+        validity=Validity(True, ()),
+        g3_hold=True,
+        g4_hold=True,
+    )
+    assert report.leg_b_confound_downgraded is True
+    assert report.leg_b is GateResult.INCONCLUSIVE
 
 
 def test_score_does_not_downgrade_leg_b_when_var_returns_iqr_is_stable():
@@ -656,11 +808,43 @@ def test_render_packet_states_confound_downgrade_when_leg_b_demoted():
 
 
 def test_render_packet_marks_diagnostic_scalars_unavailable():
-    # §9: value_main/cf target scales are not emitted until S7 — the packet says UNAVAILABLE,
-    # it does not silently omit or fake them.
+    # §9: absent value_main/cf target scales are rendered as UNAVAILABLE; no fake defaults.
     packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
     assert "§9" in packet
     assert "unavailable" in packet.lower()
+
+
+def test_render_packet_reports_available_diagnostic_scalars():
+    def with_scales(seed: int) -> SeedPair:
+        pair = _accept_pair(seed)
+        return SeedPair(
+            seed=seed,
+            on=_legseries(
+                Leg.ON,
+                ev_level=0.85,
+                adv_residual_vol=0.80,
+                ev_main_vol=0.03,
+                value_main_target_scale_level=1.7,
+                cf_value_target_scale_level=6.3,
+            ),
+            off=pair.off,
+            d_val_acc=0.0,
+            d_added_params=0.0,
+        )
+
+    report = score(
+        [with_scales(i) for i in range(10)],
+        _THRESHOLDS,
+        n=10,
+        validity=Validity(True, ()),
+        g3_hold=True,
+        g4_hold=True,
+    )
+    packet = render_packet(report, thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "value_main_target_scale" in packet
+    assert "cf_value_target_scale" in packet
+    assert "1.7000" in packet
+    assert "6.3000" in packet
 
 
 def test_render_packet_n5_screen_pass_states_never_banked():

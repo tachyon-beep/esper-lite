@@ -430,6 +430,17 @@ class SeedTelemetry:
 # acceptance wrapper (simic/telemetry/stage2_acceptance_packet.py).
 ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED = "total_reconstructed"
 
+_PPO_HRA_ON_ONLY_FIELDS: tuple[str, ...] = (
+    "cf_value_loss",
+    "ev_main",
+    "ev_cf",
+    "ev_sum",
+    "cov_rcf_return_share",
+    "r_main_cov",
+    "value_main_target_scale",
+    "cf_value_target_scale",
+)
+
 
 @dataclass(slots=True, frozen=True)
 class TrainingStartedPayload:
@@ -1052,6 +1063,14 @@ class PPOUpdatePayload:
             raise ValueError(
                 f"Expected op_valid_mask length {NUM_OPS}, got {len(self.op_valid_mask)}."
             )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize PPO update telemetry while preserving ON-only field absence on OFF legs."""
+        payload = dataclasses.asdict(self)
+        for key in _PPO_HRA_ON_ONLY_FIELDS:
+            if payload[key] is None:
+                del payload[key]
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PPOUpdatePayload":

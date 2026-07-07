@@ -427,6 +427,16 @@ class ValueNormalizer:
             return 1.0
         return self.std.item()
 
+    def scale_tensor(self, device: str | torch.device | None = None) -> torch.Tensor:
+        """Current normalization scale as a detached tensor for batched telemetry reduction."""
+        target_device = self._device if device is None else torch.device(device)
+        if not self.has_valid_stats:
+            return torch.ones((), device=target_device)
+        scale = self.std.detach()
+        if scale.device != target_device:
+            scale = scale.to(target_device)
+        return scale
+
     def to(self, device: str | torch.device) -> "ValueNormalizer":
         """Move stats to device."""
         device = torch.device(device) if isinstance(device, str) else device

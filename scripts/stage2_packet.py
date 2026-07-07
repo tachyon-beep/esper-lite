@@ -68,10 +68,14 @@ def main(argv: list[str] | None = None) -> int:
     conn = duckdb.connect(":memory:")
     try:
         create_views(conn, args.telemetry_dir)
-        if args.command == "calibrate":
-            text = calibrate_from_spec(conn, spec)
-        else:
-            text = packet_from_spec(conn, spec)
+        try:
+            if args.command == "calibrate":
+                text = calibrate_from_spec(conn, spec)
+            else:
+                text = packet_from_spec(conn, spec)
+        except (KeyError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     finally:
         conn.close()
 

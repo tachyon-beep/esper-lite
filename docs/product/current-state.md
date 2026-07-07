@@ -16,7 +16,7 @@ review finishes and findings are addressed. Metric it ultimately moves: host-acc
   `SeedPairing`/`build_report` (scoring-phase assembler; caller-supplied RunMeta, never calibrates /
   never reads `actor_advantage_source`). **236 telemetry-suite green, torch-free, NO training-code
   touch.** **S7 BUILT (PDR-0042, commit `9666fe0c`):** §9 `value_main_target_scale` /
-  `value_cf_target_scale` emission inside the HRA-ON block, strict reducer whitelist, leyline
+  `cf_value_target_scale` emission inside the HRA-ON block, strict reducer whitelist, leyline
   `actor_advantage_source` provenance pipe into `TrainingStartedPayload` + runs view, `read_run_meta`,
   G4 guard-channel reader, explicit G3/G4 threshold predicates, and runnable `scripts/stage2_packet.py`
   (`calibrate` / `score`, fail-closed JSONL corruption path). **Code-complete is not accepted:**

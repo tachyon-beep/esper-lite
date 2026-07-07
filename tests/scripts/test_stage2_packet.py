@@ -40,6 +40,17 @@ def _write_run(telemetry_dir: Path, run_name: str, *, seed: int, on: bool, expl:
                 "reward_mode": "shaped",
                 "seed": seed,
                 "n_envs": 1,
+                "n_episodes": 5,
+                "max_epochs": 150,
+                "max_batches": 5,
+                "lr": 0.001,
+                "clip_ratio": 0.2,
+                "entropy_coef": 0.01,
+                "param_budget": 100_000,
+                "host_params": 100_000,
+                "policy_device": "cpu",
+                "slot_ids": ["early"],
+                "env_devices": ["cpu"],
                 "actor_advantage_source": "total_reconstructed",
             },
         }
@@ -52,12 +63,15 @@ def _write_run(telemetry_dir: Path, run_name: str, *, seed: int, on: bool, expl:
             "ev_return_variance": 5.0,
             "pre_norm_advantage_std": 1.0,
             "return_std": 3.0 + _STD_JITTER[b],
+            "gradient_cv": 0.10,
             "advantage_per_head_normalized": False,
         }
         if on:
             data["ev_sum"] = expl + _EV_JITTER[b]
             data["ev_main"] = 0.03
             data["ev_cf"] = 0.10
+            data["value_main_target_scale"] = 1.7
+            data["cf_value_target_scale"] = 6.3
         events.append(
             {
                 "event_id": f"ppo-{run_name}-{b}",
@@ -180,3 +194,17 @@ def test_corrupt_jsonl_aborts_before_scoring(tmp_path, capsys):
     )
     assert rc == 2
     assert "not clean" in capsys.readouterr().err
+
+
+def test_calibrate_rejects_on_run_in_off_dirs(tmp_path, capsys):
+    telemetry_dir = tmp_path / "telemetry"
+    telemetry_dir.mkdir()
+    _write_pairset(telemetry_dir, 5)
+
+    spec = tmp_path / "calibrate.json"
+    spec.write_text(json.dumps({"off_run_dirs": ["on_0"], "w": 0, "budget": 2}))
+    rc = stage2_packet_main(
+        ["calibrate", "--telemetry-dir", str(telemetry_dir), "--spec", str(spec)]
+    )
+    assert rc == 1
+    assert "OFF arm carries" in capsys.readouterr().err

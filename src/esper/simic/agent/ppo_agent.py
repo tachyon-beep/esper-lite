@@ -821,7 +821,7 @@ class PPOAgent:
         # New (fixed): running_std is consistent, GAE denormalizes with same scale
         self.value_normalizer.update(valid_returns)
         normalized_returns = self.value_normalizer.normalize(valid_returns).detach()
-        value_target_scale = torch.tensor(self.value_normalizer.get_scale(), device=valid_returns.device)
+        value_target_scale = self.value_normalizer.scale_tensor(valid_returns.device)
         metrics["value_target_scale"] = [value_target_scale]
 
         # EV-stab Stage 2 (§4.5 per-stream targets): the total normalizer above stays the
@@ -841,10 +841,10 @@ class PPOAgent:
             # byte-identical (the §8 contract the acceptance wrapper's §1 signature check
             # relies on). Descriptive, not gating.
             metrics["value_main_target_scale"] = [
-                torch.tensor(self.value_main_normalizer.get_scale(), device=valid_returns.device)
+                self.value_main_normalizer.scale_tensor(valid_returns.device)
             ]
             metrics["cf_value_target_scale"] = [
-                torch.tensor(self.cf_value_normalizer.get_scale(), device=valid_returns.device)
+                self.cf_value_normalizer.scale_tensor(valid_returns.device)
             ]
             normalized_returns_main: torch.Tensor | None = (
                 self.value_main_normalizer.normalize(valid_returns_main).detach()

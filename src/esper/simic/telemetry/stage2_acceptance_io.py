@@ -33,6 +33,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     g4_hold_from_counts,
     leg_series,
     render_packet,
+    require_hra_signature,
     score,
     validate_pair,
 )
@@ -47,9 +48,25 @@ _PPO_UPDATE_COLUMNS: tuple[str, ...] = (
     "ev_sum",
     "ev_main",
     "ev_cf",
+    "value_main_target_scale",
+    "cf_value_target_scale",
     "ev_return_variance",
     "pre_norm_advantage_std",
     "return_std",
+    "gradient_cv",
+)
+
+_FROZEN_RUN_CONFIG_COLUMNS: tuple[str, ...] = (
+    "task",
+    "n_envs",
+    "n_episodes",
+    "max_epochs",
+    "max_batches",
+    "lr",
+    "clip_ratio",
+    "entropy_coef",
+    "param_budget",
+    "host_params",
 )
 
 
@@ -90,9 +107,12 @@ def row_to_update(row: dict[str, Any]) -> UpdateRow:
         ev_sum=_optional_float(row, "ev_sum"),
         ev_main=_optional_float(row, "ev_main"),
         ev_cf=_optional_float(row, "ev_cf"),
+        value_main_target_scale=_optional_float(row, "value_main_target_scale"),
+        cf_value_target_scale=_optional_float(row, "cf_value_target_scale"),
         ev_return_variance=float(_require(row, "ev_return_variance")),
         pre_norm_advantage_std=float(_require(row, "pre_norm_advantage_std")),
         return_std=float(_require(row, "return_std")),
+        gradient_cv=float(_require(row, "gradient_cv")),
     )
 
 
@@ -202,13 +222,16 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
     """
     rows = _rows(
         conn,
-        "SELECT seed, reward_mode, actor_advantage_source FROM runs WHERE run_dir = ?",
+        "SELECT seed, reward_mode, actor_advantage_source, "
+        + ", ".join(_FROZEN_RUN_CONFIG_COLUMNS)
+        + " FROM runs WHERE run_dir = ?",
         [run_dir],
     )
     if not rows:
         raise ValueError(f"no runs row for run_dir={run_dir!r}")
     row = rows[0]
-    for column in ("seed", "reward_mode", "actor_advantage_source"):
+    required_columns = ("seed", "reward_mode", "actor_advantage_source", *_FROZEN_RUN_CONFIG_COLUMNS)
+    for column in required_columns:
         if row[column] is None:
             raise ValueError(
                 f"runs.{column} is NULL for run_dir={run_dir!r} — "
@@ -219,12 +242,14 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
                     else "a required provenance field is missing"
                 )
             )
+    frozen_config = tuple((column, row[column]) for column in _FROZEN_RUN_CONFIG_COLUMNS)
     return RunMeta(
         run_dir=run_dir,
         seed=int(row["seed"]),
         reward_mode=str(row["reward_mode"]),
         actor_advantage_source=str(row["actor_advantage_source"]),
         uses_per_head_norm=read_run_uses_per_head_norm(conn, run_dir),
+        frozen_config=frozen_config,
     )
 
 
@@ -448,7 +473,9 @@ def calibrate_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -
     """
     off_legs = []
     for run_dir in spec["off_run_dirs"]:
-        series = leg_series(read_leg(conn, run_dir), leg=Leg.OFF, w=spec["w"])
+        rows = read_leg(conn, run_dir)
+        require_hra_signature(rows, Leg.OFF, run_dir=run_dir)
+        series = leg_series(rows, leg=Leg.OFF, w=spec["w"])
         if series.n_updates_scored < spec["budget"]:
             raise ValueError(
                 f"OFF leg {run_dir!r} scores {series.n_updates_scored} updates < budget "

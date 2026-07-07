@@ -103,6 +103,66 @@ allow_hits:
     owner: "john"
     reason: "LSTM health monitoring, simic-internal"
 
+  - key: "src/esper/simic/telemetry/stage2_acceptance.py:enum:GateResult"
+    owner: "john"
+    reason: "Stage-2 acceptance gate local scoring outcome, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance.py:enum:Verdict"
+    owner: "john"
+    reason: "Stage-2 acceptance gate local composite verdict, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_io.py:dataclass:SeedPairing"
+    owner: "john"
+    reason: "Stage-2 acceptance CLI assembly input, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_io.py:dataclass:BuiltReport"
+    owner: "john"
+    reason: "Stage-2 acceptance CLI assembly result, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:enum:Leg"
+    owner: "john"
+    reason: "Stage-2 acceptance ON/OFF arm marker, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:UpdateRow"
+    owner: "john"
+    reason: "Stage-2 acceptance typed ppo_updates row, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:LegSeries"
+    owner: "john"
+    reason: "Stage-2 acceptance per-leg reduction, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:RunMeta"
+    owner: "john"
+    reason: "Stage-2 acceptance run provenance/config bundle, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:Validity"
+    owner: "john"
+    reason: "Stage-2 acceptance validity result, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:ChurnRates"
+    owner: "john"
+    reason: "Stage-2 acceptance G3 churn input, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:GuardChannelCounts"
+    owner: "john"
+    reason: "Stage-2 acceptance G4 guard-channel input, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:FrozenThresholds"
+    owner: "john"
+    reason: "Stage-2 acceptance frozen threshold bundle, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:CalibrationReport"
+    owner: "john"
+    reason: "Stage-2 acceptance OFF-leg calibration result, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:SeedPair"
+    owner: "john"
+    reason: "Stage-2 acceptance pure per-seed pair, simic-internal"
+
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:Stage2Report"
+    owner: "john"
+    reason: "Stage-2 acceptance verdict packet payload, simic-internal"
+
   - key: "src/esper/simic/agent/rollout_buffer.py:dataclass:RollbackPenaltyResult"
     owner: "john"
     reason: "Rollback penalty computation result, simic-internal rollout-buffer type"

@@ -53,9 +53,12 @@ def _full_row(**overrides) -> dict:
         ev_sum=None,
         ev_main=None,
         ev_cf=None,
+        value_main_target_scale=None,
+        cf_value_target_scale=None,
         ev_return_variance=5.0,
         pre_norm_advantage_std=1.0,
         return_std=3.0,
+        gradient_cv=0.10,
         advantage_per_head_normalized=False,
     )
     row.update(overrides)
@@ -68,17 +71,33 @@ def _full_row(**overrides) -> dict:
 def test_row_to_update_maps_all_fields():
     row = _full_row(
         inner_epoch=2, batch=3, explained_variance=0.7, ev_sum=0.7, ev_main=0.2, ev_cf=0.1,
-        ev_return_variance=8.0, pre_norm_advantage_std=1.5, return_std=2.0,
+        value_main_target_scale=1.7, cf_value_target_scale=6.3,
+        ev_return_variance=8.0, pre_norm_advantage_std=1.5, return_std=2.0, gradient_cv=0.4,
     )
     assert row_to_update(row) == UpdateRow(
         inner_epoch=2, batch=3, explained_variance=0.7, ev_sum=0.7, ev_main=0.2, ev_cf=0.1,
-        ev_return_variance=8.0, pre_norm_advantage_std=1.5, return_std=2.0,
+        value_main_target_scale=1.7, cf_value_target_scale=6.3,
+        ev_return_variance=8.0, pre_norm_advantage_std=1.5, return_std=2.0, gradient_cv=0.4,
     )
 
 
 def test_row_to_update_preserves_null_per_stream_ev_on_off_leg():
-    u = row_to_update(_full_row(ev_sum=None, ev_main=None, ev_cf=None))
-    assert (u.ev_sum, u.ev_main, u.ev_cf) == (None, None, None)
+    u = row_to_update(
+        _full_row(
+            ev_sum=None,
+            ev_main=None,
+            ev_cf=None,
+            value_main_target_scale=None,
+            cf_value_target_scale=None,
+        )
+    )
+    assert (
+        u.ev_sum,
+        u.ev_main,
+        u.ev_cf,
+        u.value_main_target_scale,
+        u.cf_value_target_scale,
+    ) == (None, None, None, None, None)
 
 
 def test_row_to_update_fails_loud_on_missing_required_column():
@@ -112,17 +131,20 @@ def _conn_with_updates(rows: list[dict]) -> duckdb.DuckDBPyConnection:
         CREATE TABLE ppo_updates (
             run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            pre_norm_advantage_std DOUBLE, return_std DOUBLE, advantage_per_head_normalized BOOLEAN
+            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
+            pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
+            advantage_per_head_normalized BOOLEAN
         )
         """
     )
     for r in rows:
         conn.execute(
-            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [
                 r["run_dir"], r["inner_epoch"], r["batch"], r["explained_variance"], r["ev_sum"],
-                r["ev_main"], r["ev_cf"], r["ev_return_variance"], r["pre_norm_advantage_std"],
-                r["return_std"], r["advantage_per_head_normalized"],
+                r["ev_main"], r["ev_cf"], r["ev_return_variance"], r["value_main_target_scale"],
+                r["cf_value_target_scale"], r["pre_norm_advantage_std"], r["return_std"],
+                r["gradient_cv"], r["advantage_per_head_normalized"],
             ],
         )
     return conn
@@ -153,9 +175,20 @@ def test_read_leg_marshals_null_ev_columns_to_none():
 
 
 def test_read_leg_marshals_populated_ev_columns_on_on_leg():
-    conn = _conn_with_updates([_full_row(run_dir="/A", ev_sum=0.8, ev_main=0.3, ev_cf=0.1)])
+    conn = _conn_with_updates([
+        _full_row(
+            run_dir="/A", ev_sum=0.8, ev_main=0.3, ev_cf=0.1,
+            value_main_target_scale=1.7, cf_value_target_scale=6.3,
+        )
+    ])
     u = read_leg(conn, "/A")[0]
-    assert (u.ev_sum, u.ev_main, u.ev_cf) == (0.8, 0.3, 0.1)
+    assert (
+        u.ev_sum,
+        u.ev_main,
+        u.ev_cf,
+        u.value_main_target_scale,
+        u.cf_value_target_scale,
+    ) == (0.8, 0.3, 0.1, 1.7, 6.3)
 
 
 def test_read_leg_fails_loud_on_unknown_run_dir():
@@ -366,7 +399,8 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
         CREATE TABLE ppo_updates (
             run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            pre_norm_advantage_std DOUBLE, return_std DOUBLE
+            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
+            pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE
         )
         """
     )
@@ -390,13 +424,18 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
             expl_b = s["expl"] + ev_jitter[b]
             return_std_b = 3.0 + std_jitter[b]
             conn.execute(
-                "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     s["run_dir"], 0, b, expl_b,
                     expl_b if is_on else None,       # ev_sum: total-EV comparand on ON, null on OFF
                     0.03 if is_on else None,         # ev_main (feeds §5 MECH), null on OFF
                     0.10 if is_on else None,         # ev_cf, null on OFF
-                    5.0, 1.0, return_std_b,          # ev_return_variance (>floor), adv_std, return_std
+                    5.0,
+                    1.7 if is_on else None,
+                    6.3 if is_on else None,
+                    1.0,
+                    return_std_b,
+                    0.10,
                 ],
             )
         for env_id in s.get("env_ids", list(range(s["n_envs"]))):
@@ -492,21 +531,65 @@ def _conn_with_runs_meta(rows: list[dict]) -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect(":memory:")
     conn.execute(
         "CREATE TABLE runs (run_dir VARCHAR, seed INTEGER, reward_mode VARCHAR, "
-        "actor_advantage_source VARCHAR)"
+        "actor_advantage_source VARCHAR, task VARCHAR, n_envs INTEGER, n_episodes INTEGER, "
+        "max_epochs INTEGER, max_batches INTEGER, lr DOUBLE, clip_ratio DOUBLE, "
+        "entropy_coef DOUBLE, param_budget INTEGER, host_params INTEGER)"
     )
     conn.execute(
         "CREATE TABLE ppo_updates (run_dir VARCHAR, advantage_per_head_normalized BOOLEAN)"
     )
     for r in rows:
+        full = {
+            "task": "cifar_baseline",
+            "n_envs": 1,
+            "n_episodes": 5,
+            "max_epochs": 150,
+            "max_batches": 5,
+            "lr": 0.001,
+            "clip_ratio": 0.2,
+            "entropy_coef": 0.01,
+            "param_budget": 100_000,
+            "host_params": 100_000,
+        }
+        full.update(r)
         conn.execute(
-            "INSERT INTO runs VALUES (?,?,?,?)",
-            [r["run_dir"], r["seed"], r["reward_mode"], r["actor_advantage_source"]],
+            "INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                full["run_dir"],
+                full["seed"],
+                full["reward_mode"],
+                full["actor_advantage_source"],
+                full["task"],
+                full["n_envs"],
+                full["n_episodes"],
+                full["max_epochs"],
+                full["max_batches"],
+                full["lr"],
+                full["clip_ratio"],
+                full["entropy_coef"],
+                full["param_budget"],
+                full["host_params"],
+            ],
         )
         conn.execute(
             "INSERT INTO ppo_updates VALUES (?, ?)",
-            [r["run_dir"], r.get("per_head_norm", False)],
+            [full["run_dir"], full.get("per_head_norm", False)],
         )
     return conn
+
+
+_RUN_META_FROZEN_CONFIG = (
+    ("task", "cifar_baseline"),
+    ("n_envs", 1),
+    ("n_episodes", 5),
+    ("max_epochs", 150),
+    ("max_batches", 5),
+    ("lr", 0.001),
+    ("clip_ratio", 0.2),
+    ("entropy_coef", 0.01),
+    ("param_budget", 100_000),
+    ("host_params", 100_000),
+)
 
 
 def test_read_run_meta_reads_provenance_from_runs_view():
@@ -519,6 +602,7 @@ def test_read_run_meta_reads_provenance_from_runs_view():
         run_dir="/A", seed=7, reward_mode="SHAPED",
         actor_advantage_source=ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
         uses_per_head_norm=False,
+        frozen_config=_RUN_META_FROZEN_CONFIG,
     )
 
 
@@ -633,6 +717,13 @@ def test_g3_hold_from_churn_fails_on_materially_elevated_prune():
     assert g3_hold_from_churn(on, off, ratio_max=1.5) is False
 
 
+def test_g3_hold_from_churn_fails_on_materially_elevated_fossilize():
+    # Fossilization-heavy reward gaming is churn too; G3 must not ignore it.
+    on = ChurnRates(germinate=12.0, prune=12.0, fossilize=3.0)
+    off = ChurnRates(germinate=12.0, prune=12.0, fossilize=1.0)
+    assert g3_hold_from_churn(on, off, ratio_max=1.5) is False
+
+
 # ---- S7: CLI core — calibrate_from_spec / packet_from_spec (telemetry -> packet, end to end) ----
 
 
@@ -644,14 +735,17 @@ def _full_stage2_conn(
     conn = duckdb.connect(":memory:")
     conn.execute(
         "CREATE TABLE runs (run_dir VARCHAR, seed INTEGER, reward_mode VARCHAR, "
-        "actor_advantage_source VARCHAR, n_envs INTEGER)"
+        "actor_advantage_source VARCHAR, n_envs INTEGER, n_episodes INTEGER, max_epochs INTEGER, "
+        "max_batches INTEGER, lr DOUBLE, clip_ratio DOUBLE, entropy_coef DOUBLE, "
+        "param_budget INTEGER, host_params INTEGER, task VARCHAR)"
     )
     conn.execute(
         """
         CREATE TABLE ppo_updates (
             run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            pre_norm_advantage_std DOUBLE, return_std DOUBLE,
+            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
+            pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
             advantage_per_head_normalized BOOLEAN
         )
         """
@@ -673,19 +767,40 @@ def _full_stage2_conn(
         for leg, expl in (("on", 0.85), ("off", 0.80)):
             run_dir = f"/{leg}/{seed}"
             conn.execute(
-                "INSERT INTO runs VALUES (?,?,?,?,?)",
-                [run_dir, seed, "SHAPED", ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED, 1],
+                "INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    run_dir,
+                    seed,
+                    "SHAPED",
+                    ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+                    1,
+                    n,
+                    150,
+                    n,
+                    0.001,
+                    0.2,
+                    0.01,
+                    100_000,
+                    100_000,
+                    "cifar_baseline",
+                ],
             )
             is_on = leg == "on"
             for b in range(4):
                 conn.execute(
-                    "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     [
                         run_dir, 0, b, expl + ev_jitter[b],
                         expl + ev_jitter[b] if is_on else None,
                         0.03 if is_on else None,
                         0.10 if is_on else None,
-                        5.0, 1.0, 3.0 + std_jitter[b], False,
+                        5.0,
+                        1.7 if is_on else None,
+                        6.3 if is_on else None,
+                        1.0,
+                        3.0 + std_jitter[b],
+                        0.10,
+                        False,
                     ],
                 )
             conn.execute(
@@ -719,7 +834,14 @@ def test_packet_from_spec_produces_a_scored_markdown_packet():
     assert "# Stage-2 HRA MAJOR-1 acceptance verdict" in packet
     assert "Verdict:" in packet
     assert "INVALID" not in packet.splitlines()[2]  # a clean fixture scores, §1 passes
-    assert "Stage-0 variance gate" in packet  # §0 provenance travels
+    assert "value_main_target_scale" in packet
+    assert "cf_value_target_scale" in packet
+
+
+def test_calibrate_from_spec_rejects_on_signature_run_in_off_dirs():
+    conn, _spec = _full_stage2_conn(5)
+    with pytest.raises(ValueError, match="OFF arm carries"):
+        calibrate_from_spec(conn, {"off_run_dirs": ["/on/0"], "w": 0, "budget": 2})
 
 
 def test_packet_from_spec_material_guard_elevation_fails_g4():

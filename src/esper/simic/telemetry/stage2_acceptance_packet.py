@@ -39,6 +39,9 @@ from esper.simic.telemetry.stage2_acceptance import (
 )
 
 
+FrozenConfigValue = str | int | float | bool | None
+
+
 class Leg(enum.Enum):
     """Which arm of a fresh-init pair a run is (§2 pairing unit = seed)."""
 
@@ -82,9 +85,12 @@ class UpdateRow:
     ev_sum: float | None
     ev_main: float | None
     ev_cf: float | None
+    value_main_target_scale: float | None
+    cf_value_target_scale: float | None
     ev_return_variance: float
     pre_norm_advantage_std: float
     return_std: float
+    gradient_cv: float
 
 
 def burn_in_discard(rows: list[UpdateRow], w: int) -> list[UpdateRow]:
@@ -163,10 +169,33 @@ class LegSeries:
     raw_adv_std_vol: float  # §4 descriptive covariate: IQR(pre_norm_advantage_std)
     var_returns_level: float  # §8E context: median Var(returns_total)
     var_returns_vol: float  # §8E confound: IQR(Var(returns_total))
+    gradient_cv_vol: float  # §4 corroboration: IQR(gradient_cv)
     ev_main_vol: float | None  # §5 MECH: IQR(ev_main); ON only, None on OFF
+    value_main_target_scale_level: float | None  # §9 diagnostic scale level; ON only when emitted
+    cf_value_target_scale_level: float | None  # §9 diagnostic scale level; ON only when emitted
     ev_return_variance_min: float  # §8B caveat distribution
     ev_return_variance_median: float
     ev_return_variance_max: float
+
+
+def _optional_level_for_on(rows: list[UpdateRow], field_name: str) -> float | None:
+    """Return the median when an ON-only diagnostic is fully emitted; fail on partial streams."""
+    values: list[float] = []
+    missing = 0
+    for row in rows:
+        value = row.value_main_target_scale if field_name == "value_main_target_scale" else row.cf_value_target_scale
+        if value is None:
+            missing += 1
+        else:
+            values.append(value)
+    if missing == len(rows):
+        return None
+    if missing:
+        raise ValueError(
+            f"{field_name} is partially emitted on scored ON-leg updates "
+            f"({len(values)}/{len(rows)} present); §9 diagnostics must be all-present or all-absent"
+        )
+    return level(values)
 
 
 def leg_series(
@@ -213,6 +242,13 @@ def leg_series(
         var_returns_level=level(var_returns),
         var_returns_vol=vol(var_returns),
         ev_main_vol=ev_main_vol,
+        gradient_cv_vol=vol([row.gradient_cv for row in scored]),
+        value_main_target_scale_level=(
+            _optional_level_for_on(scored, "value_main_target_scale") if leg is Leg.ON else None
+        ),
+        cf_value_target_scale_level=(
+            _optional_level_for_on(scored, "cf_value_target_scale") if leg is Leg.ON else None
+        ),
         ev_return_variance_min=min(erv),
         ev_return_variance_median=level(erv),
         ev_return_variance_max=max(erv),
@@ -232,6 +268,7 @@ class RunMeta:
     reward_mode: str
     actor_advantage_source: str
     uses_per_head_norm: bool
+    frozen_config: tuple[tuple[str, FrozenConfigValue], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -322,12 +359,16 @@ def g4_hold_from_counts(
 def g3_hold_from_churn(on: ChurnRates, off: ChurnRates, *, ratio_max: float) -> bool:
     """§6 G3 — churn not reward-farmed: ON germinate/prune per-episode rates must not be
     materially elevated over OFF (rate_on <= ratio_max * rate_off, per channel).
-
-    Fossilize is deliberately excluded: elevated fossilization is judged by G2 (params)
-    and the value legs, and is not per-se farming. DEFINITIONAL-PENDING: ratio_max has no
-    default — freeze it in the gate doc (§11) before ON scoring; shape flagged for drl review.
+    Fossilize is included because the gate doc's churn guard names germinate/prune/fossilize,
+    and fossilization-heavy reward gaming can otherwise pass G3 while changing lifecycle pressure.
+    DEFINITIONAL-PENDING: ratio_max has no default — freeze it in the gate doc (§11) before ON
+    scoring; shape flagged for drl review.
     """
-    return on.germinate <= ratio_max * off.germinate and on.prune <= ratio_max * off.prune
+    return (
+        on.germinate <= ratio_max * off.germinate
+        and on.prune <= ratio_max * off.prune
+        and on.fossilize <= ratio_max * off.fossilize
+    )
 
 
 def _nonfinite_fields(row: UpdateRow, leg: Leg) -> list[str]:
@@ -343,6 +384,8 @@ def _nonfinite_fields(row: UpdateRow, leg: Leg) -> list[str]:
         bad.append("pre_norm_advantage_std")
     if not math.isfinite(row.return_std):
         bad.append("return_std")
+    if not math.isfinite(row.gradient_cv):
+        bad.append("gradient_cv")
     if not math.isfinite(row.ev_return_variance):
         bad.append("ev_return_variance")
     if leg is Leg.ON:
@@ -352,6 +395,10 @@ def _nonfinite_fields(row: UpdateRow, leg: Leg) -> list[str]:
             bad.append("ev_main")
         if row.ev_cf is not None and not math.isfinite(row.ev_cf):
             bad.append("ev_cf")
+        if row.value_main_target_scale is not None and not math.isfinite(row.value_main_target_scale):
+            bad.append("value_main_target_scale")
+        if row.cf_value_target_scale is not None and not math.isfinite(row.cf_value_target_scale):
+            bad.append("cf_value_target_scale")
     return bad
 
 
@@ -366,8 +413,33 @@ def _hra_signature_violation(rows: list[UpdateRow], leg: Leg) -> str | None:
                 "signature does not match a hra_value_decomposition=True run"
             )
         return None
-    if any(r.ev_sum is not None or r.ev_main is not None or r.ev_cf is not None for r in rows):
-        return "OFF arm carries a hra-gated ev_* metric — a bug, not a null (§1)"
+    if any(
+        r.ev_sum is not None
+        or r.ev_main is not None
+        or r.ev_cf is not None
+        or r.value_main_target_scale is not None
+        or r.cf_value_target_scale is not None
+        for r in rows
+    ):
+        return "OFF arm carries a hra-gated HRA metric — a bug, not a null (§1/§9)"
+    return None
+
+
+def require_hra_signature(rows: list[UpdateRow], leg: Leg, *, run_dir: str) -> None:
+    """Fail closed when a caller-supplied leg label disagrees with the telemetry signature."""
+    violation = _hra_signature_violation(rows, leg)
+    if violation is not None:
+        raise ValueError(f"{run_dir!r}: {violation}")
+    if leg is Leg.ON:
+        scale_pairs = [(row.value_main_target_scale, row.cf_value_target_scale) for row in rows]
+        present = [a is not None and b is not None for a, b in scale_pairs]
+        absent = [a is None and b is None for a, b in scale_pairs]
+        if not (all(present) or all(absent)):
+            raise ValueError(
+                f"{run_dir!r}: §9 target-scale diagnostics are partially emitted; "
+                "value_main_target_scale and cf_value_target_scale must be both present on every "
+                "ON update, or both absent on every ON update"
+            )
     return None
 
 
@@ -389,9 +461,10 @@ def _validate_leg(
             "(§0 scope-fence: objective-B run under an objective-A gate)"
         )
 
-    signature = _hra_signature_violation(rows, leg)
-    if signature is not None:
-        reasons.append(signature)
+    try:
+        require_hra_signature(rows, leg, run_dir=meta.run_dir)
+    except ValueError as exc:
+        reasons.append(str(exc))
 
     post_burnin = burn_in_discard(rows, w)
     if not post_burnin:
@@ -448,6 +521,11 @@ def validate_pair(
         reasons.append(
             f"reward_mode mismatch: ON={on_meta.reward_mode!r} != OFF={off_meta.reward_mode!r} "
             "(the toggle must be decomposition-only, §10)"
+        )
+    if on_meta.frozen_config != off_meta.frozen_config:
+        reasons.append(
+            "frozen run config mismatch: only hra_value_decomposition may differ (§10); "
+            f"ON={on_meta.frozen_config!r} OFF={off_meta.frozen_config!r}"
         )
     if on_meta.uses_per_head_norm or off_meta.uses_per_head_norm:
         reasons.append(
@@ -539,6 +617,10 @@ class Stage2Report:
     var_returns_vol_off: tuple[float, ...]
     raw_adv_std_vol_on: tuple[float, ...]
     raw_adv_std_vol_off: tuple[float, ...]
+    gradient_cv_vol_on: tuple[float, ...]
+    gradient_cv_vol_off: tuple[float, ...]
+    value_main_target_scale_levels: tuple[float, ...]
+    cf_value_target_scale_levels: tuple[float, ...]
     # §4 confound downgrade: LEG-B PASS demoted to INCONCLUSIVE when the ON adv-residual-vol reduction
     # is matched by a proportional IQR(Var(returns_total)) drop (a return-regime artifact, not shielding).
     leg_b_confound_downgraded: bool
@@ -621,6 +703,10 @@ def score(
             var_returns_vol_off=(),
             raw_adv_std_vol_on=(),
             raw_adv_std_vol_off=(),
+            gradient_cv_vol_on=(),
+            gradient_cv_vol_off=(),
+            value_main_target_scale_levels=(),
+            cf_value_target_scale_levels=(),
             leg_b_confound_downgraded=False,
             provenance=STAGE0_PROVENANCE_BLOCK,
             diagnostic_scalars_available=False,
@@ -646,10 +732,28 @@ def score(
     delta_var = [
         _relative_reduction(pair.on.var_returns_vol, pair.off.var_returns_vol) for pair in pairs
     ]
+    gradient_cv_vol_on = [pair.on.gradient_cv_vol for pair in pairs]
+    gradient_cv_vol_off = [pair.off.gradient_cv_vol for pair in pairs]
+    delta_gradient_cv = [on - off for on, off in zip(gradient_cv_vol_on, gradient_cv_vol_off, strict=True)]
     leg_b_confound_downgraded = False
     if leg_b_result is GateResult.PASS and level(delta_var) <= level(delta_b):
         leg_b_result = GateResult.INCONCLUSIVE
         leg_b_confound_downgraded = True
+    if leg_b_result is GateResult.PASS and level(delta_gradient_cv) > 0.0:
+        leg_b_result = GateResult.INCONCLUSIVE
+        leg_b_confound_downgraded = True
+
+    value_main_scales = tuple(
+        pair.on.value_main_target_scale_level
+        for pair in pairs
+        if pair.on.value_main_target_scale_level is not None
+    )
+    cf_value_scales = tuple(
+        pair.on.cf_value_target_scale_level
+        for pair in pairs
+        if pair.on.cf_value_target_scale_level is not None
+    )
+    diagnostic_scalars_available = len(value_main_scales) == n and len(cf_value_scales) == n
 
     verdict = composite_verdict(
         valid=True,
@@ -680,9 +784,13 @@ def score(
         var_returns_vol_off=tuple(pair.off.var_returns_vol for pair in pairs),
         raw_adv_std_vol_on=tuple(pair.on.raw_adv_std_vol for pair in pairs),
         raw_adv_std_vol_off=tuple(pair.off.raw_adv_std_vol for pair in pairs),
+        gradient_cv_vol_on=tuple(gradient_cv_vol_on),
+        gradient_cv_vol_off=tuple(gradient_cv_vol_off),
+        value_main_target_scale_levels=value_main_scales,
+        cf_value_target_scale_levels=cf_value_scales,
         leg_b_confound_downgraded=leg_b_confound_downgraded,
         provenance=STAGE0_PROVENANCE_BLOCK,
-        diagnostic_scalars_available=False,
+        diagnostic_scalars_available=diagnostic_scalars_available,
     )
 
 
@@ -768,8 +876,8 @@ def render_packet(
     ]
 
     downgrade = (
-        "YES — the reduction is matched by an IQR(Var(returns_total)) drop, a return-regime "
-        "artifact rather than actor-path shielding (demoted to INCONCLUSIVE)"
+        "YES — the reduction is matched by a return-regime or gradient-CV volatility confound "
+        "(demoted to INCONCLUSIVE)"
         if report.leg_b_confound_downgraded
         else "NO"
     )
@@ -782,6 +890,8 @@ def render_packet(
         f"Covariate IQR(Var(returns_total)) — OFF: {_fmt_floats(report.var_returns_vol_off)}",
         f"Covariate raw IQR(pre_norm_advantage_std) — ON:  {_fmt_floats(report.raw_adv_std_vol_on)}",
         f"Covariate raw IQR(pre_norm_advantage_std) — OFF: {_fmt_floats(report.raw_adv_std_vol_off)}",
+        f"Corroboration IQR(gradient_cv) — ON:  {_fmt_floats(report.gradient_cv_vol_on)}",
+        f"Corroboration IQR(gradient_cv) — OFF: {_fmt_floats(report.gradient_cv_vol_off)}",
         f"§4 confound downgrade: {downgrade}",
         "",
     ]
@@ -814,12 +924,22 @@ def render_packet(
         "",
     ]
 
-    scalars = (
-        "available"
-        if report.diagnostic_scalars_available
-        else "UNAVAILABLE — value_main / cf target scales are not emitted until the S7 emission slice"
-    )
-    lines += ["## §9 — diagnostic scalars", "", scalars, ""]
+    if report.diagnostic_scalars_available:
+        lines += [
+            "## §9 — diagnostic scalars",
+            "",
+            "available",
+            f"value_main_target_scale per seed: {_fmt_floats(report.value_main_target_scale_levels)}",
+            f"cf_value_target_scale per seed: {_fmt_floats(report.cf_value_target_scale_levels)}",
+            "",
+        ]
+    else:
+        lines += [
+            "## §9 — diagnostic scalars",
+            "",
+            "UNAVAILABLE — value_main_target_scale / cf_value_target_scale are absent from the ON leg",
+            "",
+        ]
 
     if calibration is not None:
         lines += [

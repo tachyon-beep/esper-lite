@@ -11,6 +11,7 @@ import pytest
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
     EpochCompletedPayload,
+    PPOUpdatePayload,
     SeedGerminatedPayload,
 )
 from esper.nissa.output import (
@@ -1050,6 +1051,63 @@ class TestTGV001JsonlPayloadFields:
         assert data["alpha_curve"] == "COSINE"
         # And the JSONL re-parses back to an equal payload.
         assert SeedGerminatedPayload.from_dict(data) == payload
+
+    def test_ppo_update_off_leg_omits_absent_hra_fields_from_jsonl(self, tmp_path: Path):
+        """OFF-leg byte identity: ON-only HRA fields must not be serialized as null keys."""
+        payload = PPOUpdatePayload(
+            policy_loss=0.5,
+            value_loss=0.3,
+            entropy=0.1,
+            grad_norm=1.5,
+            kl_divergence=0.02,
+            clip_fraction=0.05,
+            nan_grad_count=0,
+            pre_clip_grad_norm=1.7,
+            gradient_cv=0.25,
+        )
+        event = TelemetryEvent(event_type=TelemetryEventType.PPO_UPDATE_COMPLETED, data=payload)
+
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        for key in (
+            "cf_value_loss",
+            "ev_main",
+            "ev_cf",
+            "ev_sum",
+            "cov_rcf_return_share",
+            "r_main_cov",
+            "value_main_target_scale",
+            "cf_value_target_scale",
+        ):
+            assert key not in data
+
+    def test_ppo_update_on_leg_keeps_hra_fields_in_jsonl(self, tmp_path: Path):
+        payload = PPOUpdatePayload(
+            policy_loss=0.5,
+            value_loss=0.3,
+            entropy=0.1,
+            grad_norm=1.5,
+            kl_divergence=0.02,
+            clip_fraction=0.05,
+            nan_grad_count=0,
+            pre_clip_grad_norm=1.7,
+            cf_value_loss=0.04,
+            ev_main=0.42,
+            ev_cf=-0.05,
+            ev_sum=0.31,
+            cov_rcf_return_share=0.52,
+            r_main_cov=0.48,
+            value_main_target_scale=1.7,
+            cf_value_target_scale=6.3,
+            gradient_cv=0.25,
+        )
+        event = TelemetryEvent(event_type=TelemetryEventType.PPO_UPDATE_COMPLETED, data=payload)
+
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["value_main_target_scale"] == pytest.approx(1.7)
+        assert data["cf_value_target_scale"] == pytest.approx(6.3)
+        assert data["ev_sum"] == pytest.approx(0.31)
 
     def test_seed_stage_changed_proof_fields_survive_jsonl(self, tmp_path: Path):
         from esper.leyline.telemetry import SeedStageChangedPayload

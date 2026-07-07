@@ -1902,6 +1902,7 @@ def test_ppo_updates_view_extracts_per_stream_target_scales(tmp_path):
             "inner_epoch": 3,
             "batch": 1,
             "explained_variance": 0.31,
+            "gradient_cv": 0.25,
             "value_main_target_scale": 1.7,
             "cf_value_target_scale": 6.3,
         },
@@ -1924,10 +1925,10 @@ def test_ppo_updates_view_extracts_per_stream_target_scales(tmp_path):
     create_views(conn, str(tmp_path))
 
     on_row = conn.execute(
-        "SELECT value_main_target_scale, cf_value_target_scale "
+        "SELECT value_main_target_scale, cf_value_target_scale, gradient_cv "
         "FROM ppo_updates WHERE event_id = 'ppo-on'"
     ).fetchone()
-    assert on_row == (1.7, 6.3)
+    assert on_row == (1.7, 6.3, 0.25)
 
     off_row = conn.execute(
         "SELECT value_main_target_scale, cf_value_target_scale "

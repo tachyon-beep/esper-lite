@@ -459,6 +459,8 @@ def test_aggregator_reduces_on_leg_metric_keys() -> None:
             "ev_sum": 0.3,
             "cov_rcf_return_share": 0.5,
             "r_main_cov": 0.8,
+            "value_main_target_scale": 1.7,
+            "cf_value_target_scale": 6.3,
         },
         {
             "cf_value_loss": 0.4,
@@ -467,6 +469,8 @@ def test_aggregator_reduces_on_leg_metric_keys() -> None:
             "ev_sum": 0.5,
             "cov_rcf_return_share": 0.7,
             "r_main_cov": 1.0,
+            "value_main_target_scale": 1.9,
+            "cf_value_target_scale": 6.5,
         },
     ]
     aggregated = _aggregate_ppo_metrics(update_metrics)
@@ -476,3 +480,5 @@ def test_aggregator_reduces_on_leg_metric_keys() -> None:
     assert aggregated["ev_sum"] == pytest.approx(0.4)
     assert aggregated["cov_rcf_return_share"] == pytest.approx(0.6)
     assert aggregated["r_main_cov"] == pytest.approx(0.9)
+    assert aggregated["value_main_target_scale"] == pytest.approx(1.8)
+    assert aggregated["cf_value_target_scale"] == pytest.approx(6.4)

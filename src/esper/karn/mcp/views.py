@@ -166,6 +166,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             -- Clip fractions
             json_extract(data, '$.clip_fraction_positive')::DOUBLE as clip_fraction_positive,
             json_extract(data, '$.clip_fraction_negative')::DOUBLE as clip_fraction_negative,
+            json_extract(data, '$.gradient_cv')::DOUBLE as gradient_cv,
             -- Q-values (op-conditioned value function)
             json_extract(data, '$.op_q_values') as op_q_values,
             json_extract(data, '$.op_valid_mask') as op_valid_mask,
