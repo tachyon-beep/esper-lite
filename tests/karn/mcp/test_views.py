@@ -80,6 +80,7 @@ def test_view_definitions_exist():
         "runs",
         "epochs",
         "ppo_updates",
+        "ppo_traceability_evidence",
         "batch_epochs",
         "trends",
         "seed_lifecycle",
@@ -97,6 +98,14 @@ def test_view_definitions_exist():
         "phase_occupancy",
     }
     assert set(VIEW_DEFINITIONS.keys()) == expected
+
+
+def test_view_catalog_advertises_ppo_traceability_evidence():
+    """The MCP view catalog documents the PPO proof evidence surface."""
+    from esper.karn.mcp.server import VIEW_CATALOG
+
+    view_names = {view["name"] for view in VIEW_CATALOG}
+    assert "ppo_traceability_evidence" in view_names
 
 
 def test_create_views_on_empty_dir():
@@ -1068,6 +1077,327 @@ def test_ppo_updates_exposes_ev_calibration_preflight_fields(tmp_path):
     ).fetchone()
 
     assert row == (7.0, 0.11, 0.35, 0.82)
+
+
+def test_ppo_updates_exposes_proof_traceability_fields(tmp_path):
+    """ppo_updates exposes status/count/value evidence needed by proof packets."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "traceability_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-trace-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 11,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "inf_grad_count": 2,
+            "update_skipped": False,
+            "skipped": False,
+            "ppo_updates_count": 3,
+            "ev_low_return_variance_count": 4,
+            "return_variance": 9.0,
+            "value_target_scale": 2.5,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            inf_grad_count,
+            update_skipped,
+            skipped,
+            ppo_updates_count,
+            ev_low_return_variance_count,
+            return_variance,
+            value_target_scale
+        FROM ppo_updates
+        """
+    ).fetchone()
+
+    assert row == (2, False, False, 3, 4, 9.0, 2.5)
+
+
+def test_ppo_traceability_evidence_summarizes_update_status(tmp_path):
+    """ppo_traceability_evidence summarizes proof-critical PPO status per cohort."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "traceability_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    started = {
+        "event_id": "start-1",
+        "event_type": "TRAINING_STARTED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": None,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "episode_id": "proof",
+            "task": "cifar_impaired",
+            "reward_mode": "simplified",
+            "amp_enabled": False,
+            "amp_dtype": "off",
+        },
+        "severity": "info",
+    }
+    outcome = {
+        "event_id": "outcome-1",
+        "event_type": "EPISODE_OUTCOME",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 1,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "env_id": 0,
+            "episode_idx": 0,
+            "final_accuracy": 75.0,
+            "param_ratio": 1.2,
+            "num_fossilized": 1,
+            "num_contributing_fossilized": 1,
+            "episode_reward": 4.0,
+            "stability_score": 0.9,
+            "reward_mode": "simplified",
+            "episode_length": 25,
+            "outcome_type": "success",
+            "germinate_count": 1,
+            "prune_count": 0,
+            "fossilize_count": 1,
+        },
+        "severity": "info",
+    }
+    learnability_fields = {
+        "head_slot_learnable_fraction": 1.0,
+        "head_blueprint_learnable_fraction": 1.0,
+        "head_style_learnable_fraction": 1.0,
+        "head_tempo_learnable_fraction": 1.0,
+        "head_alpha_target_learnable_fraction": 1.0,
+        "head_alpha_speed_learnable_fraction": 1.0,
+        "head_alpha_curve_learnable_fraction": 1.0,
+        "head_op_learnable_fraction": 1.0,
+        "head_slot_gradient_state": "finite",
+        "head_blueprint_gradient_state": "finite",
+        "head_style_gradient_state": "finite",
+        "head_tempo_gradient_state": "finite",
+        "head_alpha_target_gradient_state": "finite",
+        "head_alpha_speed_gradient_state": "finite",
+        "head_alpha_curve_gradient_state": "finite",
+        "head_op_gradient_state": "finite",
+        "head_value_grad_norm": 0.4,
+        "head_value_gradient_state": "finite",
+    }
+    update_a = {
+        "event_id": "ppo-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 1,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "policy_loss": 0.1,
+            "value_loss": 0.2,
+            "entropy": 1.0,
+            "grad_norm": 0.3,
+            "nan_grad_count": 1,
+            "inf_grad_count": 2,
+            "pre_clip_grad_norm": 0.35,
+            "kl_divergence": 0.01,
+            "clip_fraction": 0.1,
+            "ratio_min": 0.9,
+            "ratio_max": 1.1,
+            "joint_ratio_max": 1.2,
+            "value_nrmse": 0.4,
+            "ev_low_return_variance": True,
+            "ev_return_variance": 0.7,
+            "ev_low_return_variance_count": 3,
+            "return_std": 0.8,
+            "bellman_error": 0.5,
+            "v_return_correlation": 0.6,
+            "update_skipped": False,
+            "skipped": False,
+            **learnability_fields,
+        },
+        "severity": "info",
+    }
+    update_b = {
+        "event_id": "ppo-2",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 2,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "policy_loss": 0.2,
+            "value_loss": 0.3,
+            "entropy": 1.1,
+            "grad_norm": 0.4,
+            "nan_grad_count": 0,
+            "inf_grad_count": 0,
+            "pre_clip_grad_norm": 0.45,
+            "kl_divergence": 0.02,
+            "clip_fraction": 0.2,
+            "ratio_min": 0.8,
+            "ratio_max": 1.2,
+            "joint_ratio_max": 1.3,
+            "value_nrmse": 0.9,
+            "ev_low_return_variance": False,
+            "ev_return_variance": 0.8,
+            "ev_low_return_variance_count": 0,
+            "return_std": 0.9,
+            "bellman_error": 0.7,
+            "v_return_correlation": 0.4,
+            "update_skipped": False,
+            "skipped": False,
+            **learnability_fields,
+            "head_value_grad_norm": "1e999",
+        },
+        "severity": "info",
+    }
+    skipped_batch = {
+        "event_id": "batch-1",
+        "event_type": "ANALYTICS_SNAPSHOT",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 2,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "kind": "batch_stats",
+            "episodes_completed": 2,
+            "batch": 1,
+            "inner_epoch": 0,
+            "skipped_update": True,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(
+        "\n".join(
+            json.dumps(event)
+            for event in (started, outcome, update_a, update_b, skipped_batch)
+        )
+        + "\n"
+    )
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT
+            update_count,
+            valid_outcome_count,
+            missing_required_update_count,
+            invalid_required_update_count,
+            skipped_update_count,
+            nonfinite_update_count,
+            nan_grad_update_count,
+            inf_grad_update_count,
+            low_return_variance_update_count,
+            low_return_variance_epoch_count,
+            min_value_nrmse,
+            max_value_nrmse,
+            min_bellman_error,
+            max_bellman_error,
+            min_v_return_correlation,
+            max_v_return_correlation
+        FROM ppo_traceability_evidence
+        WHERE run_dir = 'traceability_run' AND group_id = 'A'
+        """
+    ).fetchone()
+
+    assert row == (2, 1, 0, 0, 1, 1, 1, 1, 1, 3, 0.4, 0.9, 0.5, 0.7, 0.4, 0.6)
+
+
+def test_ppo_traceability_evidence_keeps_outcome_group_with_zero_updates(tmp_path):
+    """Outcome-bearing cohorts stay visible even when no PPO update row exists."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "traceability_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    events = [
+        {
+            "event_id": "start-1",
+            "event_type": "TRAINING_STARTED",
+            "timestamp": datetime.now().isoformat(),
+            "seed_id": None,
+            "slot_id": None,
+            "epoch": None,
+            "group_id": "B",
+            "message": "",
+            "data": {
+                "episode_id": "proof",
+                "task": "cifar_impaired",
+                "reward_mode": "simplified",
+                "amp_enabled": False,
+                "amp_dtype": "off",
+            },
+            "severity": "info",
+        },
+        {
+            "event_id": "outcome-1",
+            "event_type": "EPISODE_OUTCOME",
+            "timestamp": datetime.now().isoformat(),
+            "seed_id": None,
+            "slot_id": None,
+            "epoch": 1,
+            "group_id": "B",
+            "message": "",
+            "data": {
+                "env_id": 0,
+                "episode_idx": 0,
+                "final_accuracy": 75.0,
+                "param_ratio": 1.2,
+                "num_fossilized": 1,
+                "num_contributing_fossilized": 1,
+                "episode_reward": 4.0,
+                "stability_score": 0.9,
+                "reward_mode": "simplified",
+                "episode_length": 25,
+                "outcome_type": "success",
+                "germinate_count": 1,
+                "prune_count": 0,
+                "fossilize_count": 1,
+            },
+            "severity": "info",
+        },
+    ]
+    events_file.write_text("\n".join(json.dumps(event) for event in events) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT update_count, valid_outcome_count, skipped_update_count
+        FROM ppo_traceability_evidence
+        WHERE run_dir = 'traceability_run' AND group_id = 'B'
+        """
+    ).fetchone()
+
+    assert row == (0, 1, 0)
 
 
 def test_ev_calibration_preflight_raises_when_required_evidence_missing(tmp_path):

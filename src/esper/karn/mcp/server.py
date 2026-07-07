@@ -33,6 +33,10 @@ VIEW_CATALOG: list[dict[str, str]] = [
         "description": "PPO health metrics (entropy, KL, clip frac, grad norms).",
     },
     {
+        "name": "ppo_traceability_evidence",
+        "description": "Proof-grade PPO update, skip, malformed, and robust-value evidence.",
+    },
+    {
         "name": "batch_epochs",
         "description": "Batch/episode progress events (throughput + rolling accuracy).",
     },

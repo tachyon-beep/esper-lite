@@ -161,6 +161,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.policy_loss')::DOUBLE as policy_loss,
             json_extract(data, '$.value_loss')::DOUBLE as value_loss,
             json_extract(data, '$.nan_grad_count')::INTEGER as nan_grad_count,
+            json_extract(data, '$.inf_grad_count')::INTEGER as inf_grad_count,
             json_extract(data, '$.bellman_error')::DOUBLE as bellman_error,
             json_extract(data, '$.v_return_correlation')::DOUBLE as v_return_correlation,
             json_extract(data, '$.entropy')::DOUBLE as entropy,
@@ -171,8 +172,12 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.value_nrmse')::DOUBLE as value_nrmse,
             json_extract(data, '$.ev_low_return_variance')::BOOLEAN as ev_low_return_variance,
             json_extract(data, '$.ev_return_variance')::DOUBLE as ev_return_variance,
+            json_extract(data, '$.ev_low_return_variance_count')::INTEGER as ev_low_return_variance_count,
             json_extract(data, '$.grad_norm')::DOUBLE as grad_norm,
             json_extract(data, '$.pre_clip_grad_norm')::DOUBLE as pre_clip_grad_norm,
+            json_extract(data, '$.ppo_updates_count')::INTEGER as ppo_updates_count,
+            json_extract(data, '$.update_skipped')::BOOLEAN as update_skipped,
+            json_extract(data, '$.skipped')::BOOLEAN as skipped,
             json_extract(data, '$.lr')::DOUBLE as lr,
             json_extract(data, '$.entropy_coef')::DOUBLE as entropy_coef,
             json_extract(data, '$.entropy_collapsed')::BOOLEAN as entropy_collapsed,
@@ -181,6 +186,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.pre_norm_advantage_std')::DOUBLE as pre_norm_advantage_std,
             json_extract(data, '$.return_mean')::DOUBLE as return_mean,
             json_extract(data, '$.return_std')::DOUBLE as return_std,
+            json_extract(data, '$.return_variance')::DOUBLE as return_variance,
             -- Advantage statistics
             json_extract(data, '$.advantage_mean')::DOUBLE as advantage_mean,
             json_extract(data, '$.advantage_std')::DOUBLE as advantage_std,
@@ -227,6 +233,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.return_var_residual_share')::DOUBLE as return_var_residual_share,
             -- Stage-2 §9 per-stream target scales (S7, ON-leg-only; NULL on OFF):
             -- descriptive "did the target get trivially easy" diagnostics, never gate inputs.
+            json_extract(data, '$.value_target_scale')::DOUBLE as value_target_scale,
             json_extract(data, '$.value_main_target_scale')::DOUBLE as value_main_target_scale,
             json_extract(data, '$.cf_value_target_scale')::DOUBLE as cf_value_target_scale,
             -- D5 slot-saturation / actor-agency diagnostics
@@ -766,6 +773,257 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.fossilize_count')::INTEGER as fossilize_count
         FROM raw_events
         WHERE event_type = 'EPISODE_OUTCOME'
+    """,
+    "ppo_traceability_evidence": """
+        CREATE OR REPLACE VIEW ppo_traceability_evidence AS
+        WITH cohorts AS (
+            SELECT run_dir, group_id FROM runs
+            UNION
+            SELECT run_dir, group_id FROM episode_outcomes
+            UNION
+            SELECT run_dir, group_id FROM ppo_updates
+            UNION
+            SELECT run_dir, group_id FROM batch_stats
+        ),
+        valid_outcomes AS (
+            SELECT
+                run_dir,
+                group_id,
+                COUNT(*) AS valid_outcome_count
+            FROM episode_outcomes
+            WHERE env_id IS NOT NULL
+              AND env_id >= 0
+              AND episode_idx IS NOT NULL
+              AND episode_idx >= 0
+              AND final_accuracy IS NOT NULL
+              AND final_accuracy BETWEEN 0.0 AND 100.0
+              AND param_ratio IS NOT NULL
+              AND param_ratio >= 1.0
+              AND num_fossilized IS NOT NULL
+              AND num_fossilized >= 0
+              AND num_contributing_fossilized IS NOT NULL
+              AND num_contributing_fossilized >= 0
+              AND num_contributing_fossilized <= num_fossilized
+              AND episode_reward IS NOT NULL
+              AND stability_score IS NOT NULL
+              AND stability_score BETWEEN 0.0 AND 1.0
+              AND reward_mode IS NOT NULL
+              AND reward_mode <> ''
+              AND episode_length IS NOT NULL
+              AND episode_length > 0
+              AND outcome_type IS NOT NULL
+              AND outcome_type <> ''
+              AND germinate_count IS NOT NULL
+              AND germinate_count >= 0
+              AND prune_count IS NOT NULL
+              AND prune_count >= 0
+              AND fossilize_count IS NOT NULL
+              AND fossilize_count >= 0
+            GROUP BY run_dir, group_id
+        ),
+        marked_updates AS (
+            SELECT
+                *,
+                (
+                    policy_loss IS NULL
+                    OR value_loss IS NULL
+                    OR entropy IS NULL
+                    OR grad_norm IS NULL
+                    OR nan_grad_count IS NULL
+                    OR inf_grad_count IS NULL
+                    OR pre_clip_grad_norm IS NULL
+                    OR kl_divergence IS NULL
+                    OR clip_fraction IS NULL
+                    OR ratio_min IS NULL
+                    OR ratio_max IS NULL
+                    OR joint_ratio_max IS NULL
+                    OR value_nrmse IS NULL
+                    OR ev_low_return_variance IS NULL
+                    OR ev_return_variance IS NULL
+                    OR ev_low_return_variance_count IS NULL
+                    OR return_std IS NULL
+                    OR bellman_error IS NULL
+                    OR v_return_correlation IS NULL
+                    OR update_skipped IS NULL
+                    OR skipped IS NULL
+                    OR head_slot_learnable_fraction IS NULL
+                    OR head_blueprint_learnable_fraction IS NULL
+                    OR head_style_learnable_fraction IS NULL
+                    OR head_tempo_learnable_fraction IS NULL
+                    OR head_alpha_target_learnable_fraction IS NULL
+                    OR head_alpha_speed_learnable_fraction IS NULL
+                    OR head_alpha_curve_learnable_fraction IS NULL
+                    OR head_op_learnable_fraction IS NULL
+                    OR head_slot_gradient_state IS NULL
+                    OR head_blueprint_gradient_state IS NULL
+                    OR head_style_gradient_state IS NULL
+                    OR head_tempo_gradient_state IS NULL
+                    OR head_alpha_target_gradient_state IS NULL
+                    OR head_alpha_speed_gradient_state IS NULL
+                    OR head_alpha_curve_gradient_state IS NULL
+                    OR head_op_gradient_state IS NULL
+                    OR head_value_grad_norm IS NULL
+                    OR head_value_gradient_state IS NULL
+                ) AS missing_required_evidence,
+                (
+                    (policy_loss IS NOT NULL AND NOT isfinite(policy_loss))
+                    OR (value_loss IS NOT NULL AND NOT isfinite(value_loss))
+                    OR (entropy IS NOT NULL AND NOT isfinite(entropy))
+                    OR (grad_norm IS NOT NULL AND NOT isfinite(grad_norm))
+                    OR (pre_clip_grad_norm IS NOT NULL AND NOT isfinite(pre_clip_grad_norm))
+                    OR (kl_divergence IS NOT NULL AND NOT isfinite(kl_divergence))
+                    OR (clip_fraction IS NOT NULL AND NOT isfinite(clip_fraction))
+                    OR (ratio_min IS NOT NULL AND NOT isfinite(ratio_min))
+                    OR (ratio_max IS NOT NULL AND NOT isfinite(ratio_max))
+                    OR (joint_ratio_max IS NOT NULL AND NOT isfinite(joint_ratio_max))
+                    OR (value_nrmse IS NOT NULL AND NOT isfinite(value_nrmse))
+                    OR (ev_return_variance IS NOT NULL AND NOT isfinite(ev_return_variance))
+                    OR (return_std IS NOT NULL AND NOT isfinite(return_std))
+                    OR (bellman_error IS NOT NULL AND NOT isfinite(bellman_error))
+                    OR (v_return_correlation IS NOT NULL AND NOT isfinite(v_return_correlation))
+                    OR (
+                        head_slot_learnable_fraction IS NOT NULL
+                        AND NOT isfinite(head_slot_learnable_fraction)
+                    )
+                    OR (
+                        head_blueprint_learnable_fraction IS NOT NULL
+                        AND NOT isfinite(head_blueprint_learnable_fraction)
+                    )
+                    OR (
+                        head_style_learnable_fraction IS NOT NULL
+                        AND NOT isfinite(head_style_learnable_fraction)
+                    )
+                    OR (
+                        head_tempo_learnable_fraction IS NOT NULL
+                        AND NOT isfinite(head_tempo_learnable_fraction)
+                    )
+                    OR (
+                        head_alpha_target_learnable_fraction IS NOT NULL
+                        AND NOT isfinite(head_alpha_target_learnable_fraction)
+                    )
+                    OR (
+                        head_alpha_speed_learnable_fraction IS NOT NULL
+                        AND NOT isfinite(head_alpha_speed_learnable_fraction)
+                    )
+                    OR (
+                        head_alpha_curve_learnable_fraction IS NOT NULL
+                        AND NOT isfinite(head_alpha_curve_learnable_fraction)
+                    )
+                    OR (
+                        head_op_learnable_fraction IS NOT NULL
+                        AND NOT isfinite(head_op_learnable_fraction)
+                    )
+                    OR (head_value_grad_norm IS NOT NULL AND NOT isfinite(head_value_grad_norm))
+                ) AS nonfinite_required_evidence,
+                (
+                    (nan_grad_count IS NOT NULL AND nan_grad_count < 0)
+                    OR (inf_grad_count IS NOT NULL AND inf_grad_count < 0)
+                    OR (ev_low_return_variance_count IS NOT NULL AND ev_low_return_variance_count < 0)
+                    OR (value_nrmse IS NOT NULL AND isfinite(value_nrmse) AND value_nrmse < 0.0)
+                    OR (ev_return_variance IS NOT NULL AND isfinite(ev_return_variance) AND ev_return_variance < 0.0)
+                    OR (return_std IS NOT NULL AND isfinite(return_std) AND return_std < 0.0)
+                    OR (
+                        v_return_correlation IS NOT NULL
+                        AND isfinite(v_return_correlation)
+                        AND (v_return_correlation < -1.0 OR v_return_correlation > 1.0)
+                    )
+                    OR (kl_divergence IS NOT NULL AND isfinite(kl_divergence) AND kl_divergence < 0.0)
+                    OR (clip_fraction IS NOT NULL AND isfinite(clip_fraction) AND (clip_fraction < 0.0 OR clip_fraction > 1.0))
+                    OR (ratio_min IS NOT NULL AND isfinite(ratio_min) AND ratio_min <= 0.0)
+                    OR (
+                        ratio_min IS NOT NULL
+                        AND ratio_max IS NOT NULL
+                        AND isfinite(ratio_min)
+                        AND isfinite(ratio_max)
+                        AND ratio_max < ratio_min
+                    )
+                    OR (joint_ratio_max IS NOT NULL AND isfinite(joint_ratio_max) AND joint_ratio_max <= 0.0)
+                ) AS invalid_required_evidence
+            FROM ppo_updates
+        ),
+        update_summary AS (
+            SELECT
+                run_dir,
+                group_id,
+                COUNT(*) AS update_count,
+                COUNT(*) FILTER (WHERE missing_required_evidence) AS missing_required_update_count,
+                COUNT(*) FILTER (WHERE invalid_required_evidence) AS invalid_required_update_count,
+                COUNT(*) FILTER (WHERE nonfinite_required_evidence) AS nonfinite_update_count,
+                COUNT(*) FILTER (
+                    WHERE COALESCE(update_skipped, false) OR COALESCE(skipped, false)
+                ) AS ppo_skipped_update_count,
+                COUNT(*) FILTER (WHERE nan_grad_count > 0) AS nan_grad_update_count,
+                COUNT(*) FILTER (WHERE inf_grad_count > 0) AS inf_grad_update_count,
+                COUNT(*) FILTER (WHERE ev_low_return_variance IS TRUE) AS low_return_variance_update_count,
+                COALESCE(SUM(ev_low_return_variance_count), 0) AS low_return_variance_epoch_count,
+                MIN(value_loss) AS min_value_loss,
+                MAX(value_loss) AS max_value_loss,
+                MIN(bellman_error) AS min_bellman_error,
+                MAX(bellman_error) AS max_bellman_error,
+                MIN(v_return_correlation) AS min_v_return_correlation,
+                MAX(v_return_correlation) AS max_v_return_correlation,
+                MIN(value_nrmse) AS min_value_nrmse,
+                MAX(value_nrmse) AS max_value_nrmse,
+                MIN(return_std) AS min_return_std,
+                MAX(return_std) AS max_return_std,
+                MIN(ev_return_variance) AS min_ev_return_variance,
+                MAX(ev_return_variance) AS max_ev_return_variance,
+                MIN(ratio_min) AS min_ratio_min,
+                MAX(ratio_max) AS max_ratio_max,
+                MAX(joint_ratio_max) AS max_joint_ratio_max,
+                MAX(clip_fraction) AS max_clip_fraction
+            FROM marked_updates
+            GROUP BY run_dir, group_id
+        ),
+        skipped_batches AS (
+            SELECT
+                run_dir,
+                group_id,
+                COUNT(*) FILTER (WHERE skipped_update IS TRUE) AS skipped_batch_count
+            FROM batch_stats
+            GROUP BY run_dir, group_id
+        )
+        SELECT
+            cohorts.run_dir,
+            cohorts.group_id,
+            COALESCE(update_summary.update_count, 0) AS update_count,
+            COALESCE(valid_outcomes.valid_outcome_count, 0) AS valid_outcome_count,
+            COALESCE(update_summary.missing_required_update_count, 0) AS missing_required_update_count,
+            COALESCE(update_summary.invalid_required_update_count, 0) AS invalid_required_update_count,
+            COALESCE(update_summary.ppo_skipped_update_count, 0)
+                + COALESCE(skipped_batches.skipped_batch_count, 0)
+                AS skipped_update_count,
+            COALESCE(update_summary.nonfinite_update_count, 0) AS nonfinite_update_count,
+            COALESCE(update_summary.nan_grad_update_count, 0) AS nan_grad_update_count,
+            COALESCE(update_summary.inf_grad_update_count, 0) AS inf_grad_update_count,
+            COALESCE(update_summary.low_return_variance_update_count, 0) AS low_return_variance_update_count,
+            COALESCE(update_summary.low_return_variance_epoch_count, 0) AS low_return_variance_epoch_count,
+            update_summary.min_value_loss,
+            update_summary.max_value_loss,
+            update_summary.min_bellman_error,
+            update_summary.max_bellman_error,
+            update_summary.min_v_return_correlation,
+            update_summary.max_v_return_correlation,
+            update_summary.min_value_nrmse,
+            update_summary.max_value_nrmse,
+            update_summary.min_return_std,
+            update_summary.max_return_std,
+            update_summary.min_ev_return_variance,
+            update_summary.max_ev_return_variance,
+            update_summary.min_ratio_min,
+            update_summary.max_ratio_max,
+            update_summary.max_joint_ratio_max,
+            update_summary.max_clip_fraction
+        FROM cohorts
+        LEFT JOIN update_summary
+          ON update_summary.run_dir = cohorts.run_dir
+         AND COALESCE(update_summary.group_id, '') = COALESCE(cohorts.group_id, '')
+        LEFT JOIN valid_outcomes
+          ON valid_outcomes.run_dir = cohorts.run_dir
+         AND COALESCE(valid_outcomes.group_id, '') = COALESCE(cohorts.group_id, '')
+        LEFT JOIN skipped_batches
+          ON skipped_batches.run_dir = cohorts.run_dir
+         AND COALESCE(skipped_batches.group_id, '') = COALESCE(cohorts.group_id, '')
     """,
     "reward_calibration": """
         CREATE OR REPLACE VIEW reward_calibration AS

@@ -167,9 +167,25 @@ def _ppo_update_payload() -> dict:
         "entropy": 1.0,
         "grad_norm": 0.3,
         "nan_grad_count": 0,
+        "inf_grad_count": 0,
         "pre_clip_grad_norm": 0.35,
         "kl_divergence": 0.01,
         "clip_fraction": 0.0,
+        "ratio_min": 0.9,
+        "ratio_max": 1.1,
+        "joint_ratio_max": 1.2,
+        "value_nrmse": 0.2,
+        "ev_low_return_variance": False,
+        "ev_return_variance": 1.0,
+        "ev_low_return_variance_count": 0,
+        "return_std": 1.0,
+        "return_variance": 1.0,
+        "value_target_scale": 1.0,
+        "bellman_error": 0.05,
+        "v_return_correlation": 0.8,
+        "ppo_updates_count": 1,
+        "update_skipped": False,
+        "skipped": False,
     }
     for head in heads:
         payload[f"head_{head}_learnable_fraction"] = 1.0
@@ -514,9 +530,19 @@ def test_proof_packet_blocks_partial_head_learnability_telemetry(tmp_path):
         "entropy",
         "grad_norm",
         "nan_grad_count",
+        "inf_grad_count",
         "pre_clip_grad_norm",
         "kl_divergence",
         "clip_fraction",
+        "ratio_min",
+        "ratio_max",
+        "joint_ratio_max",
+        "value_nrmse",
+        "ev_return_variance",
+        "ev_low_return_variance_count",
+        "return_std",
+        "bellman_error",
+        "v_return_correlation",
     ],
 )
 def test_proof_packet_blocks_missing_required_ppo_field(tmp_path, field_name):
@@ -534,6 +560,163 @@ def test_proof_packet_blocks_missing_required_ppo_field(tmp_path, field_name):
     assert "Verdict: `BLOCKED_INSTRUMENTATION`" in packet
     assert "missing PPO instrumentation telemetry" in packet
     assert field_name in packet
+
+
+def test_proof_packet_renders_ppo_traceability_evidence(tmp_path):
+    """Healthy packets render the PPO evidence section before ROI semantics."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `CONTINUE`" in packet
+    assert "## PPO Traceability Evidence" in packet
+    assert "run `proof_run` group `A`" in packet
+    assert "updates=1" in packet
+    assert "valid_outcomes=1" in packet
+    assert "missing_fields=0" in packet
+    assert "skipped=0" in packet
+    assert "nonfinite=0" in packet
+    assert "nan_grad=0" in packet
+    assert "inf_grad=0" in packet
+    assert "low_return_variance_updates=0" in packet
+    assert "low_return_variance_count=0" in packet
+    assert "return_std=1.0..1.0" in packet
+    assert "ev_return_variance=1.0..1.0" in packet
+    assert "PPO traceability evidence is proof-grade." in packet
+
+
+def test_proof_packet_blocks_skipped_ppo_update_before_roi(tmp_path):
+    """Observed skipped PPO updates are mechanics blockers before ROI."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    events[1]["data"]["skipped"] = True
+    events.append(
+        {
+            "event_id": "batch-1",
+            "event_type": "ANALYTICS_SNAPSHOT",
+            "timestamp": datetime.now().isoformat(),
+            "epoch": 1,
+            "group_id": "A",
+            "data": {
+                "kind": "batch_stats",
+                "episodes_completed": 1,
+                "batch": 1,
+                "inner_epoch": 0,
+                "skipped_update": True,
+            },
+            "severity": "info",
+        }
+    )
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_MECHANICS`" in packet
+    assert "## PPO Traceability Evidence" in packet
+    assert "BLOCKING PPO mechanics" in packet
+    assert "skipped update" in packet
+    assert "skipped=2" in packet
+
+
+def test_proof_packet_blocks_nonfinite_ppo_traceability_before_roi(tmp_path):
+    """Nonfinite required PPO evidence is an instrumentation blocker."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    events[1]["data"]["value_nrmse"] = "1e999"
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_INSTRUMENTATION`" in packet
+    assert "## PPO Traceability Evidence" in packet
+    assert "BLOCKING PPO instrumentation" in packet
+    assert "nonfinite value_nrmse" in packet
+
+
+def test_proof_packet_blocks_missing_robust_value_traceability(tmp_path):
+    """Robust value evidence is required; raw explained_variance is diagnostic."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    del events[1]["data"]["value_nrmse"]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_INSTRUMENTATION`" in packet
+    assert "BLOCKING PPO instrumentation" in packet
+    assert "missing value_nrmse" in packet
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value", "expected_violation"),
+    [
+        ("nan_grad_count", 1, "nan_grad_count > 0"),
+        ("inf_grad_count", 1, "inf_grad_count > 0"),
+        ("head_op_gradient_state", "nonfinite", "head_op_gradient_state nonfinite"),
+        ("clip_fraction", 1.5, "clip_fraction outside [0, 1]"),
+        ("value_nrmse", -0.01, "value_nrmse < 0"),
+        ("ev_return_variance", -0.01, "ev_return_variance < 0"),
+        ("return_std", -0.01, "return_std < 0"),
+        (
+            "v_return_correlation",
+            1.01,
+            "v_return_correlation outside [-1, 1]",
+        ),
+    ],
+)
+def test_proof_packet_blocks_bad_ppo_evidence_before_roi(
+    tmp_path,
+    field_name,
+    field_value,
+    expected_violation,
+):
+    """Present-but-bad PPO evidence blocks as mechanics before ROI."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    events[1]["data"][field_name] = field_value
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `BLOCKED_MECHANICS`" in packet
+    assert "BLOCKING PPO mechanics" in packet
+    assert expected_violation in packet
+
+
+def test_proof_packet_keeps_raw_ev_diagnostic_when_robust_value_fields_clean(tmp_path):
+    """Bad raw explained_variance alone does not block robust PPO traceability."""
+    run_dir = tmp_path / "proof_run"
+    run_dir.mkdir()
+    events = _baseline_run_events()
+    events[1]["data"]["explained_variance"] = -10.0
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+
+    packet = build_proof_packet(str(tmp_path), proof_profile="generic")
+
+    assert "Verdict: `CONTINUE`" in packet
+    assert "## PPO Traceability Evidence" in packet
+    assert "PPO traceability evidence is proof-grade." in packet
+    assert "BLOCKING PPO instrumentation" not in packet
+    assert "BLOCKING PPO mechanics" not in packet
 
 
 def test_proof_packet_accepts_measured_zero_learnability_values(tmp_path):

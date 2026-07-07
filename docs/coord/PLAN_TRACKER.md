@@ -62,6 +62,7 @@ recomputes Q(s,argmax op) in deterministic bootstrap mode, and focused regressio
 14. **Telemetry Domain Separation** - ~30% done
 15. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 16. **Correctness Defect Burndown Strategy** - Drafted 2026-06-19; Package A tracker/ready-folder/defect-report reconciliation executed on 2026-06-19 with Filigree IDs recorded for the next sprint work
+17. **Karn PPO Traceability Evidence** - Completed 2026-07-08 for Filigree task `esper-lite-570d98c451`: proof-critical PPO update/skip/malformed/robust-value evidence is exposed through Karn and rendered in the proof packet before reward-efficiency ROI verdict math
 
 ### P-EV-RECAL Execution Note (2026-06-19)
 
@@ -155,6 +156,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | correctness-proof-strategy | Correctness Proof Strategy | planning | high | L | high | Drafted 2026-06-15; owns the evidence ladder and typed proof-packet verdict taxonomy for instrumentation, precision, mechanics, math, algorithm revision, and theory stop decisions; packet now blocks outcome-empty baseline controls, missing/mismatched fixed-schedule provenance, misplaced schedule metadata, missing/mismatched fixed-schedule realized traces, missing/malformed/mismatched static-final source/replay manifests, static-final lifecycle mutations, and malformed lockstep pairs; runner-side static-final source handoff and live full-baseline rehearsal implemented; current blocker is mechanics, not proof math |
 | ppo-stability-oracle-sandbox | PPO Stability / Oracle Sandbox | planning | high | M | high | Artifact created 2026-06-15; current smoke test proves scripted lifecycle mechanics only, missing proof-grade oracle telemetry and packet profile |
 | reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment deferred until governor-integrity, PPO oracle sandbox, and a mechanics-clean proof rehearsal packet |
+| karn-ppo-traceability-evidence | Karn PPO Traceability Evidence | completed | high | M | medium | Implemented 2026-07-08 from plan `docs/plans/completed/2026-07-08-karn-ppo-traceability-evidence.md`; Filigree task `esper-lite-570d98c451`; exposes PPO update counts, skipped/nonfinite/missing evidence, robust value fields, and low-return-variance counts through Karn/proof packet before reward-efficiency ROI |
 | karn-telemetry-quality-arc | Karn Telemetry Quality Strategic Arc | planning | high | L | medium | Drafted 2026-06-13; establishes Karn as the next quality-upgrade package |
 | karn-telemetry-sprint-1 | Karn Telemetry Quality Sprint 1 | planning | high | M | medium | Drafted 2026-06-13; dependency drain, Sanctum CI determinism, branch hygiene, Overwatch contract inventory |
 | proof-confounder-drain | Proof Confounder Drain | completed | high | L | high | Implemented on `confounder-drain`; proof packet correctly blocks the rehearsal on value-collapse and gradient-anomaly confounders |

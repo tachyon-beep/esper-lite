@@ -71,6 +71,7 @@ def test_list_views_returns_documentation(server_with_data):
     assert "runs" in view_names
     assert "epochs" in view_names
     assert "ppo_updates" in view_names
+    assert "ppo_traceability_evidence" in view_names
 
 
 def test_run_overview_returns_report(server_with_data):

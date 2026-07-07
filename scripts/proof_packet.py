@@ -55,14 +55,66 @@ PPO_REQUIRED_COLUMNS: tuple[str, ...] = (
     "entropy",
     "grad_norm",
     "nan_grad_count",
+    "inf_grad_count",
     "pre_clip_grad_norm",
     "kl_divergence",
     "clip_fraction",
+    "ratio_min",
+    "ratio_max",
+    "joint_ratio_max",
+    "value_nrmse",
+    "ev_low_return_variance",
+    "ev_return_variance",
+    "ev_low_return_variance_count",
+    "return_std",
+    "bellman_error",
+    "v_return_correlation",
+    "update_skipped",
+    "skipped",
 )
 
 PPO_INSTRUMENTATION_COLUMNS: tuple[str, ...] = (
     *PPO_REQUIRED_COLUMNS,
     *LEARNABILITY_COLUMNS,
+)
+
+PPO_NUMERIC_INSTRUMENTATION_COLUMNS: tuple[str, ...] = (
+    "policy_loss",
+    "value_loss",
+    "entropy",
+    "grad_norm",
+    "pre_clip_grad_norm",
+    "kl_divergence",
+    "clip_fraction",
+    "ratio_min",
+    "ratio_max",
+    "joint_ratio_max",
+    "value_nrmse",
+    "ev_return_variance",
+    "return_std",
+    "bellman_error",
+    "v_return_correlation",
+    "head_slot_learnable_fraction",
+    "head_blueprint_learnable_fraction",
+    "head_style_learnable_fraction",
+    "head_tempo_learnable_fraction",
+    "head_alpha_target_learnable_fraction",
+    "head_alpha_speed_learnable_fraction",
+    "head_alpha_curve_learnable_fraction",
+    "head_op_learnable_fraction",
+    "head_value_grad_norm",
+)
+
+PPO_GRADIENT_STATE_COLUMNS: tuple[str, ...] = (
+    "head_slot_gradient_state",
+    "head_blueprint_gradient_state",
+    "head_style_gradient_state",
+    "head_tempo_gradient_state",
+    "head_alpha_target_gradient_state",
+    "head_alpha_speed_gradient_state",
+    "head_alpha_curve_gradient_state",
+    "head_op_gradient_state",
+    "head_value_gradient_state",
 )
 
 VALID_OUTCOME_PREDICATE = """
@@ -151,7 +203,37 @@ def _reward_mode_evidence_reason(reward_mode: str) -> str:
     return "unsupported"
 
 
-def _missing_learnability_query() -> str:
+def _ppo_traceability_rows_query() -> str:
+    return """
+        SELECT
+            run_dir,
+            group_id,
+            update_count,
+            valid_outcome_count,
+            missing_required_update_count,
+            invalid_required_update_count,
+            skipped_update_count,
+            nonfinite_update_count,
+            nan_grad_update_count,
+            inf_grad_update_count,
+            low_return_variance_update_count,
+            low_return_variance_epoch_count,
+            min_value_nrmse,
+            max_value_nrmse,
+            min_bellman_error,
+            max_bellman_error,
+            min_v_return_correlation,
+            max_v_return_correlation,
+            min_return_std,
+            max_return_std,
+            min_ev_return_variance,
+            max_ev_return_variance
+        FROM ppo_traceability_evidence
+        ORDER BY run_dir, group_id
+    """
+
+
+def _ppo_instrumentation_blockers_query() -> str:
     missing_predicate = " OR ".join(
         f"{column} IS NULL" for column in PPO_INSTRUMENTATION_COLUMNS
     )
@@ -162,37 +244,28 @@ def _missing_learnability_query() -> str:
         )
         for column in PPO_INSTRUMENTATION_COLUMNS
     )
+    nonfinite_predicate = " OR ".join(
+        f"({column} IS NOT NULL AND NOT isfinite({column}))"
+        for column in PPO_NUMERIC_INSTRUMENTATION_COLUMNS
+    )
+    nonfinite_violations = ",\n                    ".join(
+        (
+            f"CASE WHEN {column} IS NOT NULL AND NOT isfinite({column}) "
+            f"THEN 'nonfinite {column}, ' ELSE '' END"
+        )
+        for column in PPO_NUMERIC_INSTRUMENTATION_COLUMNS
+    )
     return f"""
-        WITH valid_outcome_runs AS (
+        WITH missing_update_rows AS (
             SELECT
                 run_dir,
                 group_id,
-                COUNT(*) AS valid_outcome_count
-            FROM episode_outcomes
-            WHERE {VALID_OUTCOME_PREDICATE}
-            GROUP BY run_dir, group_id
-        ),
-        ppo_counts AS (
-            SELECT
-                run_dir,
-                group_id,
-                COUNT(*) AS ppo_update_count
-            FROM ppo_updates
-            GROUP BY run_dir, group_id
-        ),
-        missing_update_rows AS (
-            SELECT
-                valid_outcome_runs.run_dir,
-                valid_outcome_runs.group_id,
                 0 AS missing_update_count,
-                valid_outcome_runs.valid_outcome_count,
+                valid_outcome_count,
                 'missing PPO_UPDATE_COMPLETED' AS violations
-            FROM valid_outcome_runs
-            LEFT JOIN ppo_counts
-              ON ppo_counts.run_dir = valid_outcome_runs.run_dir
-             AND COALESCE(ppo_counts.group_id, '') = COALESCE(valid_outcome_runs.group_id, '')
-            WHERE ppo_counts.ppo_update_count IS NULL
-               OR ppo_counts.ppo_update_count = 0
+            FROM ppo_traceability_evidence
+            WHERE valid_outcome_count > 0
+              AND update_count = 0
         ),
         missing_field_rows AS (
             SELECT
@@ -202,13 +275,15 @@ def _missing_learnability_query() -> str:
                 0 AS valid_outcome_count,
                 STRING_AGG(
                     TRIM(TRAILING ', ' FROM CONCAT(
-                    {missing_violations}
+                    {missing_violations},
+                    {nonfinite_violations}
                     )),
                     '; '
                     ORDER BY episodes_completed, inner_epoch, batch
                 ) AS violations
             FROM ppo_updates
             WHERE {missing_predicate}
+               OR {nonfinite_predicate}
             GROUP BY run_dir, group_id
         )
         SELECT
@@ -226,6 +301,181 @@ def _missing_learnability_query() -> str:
             valid_outcome_count,
             violations
         FROM missing_field_rows
+        ORDER BY run_dir, group_id, violations
+    """
+
+
+def _ppo_mechanics_blockers_query() -> str:
+    gradient_state_predicate = " OR ".join(
+        f"{column} = 'nonfinite'" for column in PPO_GRADIENT_STATE_COLUMNS
+    )
+    gradient_state_violations = ",\n                    ".join(
+        (
+            f"CASE WHEN {column} = 'nonfinite' "
+            f"THEN '{column} nonfinite, ' ELSE '' END"
+        )
+        for column in PPO_GRADIENT_STATE_COLUMNS
+    )
+    return f"""
+        WITH skipped_rows AS (
+            SELECT
+                evidence.run_dir,
+                evidence.group_id,
+                evidence.skipped_update_count AS affected_update_count,
+                evidence.valid_outcome_count,
+                'skipped update' AS violations
+            FROM ppo_traceability_evidence evidence
+            LEFT JOIN (
+                SELECT
+                    run_dir,
+                    group_id,
+                    COUNT(*) AS row_skipped_update_count
+                FROM ppo_updates
+                WHERE COALESCE(update_skipped, false)
+                   OR COALESCE(skipped, false)
+                GROUP BY run_dir, group_id
+            ) row_skips
+              ON row_skips.run_dir = evidence.run_dir
+             AND COALESCE(row_skips.group_id, '') = COALESCE(evidence.group_id, '')
+            WHERE evidence.skipped_update_count > 0
+              AND COALESCE(row_skips.row_skipped_update_count, 0) = 0
+        ),
+        malformed_rows AS (
+            SELECT
+                run_dir,
+                group_id,
+                COUNT(*) AS affected_update_count,
+                0 AS valid_outcome_count,
+                STRING_AGG(
+                    TRIM(TRAILING ', ' FROM CONCAT(
+                    CASE WHEN COALESCE(update_skipped, false) OR COALESCE(skipped, false)
+                        THEN 'skipped update, ' ELSE '' END,
+                    CASE WHEN nan_grad_count > 0
+                        THEN 'nan_grad_count > 0, ' ELSE '' END,
+                    CASE WHEN inf_grad_count > 0
+                        THEN 'inf_grad_count > 0, ' ELSE '' END,
+                    CASE WHEN nan_grad_count < 0
+                        THEN 'negative nan_grad_count, ' ELSE '' END,
+                    CASE WHEN inf_grad_count < 0
+                        THEN 'negative inf_grad_count, ' ELSE '' END,
+                    CASE WHEN ev_low_return_variance_count < 0
+                        THEN 'negative ev_low_return_variance_count, ' ELSE '' END,
+                    CASE WHEN value_nrmse IS NOT NULL
+                          AND isfinite(value_nrmse)
+                          AND value_nrmse < 0.0
+                        THEN 'value_nrmse < 0, ' ELSE '' END,
+                    CASE WHEN ev_return_variance IS NOT NULL
+                          AND isfinite(ev_return_variance)
+                          AND ev_return_variance < 0.0
+                        THEN 'ev_return_variance < 0, ' ELSE '' END,
+                    CASE WHEN return_std IS NOT NULL
+                          AND isfinite(return_std)
+                          AND return_std < 0.0
+                        THEN 'return_std < 0, ' ELSE '' END,
+                    CASE WHEN v_return_correlation IS NOT NULL
+                          AND isfinite(v_return_correlation)
+                          AND (v_return_correlation < -1.0 OR v_return_correlation > 1.0)
+                        THEN 'v_return_correlation outside [-1, 1], ' ELSE '' END,
+                    CASE WHEN kl_divergence IS NOT NULL
+                          AND isfinite(kl_divergence)
+                          AND kl_divergence < 0.0
+                        THEN 'kl_divergence < 0, ' ELSE '' END,
+                    CASE WHEN clip_fraction IS NOT NULL
+                          AND isfinite(clip_fraction)
+                          AND (clip_fraction < 0.0 OR clip_fraction > 1.0)
+                        THEN 'clip_fraction outside [0, 1], ' ELSE '' END,
+                    CASE WHEN ratio_min IS NOT NULL
+                          AND isfinite(ratio_min)
+                          AND ratio_min <= 0.0
+                        THEN 'ratio_min <= 0, ' ELSE '' END,
+                    CASE WHEN ratio_min IS NOT NULL
+                          AND ratio_max IS NOT NULL
+                          AND isfinite(ratio_min)
+                          AND isfinite(ratio_max)
+                          AND ratio_max < ratio_min
+                        THEN 'ratio_max < ratio_min, ' ELSE '' END,
+                    CASE WHEN joint_ratio_max IS NOT NULL
+                          AND isfinite(joint_ratio_max)
+                          AND joint_ratio_max <= 0.0
+                        THEN 'joint_ratio_max <= 0, ' ELSE '' END,
+                    {gradient_state_violations}
+                    )),
+                    '; '
+                    ORDER BY episodes_completed, inner_epoch, batch
+                ) AS violations
+            FROM ppo_updates
+            WHERE COALESCE(update_skipped, false)
+               OR COALESCE(skipped, false)
+               OR nan_grad_count > 0
+               OR inf_grad_count > 0
+               OR nan_grad_count < 0
+               OR inf_grad_count < 0
+               OR ev_low_return_variance_count < 0
+               OR (
+                    value_nrmse IS NOT NULL
+                    AND isfinite(value_nrmse)
+                    AND value_nrmse < 0.0
+               )
+               OR (
+                    ev_return_variance IS NOT NULL
+                    AND isfinite(ev_return_variance)
+                    AND ev_return_variance < 0.0
+               )
+               OR (
+                    return_std IS NOT NULL
+                    AND isfinite(return_std)
+                    AND return_std < 0.0
+               )
+               OR (
+                    v_return_correlation IS NOT NULL
+                    AND isfinite(v_return_correlation)
+                    AND (v_return_correlation < -1.0 OR v_return_correlation > 1.0)
+               )
+               OR (
+                    kl_divergence IS NOT NULL
+                    AND isfinite(kl_divergence)
+                    AND kl_divergence < 0.0
+               )
+               OR (
+                    clip_fraction IS NOT NULL
+                    AND isfinite(clip_fraction)
+                    AND (clip_fraction < 0.0 OR clip_fraction > 1.0)
+               )
+               OR (
+                    ratio_min IS NOT NULL
+                    AND isfinite(ratio_min)
+                    AND ratio_min <= 0.0
+               )
+               OR (
+                    ratio_min IS NOT NULL
+                    AND ratio_max IS NOT NULL
+                    AND isfinite(ratio_min)
+                    AND isfinite(ratio_max)
+                    AND ratio_max < ratio_min
+               )
+               OR (
+                    joint_ratio_max IS NOT NULL
+                    AND isfinite(joint_ratio_max)
+                    AND joint_ratio_max <= 0.0
+               )
+               OR {gradient_state_predicate}
+            GROUP BY run_dir, group_id
+        )
+        SELECT
+            run_dir,
+            group_id,
+            affected_update_count,
+            valid_outcome_count,
+            violations
+        FROM skipped_rows
+        UNION ALL
+        SELECT
+            run_dir,
+            group_id,
+            affected_update_count,
+            valid_outcome_count,
+            violations
+        FROM malformed_rows
         ORDER BY run_dir, group_id, violations
     """
 
@@ -1254,7 +1504,8 @@ def _classify_verdict(
     *,
     blocking_confounders: list[dict[str, Any]],
     invalid_outcomes: list[dict[str, Any]],
-    missing_learnability: list[dict[str, Any]],
+    ppo_instrumentation_blockers: list[dict[str, Any]],
+    ppo_mechanics_blockers: list[dict[str, Any]],
     missing_baselines: tuple[str, ...],
     baseline_provenance_blockers: list[dict[str, Any]],
     baseline_evidence_blockers: list[dict[str, Any]],
@@ -1275,7 +1526,7 @@ def _classify_verdict(
         ingestion_blocking
         or missing_runs
         or missing_outcomes
-        or missing_learnability
+        or ppo_instrumentation_blockers
         or oracle_instrumentation_blockers
     ):
         return BLOCKED_INSTRUMENTATION
@@ -1293,7 +1544,7 @@ def _classify_verdict(
         or oracle_trace_blockers
     ):
         return BLOCKED_MATH
-    if blocking_confounders:
+    if blocking_confounders or ppo_mechanics_blockers:
         return BLOCKED_MECHANICS
 
     roi_values = [
@@ -1715,10 +1966,20 @@ def build_proof_packet(
             ORDER BY timestamp, run_dir, group_id, env_id
             """,
         )
-        missing_learnability = (
+        ppo_traceability_rows = (
             []
             if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE
-            else _rows(conn, _missing_learnability_query())
+            else _rows(conn, _ppo_traceability_rows_query())
+        )
+        ppo_instrumentation_blockers = (
+            []
+            if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE
+            else _rows(conn, _ppo_instrumentation_blockers_query())
+        )
+        ppo_mechanics_blockers = (
+            []
+            if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE
+            else _rows(conn, _ppo_mechanics_blockers_query())
         )
         invalid_outcomes = _rows(conn, _invalid_outcomes_query())
         outcome_count_rows = _rows(
@@ -1813,7 +2074,8 @@ def build_proof_packet(
     verdict = _classify_verdict(
         blocking_confounders=blocking_confounders,
         invalid_outcomes=invalid_outcomes,
-        missing_learnability=missing_learnability,
+        ppo_instrumentation_blockers=ppo_instrumentation_blockers,
+        ppo_mechanics_blockers=ppo_mechanics_blockers,
         missing_baselines=missing_baselines,
         baseline_provenance_blockers=baseline_provenance_blockers,
         baseline_evidence_blockers=baseline_evidence_blockers,
@@ -2071,13 +2333,64 @@ def build_proof_packet(
             "`oracle-sandbox` profile."
         )
 
+    lines.extend(["", "## PPO Traceability Evidence", ""])
+    if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE:
+        lines.append(
+            "- PPO traceability evidence is not required for oracle-sandbox profile."
+        )
+    elif ppo_traceability_rows:
+        for row in ppo_traceability_rows:
+            lines.append(
+                "- "
+                f"run `{row['run_dir']}` group `{row['group_id']}`: "
+                f"updates={row['update_count']}, "
+                f"valid_outcomes={row['valid_outcome_count']}, "
+                f"missing_fields={row['missing_required_update_count']}, "
+                f"invalid_fields={row['invalid_required_update_count']}, "
+                f"skipped={row['skipped_update_count']}, "
+                f"nonfinite={row['nonfinite_update_count']}, "
+                f"nan_grad={row['nan_grad_update_count']}, "
+                f"inf_grad={row['inf_grad_update_count']}, "
+                f"low_return_variance_updates={row['low_return_variance_update_count']}, "
+                f"low_return_variance_count={row['low_return_variance_epoch_count']}, "
+                f"value_nrmse={row['min_value_nrmse']}..{row['max_value_nrmse']}, "
+                f"return_std={row['min_return_std']}..{row['max_return_std']}, "
+                "ev_return_variance="
+                f"{row['min_ev_return_variance']}..{row['max_ev_return_variance']}, "
+                f"bellman_error={row['min_bellman_error']}..{row['max_bellman_error']}, "
+                "v_return_correlation="
+                f"{row['min_v_return_correlation']}..{row['max_v_return_correlation']}"
+            )
+        if ppo_instrumentation_blockers:
+            for row in ppo_instrumentation_blockers:
+                lines.append(
+                    "- BLOCKING PPO instrumentation "
+                    f"run `{row['run_dir']}` group `{row['group_id']}` "
+                    f"updates={row['missing_update_count']}, "
+                    f"valid_outcomes={row['valid_outcome_count']}: "
+                    f"{row['violations']}"
+                )
+        if ppo_mechanics_blockers:
+            for row in ppo_mechanics_blockers:
+                lines.append(
+                    "- BLOCKING PPO mechanics "
+                    f"run `{row['run_dir']}` group `{row['group_id']}` "
+                    f"affected_updates={row['affected_update_count']}, "
+                    f"valid_outcomes={row['valid_outcome_count']}: "
+                    f"{row['violations']}"
+                )
+        if not ppo_instrumentation_blockers and not ppo_mechanics_blockers:
+            lines.append("- PPO traceability evidence is proof-grade.")
+    else:
+        lines.append("- No PPO traceability evidence rows were found.")
+
     lines.extend(["", "## Learnability Gate", ""])
     if proof_profile == ORACLE_SANDBOX_PROOF_PROFILE:
         lines.append(
             "- PPO learnability telemetry is not required for oracle-sandbox profile."
         )
-    elif missing_learnability:
-        for row in missing_learnability:
+    elif ppo_instrumentation_blockers:
+        for row in ppo_instrumentation_blockers:
             lines.append(
                 "- BLOCKING missing PPO instrumentation telemetry "
                 "(missing learnability telemetry) "
