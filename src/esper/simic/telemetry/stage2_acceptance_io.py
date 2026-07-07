@@ -21,6 +21,7 @@ import duckdb
 
 from esper.simic.telemetry.stage2_acceptance_packet import (
     ChurnRates,
+    FrozenConfigValue,
     FrozenThresholds,
     GuardChannelCounts,
     Leg,
@@ -124,6 +125,17 @@ def _rows(
     result = conn.execute(query, params) if params is not None else conn.execute(query)
     columns = [col[0] for col in result.description]
     return [dict(zip(columns, row)) for row in result.fetchall()]
+
+
+def _exactly_one_row(rows: list[dict[str, Any]], *, source: str, run_dir: str) -> dict[str, Any]:
+    if not rows:
+        raise ValueError(f"no {source} row for run_dir={run_dir!r}")
+    if len(rows) != 1:
+        raise ValueError(
+            f"expected exactly one {source} row for run_dir={run_dir!r}, found {len(rows)} "
+            "— duplicate run metadata would make Stage-2 evidence ambiguous"
+        )
+    return rows[0]
 
 
 def _require(row: dict[str, Any], key: str) -> Any:
@@ -280,9 +292,7 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
         + " FROM runs WHERE run_dir = ?",
         [run_dir],
     )
-    if not rows:
-        raise ValueError(f"no runs row for run_dir={run_dir!r}")
-    row = rows[0]
+    row = _exactly_one_row(rows, source="runs", run_dir=run_dir)
     required_columns = (
         "seed",
         "reward_mode",
@@ -382,29 +392,96 @@ def read_run_churn(conn: duckdb.DuckDBPyConnection, run_dir: str) -> ChurnRates:
 
 # --- §6 env-count-completeness validity (backstops Finding 1's per-env-terminal aggregation) ---
 #
-# The per-env-terminal G1/G2 mean silently averages over WHATEVER envs are present. If a leg's
-# episode_outcomes is missing an env entirely (crash, lost log), the paired safety delta is biased
-# over a subset. So the pair is rejected unless each leg covers all runs.n_envs distinct env_ids
-# AND ON n_envs == OFF n_envs. DEFINITIONAL: hard-reject-on-incomplete is the conservative stance;
-# the exact threshold rides with the G1/G2 definitions pending §6/drl confirmation.
+# The per-env-terminal G1/G2 mean silently averages each env's latest available row. If a leg's
+# episode_outcomes is missing an env entirely, or if an env stopped before its terminal episode,
+# the paired safety delta is biased over stale/subset evidence. So the pair is rejected unless
+# each leg covers all runs.n_envs distinct env_ids at their expected terminal episode_idx AND ON
+# n_envs == OFF n_envs. DEFINITIONAL: hard-reject-on-incomplete is the conservative stance.
 
 
 def read_run_n_envs(conn: duckdb.DuckDBPyConnection, run_dir: str) -> int:
     """The run's configured env count from the ``runs`` view (§6 completeness denominator)."""
-    rows = _rows(conn, "SELECT n_envs FROM runs WHERE run_dir = ?", [run_dir])
-    if not rows or rows[0]["n_envs"] is None:
-        raise ValueError(f"no runs.n_envs for run_dir={run_dir!r}")
-    return int(rows[0]["n_envs"])
+    n_envs, _n_episodes = _read_run_episode_shape(conn, run_dir)
+    return n_envs
 
 
-def _distinct_env_count(conn: duckdb.DuckDBPyConnection, run_dir: str) -> int:
-    """Distinct env_ids that actually reported an ``episode_outcomes`` row for this run."""
+def _read_run_episode_shape(conn: duckdb.DuckDBPyConnection, run_dir: str) -> tuple[int, int]:
+    rows = _rows(conn, "SELECT n_envs, n_episodes FROM runs WHERE run_dir = ?", [run_dir])
+    row = _exactly_one_row(rows, source="runs", run_dir=run_dir)
+    if row["n_envs"] is None:
+        raise ValueError(f"runs.n_envs is NULL for run_dir={run_dir!r}")
+    if row["n_episodes"] is None:
+        raise ValueError(f"runs.n_episodes is NULL for run_dir={run_dir!r}")
+    n_envs = int(row["n_envs"])
+    n_episodes = int(row["n_episodes"])
+    if n_envs <= 0:
+        raise ValueError(f"runs.n_envs must be positive for run_dir={run_dir!r}, got {n_envs}")
+    if n_episodes <= 0:
+        raise ValueError(
+            f"runs.n_episodes must be positive for run_dir={run_dir!r}, got {n_episodes}"
+        )
+    if n_episodes % n_envs != 0:
+        raise ValueError(
+            f"runs.n_episodes={n_episodes} is not divisible by n_envs={n_envs} for "
+            f"run_dir={run_dir!r}; terminal env coverage is ambiguous"
+        )
+    return n_envs, n_episodes
+
+
+def _episode_outcome_env_rows(conn: duckdb.DuckDBPyConnection, run_dir: str) -> list[dict[str, Any]]:
+    """Per-env outcome coverage for this run: row count and latest episode index."""
     rows = _rows(
         conn,
-        "SELECT COUNT(DISTINCT env_id) AS c FROM episode_outcomes WHERE run_dir = ?",
+        "SELECT env_id, COUNT(*) AS n_rows, MAX(episode_idx) AS max_episode_idx "
+        "FROM episode_outcomes WHERE run_dir = ? GROUP BY env_id ORDER BY env_id",
         [run_dir],
     )
-    return int(rows[0]["c"])  # COUNT is never NULL (0 when the leg has no outcomes at all)
+    return rows
+
+
+def _terminal_env_coverage_reasons(
+    conn: duckdb.DuckDBPyConnection, *, run_dir: str, arm: str
+) -> list[str]:
+    n_envs, n_episodes = _read_run_episode_shape(conn, run_dir)
+    rows = _episode_outcome_env_rows(conn, run_dir)
+    expected_env_ids = set(range(n_envs))
+    present_env_ids = {int(row["env_id"]) for row in rows}
+    reasons: list[str] = []
+
+    missing = sorted(expected_env_ids - present_env_ids)
+    if missing:
+        reasons.append(
+            f"{arm} arm episode_outcomes cover {len(present_env_ids)}/{n_envs} envs — "
+            f"missing env_id(s): {', '.join(str(env_id) for env_id in missing)}; the "
+            "per-env-terminal G1/G2 mean would be biased over a subset (§6)"
+        )
+
+    unexpected = sorted(present_env_ids - expected_env_ids)
+    if unexpected:
+        reasons.append(
+            f"{arm} arm episode_outcomes include unexpected env_id(s): "
+            f"{', '.join(str(env_id) for env_id in unexpected)}; expected 0..{n_envs - 1} (§6)"
+        )
+
+    stale: list[str] = []
+    for row in rows:
+        env_id = int(row["env_id"])
+        if env_id not in expected_env_ids:
+            continue
+        expected_terminal_idx = n_episodes - n_envs + env_id
+        actual_terminal_idx = int(row["max_episode_idx"])
+        if actual_terminal_idx != expected_terminal_idx:
+            stale.append(
+                f"env {env_id} max episode_idx {actual_terminal_idx} != "
+                f"expected terminal {expected_terminal_idx}"
+            )
+    if stale:
+        reasons.append(
+            f"{arm} arm episode_outcomes do not cover terminal evidence for every env: "
+            + "; ".join(stale)
+            + " (§6)"
+        )
+    return reasons
 
 
 def env_count_completeness_reasons(
@@ -423,18 +500,8 @@ def env_count_completeness_reasons(
             f"env-count mismatch: ON n_envs={on_expected} != OFF n_envs={off_expected} "
             "(the arms must run the same env count, §6)"
         )
-    on_present = _distinct_env_count(conn, on_run_dir)
-    if on_present != on_expected:
-        reasons.append(
-            f"ON arm episode_outcomes cover {on_present}/{on_expected} envs — incomplete; the "
-            "per-env-terminal G1/G2 mean would be biased over a subset (§6, backstops Finding 1)"
-        )
-    off_present = _distinct_env_count(conn, off_run_dir)
-    if off_present != off_expected:
-        reasons.append(
-            f"OFF arm episode_outcomes cover {off_present}/{off_expected} envs — incomplete; the "
-            "per-env-terminal G1/G2 mean would be biased over a subset (§6, backstops Finding 1)"
-        )
+    reasons.extend(_terminal_env_coverage_reasons(conn, run_dir=on_run_dir, arm="ON"))
+    reasons.extend(_terminal_env_coverage_reasons(conn, run_dir=off_run_dir, arm="OFF"))
     return reasons
 
 
@@ -523,6 +590,45 @@ def pairset_validity_reasons(pairings: list[SeedPairing]) -> list[str]:
     return reasons
 
 
+def _frozen_config_value(meta: RunMeta, field: str) -> FrozenConfigValue:
+    for key, value in meta.frozen_config:
+        if key == field:
+            return value
+    raise ValueError(
+        f"runs.{field} is missing from frozen_config for run_dir={meta.run_dir!r}; "
+        "Stage-2 cannot score this run"
+    )
+
+
+def _run_host_params(meta: RunMeta) -> int:
+    value = _frozen_config_value(meta, "host_params")
+    if value is None:
+        raise ValueError(f"runs.host_params is NULL for run_dir={meta.run_dir!r}")
+    host_params = int(value)
+    if host_params <= 0:
+        raise ValueError(
+            f"runs.host_params must be positive for run_dir={meta.run_dir!r}, got {host_params}"
+        )
+    return host_params
+
+
+def _host_params_for_pairing(pairing: SeedPairing) -> int:
+    on_host_params = _run_host_params(pairing.on_meta)
+    off_host_params = _run_host_params(pairing.off_meta)
+    if on_host_params != off_host_params:
+        raise ValueError(
+            f"host_params mismatch for seed {pairing.on_meta.seed}: "
+            f"ON {on_host_params} != OFF {off_host_params}; G2 must compare equal-host pairs"
+        )
+    if pairing.host_params != on_host_params:
+        raise ValueError(
+            f"spec host_params={pairing.host_params} does not match telemetry "
+            f"host_params={on_host_params} for seed {pairing.on_meta.seed}; "
+            "G2 added-parameter evidence is telemetry-derived"
+        )
+    return on_host_params
+
+
 def build_report(
     conn: duckdb.DuckDBPyConnection,
     pairings: list[SeedPairing],
@@ -547,9 +653,10 @@ def build_report(
     ``actor_advantage_source`` from telemetry (caller supplies ``RunMeta``). ``g3_hold``/``g4_hold``
     are injected: the G4 guard-channel reader and the churn threshold are the S7/§6-definitional tail.
     """
-    loaded: list[tuple[SeedPairing, list[UpdateRow], list[UpdateRow]]] = []
+    loaded: list[tuple[SeedPairing, int, list[UpdateRow], list[UpdateRow]]] = []
     reasons: list[str] = pairset_validity_reasons(pairings)
     for pairing in pairings:
+        host_params = _host_params_for_pairing(pairing)
         on_rows = read_leg(conn, pairing.on_meta.run_dir)
         off_rows = read_leg(conn, pairing.off_meta.run_dir)
         pair_validity = validate_pair(
@@ -562,7 +669,7 @@ def build_report(
                 conn, on_run_dir=pairing.on_meta.run_dir, off_run_dir=pairing.off_meta.run_dir
             )
         )
-        loaded.append((pairing, on_rows, off_rows))
+        loaded.append((pairing, host_params, on_rows, off_rows))
 
     validity = Validity(valid=not reasons, reasons=tuple(reasons))
     if not validity.valid:
@@ -579,15 +686,15 @@ def build_report(
         return BuiltReport(report=report, validity=validity)
 
     pairs: list[SeedPair] = []
-    for pairing, on_rows, off_rows in loaded:
+    for pairing, host_params, on_rows, off_rows in loaded:
         on_ls = leg_series(on_rows, leg=Leg.ON, w=thresholds.w, floor=floor)
         off_ls = leg_series(off_rows, leg=Leg.OFF, w=thresholds.w, floor=floor)
         d_val_acc = read_run_val_acc(conn, pairing.on_meta.run_dir) - read_run_val_acc(
             conn, pairing.off_meta.run_dir
         )
         d_added_params = read_run_added_params(
-            conn, pairing.on_meta.run_dir, pairing.host_params
-        ) - read_run_added_params(conn, pairing.off_meta.run_dir, pairing.host_params)
+            conn, pairing.on_meta.run_dir, host_params
+        ) - read_run_added_params(conn, pairing.off_meta.run_dir, host_params)
         pairs.append(
             SeedPair(
                 seed=pairing.on_meta.seed, on=on_ls, off=off_ls,

@@ -550,6 +550,26 @@ def test_score_rejects_duplicate_seed_pairset():
         score(pairs, _THRESHOLDS, n=10, validity=Validity(True, ()), g3_hold=True, g4_hold=True)
 
 
+def test_score_zero_return_variance_confound_names_return_variance():
+    pairs = [_accept_pair(i) for i in range(5)]
+    pairs[0] = SeedPair(
+        seed=0,
+        on=_legseries(Leg.ON, ev_level=0.85, adv_residual_vol=0.80, ev_main_vol=0.03),
+        off=_legseries(
+            Leg.OFF,
+            ev_level=0.80,
+            ev_vol=0.10,
+            adv_residual_vol=1.00,
+            var_returns_vol=0.0,
+        ),
+        d_val_acc=0.0,
+        d_added_params=0.0,
+    )
+
+    with pytest.raises(ValueError, match="OFF return-variance volatility"):
+        score(pairs, _THRESHOLDS, n=5, validity=Validity(True, ()), g3_hold=True, g4_hold=True)
+
+
 def test_score_invalid_pair_is_invalid_and_computes_no_legs():
     pairs = [_accept_pair(i) for i in range(10)]
     report = score(

@@ -26,7 +26,7 @@ _STD_JITTER = (-0.5, 0.0, 0.5, 0.0)
 
 
 def _write_run(telemetry_dir: Path, run_name: str, *, seed: int, on: bool, expl: float) -> None:
-    """One run's events.jsonl: TRAINING_STARTED + 4 PPO_UPDATE_COMPLETED + EPISODE_OUTCOME."""
+    """One run's events.jsonl: TRAINING_STARTED + PPO updates + terminal outcomes."""
     run_dir = telemetry_dir / run_name
     run_dir.mkdir()
     events: list[dict] = [
@@ -117,23 +117,24 @@ def _write_run(telemetry_dir: Path, run_name: str, *, seed: int, on: bool, expl:
                 "data": data,
             }
         )
-    events.append(
-        {
-            "event_id": f"outcome-{run_name}",
-            "event_type": "EPISODE_OUTCOME",
-            "timestamp": "2026-07-07T00:02:00+00:00",
-            "group_id": "stage2",
-            "data": {
-                "env_id": 0,
-                "episode_idx": 0,
-                "final_accuracy": 50.0,
-                "param_ratio": 1.1,
-                "germinate_count": 1,
-                "prune_count": 1,
-                "fossilize_count": 0,
-            },
-        }
-    )
+    for episode_idx in range(5):
+        events.append(
+            {
+                "event_id": f"outcome-{run_name}-{episode_idx}",
+                "event_type": "EPISODE_OUTCOME",
+                "timestamp": "2026-07-07T00:02:00+00:00",
+                "group_id": "stage2",
+                "data": {
+                    "env_id": 0,
+                    "episode_idx": episode_idx,
+                    "final_accuracy": 50.0,
+                    "param_ratio": 1.1,
+                    "germinate_count": 1,
+                    "prune_count": 1,
+                    "fossilize_count": 0,
+                },
+            }
+        )
     (run_dir / "events.jsonl").write_text(
         "\n".join(json.dumps(event) for event in events) + "\n"
     )

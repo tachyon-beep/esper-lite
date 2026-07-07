@@ -683,11 +683,12 @@ def calibrate_off(
     )
 
 
-def _relative_reduction(on_value: float, off_value: float) -> float:
-    """§4 Δ_B: (ON − OFF) / OFF adv-residual volatility. A zero OFF volatility is a degenerate,
-    constant-EV leg — fail loud rather than divide by zero."""
+def _relative_reduction(
+    on_value: float, off_value: float, *, denominator_label: str
+) -> float:
+    """Relative change ``(ON − OFF) / OFF``; fail loud on a degenerate OFF denominator."""
     if off_value == 0.0:
-        raise ValueError("OFF adv-residual volatility is zero — degenerate leg (constant EV series)")
+        raise ValueError(f"{denominator_label} is zero — degenerate leg")
     return (on_value - off_value) / off_value
 
 
@@ -744,7 +745,12 @@ def score(
 
     delta_a = [pair.on.ev_level - pair.off.ev_level for pair in pairs]
     delta_b = [
-        _relative_reduction(pair.on.adv_residual_vol, pair.off.adv_residual_vol) for pair in pairs
+        _relative_reduction(
+            pair.on.adv_residual_vol,
+            pair.off.adv_residual_vol,
+            denominator_label="OFF adv-residual volatility",
+        )
+        for pair in pairs
     ]
     ev_main_vol_on = [_require_present("ev_main_vol", pair.on.ev_main_vol) for pair in pairs]
     expl_vol_off = [pair.off.ev_vol for pair in pairs]
@@ -758,7 +764,12 @@ def score(
     # §4 confound: if IQR(Var(returns_total)) drops at least as much (relatively) as the gated
     # residual, a LEG-B PASS is not distinguishable from a return-regime artifact -> INCONCLUSIVE.
     delta_var = [
-        _relative_reduction(pair.on.var_returns_vol, pair.off.var_returns_vol) for pair in pairs
+        _relative_reduction(
+            pair.on.var_returns_vol,
+            pair.off.var_returns_vol,
+            denominator_label="OFF return-variance volatility",
+        )
+        for pair in pairs
     ]
     gradient_cv_vol_on = [pair.on.gradient_cv_vol for pair in pairs]
     gradient_cv_vol_off = [pair.off.gradient_cv_vol for pair in pairs]

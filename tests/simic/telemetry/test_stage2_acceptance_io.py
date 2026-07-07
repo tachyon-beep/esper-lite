@@ -340,9 +340,12 @@ def _conn_with_runs_and_outcomes(
     runs: list[dict], outcomes: list[dict]
 ) -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect(":memory:")
-    conn.execute("CREATE TABLE runs (run_dir VARCHAR, n_envs INTEGER)")
+    conn.execute("CREATE TABLE runs (run_dir VARCHAR, n_envs INTEGER, n_episodes INTEGER)")
     for r in runs:
-        conn.execute("INSERT INTO runs VALUES (?, ?)", [r["run_dir"], r["n_envs"]])
+        conn.execute(
+            "INSERT INTO runs VALUES (?, ?, ?)",
+            [r["run_dir"], r["n_envs"], r.get("n_episodes", r["n_envs"])],
+        )
     conn.execute(
         """
         CREATE TABLE episode_outcomes (
@@ -380,6 +383,14 @@ def test_read_run_n_envs_fails_loud_on_unknown_run_dir():
         read_run_n_envs(conn, "/missing")
 
 
+def test_read_run_n_envs_rejects_duplicate_runs_rows():
+    conn = _conn_with_runs_and_outcomes(
+        [{"run_dir": "/A", "n_envs": 8}, {"run_dir": "/A", "n_envs": 8}], []
+    )
+    with pytest.raises(ValueError, match="duplicate|exactly one"):
+        read_run_n_envs(conn, "/A")
+
+
 def test_env_count_completeness_empty_when_both_legs_cover_all_envs():
     conn = _conn_with_runs_and_outcomes(
         runs=[{"run_dir": "/on", "n_envs": 3}, {"run_dir": "/off", "n_envs": 3}],
@@ -405,6 +416,26 @@ def test_env_count_completeness_flags_n_envs_mismatch_between_arms():
     )
     reasons = env_count_completeness_reasons(conn, on_run_dir="/on", off_run_dir="/off")
     assert any("mismatch" in r.lower() for r in reasons)
+
+
+def test_env_count_completeness_flags_stale_nonterminal_env_rows():
+    conn = _conn_with_runs_and_outcomes(
+        runs=[
+            {"run_dir": "/on", "n_envs": 2, "n_episodes": 4},
+            {"run_dir": "/off", "n_envs": 2, "n_episodes": 4},
+        ],
+        outcomes=[
+            {"run_dir": "/on", "env_id": 0, "episode_idx": 0},
+            {"run_dir": "/on", "env_id": 0, "episode_idx": 2},
+            {"run_dir": "/on", "env_id": 1, "episode_idx": 1},
+            {"run_dir": "/off", "env_id": 0, "episode_idx": 0},
+            {"run_dir": "/off", "env_id": 0, "episode_idx": 2},
+            {"run_dir": "/off", "env_id": 1, "episode_idx": 1},
+            {"run_dir": "/off", "env_id": 1, "episode_idx": 3},
+        ],
+    )
+    reasons = env_count_completeness_reasons(conn, on_run_dir="/on", off_run_dir="/off")
+    assert any("ON" in reason and "terminal" in reason for reason in reasons)
 
 
 # ---- S6: build_report — the scoring-phase assembly (telemetry -> scored verdict) ----
@@ -439,13 +470,16 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
         )
         """
     )
-    conn.execute("CREATE TABLE runs (run_dir VARCHAR, n_envs INTEGER)")
+    conn.execute("CREATE TABLE runs (run_dir VARCHAR, n_envs INTEGER, n_episodes INTEGER)")
     # Median-preserving jitter over 4 updates so every leg has NONZERO within-run IQR — a
     # constant-EV leg is degenerate (IQR=0) and the scorer rightly rejects it; real telemetry varies.
     ev_jitter = [-0.02, 0.0, 0.02, 0.0]
     std_jitter = [-0.5, 0.0, 0.5, 0.0]
     for s in specs:
-        conn.execute("INSERT INTO runs VALUES (?, ?)", [s["run_dir"], s["n_envs"]])
+        conn.execute(
+            "INSERT INTO runs VALUES (?, ?, ?)",
+            [s["run_dir"], s["n_envs"], s.get("n_episodes", s["n_envs"])],
+        )
         is_on = s["leg"] == "on"
         for b in range(4):
             expl_b = s["expl"] + ev_jitter[b]
@@ -478,6 +512,7 @@ def _meta(run_dir: str, seed: int) -> RunMeta:
     return RunMeta(
         run_dir=run_dir, seed=seed, reward_mode="SHAPED",
         actor_advantage_source=ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED, uses_per_head_norm=False,
+        frozen_config=_RUN_META_FROZEN_CONFIG,
     )
 
 
@@ -583,8 +618,8 @@ def test_build_report_rejects_on_off_run_dir_overlap_as_invalid():
 
 def test_build_report_rejects_global_frozen_config_drift_as_invalid():
     conn, pairings = _pairset(5)
-    common_config = (("task", "cifar_baseline"), ("gamma", 0.99))
-    drifted_config = (("task", "cifar_baseline"), ("gamma", 0.90))
+    common_config = (("task", "cifar_baseline"), ("gamma", 0.99), ("host_params", 100_000))
+    drifted_config = (("task", "cifar_baseline"), ("gamma", 0.90), ("host_params", 100_000))
 
     updated: list[SeedPairing] = []
     for index, pairing in enumerate(pairings):
@@ -839,6 +874,21 @@ def test_read_run_meta_fails_loud_on_unknown_run_dir():
         read_run_meta(conn, "/missing")
 
 
+def test_read_run_meta_rejects_duplicate_runs_rows():
+    conn = _conn_with_runs_meta([
+        {
+            "run_dir": "/A", "seed": 7, "reward_mode": "SHAPED",
+            "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+        },
+        {
+            "run_dir": "/A", "seed": 7, "reward_mode": "SHAPED",
+            "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+        },
+    ])
+    with pytest.raises(ValueError, match="duplicate|exactly one"):
+        read_run_meta(conn, "/A")
+
+
 # ---- S7: G4 guard-channel reader + G3/G4 hold predicates (§6) ----
 
 
@@ -1012,10 +1062,11 @@ def _full_stage2_conn(
                         False,
                     ],
                 )
-            conn.execute(
-                "INSERT INTO episode_outcomes VALUES (?,?,?,?,?,?,?,?)",
-                [run_dir, 0, 0, 50.0, 1.1, 1, 1, 0],
-            )
+            for episode_idx in range(n):
+                conn.execute(
+                    "INSERT INTO episode_outcomes VALUES (?,?,?,?,?,?,?,?)",
+                    [run_dir, 0, episode_idx, 50.0, 1.1, 1, 1, 0],
+                )
         pairs_spec.append({"seed": seed, "on_run_dir": f"/on/{seed}", "off_run_dir": f"/off/{seed}"})
 
     for run_dir, event_type in anomaly_rows or []:
@@ -1091,6 +1142,14 @@ def test_packet_from_spec_rejects_duplicate_pairset_seed():
     packet = packet_from_spec(conn, spec)
     assert "## §1 Validity — INVALID" in packet
     assert "duplicate seed" in packet
+
+
+def test_packet_from_spec_rejects_host_params_spec_drift():
+    conn, spec = _full_stage2_conn(5)
+    spec["host_params"] = 123_456
+
+    with pytest.raises(ValueError, match="host_params"):
+        packet_from_spec(conn, spec)
 
 
 def test_calibrate_from_spec_freezes_delta_from_off_arms_only():
