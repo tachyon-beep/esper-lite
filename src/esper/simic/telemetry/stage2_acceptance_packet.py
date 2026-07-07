@@ -598,3 +598,152 @@ def score(
         provenance=STAGE0_PROVENANCE_BLOCK,
         diagnostic_scalars_available=False,
     )
+
+
+# --- S6: markdown verdict packet ---------------------------------------------------------------
+#
+# render_packet is PURE over the scored artifacts — it mirrors scripts/proof_packet.py's
+# markdown-packet idiom but touches no telemetry (the duckdb assembly lives in
+# stage2_acceptance_io.build_report). It surfaces the frozen scorer's verdict, the §3/§4 leg
+# deltas, the §5 MECH / §6 safety guards, the §8B floored distribution, the §4 covariates +
+# confound-downgrade, and the §0 provenance VERBATIM. It weakens no predicate.
+
+
+def _tier_label(n: int) -> str:
+    """§7/§10 tier: n=10 banks a claim; a clean n=5 is only a screen and is NEVER banked ACCEPT."""
+    if n >= 10:
+        return "powered-claim tier"
+    return "direction-screen tier — a clean screen is SCREEN_PASS, NEVER banked as ACCEPT"
+
+
+def _fmt_floats(values: tuple[float, ...], prec: int = 4) -> str:
+    """Render a per-seed float tuple; an empty tuple (e.g. INVALID) renders as an em-dash."""
+    return ", ".join(f"{v:.{prec}f}" for v in values) if values else "—"
+
+
+def _gate(result: GateResult | None) -> str:
+    """Render a 3-valued gate result; ``None`` (no interpretation on INVALID) is an em-dash."""
+    return result.value if result is not None else "—"
+
+
+def _provenance_section(report: Stage2Report) -> str:
+    """§0 provenance — the block travels VERBATIM (do not paraphrase), fenced so it renders intact."""
+    return "\n".join(
+        [
+            "## §0 Provenance (Stage-0 evidence is NOT HRA evidence)",
+            "",
+            "```",
+            report.provenance,
+            "```",
+        ]
+    )
+
+
+def render_packet(
+    report: Stage2Report,
+    *,
+    thresholds: FrozenThresholds,
+    validity: Validity,
+    calibration: CalibrationReport | None = None,
+) -> str:
+    """Render the Stage-2 HRA MAJOR-1 acceptance verdict as a §-structured markdown packet.
+
+    Pure over the already-scored artifacts (no I/O, no torch). The §0 provenance block travels
+    VERBATIM; the tier caveat (§7/§10) is stated so an n=5 screen can never read as a banked ACCEPT.
+    An INVALID run lists every §1 breach and performs NO leg/guard interpretation.
+    """
+    lines: list[str] = [
+        "# Stage-2 HRA MAJOR-1 acceptance verdict",
+        "",
+        f"**Verdict: {report.verdict.value}**  (n={report.n}, {_tier_label(report.n)})",
+        "",
+    ]
+
+    if report.verdict is Verdict.INVALID:
+        lines += [
+            "## §1 Validity — INVALID",
+            "",
+            "The pair failed validity; per §1, NO leg/guard interpretation is performed.",
+            "",
+            "Breaches:",
+        ]
+        lines += [f"- {reason}" for reason in validity.reasons] or ["- (no reasons recorded)"]
+        lines += ["", _provenance_section(report)]
+        return "\n".join(lines)
+
+    lines += ["## §1 Validity", "", "VALID — pairing, finiteness, and completeness gates pass.", ""]
+
+    lines += [
+        "## §3 LEG-A — ev_sum non-inferiority (MAJOR-1 floor)",
+        "",
+        f"Result: **{_gate(report.leg_a)}**   (δ = {thresholds.delta:.4f}, frozen from OFF calibration)",
+        f"Per-seed Δ_A (ev_level ON − OFF): {_fmt_floats(report.delta_a)}",
+        "",
+    ]
+
+    downgrade = (
+        "YES — the reduction is matched by an IQR(Var(returns_total)) drop, a return-regime "
+        "artifact rather than actor-path shielding (demoted to INCONCLUSIVE)"
+        if report.leg_b_confound_downgraded
+        else "NO"
+    )
+    lines += [
+        "## §4 LEG-B — advantage-path volatility reduction (gated)",
+        "",
+        f"Result: **{_gate(report.leg_b)}**   (ε_rel = {thresholds.eps_rel:.2f})",
+        f"Per-seed Δ_B (rel. adv-residual IQR ON vs OFF): {_fmt_floats(report.delta_b)}",
+        f"Covariate IQR(Var(returns_total)) — ON:  {_fmt_floats(report.var_returns_vol_on)}",
+        f"Covariate IQR(Var(returns_total)) — OFF: {_fmt_floats(report.var_returns_vol_off)}",
+        f"Covariate raw IQR(pre_norm_advantage_std) — ON:  {_fmt_floats(report.raw_adv_std_vol_on)}",
+        f"Covariate raw IQR(pre_norm_advantage_std) — OFF: {_fmt_floats(report.raw_adv_std_vol_off)}",
+        f"§4 confound downgrade: {downgrade}",
+        "",
+    ]
+
+    lines += [
+        "## §5 MECH — EV_main mechanism guard",
+        "",
+        f"Hold: {report.mech_hold}   (ON ev_main volatility below the OFF explained_variance "
+        "baseline on ≥⌈0.8n⌉ seeds)",
+        "",
+    ]
+
+    lines += [
+        "## §6 Safety guards",
+        "",
+        f"G1 val-acc non-regression: **{_gate(report.g1)}**   (τ_acc = {thresholds.tau_acc:.2f} pp)",
+        f"G2 added-params non-inflation: {report.g2_hold}   (Δparam_max = {thresholds.delta_param_max:g})",
+        f"G3 churn not reward-farmed: {report.g3_hold}",
+        f"G4 guard channels within OFF baseline: {report.g4_hold}",
+        "",
+    ]
+
+    lines += [
+        "## §8B — floored-update exclusion",
+        "",
+        f"Floored fraction ON:  {_fmt_floats(report.on_floored_fractions, 3)}",
+        f"Floored fraction OFF: {_fmt_floats(report.off_floored_fractions, 3)}",
+        "Caveat: telemetry exposes only the total `ev_return_variance` (per-stream blindness); the "
+        "floor bites on the total, so the M1/MECH per-stream artifact travels with this verdict.",
+        "",
+    ]
+
+    scalars = (
+        "available"
+        if report.diagnostic_scalars_available
+        else "UNAVAILABLE — value_main / cf target scales are not emitted until the S7 emission slice"
+    )
+    lines += ["## §9 — diagnostic scalars", "", scalars, ""]
+
+    if calibration is not None:
+        lines += [
+            "## §10 — OFF calibration (freeze provenance)",
+            "",
+            f"δ frozen from the OFF arms: {calibration.delta:.4f}",
+            f"ε_rel: {calibration.eps_rel:.2f}   (OFF seed-to-seed adv-residual spread anchor: "
+            f"{calibration.eps_rel_off_spread_anchor:.4f})",
+            "",
+        ]
+
+    lines += [_provenance_section(report)]
+    return "\n".join(lines)

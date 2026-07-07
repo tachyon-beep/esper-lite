@@ -12,6 +12,7 @@ import pytest
 from esper.simic.telemetry.stage2_acceptance import GateResult, Verdict, calibrate_delta, level, vol
 from esper.simic.telemetry.stage2_acceptance_packet import (
     ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+    STAGE0_PROVENANCE_BLOCK,
     CalibrationReport,
     FrozenThresholds,
     Leg,
@@ -25,6 +26,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     calibrate_off,
     floored_exclusion,
     leg_series,
+    render_packet,
     score,
     sqrt_unexplained_series,
     validate_pair,
@@ -559,3 +561,122 @@ def test_score_does_not_downgrade_leg_b_when_var_returns_iqr_is_stable():
     assert report.leg_b_confound_downgraded is False
     assert report.leg_b is GateResult.PASS
     assert report.verdict is Verdict.ACCEPT
+
+
+# ---- S6: markdown verdict packet (render_packet) ----
+#
+# render_packet is a PURE function of the already-scored artifacts (Stage2Report +
+# CalibrationReport + FrozenThresholds + Validity). It invents no telemetry — it faithfully
+# surfaces the frozen scorer's verdict + covariates + provenance as a §-structured markdown packet,
+# mirroring scripts/proof_packet.py. No I/O, no torch.
+
+
+def _report(pairs_fn, n: int, *, g3_hold: bool = True, g4_hold: bool = True) -> Stage2Report:
+    return score(
+        [pairs_fn(i) for i in range(n)],
+        _THRESHOLDS, n=n, validity=Validity(True, ()), g3_hold=g3_hold, g4_hold=g4_hold,
+    )
+
+
+def test_render_packet_headlines_verdict_and_powered_claim_tier():
+    # §7: the verdict + its tier are the headline. n=10 is the powered-claim tier.
+    packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "ACCEPT" in packet
+    assert "n=10" in packet
+
+
+def test_render_packet_carries_stage0_provenance_block_verbatim():
+    # §0/MAJOR-3: the provenance block must appear verbatim so Stage-0 variance evidence can never
+    # be laundered into HRA acceptance evidence (the module says "do not paraphrase").
+    packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert STAGE0_PROVENANCE_BLOCK in packet
+
+
+def _calibration() -> CalibrationReport:
+    off_legs = [
+        _legseries(Leg.OFF, ev_level=e, ev_vol=0.10, adv_residual_vol=1.0)
+        for e in [0.80, 0.82, 0.79, 0.81, 0.80]
+    ]
+    return calibrate_off(off_legs)
+
+
+def test_render_packet_invalid_lists_every_validity_reason_and_withholds_interpretation():
+    # §1: an INVALID run lists EVERY breach and performs NO leg/guard interpretation.
+    reasons = ("seed mismatch: ON seed=7 != OFF seed=8", "reward_mode mismatch: 'SHAPED' != 'SIMPLIFIED'")
+    invalid = Validity(False, reasons)
+    report = score(
+        [_accept_pair(i) for i in range(10)], _THRESHOLDS, n=10,
+        validity=invalid, g3_hold=True, g4_hold=True,
+    )
+    packet = render_packet(report, thresholds=_THRESHOLDS, validity=invalid)
+    assert "INVALID" in packet
+    for reason in reasons:
+        assert reason in packet
+    assert "no leg" in packet.lower() and "interpretation" in packet.lower()
+
+
+def test_render_packet_reports_leg_a_result_and_frozen_delta():
+    # §3 LEG-A: gate result + the frozen non-inferiority margin δ (0.05).
+    packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "LEG-A" in packet
+    assert "0.0500" in packet  # δ = 0.05
+
+
+def test_render_packet_reports_leg_b_result_and_eps_rel():
+    # §4 LEG-B: gate result + the fixed relative-reduction floor ε_rel (0.10).
+    packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "LEG-B" in packet
+    assert "0.10" in packet  # ε_rel
+
+
+def test_render_packet_reports_mech_and_all_four_safety_guards():
+    # §5 MECH + §6 G1/G2/G3/G4 — every guard is surfaced (none defaulted).
+    packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "MECH" in packet
+    for guard in ("G1", "G2", "G3", "G4"):
+        assert guard in packet
+
+
+def test_render_packet_reports_floored_distribution_and_per_stream_blindness_caveat():
+    # §8B: the floored fractions + the per-stream-blindness caveat travel with the verdict.
+    packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "§8B" in packet or "floored" in packet.lower()
+    assert "ev_return_variance" in packet
+
+
+def test_render_packet_states_confound_downgrade_when_leg_b_demoted():
+    # §4 confound: a downgraded LEG-B must be visible in the packet, not silent.
+    downgraded = _report(_confounded_pair, 10)
+    assert downgraded.leg_b_confound_downgraded is True
+    packet = render_packet(downgraded, thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "confound" in packet.lower()
+    # and a non-downgraded run says so too (the field is always reported)
+    clean = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "confound" in clean.lower()
+
+
+def test_render_packet_marks_diagnostic_scalars_unavailable():
+    # §9: value_main/cf target scales are not emitted until S7 — the packet says UNAVAILABLE,
+    # it does not silently omit or fake them.
+    packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "§9" in packet
+    assert "unavailable" in packet.lower()
+
+
+def test_render_packet_n5_screen_pass_states_never_banked():
+    # §7/§10 tier: a clean n=5 is SCREEN_PASS and the packet must say it is NOT a banked ACCEPT.
+    report = _report(_accept_pair, 5)
+    assert report.verdict is Verdict.SCREEN_PASS
+    packet = render_packet(report, thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "SCREEN_PASS" in packet
+    assert "never" in packet.lower() and "bank" in packet.lower()
+
+
+def test_render_packet_includes_calibration_provenance_when_provided():
+    # When the OFF calibration is supplied, the packet records that δ was frozen from OFF (§10).
+    packet = render_packet(
+        _report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()),
+        calibration=_calibration(),
+    )
+    assert "OFF" in packet
+    assert "frozen" in packet.lower() or "calibrat" in packet.lower()

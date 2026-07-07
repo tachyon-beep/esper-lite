@@ -18,7 +18,18 @@ from typing import Any
 
 import duckdb
 
-from esper.simic.telemetry.stage2_acceptance_packet import UpdateRow
+from esper.simic.telemetry.stage2_acceptance_packet import (
+    FrozenThresholds,
+    Leg,
+    RunMeta,
+    SeedPair,
+    Stage2Report,
+    UpdateRow,
+    Validity,
+    leg_series,
+    score,
+    validate_pair,
+)
 
 # The ppo_updates columns the wrapper reads (names verified against the Karn view schema).
 # Ordering is chronological by (batch, inner_epoch): PPO collects a rollout (batch), then runs the
@@ -198,3 +209,142 @@ def read_run_churn(conn: duckdb.DuckDBPyConnection, run_dir: str) -> ChurnRates:
     return ChurnRates(
         germinate=float(rows[0]["g"]), prune=float(rows[0]["p"]), fossilize=float(rows[0]["f"])
     )
+
+
+# --- §6 env-count-completeness validity (backstops Finding 1's per-env-terminal aggregation) ---
+#
+# The per-env-terminal G1/G2 mean silently averages over WHATEVER envs are present. If a leg's
+# episode_outcomes is missing an env entirely (crash, lost log), the paired safety delta is biased
+# over a subset. So the pair is rejected unless each leg covers all runs.n_envs distinct env_ids
+# AND ON n_envs == OFF n_envs. DEFINITIONAL: hard-reject-on-incomplete is the conservative stance;
+# the exact threshold rides with the G1/G2 definitions pending §6/drl confirmation.
+
+
+def read_run_n_envs(conn: duckdb.DuckDBPyConnection, run_dir: str) -> int:
+    """The run's configured env count from the ``runs`` view (§6 completeness denominator)."""
+    rows = _rows(conn, "SELECT n_envs FROM runs WHERE run_dir = ?", [run_dir])
+    if not rows or rows[0]["n_envs"] is None:
+        raise ValueError(f"no runs.n_envs for run_dir={run_dir!r}")
+    return int(rows[0]["n_envs"])
+
+
+def _distinct_env_count(conn: duckdb.DuckDBPyConnection, run_dir: str) -> int:
+    """Distinct env_ids that actually reported an ``episode_outcomes`` row for this run."""
+    rows = _rows(
+        conn,
+        "SELECT COUNT(DISTINCT env_id) AS c FROM episode_outcomes WHERE run_dir = ?",
+        [run_dir],
+    )
+    return int(rows[0]["c"])  # COUNT is never NULL (0 when the leg has no outcomes at all)
+
+
+def env_count_completeness_reasons(
+    conn: duckdb.DuckDBPyConnection, *, on_run_dir: str, off_run_dir: str
+) -> list[str]:
+    """§6 — reasons the pair fails env-count completeness (empty iff both legs are complete + matched).
+
+    Merged into the ``Validity`` passed to ``score`` at the assembly layer (``build_report``), since
+    it reads ``runs``/``episode_outcomes`` — telemetry the pure ``validate_pair`` never sees.
+    """
+    reasons: list[str] = []
+    on_expected = read_run_n_envs(conn, on_run_dir)
+    off_expected = read_run_n_envs(conn, off_run_dir)
+    if on_expected != off_expected:
+        reasons.append(
+            f"env-count mismatch: ON n_envs={on_expected} != OFF n_envs={off_expected} "
+            "(the arms must run the same env count, §6)"
+        )
+    on_present = _distinct_env_count(conn, on_run_dir)
+    if on_present != on_expected:
+        reasons.append(
+            f"ON arm episode_outcomes cover {on_present}/{on_expected} envs — incomplete; the "
+            "per-env-terminal G1/G2 mean would be biased over a subset (§6, backstops Finding 1)"
+        )
+    off_present = _distinct_env_count(conn, off_run_dir)
+    if off_present != off_expected:
+        reasons.append(
+            f"OFF arm episode_outcomes cover {off_present}/{off_expected} envs — incomplete; the "
+            "per-env-terminal G1/G2 mean would be biased over a subset (§6, backstops Finding 1)"
+        )
+    return reasons
+
+
+# --- S6: scoring-phase assembly (telemetry -> scored verdict) -----------------------------------
+
+
+@dataclass(frozen=True)
+class SeedPairing:
+    """One fresh-init seed's ON/OFF run metadata + host size (the assembler's per-seed input).
+
+    ``on_meta``/``off_meta`` are caller-supplied (option (a)): the wrapper reads no
+    ``actor_advantage_source`` column from telemetry — the runs-view ``read_run_meta`` that would is
+    bundled with the S7 emission that CREATES that column. ``host_params`` scales the §6 G2
+    added-parameter footprint.
+    """
+
+    on_meta: RunMeta
+    off_meta: RunMeta
+    host_params: int
+
+
+def build_report(
+    conn: duckdb.DuckDBPyConnection,
+    pairings: list[SeedPairing],
+    thresholds: FrozenThresholds,
+    *,
+    n: int,
+    budget: int,
+    floor: float = 1.0,
+    floored_asymmetry_max: float = 0.10,
+    g3_hold: bool,
+    g4_hold: bool,
+) -> Stage2Report:
+    """Assemble frozen-config telemetry into a scored Stage-2 verdict (§10 scoring phase).
+
+    Per pairing: read both legs' ``ppo_updates``, run §1 ``validate_pair`` and merge the §6
+    env-count-completeness reasons into one ``Validity``; if valid, reduce each leg to a ``LegSeries``,
+    read the §6 paired safety deltas (ON − OFF), and ``score`` against the ALREADY-FROZEN thresholds.
+
+    It NEVER calibrates (δ is frozen input — "no peeking" is mechanical) and NEVER reads
+    ``actor_advantage_source`` from telemetry (caller supplies ``RunMeta``). ``g3_hold``/``g4_hold``
+    are injected: the G4 guard-channel reader and the churn threshold are the S7/§6-definitional tail.
+    """
+    loaded: list[tuple[SeedPairing, list[UpdateRow], list[UpdateRow]]] = []
+    reasons: list[str] = []
+    for pairing in pairings:
+        on_rows = read_leg(conn, pairing.on_meta.run_dir)
+        off_rows = read_leg(conn, pairing.off_meta.run_dir)
+        pair_validity = validate_pair(
+            pairing.on_meta, on_rows, pairing.off_meta, off_rows,
+            w=thresholds.w, budget=budget, floor=floor, floored_asymmetry_max=floored_asymmetry_max,
+        )
+        reasons.extend(pair_validity.reasons)
+        reasons.extend(
+            env_count_completeness_reasons(
+                conn, on_run_dir=pairing.on_meta.run_dir, off_run_dir=pairing.off_meta.run_dir
+            )
+        )
+        loaded.append((pairing, on_rows, off_rows))
+
+    validity = Validity(valid=not reasons, reasons=tuple(reasons))
+    if not validity.valid:
+        # §1: no interpretation on a broken run — score short-circuits before touching pairs.
+        return score([], thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
+
+    pairs: list[SeedPair] = []
+    for pairing, on_rows, off_rows in loaded:
+        on_ls = leg_series(on_rows, leg=Leg.ON, w=thresholds.w, floor=floor)
+        off_ls = leg_series(off_rows, leg=Leg.OFF, w=thresholds.w, floor=floor)
+        d_val_acc = read_run_val_acc(conn, pairing.on_meta.run_dir) - read_run_val_acc(
+            conn, pairing.off_meta.run_dir
+        )
+        d_added_params = read_run_added_params(
+            conn, pairing.on_meta.run_dir, pairing.host_params
+        ) - read_run_added_params(conn, pairing.off_meta.run_dir, pairing.host_params)
+        pairs.append(
+            SeedPair(
+                seed=pairing.on_meta.seed, on=on_ls, off=off_ls,
+                d_val_acc=d_val_acc, d_added_params=d_added_params,
+            )
+        )
+    return score(pairs, thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
