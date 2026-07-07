@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-08 00:27 AEST · code commit `7ebaff72` · checkpoint #31 (PDR-0045; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-08 01:10 AEST · code commit `0838cc40` · checkpoint #32 (PDR-0046; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet) has its **Stage-2 MAJOR-1
@@ -27,9 +27,11 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - **Branch survivor pick (esper-lite-1f1e55f58f, open/unblocked):** unchanged
   (PDR-0038). Do not merge/delete/push or jettison a branch without explicit owner approval.
 - **Reward-efficiency statistics (esper-lite-a2abff5ec5, Next bet):** first proof-provenance
-  blocker esper-lite-441fbc6810 is closed in `7ebaff72`; the live critical path now starts
-  at esper-lite-570d98c451, the Karn PPO traceability evidence section, if the owner does
-  not want to freeze/launch Stage-2 next.
+  blocker esper-lite-441fbc6810 is closed in `7ebaff72`; Karn PPO traceability
+  esper-lite-570d98c451 is closed in `0838cc40`. The newly startable P1s are
+  esper-lite-9678c6d05a (ROI verdict semantics) and esper-lite-c3cb5338c4 (CI-safe PPO
+  learnability proof lane). If work proceeds serially, take ROI verdict semantics next;
+  the proof lane is a parallel-startable critical-path sibling.
 
 ## Facts the next session must not relitigate
 - **Wrapper architecture settled — PDR-0039.** Caller-supplied pairing, telemetry-verified
@@ -40,10 +42,10 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - **S7 built, then review-remediated and closed — PDR-0042/PDR-0043/PDR-0044.** The harness
   is no longer blocked on the known S7 review findings or the stale-gate/final-review validity
   blockers, but code-complete is not value-landed. No A/B before owner freeze.
-- **Verification baseline remains mixed:** full default pytest passes at `7ebaff72`; touched-file
-  ruff, diff check, wardline, and added-line guardrail scan pass. Defensive-pattern lint and
-  GPU-sync lint still report existing non-touched failures; full mypy/full ruff were not
-  re-established in this checkpoint.
+- **Verification baseline remains mixed:** full default pytest passes at `0838cc40`; touched-file
+  ruff, diff check, Wardline, and added-line defensive/GPU-sync guardrail scans pass.
+  Defensive-pattern lint and GPU-sync lint still report existing non-touched failures;
+  full mypy/full ruff were not re-established in this checkpoint.
 - **Branch:** stay on `feat/ev-stab-stage2-hra`. Do not push without an explicit owner ask.
 
 ## Open questions / blocked-on-owner
@@ -56,7 +58,20 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - **Standing owner gates:** no push, tag, release, branch deletion, telemetry deletion, or remote
   action without explicit approval.
 
-## Last checkpoint did (checkpoint #31)
+## Last checkpoint did (checkpoint #32)
+- Committed Karn PPO traceability evidence as `0838cc40` and closed Filigree task
+  esper-lite-570d98c451 with that commit anchor.
+- Added `ppo_traceability_evidence` as a Karn public proof surface, expanded `ppo_updates`
+  with inf-gradient/update-skip/update-count/robust-value evidence, rendered `## PPO
+  Traceability Evidence`, and blocked missing, nonfinite, skipped, and impossible finite
+  PPO evidence before reward-efficiency ROI verdict math.
+- Recorded PDR-0046: traceability is closed; ROI verdict semantics
+  (esper-lite-9678c6d05a) and the CI-safe PPO proof lane (esper-lite-c3cb5338c4) are both
+  startable, with ROI semantics the serial recommendation and proof-lane work parallelable.
+- Verified with targeted red/green tests, focused Karn/MCP/proof suites, full default
+  pytest, touched-file ruff, diff checks, Wardline, and added-line guardrail scans.
+
+## Previous checkpoint did (checkpoint #31)
 - Committed PPO proof-provenance/missing-evidence fixes as `7ebaff72` and closed Filigree
   task esper-lite-441fbc6810 with that commit anchor.
 - Recorded PDR-0045: PPO reward-efficiency remains Next; its autonomous critical path now
@@ -64,7 +79,7 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - Verified the proof fix with targeted red/green coverage, affected suites, full default
   pytest, touched-file ruff, diff checks, Wardline, and an added-line guardrail scan.
 
-## Previous checkpoint did (checkpoint #30)
+## Earlier checkpoint did (checkpoint #30)
 - Committed the final-review Stage-2 fixset as `3669934d` and closed Filigree task
   esper-lite-2a4b56e719 with that commit anchor.
 - Recorded PDR-0044: implementation is closed, but the Stage-2 value read remains
@@ -88,6 +103,8 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 ## Next session, start here
 Ask the owner whether to spend the next session freezing and launching the Stage-2 paired
 fresh-init HRA ON/OFF A/B. If yes, freeze `Δparam_max`, exact `W`, floored-EV asymmetry,
-G3/G4 materiality, and advantage-floor policy before any ON run. If no, start the P1
-reward-efficiency critical path at esper-lite-570d98c451. Branch survivor cleanup is
-unblocked but remains owner-gated for any merge/jettison/push action.
+G3/G4 materiality, and advantage-floor policy before any ON run. If no, start
+esper-lite-9678c6d05a (reconcile reward-efficiency ROI verdict semantics) as the serial
+reward-efficiency move; esper-lite-c3cb5338c4 can run in parallel if another agent is
+available. Branch survivor cleanup is unblocked but remains owner-gated for any
+merge/jettison/push action.
