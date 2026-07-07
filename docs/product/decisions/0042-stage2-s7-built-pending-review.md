@@ -6,6 +6,10 @@ Related: PDR-0039 (wrapper slice map), PDR-0040 (S5 reader + review fixes), PDR-
 (S6 packet/env-count/assembler), task esper-lite-2a4b56e719, epic esper-lite-f25b71c165.
 Code commit: `9666fe0c`.
 
+Forward pointer: state advanced by PDR-0043 and the final-review working-tree fixset after
+`6d2dd07e`; known S7 findings and final-review validity blockers were remediated, but freeze
+and the paired HRA ON/OFF A/B remain owner-gated.
+
 ## Context
 
 The product workspace checkpoint #26 said Stage-2 acceptance was **6/7 slices done** and that S7

@@ -91,6 +91,7 @@ class UpdateRow:
     pre_norm_advantage_std: float
     return_std: float
     gradient_cv: float
+    advantage_std_floored: bool
 
 
 def burn_in_discard(rows: list[UpdateRow], w: int) -> list[UpdateRow]:
@@ -167,6 +168,7 @@ class LegSeries:
     ev_vol: float  # §3 calibrate fallback / §5 MECH OFF baseline (IQR total EV)
     adv_residual_vol: float  # §4 LEG-B gated statistic: IQR(sqrt(1 - ev))
     raw_adv_std_vol: float  # §4 descriptive covariate: IQR(pre_norm_advantage_std)
+    advantage_std_floored_fraction: float  # §8F contamination flag: share of scored updates floored
     var_returns_level: float  # §8E context: median Var(returns_total)
     var_returns_vol: float  # §8E confound: IQR(Var(returns_total))
     gradient_cv_vol: float  # §4 corroboration: IQR(gradient_cv)
@@ -239,6 +241,9 @@ def leg_series(
         ev_vol=vol(ev_totals),
         adv_residual_vol=vol(sqrt_unexplained_series(ev_totals)),
         raw_adv_std_vol=vol([row.pre_norm_advantage_std for row in scored]),
+        advantage_std_floored_fraction=(
+            sum(1 for row in scored if row.advantage_std_floored) / len(scored)
+        ),
         var_returns_level=level(var_returns),
         var_returns_vol=vol(var_returns),
         ev_main_vol=ev_main_vol,
@@ -640,6 +645,8 @@ class Stage2Report:
     var_returns_vol_off: tuple[float, ...]
     raw_adv_std_vol_on: tuple[float, ...]
     raw_adv_std_vol_off: tuple[float, ...]
+    advantage_std_floored_fractions_on: tuple[float, ...]
+    advantage_std_floored_fractions_off: tuple[float, ...]
     gradient_cv_vol_on: tuple[float, ...]
     gradient_cv_vol_off: tuple[float, ...]
     value_main_target_scale_levels: tuple[float, ...]
@@ -729,6 +736,8 @@ def score(
             var_returns_vol_off=(),
             raw_adv_std_vol_on=(),
             raw_adv_std_vol_off=(),
+            advantage_std_floored_fractions_on=(),
+            advantage_std_floored_fractions_off=(),
             gradient_cv_vol_on=(),
             gradient_cv_vol_off=(),
             value_main_target_scale_levels=(),
@@ -824,6 +833,12 @@ def score(
         var_returns_vol_off=tuple(pair.off.var_returns_vol for pair in pairs),
         raw_adv_std_vol_on=tuple(pair.on.raw_adv_std_vol for pair in pairs),
         raw_adv_std_vol_off=tuple(pair.off.raw_adv_std_vol for pair in pairs),
+        advantage_std_floored_fractions_on=tuple(
+            pair.on.advantage_std_floored_fraction for pair in pairs
+        ),
+        advantage_std_floored_fractions_off=tuple(
+            pair.off.advantage_std_floored_fraction for pair in pairs
+        ),
         gradient_cv_vol_on=tuple(gradient_cv_vol_on),
         gradient_cv_vol_off=tuple(gradient_cv_vol_off),
         value_main_target_scale_levels=value_main_scales,
@@ -1002,6 +1017,20 @@ def render_packet(
         f"Floored fraction OFF: {_fmt_floats(report.off_floored_fractions, 3)}",
         "Caveat: telemetry exposes only the total `ev_return_variance` (per-stream blindness); the "
         "floor bites on the total, so the M1/MECH per-stream artifact travels with this verdict.",
+        "",
+    ]
+
+    adv_floor_observed = any(report.advantage_std_floored_fractions_on) or any(
+        report.advantage_std_floored_fractions_off
+    )
+    lines += [
+        "## §8F — advantage-normalizer floor contamination",
+        "",
+        f"advantage_std_floored flag: {'OBSERVED' if adv_floor_observed else 'clear'}",
+        f"advantage_std_floored fraction ON:  {_fmt_floats(report.advantage_std_floored_fractions_on, 3)}",
+        f"advantage_std_floored fraction OFF: {_fmt_floats(report.advantage_std_floored_fractions_off, 3)}",
+        "Interpretation: nonzero fractions are contamination evidence for LEG-B; this packet reports "
+        "the exact fractions because no frozen frequency cutoff is registered in §11.",
         "",
     ]
 

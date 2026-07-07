@@ -1,14 +1,14 @@
 # Stage-2 HRA — MAJOR-1 Acceptance Gate (pre-registered)
 
-- **Status:** `DRAFT — pending drl-expert / yzmir-deep-rl / pytorch-expert review; FROZEN before any Stage-2 ON run.`
+- **Status:** `DRAFT — review-remediated in the working tree after 6d2dd07e; owner freeze pending; FROZEN before any Stage-2 ON run.`
 - **Epic / task:** `esper-lite-f25b71c165` (EV-stabilization) → `esper-lite-2a4b56e719` (Stage 2 — de-shape the regressand via HRA value head).
 - **Origin:** review-gate disposition PDR-0029 (MAJOR-1 `ev_sum` hard floor + MAJOR-3 provenance folded into Stage-2 acceptance); Stage-0 gate PDR-0032/0033; value-free-gate methodology PDR-0028.
 - **Scope fence:** this gate accepts/rejects Stage-2 as a **critic / value-target decomposition intervention (actor-objective A, below)**, NOT as a reward-redesign verdict. `share_attribution` and the Stage-0 variance gate are *variance facts*, not behavioural proof.
 - **Design provenance:** `drl-expert` spec (2026-07-06) merged with an independent external review; two external recommendations were rejected on code/algebra grounds (see §12).
 
-**Freeze status: NOT YET FREEZABLE (drl-expert H1).** Only the *pure statistical predicates* below are implemented and tested, in `src/esper/simic/telemetry/stage2_acceptance.py` (`leg_a`, `leg_b`, `mech_guard`, `safety_g1/g2`, `composite_verdict`, `calibrate_delta`, `level`/`vol`; 42 tests). The **wrapper/packet layer does not exist yet**, and it owns half the gate: the §1 validity gates, the §0 provenance block, the burn-in `W` discard (§2/§8), the §8B floored-update exclusion, the §8C–G comparability guards + covariates, and the G3/G4 computations. **Freeze is blocked until that wrapper exists and its tests encode those predicates.** Only then is this the frozen contract, after which a change is a new PDR that supersedes this one.
+**Freeze status: REVIEW-REMEDIATED, NOT FROZEN.** The pure scorer and wrapper/packet layer now cover the §1 validity gates, §0 provenance block, burn-in `W`, §8B floored-update exclusion, §8C–G comparability guards/covariates, G3/G4 inputs, S7 diagnostic rendering, OFF-only calibration validity, spec-scoped traceback/run-log validity, and `advantage_std_floored` contamination reporting. This document is still not frozen and no paired HRA ON/OFF A/B has run. Freeze remains blocked on final verification, owner-set threshold slots, and explicit owner approval before ON launch.
 
-Predicate ownership: *pure scorer* = LEG-A/LEG-B/MECH/G1/G2 statistics + composite (`n`-aware; ACCEPT only at n=10). *Wrapper* = everything that reads telemetry: §1, §0, burn-in, §8B, §8E covariates, G3/G4, and the tier-gated call into `composite_verdict`.
+Predicate ownership: *pure scorer* = LEG-A/LEG-B/MECH/G1/G2 statistics + composite (`n`-aware; ACCEPT only at n=10). *Wrapper* = everything that reads telemetry: §1, §0, burn-in, §8B, §8E covariates, §8F contamination reporting, G3/G4, and the tier-gated call into `composite_verdict`.
 
 ---
 
@@ -171,11 +171,11 @@ INCONCLUSIVE ⟺ ¬REJECT ∧ ¬clean                  # null band / safety soft
 ## §8. Comparability traps to control
 
 - **(A) normalizer re-warm.** ON reconstructs `V_total = denorm_main(V_main) + denorm_cf(V_cf)` (two fresh normalizers) vs OFF's one. EV read mid-warmup makes ON look spuriously bad → controlled by burn-in `W`, identical both legs.
-- **(B) floored-EV asymmetry — a SCORED PRECONDITION, not a note (drl-expert M1).** `EV = 1 − residual/max(Var(returns), floor=1.0)` (`value_metrics.py:164`). By the intervention's own premise `R_cf` is the high-CoV stream, so `returns_main = returns_total − returns_cf` is the low-variance remainder — **the quantity most likely to fall below the absolute floor 1.0**, which biases `ev_main` *up* in level and *down* in volatility (→ MECH can hold for a floor artifact, not a mechanism) and, when ON's `Var(returns_total)` dips below the floor more than OFF's, biases ON `ev_sum` *up* (→ an easier, unreal LEG-A pass). Therefore the wrapper MUST, before any level/vol statistic: (i) **exclude updates where `ev_return_variance ≤ 1.0`** from every leg's series; (ii) **REJECT/INVALID a leg if the floored fraction is materially asymmetric between arms**; (iii) **report the per-leg floored fraction in the verdict.** Telemetry is present (`ev_return_variance`, `ev_low_return_variance`, `ppo_agent.py:742-744`) but currently unread. Whether the floor bites at all depends on the empirical reward scale — check the `ev_return_variance` distribution on the `cifar_baseline` runs before trusting LEG-A/MECH.
+- **(B) floored-EV asymmetry — a SCORED PRECONDITION, not a note (drl-expert M1).** `EV = 1 − residual/max(Var(returns), floor=1.0)` (`value_metrics.py:164`). By the intervention's own premise `R_cf` is the high-CoV stream, so `returns_main = returns_total − returns_cf` is the low-variance remainder — **the quantity most likely to fall below the absolute floor 1.0**, which biases `ev_main` *up* in level and *down* in volatility (→ MECH can hold for a floor artifact, not a mechanism) and, when ON's `Var(returns_total)` dips below the floor more than OFF's, biases ON `ev_sum` *up* (→ an easier, unreal LEG-A pass). Therefore the wrapper MUST, before any level/vol statistic: (i) **exclude updates where `ev_return_variance ≤ 1.0`** from every leg's series; (ii) **REJECT/INVALID a leg if the floored fraction is materially asymmetric between arms**; (iii) **report the per-leg floored fraction in the verdict.** The wrapper now reads `ev_return_variance`, applies the exclusion, and reports per-leg fractions; the material asymmetry threshold is a freeze-time threshold slot (§11).
 - **(C) moment-convention mixing.** EV family = `correction=1`; `pre_norm_advantage_std` and the value-free shares = `correction=0`. LEG A reads only `explained_variance`/`ev_sum` (both correction=1); LEG B uses only within-series IQR (convention-immune). Never compare an EV against a correction=0 sibling.
 - **(D) per-stream vs total.** Only `ev_sum` (=total) is the OFF comparand; `ev_main`/`ev_cf` enter only MECH (§5).
 - **(E) different `returns_total` regimes.** Report `Var(returns_total)` per leg as a covariate; if the two legs' return-variance regimes diverge materially, the paired EV comparison is confounded — surface it, don't silently score.
-- **(F) advantage-norm config.** `per_head_advantage_norm` and `ADVANTAGE_STD_FLOOR` change `pre_norm_advantage_std` semantics → frozen identical both legs (per-head OFF, same floor). If `advantage_std_floored` is frequently True in either leg, LEG B is contaminated — flag.
+- **(F) advantage-norm config.** `per_head_advantage_norm` and `ADVANTAGE_STD_FLOOR` change `pre_norm_advantage_std` semantics → frozen identical both legs (per-head OFF, same floor). The wrapper rejects `per_head_advantage_norm=True` and reports per-leg `advantage_std_floored` fractions. Nonzero fractions are flagged as LEG-B contamination evidence; no hard frequency cutoff is registered unless the owner freezes one before ON.
 - **(G) sequential-A/B warm-up.** `dual_ab.py` trains groups sequentially; EV/advantage/val-acc are step-indexed not time-indexed → safe, note in the run log.
 
 **Burn-in `W`:** the slowest re-warm is `cf_value_normalizer` (high-variance `R_cf`), which the total `value_target_scale` does not track. Set `W` = later of (i) `value_warmup_batches × ppo_updates_per_batch` and (ii) the update at which `value_target_scale` plateaus AND (ON) `cf_value_loss` plateaus. Same absolute `W` discarded on both legs.
@@ -189,7 +189,7 @@ Two ON-leg scalars, added so a reader can tell "critic got better" from "target 
 - `value_main_target_scale` = `value_main_normalizer.get_scale()`
 - `cf_value_target_scale`   = `cf_value_normalizer.get_scale()`
 
-(The normalizers already track these; only the *total* `value_target_scale` is emitted today.) **Descriptive, not gating.** Interpretation folded into the report:
+(The normalizers now emit these ON-leg scalars through S7; old/all-missing telemetry renders them as `UNAVAILABLE`, never as defaults.) **Descriptive, not gating.** Interpretation folded into the report:
 
 ```
 Expected non-hollow pattern:  target_main_scale ↓, ev_main ↑/steadier, ev_cf noisy/modest,
@@ -207,7 +207,7 @@ If `ev_main` improved *only* because `value_main_target_scale` collapsed, that i
 - **ON posture:** `hra_value_decomposition=True`, `reward_mode=SHAPED`, `reward_family=CONTRIBUTION`.
 - **OFF posture:** `hra_value_decomposition=False`, **same** `reward_mode=SHAPED`, **same** `reward_family=CONTRIBUTION`. The `bounded_attribution` (`R_cf`) term is in the reward on BOTH legs — folded into the single value target on OFF. **The toggle is decomposition-only, never reward-removal** (OFF is NOT a `reward_family`/`SIMPLIFIED` change — that would be objective B, out of scope §0).
 - **Frozen between legs (only `hra_value_decomposition` toggles):** seed & network init; lr, clip_ratio, entropy_coef + schedules, gamma, gae_lambda, epochs/episode, n_envs, batch, `ppo_updates_per_batch`; the entire reward config (mode, family, all shaping coefficients, `R_cf` scale, rent, PBRS potentials, terminal-acc); `ev_return_variance_floor=1.0`; `per_head_advantage_norm=False` + `ADVANTAGE_STD_FLOOR`; value-warmup config; host task (`cifar_baseline`) + curriculum; governor/safety-gate config; blueprint set & slots; episode budget.
-- **Freeze order (NO peeking):** (1) run all OFF arms; (2) compute `δ`, `ε_rel` from the OFF arms + confirm `τ_acc`, `Δparam_max`, `W`; (3) freeze all thresholds into this doc; (4) run + score ON arms. Calibration touches only control data.
+- **Freeze order (NO peeking):** (1) run all OFF arms; (2) compute `δ` from valid OFF arms only; (3) confirm fixed `ε_rel=0.10` and `τ_acc=0.3pp`, plus owner-set `Δparam_max`, `W`, floored-asymmetry materiality, G3/G4 materiality, and any advantage-floor policy; (4) freeze thresholds into this doc; (5) run + score ON arms. Calibration touches only control data.
 
 ---
 
@@ -218,8 +218,12 @@ If `ev_main` improved *only* because `value_main_target_scale` collapsed, that i
 | `δ` | ev_sum non-inferiority margin | `max(0.05, paired_bootstrap_SE(OFF ev-level medians))`; fallback `max(0.05, 0.5·median OFF IQR)` |
 | `ε_rel` | adv-vol relative reduction floor | `0.10` |
 | `τ_acc` | val-acc regression deadband | `0.3pp` |
-| `Δparam_max` | added-param inflation ceiling | `<owner-set>` (freeze before ON) |
-| `W` | burn-in updates discarded | `max(value_warmup·updates_per_batch, plateau(value_target_scale, cf_value_loss))` |
+| `Δparam_max` | added-param inflation ceiling | `<owner-set before ON>` |
+| `W` | burn-in updates discarded | exact integer frozen before ON from `max(value_warmup·updates_per_batch, plateau(value_target_scale, cf_value_loss))` |
+| `floored_asymmetry_max` | material ON/OFF floored-EV fraction asymmetry | `0.10` candidate code default; owner freeze before ON |
+| `g3_ratio_max` | churn material-elevation ratio | `<owner-set before ON>` (score spec field) |
+| `g4_ratio_max` / `g4_abs_floor` | guard-channel material-elevation thresholds | `<owner-set before ON>` (score spec fields) |
+| `advantage_std_floored` policy | LEG-B contamination handling | report exact ON/OFF fractions + `OBSERVED` flag; no hard cutoff unless owner freezes one |
 | tiers | direction / claim | n=5 screen → n=10 claim (ACCEPT only at n=10) |
 
 ---

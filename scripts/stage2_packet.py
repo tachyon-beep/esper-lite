@@ -26,12 +26,62 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import duckdb
 
 from esper.karn.mcp.views import create_views, scan_ingestion_integrity
 from esper.simic.telemetry.stage2_acceptance_io import calibrate_from_spec, packet_from_spec
+
+
+_TRACEBACK_LOG_PATTERNS: tuple[str, ...] = (
+    "*.log",
+    "*.err",
+    "*.out",
+    "stderr",
+    "stdout",
+    "stderr.txt",
+    "stdout.txt",
+)
+_TRACEBACK_MARKERS: tuple[str, ...] = (
+    "Traceback (most recent call last):",
+    "[TRAINING ERROR]",
+    "[Training crashed with error:]",
+)
+
+
+def _run_dirs_for_command(command: str, spec: dict) -> tuple[str, ...]:
+    if command == "calibrate":
+        return tuple(str(run_dir) for run_dir in spec["off_run_dirs"])
+    return tuple(
+        str(run_dir)
+        for pair in spec["pairs"]
+        for run_dir in (pair["on_run_dir"], pair["off_run_dir"])
+    )
+
+
+def run_log_traceback_reasons(telemetry_dir: str, run_dirs: Sequence[str]) -> tuple[str, ...]:
+    """§1 run-log traceback scan, scoped to the run dirs named by the packet spec."""
+    telemetry_path = Path(telemetry_dir)
+    reasons: list[str] = []
+    for run_dir in run_dirs:
+        run_path = telemetry_path / run_dir
+        log_files: set[Path] = set()
+        for pattern in _TRACEBACK_LOG_PATTERNS:
+            log_files.update(run_path.glob(pattern))
+        for log_file in sorted(log_files):
+            if not log_file.is_file():
+                continue
+            with log_file.open("r", encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    for marker in _TRACEBACK_MARKERS:
+                        if marker in line:
+                            reasons.append(
+                                f"{run_dir} log {log_file.name}:{line_number} contains "
+                                f"{marker!r} (§1 traceback/run-log validity gate)"
+                            )
+    return tuple(reasons)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,6 +115,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     spec = json.loads(Path(args.spec).read_text())
+    try:
+        traceback_reasons = run_log_traceback_reasons(
+            args.telemetry_dir, _run_dirs_for_command(args.command, spec)
+        )
+    except KeyError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.command == "calibrate" and traceback_reasons:
+        for reason in traceback_reasons:
+            print(f"TRACEBACK: {reason}", file=sys.stderr)
+        return 1
+
     conn = duckdb.connect(":memory:")
     try:
         create_views(conn, args.telemetry_dir)
@@ -72,7 +134,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "calibrate":
                 text = calibrate_from_spec(conn, spec)
             else:
-                text = packet_from_spec(conn, spec)
+                text = packet_from_spec(
+                    conn,
+                    spec,
+                    extra_validity_reasons=traceback_reasons,
+                )
         except (KeyError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 1

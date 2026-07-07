@@ -59,6 +59,7 @@ def _full_row(**overrides) -> dict:
         pre_norm_advantage_std=1.0,
         return_std=3.0,
         gradient_cv=0.10,
+        advantage_std_floored=False,
         advantage_per_head_normalized=False,
     )
     row.update(overrides)
@@ -73,11 +74,13 @@ def test_row_to_update_maps_all_fields():
         inner_epoch=2, batch=3, explained_variance=0.7, ev_sum=0.7, ev_main=0.2, ev_cf=0.1,
         value_main_target_scale=1.7, cf_value_target_scale=6.3,
         ev_return_variance=8.0, pre_norm_advantage_std=1.5, return_std=2.0, gradient_cv=0.4,
+        advantage_std_floored=True,
     )
     assert row_to_update(row) == UpdateRow(
         inner_epoch=2, batch=3, explained_variance=0.7, ev_sum=0.7, ev_main=0.2, ev_cf=0.1,
         value_main_target_scale=1.7, cf_value_target_scale=6.3,
         ev_return_variance=8.0, pre_norm_advantage_std=1.5, return_std=2.0, gradient_cv=0.4,
+        advantage_std_floored=True,
     )
 
 
@@ -133,18 +136,18 @@ def _conn_with_updates(rows: list[dict]) -> duckdb.DuckDBPyConnection:
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
             value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
             pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
-            advantage_per_head_normalized BOOLEAN
+            advantage_std_floored BOOLEAN, advantage_per_head_normalized BOOLEAN
         )
         """
     )
     for r in rows:
         conn.execute(
-            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [
                 r["run_dir"], r["inner_epoch"], r["batch"], r["explained_variance"], r["ev_sum"],
                 r["ev_main"], r["ev_cf"], r["ev_return_variance"], r["value_main_target_scale"],
                 r["cf_value_target_scale"], r["pre_norm_advantage_std"], r["return_std"],
-                r["gradient_cv"], r["advantage_per_head_normalized"],
+                r["gradient_cv"], r["advantage_std_floored"], r["advantage_per_head_normalized"],
             ],
         )
     return conn
@@ -458,7 +461,8 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
             run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
             value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
-            pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE
+            pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
+            advantage_std_floored BOOLEAN
         )
         """
     )
@@ -485,7 +489,7 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
             expl_b = s["expl"] + ev_jitter[b]
             return_std_b = 3.0 + std_jitter[b]
             conn.execute(
-                "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     s["run_dir"], 0, b, expl_b,
                     expl_b if is_on else None,       # ev_sum: total-EV comparand on ON, null on OFF
@@ -497,6 +501,7 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
                     1.0,
                     return_std_b,
                     0.10,
+                    False,
                 ],
             )
         for env_id in s.get("env_ids", list(range(s["n_envs"]))):
@@ -831,6 +836,16 @@ def test_read_run_meta_carries_per_head_norm_scan():
     assert read_run_meta(conn, "/A").uses_per_head_norm is True
 
 
+def test_read_run_meta_carries_per_head_norm_config_even_when_update_scan_is_false():
+    conn = _conn_with_runs_meta([{
+        "run_dir": "/A", "seed": 7, "reward_mode": "SHAPED",
+        "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+        "per_head_advantage_norm": True,
+        "per_head_norm": False,
+    }])
+    assert read_run_meta(conn, "/A").uses_per_head_norm is True
+
+
 def test_read_run_meta_fails_loud_on_pre_s7_telemetry():
     # Pre-S7 telemetry has no actor_advantage_source (view extracts NULL): the §0 fence
     # cannot verify provenance it does not have — fail loud, never default.
@@ -1013,7 +1028,7 @@ def _full_stage2_conn(
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
             value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
             pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
-            advantage_per_head_normalized BOOLEAN
+            advantage_std_floored BOOLEAN, advantage_per_head_normalized BOOLEAN
         )
         """
     )
@@ -1047,7 +1062,7 @@ def _full_stage2_conn(
             is_on = leg == "on"
             for b in range(4):
                 conn.execute(
-                    "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     [
                         run_dir, 0, b, expl + ev_jitter[b],
                         expl + ev_jitter[b] if is_on else None,
@@ -1059,6 +1074,7 @@ def _full_stage2_conn(
                         1.0,
                         3.0 + std_jitter[b],
                         0.10,
+                        False,
                         False,
                     ],
                 )
@@ -1119,6 +1135,67 @@ def test_calibrate_from_spec_rejects_metadata_invalid_off_run():
     conn.execute("UPDATE runs SET resume_path = '/tmp/checkpoint.pt' WHERE run_dir = '/off/0'")
     with pytest.raises(ValueError, match="fresh-init"):
         calibrate_from_spec(conn, {"off_run_dirs": ["/off/0"], "w": 0, "budget": 2})
+
+
+def test_calibrate_from_spec_rejects_non_total_actor_source_off_run():
+    conn, _spec = _full_stage2_conn(5)
+    conn.execute("UPDATE runs SET actor_advantage_source = 'main_only' WHERE run_dir = '/off/0'")
+    with pytest.raises(ValueError, match="actor_advantage_source"):
+        calibrate_from_spec(
+            conn,
+            {"off_run_dirs": [f"/off/{seed}" for seed in range(5)], "w": 0, "budget": 2},
+        )
+
+
+def test_calibrate_from_spec_rejects_per_head_norm_off_run():
+    conn, _spec = _full_stage2_conn(5)
+    conn.execute(
+        "UPDATE ppo_updates SET advantage_per_head_normalized = true WHERE run_dir = '/off/0'"
+    )
+    with pytest.raises(ValueError, match="per-head advantage normalization"):
+        calibrate_from_spec(
+            conn,
+            {"off_run_dirs": [f"/off/{seed}" for seed in range(5)], "w": 0, "budget": 2},
+        )
+
+
+def test_calibrate_from_spec_rejects_duplicate_off_seed():
+    conn, _spec = _full_stage2_conn(5)
+    conn.execute("UPDATE runs SET seed = 0 WHERE run_dir = '/off/1'")
+    with pytest.raises(ValueError, match="duplicate seed"):
+        calibrate_from_spec(
+            conn,
+            {"off_run_dirs": [f"/off/{seed}" for seed in range(5)], "w": 0, "budget": 2},
+        )
+
+
+def test_calibrate_from_spec_rejects_reward_mode_drift_across_off_runs():
+    conn, _spec = _full_stage2_conn(5)
+    conn.execute("UPDATE runs SET reward_mode = 'SIMPLIFIED' WHERE run_dir = '/off/1'")
+    with pytest.raises(ValueError, match="reward_mode mismatch"):
+        calibrate_from_spec(
+            conn,
+            {"off_run_dirs": [f"/off/{seed}" for seed in range(5)], "w": 0, "budget": 2},
+        )
+
+
+def test_calibrate_from_spec_rejects_frozen_config_drift_across_off_runs():
+    conn, _spec = _full_stage2_conn(5)
+    conn.execute("UPDATE runs SET lr = 0.002 WHERE run_dir = '/off/1'")
+    with pytest.raises(ValueError, match="frozen run config mismatch"):
+        calibrate_from_spec(
+            conn,
+            {"off_run_dirs": [f"/off/{seed}" for seed in range(5)], "w": 0, "budget": 2},
+        )
+
+
+def test_calibrate_from_spec_rejects_incomplete_off_series_budget():
+    conn, _spec = _full_stage2_conn(5)
+    with pytest.raises(ValueError, match="budget"):
+        calibrate_from_spec(
+            conn,
+            {"off_run_dirs": [f"/off/{seed}" for seed in range(5)], "w": 0, "budget": 5},
+        )
 
 
 def test_packet_from_spec_material_guard_elevation_fails_g4():

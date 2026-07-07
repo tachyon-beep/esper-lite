@@ -56,6 +56,7 @@ def _update(**overrides) -> UpdateRow:
         pre_norm_advantage_std=1.0,
         return_std=3.0,
         gradient_cv=0.10,
+        advantage_std_floored=False,
     )
     fields.update(overrides)
     return UpdateRow(**fields)  # type: ignore[arg-type]
@@ -268,6 +269,17 @@ def test_leg_series_reports_ev_return_variance_distribution_for_the_caveat():
     assert ls.ev_return_variance_max == pytest.approx(8.0)
 
 
+def test_leg_series_reports_advantage_std_floor_fraction_for_contamination_flag():
+    rows = [
+        _update(batch=0, explained_variance=0.5, advantage_std_floored=False),
+        _update(batch=1, explained_variance=0.5, advantage_std_floored=True),
+        _update(batch=2, explained_variance=0.5, advantage_std_floored=False),
+        _update(batch=3, explained_variance=0.5, advantage_std_floored=True),
+    ]
+    ls = leg_series(rows, leg=Leg.OFF, w=0)
+    assert ls.advantage_std_floored_fraction == pytest.approx(0.5)
+
+
 def test_leg_series_type_is_legseries():
     ls = leg_series(_off_rows([0.4, 0.5, 0.6]), leg=Leg.OFF, w=0)
     assert isinstance(ls, LegSeries)
@@ -464,6 +476,7 @@ def _legseries(
     floored_fraction: float = 0.0,
     var_returns_vol: float = 0.10,
     raw_adv_std_vol: float = 0.10,
+    advantage_std_floored_fraction: float = 0.0,
     gradient_cv_vol: float = 0.10,
     value_main_target_scale_level: float | None = None,
     cf_value_target_scale_level: float | None = None,
@@ -476,6 +489,7 @@ def _legseries(
         ev_vol=ev_vol,
         adv_residual_vol=adv_residual_vol,
         raw_adv_std_vol=raw_adv_std_vol,
+        advantage_std_floored_fraction=advantage_std_floored_fraction,
         var_returns_level=1.0,
         var_returns_vol=var_returns_vol,
         gradient_cv_vol=gradient_cv_vol,
@@ -873,6 +887,36 @@ def test_render_packet_reports_floored_distribution_and_per_stream_blindness_cav
     packet = render_packet(_report(_accept_pair, 10), thresholds=_THRESHOLDS, validity=Validity(True, ()))
     assert "§8B" in packet or "floored" in packet.lower()
     assert "ev_return_variance" in packet
+
+
+def test_render_packet_flags_observed_advantage_std_flooring_without_changing_verdict():
+    def floored_advantage_pair(seed: int) -> SeedPair:
+        return SeedPair(
+            seed=seed,
+            on=_legseries(
+                Leg.ON,
+                ev_level=0.85,
+                adv_residual_vol=0.80,
+                ev_main_vol=0.03,
+                advantage_std_floored_fraction=0.5,
+            ),
+            off=_legseries(
+                Leg.OFF,
+                ev_level=0.80,
+                ev_vol=0.10,
+                adv_residual_vol=1.00,
+                advantage_std_floored_fraction=0.0,
+            ),
+            d_val_acc=0.0,
+            d_added_params=0.0,
+        )
+
+    report = _report(floored_advantage_pair, 10)
+    assert report.verdict is Verdict.ACCEPT
+    packet = render_packet(report, thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "advantage_std_floored" in packet
+    assert "OBSERVED" in packet
+    assert "0.500" in packet
 
 
 def test_render_packet_states_confound_downgrade_when_leg_b_demoted():

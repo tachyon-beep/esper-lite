@@ -99,6 +99,7 @@ def _write_run(telemetry_dir: Path, run_name: str, *, seed: int, on: bool, expl:
             "pre_norm_advantage_std": 1.0,
             "return_std": 3.0 + _STD_JITTER[b],
             "gradient_cv": 0.10,
+            "advantage_std_floored": False,
             "advantage_per_head_normalized": False,
         }
         if on:
@@ -233,6 +234,88 @@ def test_corrupt_jsonl_aborts_before_scoring(tmp_path, capsys):
     )
     assert rc == 2
     assert "not clean" in capsys.readouterr().err
+
+
+def test_traceback_off_run_log_aborts_calibration_before_freezing_delta(tmp_path, capsys):
+    telemetry_dir = tmp_path / "telemetry"
+    telemetry_dir.mkdir()
+    _write_pairset(telemetry_dir, 5)
+    (telemetry_dir / "off_0" / "stderr.log").write_text(
+        "Traceback (most recent call last):\nRuntimeError: training failed\n"
+    )
+
+    spec = tmp_path / "calibrate.json"
+    spec.write_text(
+        json.dumps({"off_run_dirs": [f"off_{s}" for s in range(5)], "w": 0, "budget": 2})
+    )
+    rc = stage2_packet_main(
+        ["calibrate", "--telemetry-dir", str(telemetry_dir), "--spec", str(spec)]
+    )
+    assert rc == 1
+    assert "traceback" in capsys.readouterr().err.lower()
+
+
+def test_traceback_unreferenced_run_log_does_not_block_calibration(tmp_path, capsys):
+    telemetry_dir = tmp_path / "telemetry"
+    telemetry_dir.mkdir()
+    _write_pairset(telemetry_dir, 5)
+    (telemetry_dir / "on_0" / "stderr.log").write_text(
+        "Traceback (most recent call last):\nRuntimeError: training failed\n"
+    )
+
+    spec = tmp_path / "calibrate.json"
+    spec.write_text(
+        json.dumps({"off_run_dirs": [f"off_{s}" for s in range(5)], "w": 0, "budget": 2})
+    )
+    rc = stage2_packet_main(
+        ["calibrate", "--telemetry-dir", str(telemetry_dir), "--spec", str(spec)]
+    )
+    assert rc == 0
+    assert "delta" in capsys.readouterr().out
+
+
+def test_traceback_paired_run_log_renders_invalid_score_packet(tmp_path):
+    telemetry_dir = tmp_path / "telemetry"
+    telemetry_dir.mkdir()
+    pairs = _write_pairset(telemetry_dir, 5)
+    (telemetry_dir / "on_0" / "stderr.log").write_text(
+        "[TRAINING ERROR]\nTraceback (most recent call last):\nRuntimeError: training failed\n"
+    )
+
+    spec = tmp_path / "score.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "pairs": pairs,
+                "host_params": 100_000,
+                "n": 5,
+                "budget": 2,
+                "thresholds": {
+                    "delta": 0.05,
+                    "eps_rel": 0.10,
+                    "tau_acc": 0.3,
+                    "delta_param_max": 1e9,
+                    "w": 0,
+                },
+                "g3_ratio_max": 1.5,
+                "g4_ratio_max": 2.0,
+                "g4_abs_floor": 5,
+            }
+        )
+    )
+    output = tmp_path / "packet.md"
+    rc = stage2_packet_main(
+        [
+            "score",
+            "--telemetry-dir", str(telemetry_dir),
+            "--spec", str(spec),
+            "--output", str(output),
+        ]
+    )
+    assert rc == 0
+    packet = output.read_text()
+    assert "## §1 Validity — INVALID" in packet
+    assert "traceback" in packet.lower()
 
 
 def test_calibrate_rejects_on_run_in_off_dirs(tmp_path, capsys):

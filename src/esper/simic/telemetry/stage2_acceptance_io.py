@@ -19,6 +19,7 @@ from typing import Any
 
 import duckdb
 
+from esper.leyline.telemetry import ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
 from esper.simic.telemetry.stage2_acceptance_packet import (
     ChurnRates,
     FrozenConfigValue,
@@ -57,6 +58,7 @@ _PPO_UPDATE_COLUMNS: tuple[str, ...] = (
     "pre_norm_advantage_std",
     "return_std",
     "gradient_cv",
+    "advantage_std_floored",
 )
 
 _FROZEN_RUN_CONFIG_COLUMNS: tuple[str, ...] = (
@@ -172,6 +174,7 @@ def row_to_update(row: dict[str, Any]) -> UpdateRow:
         pre_norm_advantage_std=float(_require(row, "pre_norm_advantage_std")),
         return_std=float(_require(row, "return_std")),
         gradient_cv=float(_require(row, "gradient_cv")),
+        advantage_std_floored=bool(_require(row, "advantage_std_floored")),
     )
 
 
@@ -326,7 +329,8 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
         seed=int(row["seed"]),
         reward_mode=str(row["reward_mode"]),
         actor_advantage_source=str(row["actor_advantage_source"]),
-        uses_per_head_norm=read_run_uses_per_head_norm(conn, run_dir),
+        uses_per_head_norm=bool(row["per_head_advantage_norm"])
+        or read_run_uses_per_head_norm(conn, run_dir),
         frozen_config=frozen_config,
     )
 
@@ -590,6 +594,58 @@ def pairset_validity_reasons(pairings: list[SeedPairing]) -> list[str]:
     return reasons
 
 
+def off_calibration_validity_reasons(metas: list[RunMeta]) -> list[str]:
+    """§10 OFF-only calibration validity before freezing thresholds.
+
+    Calibration has no ON arm to pair against, so it cannot call ``validate_pair``. It still freezes
+    the experiment's δ/ε_rel anchors, which means the OFF control set must satisfy the applicable
+    §0/§1/§10 invariants on its own: objective-A provenance, no per-head advantage normalization,
+    unique seeds, and one homogeneous frozen control configuration.
+    """
+    reasons: list[str] = []
+    bad_actor_sources = [
+        f"{meta.run_dir}={meta.actor_advantage_source!r}"
+        for meta in metas
+        if meta.actor_advantage_source != ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
+    ]
+    if bad_actor_sources:
+        reasons.append(
+            "OFF calibration actor_advantage_source must be "
+            f"{ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED!r}; got "
+            + ", ".join(bad_actor_sources)
+        )
+
+    per_head_norm_dirs = [meta.run_dir for meta in metas if meta.uses_per_head_norm]
+    if per_head_norm_dirs:
+        reasons.append(
+            "per-head advantage normalization active in OFF calibration run(s): "
+            f"{', '.join(per_head_norm_dirs)} — §8F(i)/§10 require per_head_advantage_norm=False "
+            "before freezing δ"
+        )
+
+    duplicate_seeds = _duplicate_items([meta.seed for meta in metas])
+    if duplicate_seeds:
+        reasons.append(
+            "duplicate seed(s) in OFF calibration set: "
+            f"{', '.join(duplicate_seeds)} — each OFF seed may anchor δ once (§10)"
+        )
+
+    if metas:
+        reward_mode = metas[0].reward_mode
+        if any(meta.reward_mode != reward_mode for meta in metas):
+            reasons.append(
+                "reward_mode mismatch across OFF calibration set: every OFF run must share "
+                "the same frozen reward_mode (§10)"
+            )
+        frozen_config = metas[0].frozen_config
+        if any(meta.frozen_config != frozen_config for meta in metas):
+            reasons.append(
+                "frozen run config mismatch across OFF calibration set: δ must be frozen from "
+                "one homogeneous control experiment (§10)"
+            )
+    return reasons
+
+
 def _frozen_config_value(meta: RunMeta, field: str) -> FrozenConfigValue:
     for key, value in meta.frozen_config:
         if key == field:
@@ -641,6 +697,7 @@ def build_report(
     g3_hold: bool,
     g4_hold: bool,
     safety_evidence: SafetyEvidence | None = None,
+    extra_validity_reasons: Sequence[str] = (),
 ) -> BuiltReport:
     """Assemble frozen-config telemetry into a scored Stage-2 verdict (§10 scoring phase).
 
@@ -655,6 +712,7 @@ def build_report(
     """
     loaded: list[tuple[SeedPairing, int, list[UpdateRow], list[UpdateRow]]] = []
     reasons: list[str] = pairset_validity_reasons(pairings)
+    reasons.extend(extra_validity_reasons)
     for pairing in pairings:
         host_params = _host_params_for_pairing(pairing)
         on_rows = read_leg(conn, pairing.on_meta.run_dir)
@@ -733,9 +791,12 @@ def calibrate_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -
             "duplicate OFF calibration run_dir(s): "
             f"{', '.join(duplicate_off_dirs)} — δ must be frozen from unique OFF runs (§10)"
         )
+    off_metas = [read_run_meta(conn, run_dir) for run_dir in off_run_dirs]
+    meta_reasons = off_calibration_validity_reasons(off_metas)
+    if meta_reasons:
+        raise ValueError("invalid OFF calibration evidence: " + "; ".join(meta_reasons))
     off_legs = []
     for run_dir in off_run_dirs:
-        read_run_meta(conn, run_dir)
         rows = read_leg(conn, run_dir)
         require_hra_signature(rows, Leg.OFF, run_dir=run_dir)
         series = leg_series(rows, leg=Leg.OFF, w=spec["w"])
@@ -761,7 +822,12 @@ def calibrate_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -
     return "\n".join(lines)
 
 
-def packet_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -> str:
+def packet_from_spec(
+    conn: duckdb.DuckDBPyConnection,
+    spec: dict[str, Any],
+    *,
+    extra_validity_reasons: Sequence[str] = (),
+) -> str:
     """§10 step 4 — score the pairing spec against FROZEN thresholds; returns the packet.
 
     Reads RunMeta from telemetry (read_run_meta — §0 provenance verified, not trusted),
@@ -835,5 +901,6 @@ def packet_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -> s
         g3_hold=all(g3_holds),
         g4_hold=all(g4_holds),
         safety_evidence=safety_evidence,
+        extra_validity_reasons=extra_validity_reasons,
     )
     return render_packet(built.report, thresholds=thresholds, validity=built.validity)
