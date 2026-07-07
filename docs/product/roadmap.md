@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-07 (PDR-0043)
+# Roadmap — Esper            Updated: 2026-07-07 (PDR-0044)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -12,9 +12,9 @@
   channel the A/B found too narrow (1.1% of episodes). **Stage-0 DELIVERED + gate PASSED
   (PDR-0032): `Cov(R_cf,R)/Var(R)` median ~1.02 >> 0.40 on a Stage-2-OFF control run — the
   cf stream dominates value-target variance, so de-shaping is justified. Stage-2 MAJOR-1
-  acceptance harness is **built and review-remediated through `f0ee27fe` (PDR-0043)**; next
-  intent is final freeze-readiness review, gate-doc freeze, then owner-launched paired HRA ON/OFF
-  A/B.** · tracker: esper-lite-f25b71c165 (epic) · metric: EV Stage-0 gate (PASSED);
+  acceptance harness is **built, review-remediated, and tracker-closed in `3669934d`
+  (PDR-0044)**; next intent is owner freeze of the remaining gate slots, then paired HRA
+  ON/OFF A/B and packet read.** · tracker: esper-lite-f25b71c165 (epic) · metric: EV Stage-0 gate (PASSED);
   Stage-2 MAJOR-1 gate NOT YET READ; watch fossilize/ep + k≥2 frequency as the
   organic-coverage signal
 
