@@ -14,10 +14,13 @@ from esper.simic.telemetry.stage2_acceptance import GateResult, Verdict, calibra
 from esper.simic.telemetry.stage2_acceptance_packet import (
     STAGE0_PROVENANCE_BLOCK,
     CalibrationReport,
+    ChurnRates,
     FrozenThresholds,
+    GuardChannelCounts,
     Leg,
     LegSeries,
     RunMeta,
+    SafetyEvidence,
     SeedPair,
     Stage2Report,
     UpdateRow,
@@ -540,6 +543,13 @@ def test_score_clean_n5_pairset_is_screen_pass_never_accept():
     assert report.verdict is Verdict.SCREEN_PASS
 
 
+def test_score_rejects_duplicate_seed_pairset():
+    pairs = [_accept_pair(i) for i in range(10)]
+    pairs[1] = _accept_pair(0)
+    with pytest.raises(ValueError, match="duplicate seed"):
+        score(pairs, _THRESHOLDS, n=10, validity=Validity(True, ()), g3_hold=True, g4_hold=True)
+
+
 def test_score_invalid_pair_is_invalid_and_computes_no_legs():
     pairs = [_accept_pair(i) for i in range(10)]
     report = score(
@@ -787,6 +797,55 @@ def test_render_packet_reports_mech_and_all_four_safety_guards():
     assert "MECH" in packet
     for guard in ("G1", "G2", "G3", "G4"):
         assert guard in packet
+
+
+def test_render_packet_reports_g3_g4_safety_evidence():
+    evidence = SafetyEvidence(
+        g3_churn_on=(ChurnRates(germinate=1.0, prune=0.5, fossilize=0.25),),
+        g3_churn_off=(ChurnRates(germinate=0.8, prune=0.4, fossilize=0.2),),
+        g3_ratio_max=1.5,
+        g4_counts_on=(
+            GuardChannelCounts(
+                governor_rollback=1,
+                value_collapse=0,
+                ratio_explosion=0,
+                ratio_collapse=0,
+                gradient_anomaly=0,
+                gradient_pathology=0,
+                numerical_instability=0,
+                reward_hacking=0,
+            ),
+        ),
+        g4_counts_off=(
+            GuardChannelCounts(
+                governor_rollback=0,
+                value_collapse=0,
+                ratio_explosion=0,
+                ratio_collapse=0,
+                gradient_anomaly=0,
+                gradient_pathology=0,
+                numerical_instability=0,
+                reward_hacking=0,
+            ),
+        ),
+        g4_ratio_max=2.0,
+        g4_abs_floor=5,
+    )
+    report = score(
+        [_accept_pair(i) for i in range(10)],
+        _THRESHOLDS,
+        n=10,
+        validity=Validity(True, ()),
+        g3_hold=True,
+        g4_hold=True,
+        safety_evidence=evidence,
+    )
+    packet = render_packet(report, thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "G3 materiality threshold: ratio_max = 1.5" in packet
+    assert "g=1.000/p=0.500/f=0.250" in packet
+    assert "G4 materiality thresholds: ratio_max = 2, abs_floor = 5" in packet
+    assert "rollback=1" in packet
+    assert "reward_hacking=0" in packet
 
 
 def test_render_packet_reports_floored_distribution_and_per_stream_blindness_caveat():

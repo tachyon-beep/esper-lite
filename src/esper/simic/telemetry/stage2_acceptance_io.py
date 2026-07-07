@@ -13,6 +13,7 @@ every downstream statistic.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +25,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     GuardChannelCounts,
     Leg,
     RunMeta,
+    SafetyEvidence,
     SeedPair,
     Stage2Report,
     UpdateRow,
@@ -58,16 +60,61 @@ _PPO_UPDATE_COLUMNS: tuple[str, ...] = (
 
 _FROZEN_RUN_CONFIG_COLUMNS: tuple[str, ...] = (
     "task",
+    "reward_family",
     "n_envs",
     "n_episodes",
     "max_epochs",
     "max_batches",
     "lr",
+    "gamma",
+    "gae_lambda",
+    "ppo_updates_per_batch",
+    "recurrent_n_epochs",
     "clip_ratio",
     "entropy_coef",
+    "per_head_advantage_norm",
+    "return_variance_telemetry",
+    "value_coef",
+    "value_warmup_batches",
+    "value_coef_start",
     "param_budget",
+    "param_penalty_weight",
+    "sparse_reward_scale",
+    "rent_host_params_floor",
+    "basic_acc_delta_weight",
+    "plateau_threshold",
+    "improvement_threshold",
+    "gradient_telemetry_stride",
+    "lstm_hidden_dim",
+    "chunk_length",
+    "max_seeds",
+    "slot_ids_json",
+    "env_devices_json",
+    "policy_device",
+    "amp_enabled",
+    "amp_dtype",
+    "compile_enabled",
+    "compile_backend",
+    "compile_mode",
+    "permissive_gates",
+    "auto_forward_g1",
+    "auto_forward_g2",
+    "auto_forward_g3",
+    "disable_pbrs",
+    "disable_terminal_reward",
+    "disable_anti_gaming",
+    "max_grad_norm",
     "host_params",
 )
+
+_NULLABLE_FROZEN_RUN_CONFIG_COLUMNS: frozenset[str] = frozenset({
+    "value_coef_start",
+    "max_seeds",
+    "amp_dtype",
+    "compile_backend",
+    "compile_mode",
+    "max_grad_norm",
+})
 
 
 def _rows(
@@ -168,12 +215,18 @@ def _per_env_terminal_mean(
                    ROW_NUMBER() OVER (PARTITION BY env_id ORDER BY episode_idx DESC) AS rn
             FROM episode_outcomes WHERE run_dir = ?
         )
-        SELECT AVG(value) AS value FROM per_env WHERE rn = 1
+        SELECT COUNT(*) AS terminal_envs, COUNT(value) AS present_values, AVG(value) AS value
+        FROM per_env WHERE rn = 1
         """,
         [run_dir],
     )
-    if not rows or rows[0]["value"] is None:
+    if not rows or rows[0]["terminal_envs"] == 0:
         raise ValueError(f"no episode_outcomes at the terminal episode for run_dir={run_dir!r}")
+    if rows[0]["terminal_envs"] != rows[0]["present_values"]:
+        raise ValueError(
+            f"terminal episode_outcomes.{column} is NULL for "
+            f"{rows[0]['terminal_envs'] - rows[0]['present_values']} env(s) in run_dir={run_dir!r}"
+        )
     return float(rows[0]["value"])
 
 
@@ -222,7 +275,7 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
     """
     rows = _rows(
         conn,
-        "SELECT seed, reward_mode, actor_advantage_source, "
+        "SELECT seed, reward_mode, actor_advantage_source, resume_path, start_episode, "
         + ", ".join(_FROZEN_RUN_CONFIG_COLUMNS)
         + " FROM runs WHERE run_dir = ?",
         [run_dir],
@@ -230,9 +283,16 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
     if not rows:
         raise ValueError(f"no runs row for run_dir={run_dir!r}")
     row = rows[0]
-    required_columns = ("seed", "reward_mode", "actor_advantage_source", *_FROZEN_RUN_CONFIG_COLUMNS)
+    required_columns = (
+        "seed",
+        "reward_mode",
+        "actor_advantage_source",
+        "resume_path",
+        "start_episode",
+        *_FROZEN_RUN_CONFIG_COLUMNS,
+    )
     for column in required_columns:
-        if row[column] is None:
+        if row[column] is None and column not in _NULLABLE_FROZEN_RUN_CONFIG_COLUMNS:
             raise ValueError(
                 f"runs.{column} is NULL for run_dir={run_dir!r} — "
                 + (
@@ -242,6 +302,14 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
                     else "a required provenance field is missing"
                 )
             )
+    if str(row["resume_path"]) != "":
+        raise ValueError(
+            f"run_dir={run_dir!r} is not fresh-init telemetry: resume_path={row['resume_path']!r}"
+        )
+    if int(row["start_episode"]) != 0:
+        raise ValueError(
+            f"run_dir={run_dir!r} is not fresh-init telemetry: start_episode={row['start_episode']!r}"
+        )
     frozen_config = tuple((column, row[column]) for column in _FROZEN_RUN_CONFIG_COLUMNS)
     return RunMeta(
         run_dir=run_dir,
@@ -264,6 +332,7 @@ _GUARD_CHANNEL_EVENT_TYPES: dict[str, str] = {
     "GRADIENT_ANOMALY": "gradient_anomaly",
     "GRADIENT_PATHOLOGY_DETECTED": "gradient_pathology",
     "NUMERICAL_INSTABILITY_DETECTED": "numerical_instability",
+    "REWARD_HACKING_SUSPECTED": "reward_hacking",
 }
 
 
@@ -282,8 +351,9 @@ def read_run_guard_channels(
     )
     counts = dict.fromkeys(_GUARD_CHANNEL_EVENT_TYPES.values(), 0)
     for row in rows:
-        field_name = _GUARD_CHANNEL_EVENT_TYPES.get(str(row["event_type"]))
-        if field_name is not None:  # non-guard event types (e.g. PLATEAU_DETECTED) are skipped
+        event_type = str(row["event_type"])
+        if event_type in _GUARD_CHANNEL_EVENT_TYPES:
+            field_name = _GUARD_CHANNEL_EVENT_TYPES[event_type]
             counts[field_name] = int(row["c"])
     return GuardChannelCounts(**counts)
 
@@ -292,14 +362,21 @@ def read_run_churn(conn: duckdb.DuckDBPyConnection, run_dir: str) -> ChurnRates:
     """§6 G3 — per-episode germinate/prune/fossilize means over the whole run."""
     rows = _rows(
         conn,
-        "SELECT AVG(germinate_count) AS g, AVG(prune_count) AS p, AVG(fossilize_count) AS f "
+        "SELECT COUNT(*) AS n, COUNT(germinate_count) AS n_g, COUNT(prune_count) AS n_p, "
+        "COUNT(fossilize_count) AS n_f, AVG(germinate_count) AS g, AVG(prune_count) AS p, "
+        "AVG(fossilize_count) AS f "
         "FROM episode_outcomes WHERE run_dir = ?",
         [run_dir],
     )
-    if not rows or rows[0]["g"] is None:
+    if not rows or rows[0]["n"] == 0:
         raise ValueError(f"no episode_outcomes churn rows for run_dir={run_dir!r}")
+    row = rows[0]
+    if row["n"] != row["n_g"] or row["n"] != row["n_p"] or row["n"] != row["n_f"]:
+        raise ValueError(
+            f"episode_outcomes churn fields contain NULL values for run_dir={run_dir!r}"
+        )
     return ChurnRates(
-        germinate=float(rows[0]["g"]), prune=float(rows[0]["p"]), fossilize=float(rows[0]["f"])
+        germinate=float(row["g"]), prune=float(row["p"]), fossilize=float(row["f"])
     )
 
 
@@ -392,6 +469,60 @@ class BuiltReport:
     validity: Validity
 
 
+def _duplicate_items(values: Sequence[str | int]) -> tuple[str, ...]:
+    seen: set[str | int] = set()
+    duplicates: set[str | int] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        else:
+            seen.add(value)
+    return tuple(str(value) for value in sorted(duplicates, key=str))
+
+
+def pairset_validity_reasons(pairings: list[SeedPairing]) -> list[str]:
+    """§1 pairset-level validity: uniqueness and cross-seed frozen-config homogeneity."""
+    reasons: list[str] = []
+    seeds = [pairing.on_meta.seed for pairing in pairings]
+    duplicate_seeds = _duplicate_items(seeds)
+    if duplicate_seeds:
+        reasons.append(
+            "duplicate seed(s) in Stage-2 pairset: "
+            f"{', '.join(duplicate_seeds)} — each seed may contribute one fresh-init pair (§10)"
+        )
+
+    on_dirs = [pairing.on_meta.run_dir for pairing in pairings]
+    off_dirs = [pairing.off_meta.run_dir for pairing in pairings]
+    duplicate_run_dirs = _duplicate_items(on_dirs + off_dirs)
+    if duplicate_run_dirs:
+        reasons.append(
+            "duplicate run_dir(s) in Stage-2 pairset: "
+            f"{', '.join(duplicate_run_dirs)} — evidence rows must be unique (§10)"
+        )
+    overlap = sorted(set(on_dirs).intersection(off_dirs))
+    if overlap:
+        reasons.append(
+            "run_dir(s) appear in both ON and OFF arms: "
+            f"{', '.join(overlap)} — arms must be disjoint fresh runs (§10)"
+        )
+
+    metas = [meta for pairing in pairings for meta in (pairing.on_meta, pairing.off_meta)]
+    if metas:
+        reward_mode = metas[0].reward_mode
+        if any(meta.reward_mode != reward_mode for meta in metas):
+            reasons.append(
+                "global reward_mode mismatch across Stage-2 pairset: every run must share "
+                "the same frozen reward_mode (§10)"
+            )
+        frozen_config = metas[0].frozen_config
+        if any(meta.frozen_config != frozen_config for meta in metas):
+            reasons.append(
+                "global frozen run config mismatch across Stage-2 pairset: each pair may match "
+                "internally, but the scored seed set must be one homogeneous experiment (§10)"
+            )
+    return reasons
+
+
 def build_report(
     conn: duckdb.DuckDBPyConnection,
     pairings: list[SeedPairing],
@@ -403,6 +534,7 @@ def build_report(
     floored_asymmetry_max: float = 0.10,
     g3_hold: bool,
     g4_hold: bool,
+    safety_evidence: SafetyEvidence | None = None,
 ) -> BuiltReport:
     """Assemble frozen-config telemetry into a scored Stage-2 verdict (§10 scoring phase).
 
@@ -416,7 +548,7 @@ def build_report(
     are injected: the G4 guard-channel reader and the churn threshold are the S7/§6-definitional tail.
     """
     loaded: list[tuple[SeedPairing, list[UpdateRow], list[UpdateRow]]] = []
-    reasons: list[str] = []
+    reasons: list[str] = pairset_validity_reasons(pairings)
     for pairing in pairings:
         on_rows = read_leg(conn, pairing.on_meta.run_dir)
         off_rows = read_leg(conn, pairing.off_meta.run_dir)
@@ -435,7 +567,15 @@ def build_report(
     validity = Validity(valid=not reasons, reasons=tuple(reasons))
     if not validity.valid:
         # §1: no interpretation on a broken run — score short-circuits before touching pairs.
-        report = score([], thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
+        report = score(
+            [],
+            thresholds,
+            n=n,
+            validity=validity,
+            g3_hold=g3_hold,
+            g4_hold=g4_hold,
+            safety_evidence=safety_evidence,
+        )
         return BuiltReport(report=report, validity=validity)
 
     pairs: list[SeedPair] = []
@@ -454,7 +594,15 @@ def build_report(
                 d_val_acc=d_val_acc, d_added_params=d_added_params,
             )
         )
-    report = score(pairs, thresholds, n=n, validity=validity, g3_hold=g3_hold, g4_hold=g4_hold)
+    report = score(
+        pairs,
+        thresholds,
+        n=n,
+        validity=validity,
+        g3_hold=g3_hold,
+        g4_hold=g4_hold,
+        safety_evidence=safety_evidence,
+    )
     return BuiltReport(report=report, validity=validity)
 
 
@@ -471,8 +619,16 @@ def calibrate_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -
     Spec: ``{"off_run_dirs": [...], "w": int, "budget": int}``. An OFF leg scoring fewer
     updates than ``budget`` would freeze δ from an incomplete series — fail loud.
     """
+    off_run_dirs = list(spec["off_run_dirs"])
+    duplicate_off_dirs = _duplicate_items(off_run_dirs)
+    if duplicate_off_dirs:
+        raise ValueError(
+            "duplicate OFF calibration run_dir(s): "
+            f"{', '.join(duplicate_off_dirs)} — δ must be frozen from unique OFF runs (§10)"
+        )
     off_legs = []
-    for run_dir in spec["off_run_dirs"]:
+    for run_dir in off_run_dirs:
+        read_run_meta(conn, run_dir)
         rows = read_leg(conn, run_dir)
         require_hra_signature(rows, Leg.OFF, run_dir=run_dir)
         series = leg_series(rows, leg=Leg.OFF, w=spec["w"])
@@ -517,6 +673,10 @@ def packet_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -> s
     pairings: list[SeedPairing] = []
     g3_holds: list[bool] = []
     g4_holds: list[bool] = []
+    g3_on: list[ChurnRates] = []
+    g3_off: list[ChurnRates] = []
+    g4_on: list[GuardChannelCounts] = []
+    g4_off: list[GuardChannelCounts] = []
     for pair in spec["pairs"]:
         on_meta = read_run_meta(conn, pair["on_run_dir"])
         off_meta = read_run_meta(conn, pair["off_run_dir"])
@@ -530,21 +690,34 @@ def packet_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -> s
         pairings.append(
             SeedPairing(on_meta=on_meta, off_meta=off_meta, host_params=spec["host_params"])
         )
+        on_churn = read_run_churn(conn, pair["on_run_dir"])
+        off_churn = read_run_churn(conn, pair["off_run_dir"])
+        g3_on.append(on_churn)
+        g3_off.append(off_churn)
         g3_holds.append(
-            g3_hold_from_churn(
-                read_run_churn(conn, pair["on_run_dir"]),
-                read_run_churn(conn, pair["off_run_dir"]),
-                ratio_max=spec["g3_ratio_max"],
-            )
+            g3_hold_from_churn(on_churn, off_churn, ratio_max=spec["g3_ratio_max"])
         )
+        on_counts = read_run_guard_channels(conn, pair["on_run_dir"])
+        off_counts = read_run_guard_channels(conn, pair["off_run_dir"])
+        g4_on.append(on_counts)
+        g4_off.append(off_counts)
         g4_holds.append(
             g4_hold_from_counts(
-                read_run_guard_channels(conn, pair["on_run_dir"]),
-                read_run_guard_channels(conn, pair["off_run_dir"]),
+                on_counts,
+                off_counts,
                 ratio_max=spec["g4_ratio_max"],
                 abs_floor=spec["g4_abs_floor"],
             )
         )
+    safety_evidence = SafetyEvidence(
+        g3_churn_on=tuple(g3_on),
+        g3_churn_off=tuple(g3_off),
+        g3_ratio_max=spec["g3_ratio_max"],
+        g4_counts_on=tuple(g4_on),
+        g4_counts_off=tuple(g4_off),
+        g4_ratio_max=spec["g4_ratio_max"],
+        g4_abs_floor=spec["g4_abs_floor"],
+    )
 
     built = build_report(
         conn,
@@ -554,5 +727,6 @@ def packet_from_spec(conn: duckdb.DuckDBPyConnection, spec: dict[str, Any]) -> s
         budget=spec["budget"],
         g3_hold=all(g3_holds),
         g4_hold=all(g4_holds),
+        safety_evidence=safety_evidence,
     )
     return render_packet(built.report, thresholds=thresholds, validity=built.validity)

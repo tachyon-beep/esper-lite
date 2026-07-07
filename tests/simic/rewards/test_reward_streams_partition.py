@@ -171,6 +171,8 @@ def _run_step(
     epoch: int = 1,
     max_epochs: int = 5,
     return_variance_telemetry: bool = False,
+    pass_cf_values: bool = True,
+    cf_values_override: list[float] | None = None,
 ) -> tuple[ActionOutcome, dict[str, object]]:
     """Drive ONE WAIT step through execute_actions; return (outcome, buffer.add kwargs)."""
     monkeypatch.setattr(
@@ -246,12 +248,18 @@ def _run_step(
     )
     action_outcome = ActionOutcome()
 
+    cf_values_arg = (
+        cf_values_override
+        if cf_values_override is not None
+        else [cf_value] if hra_value_decomposition and pass_cf_values else None
+    )
+
     execute_actions(
         context=context,
         env_states=[env_state],
         actions_np=actions_np,
         values=[0.0],
-        cf_values=[cf_value] if hra_value_decomposition else None,
+        cf_values=cf_values_arg,
         all_signals=[
             SimpleNamespace(
                 metrics=SimpleNamespace(
@@ -402,6 +410,51 @@ def test_buffer_receives_r_cf_norm_via_divide_by_std(
 
     # The buffer still stores the CLIPPED normalized TOTAL as the main reward.
     assert add_kwargs["reward"] == pytest.approx(outcome.reward_normalized)
+
+
+def test_hra_execute_actions_rejects_missing_cf_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="requires cf_values"):
+        _run_step(
+            monkeypatch,
+            reward_mode=RewardMode.SHAPED,
+            initial_reward=4.0,
+            components=RewardComponentsTelemetry(bounded_attribution=1.0),
+            reward_normalizer=_seeded_normalizer(),
+            hra_value_decomposition=True,
+            pass_cf_values=False,
+        )
+
+
+def test_hra_execute_actions_rejects_wrong_length_cf_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="0 cf_values for 1 env_states"):
+        _run_step(
+            monkeypatch,
+            reward_mode=RewardMode.SHAPED,
+            initial_reward=4.0,
+            components=RewardComponentsTelemetry(bounded_attribution=1.0),
+            reward_normalizer=_seeded_normalizer(),
+            hra_value_decomposition=True,
+            cf_values_override=[],
+        )
+
+
+def test_hra_execute_actions_rejects_nonfinite_cf_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="non-finite cf_values"):
+        _run_step(
+            monkeypatch,
+            reward_mode=RewardMode.SHAPED,
+            initial_reward=4.0,
+            components=RewardComponentsTelemetry(bounded_attribution=1.0),
+            reward_normalizer=_seeded_normalizer(),
+            hra_value_decomposition=True,
+            cf_values_override=[float("nan")],
+        )
 
 
 def test_r_cf_norm_unclipped_when_total_clips(monkeypatch: pytest.MonkeyPatch) -> None:

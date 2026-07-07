@@ -44,13 +44,48 @@ def _write_run(telemetry_dir: Path, run_name: str, *, seed: int, on: bool, expl:
                 "max_epochs": 150,
                 "max_batches": 5,
                 "lr": 0.001,
+                "gamma": 0.99,
+                "gae_lambda": 0.95,
+                "ppo_updates_per_batch": 1,
+                "recurrent_n_epochs": 1,
                 "clip_ratio": 0.2,
                 "entropy_coef": 0.01,
+                "per_head_advantage_norm": False,
+                "return_variance_telemetry": False,
+                "value_coef": 0.5,
+                "value_warmup_batches": 0,
+                "value_coef_start": None,
                 "param_budget": 100_000,
+                "param_penalty_weight": 0.1,
+                "sparse_reward_scale": 1.0,
+                "rent_host_params_floor": 200,
+                "basic_acc_delta_weight": 5.0,
                 "host_params": 100_000,
+                "reward_family": "contribution",
                 "policy_device": "cpu",
                 "slot_ids": ["early"],
                 "env_devices": ["cpu"],
+                "resume_path": "",
+                "start_episode": 0,
+                "amp_enabled": False,
+                "amp_dtype": None,
+                "compile_enabled": False,
+                "compile_backend": None,
+                "compile_mode": None,
+                "plateau_threshold": 0.5,
+                "improvement_threshold": 2.0,
+                "gradient_telemetry_stride": 10,
+                "lstm_hidden_dim": 512,
+                "chunk_length": 150,
+                "max_seeds": None,
+                "permissive_gates": True,
+                "auto_forward_g1": False,
+                "auto_forward_g2": False,
+                "auto_forward_g3": False,
+                "disable_pbrs": False,
+                "disable_terminal_reward": False,
+                "disable_anti_gaming": False,
+                "max_grad_norm": None,
                 "actor_advantage_source": "total_reconstructed",
             },
         }
@@ -171,8 +206,11 @@ def test_calibrate_then_score_end_to_end(tmp_path, capsys):
     assert "# Stage-2 HRA MAJOR-1 acceptance verdict" in packet
     assert "n=5" in packet
     # The clean fixture passes §1 (real telemetry-signature verification end to end).
-    assert "## §1 Validity" in packet
-    assert "VALID" in packet
+    lines = packet.splitlines()
+    assert lines[2].startswith("**Verdict: REJECT**")
+    validity_idx = lines.index("## §1 Validity")
+    assert lines[validity_idx + 2] == "VALID — pairing, finiteness, and completeness gates pass."
+    assert "## §1 Validity — INVALID" not in packet
     assert "Stage-0 variance gate" in packet  # §0 provenance travels verbatim
 
 

@@ -462,6 +462,253 @@ def _build_rollback_causal_log_payload(
     )
 
 
+def _validate_hra_cf_values(
+    *,
+    hra_value_decomposition: bool,
+    reward_family_enum: RewardFamily,
+    cf_values: list[float] | None,
+    env_count: int,
+) -> None:
+    if hra_value_decomposition and reward_family_enum != RewardFamily.CONTRIBUTION:
+        raise ValueError(
+            "hra_value_decomposition=True requires the CONTRIBUTION reward family "
+            f"(R_cf = bounded_attribution is only defined there); got {reward_family_enum}."
+        )
+    if not hra_value_decomposition:
+        return
+    if cf_values is None:
+        raise ValueError(
+            "hra_value_decomposition=True requires cf_values for every environment; "
+            "missing V_cf would corrupt the HRA ON rollout buffer."
+        )
+    if len(cf_values) != env_count:
+        raise ValueError(
+            f"hra_value_decomposition=True received {len(cf_values)} cf_values for "
+            f"{env_count} env_states"
+        )
+    bad_cf_indices = [
+        env_idx for env_idx, cf_value in enumerate(cf_values) if not math.isfinite(cf_value)
+    ]
+    if bad_cf_indices:
+        raise ValueError(
+            "hra_value_decomposition=True received non-finite cf_values for env index(es): "
+            + ", ".join(str(env_idx) for env_idx in bad_cf_indices)
+        )
+
+
+def _handle_governor_rollback(
+    *,
+    context: ActionExecutionContext,
+    governor_panic_envs: list[int],
+    env_idx: int,
+    env_state: ParallelEnvState,
+    record: EnvStepRecord,
+    op_action: int,
+    blueprint_action: int,
+    batch_idx: int,
+    epoch: int,
+    target_slot: str,
+    states_batch_normalized: torch.Tensor,
+) -> bool:
+    if env_idx not in governor_panic_envs:
+        return False
+
+    reward_normalizer = context.reward_normalizer
+    agent = context.agent
+    task_spec = context.task_spec
+    emitters = context.emitters
+    action_outcome = record.action_outcome
+
+    # Capture panic info BEFORE rollback (execute_rollback resets these).
+    # Used only for the joinable morphology causal-log rows below; the
+    # authoritative GOVERNOR_ROLLBACK panic record is emitted by the governor.
+    panic_reason = env_state.governor._panic_reason
+    panic_loss = env_state.governor._panic_loss
+    rollback_raw_penalty = env_state.governor.get_punishment_reward()
+    rollback_normalized_penalty = float(
+        max(
+            -reward_normalizer.clip,
+            min(reward_normalizer.clip, rollback_raw_penalty),
+        )
+    )
+    rollback_triggering_action_id = (
+        agent.buffer.last_action_id(env_idx)
+        if agent.buffer.step_counts[env_idx] > 0
+        else None
+    )
+    rollback_severity = abs(rollback_raw_penalty)
+    rollback_watch_window_evidence = rollback_severity
+
+    # Stream safety: rollback mutates model tensors; ensure it runs on the
+    # per-env CUDA stream to avoid default-stream leakage and races.
+    rollback_ctx = (
+        torch.cuda.stream(env_state.stream)
+        if env_state.stream
+        else nullcontext()
+    )
+    with rollback_ctx:
+        env_state.governor.execute_rollback(
+            env_id=env_idx,
+            triggering_action_id=rollback_triggering_action_id,
+            raw_penalty=rollback_raw_penalty,
+            normalized_penalty=rollback_normalized_penalty,
+            rollback_severity=rollback_severity,
+            watch_window_evidence=rollback_watch_window_evidence,
+        )
+    record.rollback_occurred = True
+
+    # CRITICAL: Clear optimizer momentum after rollback.
+    # PyTorch's load_state_dict() copies weights IN-PLACE, so Parameter objects
+    # retain their identity. Optimizer state is keyed by Parameter objects, so
+    # momentum/variance buffers survive rollback unless explicitly cleared.
+    env_state.host_optimizer.state.clear()
+    for seed_opt in env_state.seed_optimizers.values():
+        seed_opt.state.clear()
+
+    # KTS-003: TolariaGovernor.execute_rollback() is the single authoritative
+    # GOVERNOR_ROLLBACK emitter. Simic records only joinable morphology causal log rows.
+    rollback_blueprint_id = (
+        BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
+    )
+    rollback_payload = _build_rollback_causal_log_payload(
+        batch_idx=batch_idx,
+        epoch=epoch,
+        env_idx=env_idx,
+        op_action=op_action,
+        target_slot=target_slot,
+        topology=task_spec.topology if task_spec.topology is not None else "unknown",
+        observation_hash=_observation_hash(states_batch_normalized[env_idx]),
+        reason=panic_reason or "unknown",
+        loss_at_panic=panic_loss,
+        blueprint_id=rollback_blueprint_id,
+    )
+    rollback_phases: tuple[tuple[MorphologyCausalLogPhase, str], ...] = (
+        ("rollback", "Morphology rollback causal log"),
+        ("cooldown", "Morphology rollback cooldown"),
+        ("audit", "Morphology rollback audit"),
+    )
+    for rollback_phase, message in rollback_phases:
+        emitters[env_idx].emit(TelemetryEvent(
+            event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+            data=replace(rollback_payload, phase=rollback_phase),
+            severity="warning",
+            message=message,
+        ))
+
+    action_outcome.rollback_occurred = True
+    action_outcome.action_success = False
+    action_outcome.reward_raw = 0.0
+    action_outcome.reward_normalized = 0.0
+    action_outcome.truncated = False
+    env_state.last_action_success = False
+    env_state.last_action_op = OP_WAIT
+
+    # The sampled action never executed. End the episode so the prior executed
+    # transition receives the death penalty; first-step panics have nothing to blame.
+    agent.buffer.end_episode(env_id=env_idx)
+    return True
+
+
+def _preflight_lifecycle_mutation(
+    *,
+    context: ActionExecutionContext,
+    env_idx: int,
+    env_state: ParallelEnvState,
+    model: Any,
+    action_spec: ActionSpec,
+    seed_state: SeedStateProtocol | None,
+    slot_is_enabled: bool,
+    op_action: int,
+    blueprint_action: int,
+    alpha_target: float,
+    alpha_speed_action: int,
+    alpha_curve_action: int,
+    batch_idx: int,
+    epoch: int,
+    target_slot: str,
+    effective_seed_params: float,
+    states_batch_normalized: torch.Tensor,
+) -> tuple[bool, LifecycleMutationCausalContext | None, str | None, LifecycleOp]:
+    action_for_reward = action_spec.action_for_reward
+    if not slot_is_enabled or op_action not in (
+        OP_GERMINATE,
+        OP_FOSSILIZE,
+        OP_PRUNE,
+        OP_SET_ALPHA_TARGET,
+        OP_ADVANCE,
+    ):
+        return True, None, None, action_for_reward
+
+    task_spec = context.task_spec
+    morphology_context = _build_lifecycle_mutation_context(
+        batch_idx=batch_idx,
+        epoch=epoch,
+        env_idx=env_idx,
+        op_action=op_action,
+        target_slot=target_slot,
+        observation_hash=_observation_hash(states_batch_normalized[env_idx]),
+        topology=task_spec.topology if task_spec.topology is not None else "unknown",
+    )
+    preflight_alpha_speed_steps = None
+    preflight_alpha_curve = None
+    if op_action in (OP_PRUNE, OP_SET_ALPHA_TARGET):
+        preflight_alpha_speed_steps = ALPHA_SPEED_TO_STEPS[
+            AlphaSpeedAction(alpha_speed_action)
+        ]
+        preflight_alpha_curve = AlphaCurveAction(alpha_curve_action).name
+    preflight_blueprint_id = (
+        BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
+    )
+    context.emitters[env_idx].emit(TelemetryEvent(
+        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+        data=_build_morphology_causal_log_payload(
+            phase="proposal",
+            context=morphology_context,
+            env_idx=env_idx,
+            blueprint_id=preflight_blueprint_id,
+        ),
+        severity="debug",
+        message="Morphology proposal",
+    ))
+    preflight_verdict = env_state.governor.preflight_lifecycle_mutation(
+        operation=LifecycleOp(op_action),
+        slot_id=target_slot,
+        blueprint_id=preflight_blueprint_id,
+        alpha_target=alpha_target if op_action == OP_SET_ALPHA_TARGET else None,
+        alpha_speed_steps=preflight_alpha_speed_steps,
+        alpha_curve=preflight_alpha_curve,
+        val_loss=env_state.val_loss,
+        val_accuracy=env_state.val_acc,
+        seed_stage=seed_state.stage if seed_state is not None else None,
+        total_params=model.total_params,
+        effective_seed_params=effective_seed_params,
+        max_seeds=context.effective_max_seeds,
+        active_seed_count=model.total_seeds(),
+        cooldown_epochs_remaining=0,
+        event_id=morphology_context.proposal_id,
+    )
+    context.emitters[env_idx].emit(TelemetryEvent(
+        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+        data=_build_morphology_causal_log_payload(
+            phase="verdict",
+            context=morphology_context,
+            env_idx=env_idx,
+            blueprint_id=preflight_blueprint_id,
+            governor_approved=preflight_verdict.approved,
+            governor_reason=preflight_verdict.reason,
+            governor_blocked_factor=preflight_verdict.blocked_factor,
+        ),
+        severity="debug" if preflight_verdict.approved else "warning",
+        message="Morphology governor verdict",
+    ))
+    if preflight_verdict.approved:
+        return True, morphology_context, preflight_blueprint_id, action_for_reward
+
+    action_spec.action_valid_for_reward = False
+    action_spec.action_for_reward = LifecycleOp.WAIT
+    return False, morphology_context, preflight_blueprint_id, LifecycleOp.WAIT
+
+
 def execute_actions(
     *,
     context: ActionExecutionContext,
@@ -518,11 +765,13 @@ def execute_actions(
     # split is only well-defined for the CONTRIBUTION family (the only family that
     # emits reward_components with bounded_attribution); reject the flag otherwise.
     hra_value_decomposition = context.hra_value_decomposition
-    if hra_value_decomposition and reward_family_enum != RewardFamily.CONTRIBUTION:
-        raise ValueError(
-            "hra_value_decomposition=True requires the CONTRIBUTION reward family "
-            f"(R_cf = bounded_attribution is only defined there); got {reward_family_enum}."
-        )
+    _validate_hra_cf_values(
+        hra_value_decomposition=hra_value_decomposition,
+        reward_family_enum=reward_family_enum,
+        cf_values=cf_values,
+        env_count=len(env_states),
+    )
+    cf_values_on = cf_values if hra_value_decomposition else None
     # EV-stab Stage 0: the signed additend decomposition is CONTRIBUTION-scoped too
     # (ADDITEND_SIGN_MAP names CONTRIBUTION-family reward terms); reject the flag otherwise.
     return_variance_telemetry = context.return_variance_telemetry
@@ -570,7 +819,7 @@ def execute_actions(
         signals = all_signals[env_idx]
         value = values[env_idx]
         # EV-stab Stage 2: per-step head-only V_cf(s) for this env (None list when OFF).
-        cf_value = cf_values[env_idx] if cf_values is not None else 0.0
+        cf_value = cf_values_on[env_idx] if cf_values_on is not None else 0.0
 
         # Parse sampled action indices and derive values (Deduplication)
         slot_action = int(actions_np[_HEAD_SLOT_IDX, env_idx])
@@ -626,114 +875,19 @@ def execute_actions(
 
         action_success = False
 
-        # Governor rollback
-        if env_idx in governor_panic_envs:
-            # Capture panic info BEFORE rollback (execute_rollback resets these).
-            # Used only for the joinable morphology causal-log rows below; the
-            # authoritative GOVERNOR_ROLLBACK panic record is emitted by the governor.
-            panic_reason = env_state.governor._panic_reason
-            panic_loss = env_state.governor._panic_loss
-            rollback_raw_penalty = env_state.governor.get_punishment_reward()
-            rollback_normalized_penalty = float(
-                max(
-                    -reward_normalizer.clip,
-                    min(reward_normalizer.clip, rollback_raw_penalty),
-                )
-            )
-            rollback_triggering_action_id = (
-                agent.buffer.last_action_id(env_idx)
-                if agent.buffer.step_counts[env_idx] > 0
-                else None
-            )
-            rollback_severity = abs(rollback_raw_penalty)
-            rollback_watch_window_evidence = rollback_severity
-
-            # Stream safety: rollback mutates model tensors; ensure it runs on the
-            # per-env CUDA stream to avoid default-stream leakage and races.
-            rollback_ctx = (
-                torch.cuda.stream(env_state.stream)
-                if env_state.stream
-                else nullcontext()
-            )
-            with rollback_ctx:
-                env_state.governor.execute_rollback(
-                    env_id=env_idx,
-                    triggering_action_id=rollback_triggering_action_id,
-                    raw_penalty=rollback_raw_penalty,
-                    normalized_penalty=rollback_normalized_penalty,
-                    rollback_severity=rollback_severity,
-                    watch_window_evidence=rollback_watch_window_evidence,
-                )
-            record.rollback_occurred = True
-
-            # CRITICAL: Clear optimizer momentum after rollback.
-            # PyTorch's load_state_dict() copies weights IN-PLACE, so
-            # Parameter objects retain their identity (same id()). The
-            # optimizer's state dict is keyed by Parameter objects, so
-            # momentum/variance buffers SURVIVE the rollback. Without
-            # clearing, SGD momentum continues pushing toward the
-            # diverged state that caused the panic, risking immediate
-            # re-divergence. See B1-PT-01 correction notes.
-            env_state.host_optimizer.state.clear()
-            for seed_opt in env_state.seed_optimizers.values():
-                seed_opt.state.clear()
-
-            # KTS-003: The GOVERNOR_ROLLBACK telemetry event is emitted by the
-            # SINGLE authoritative source — TolariaGovernor.execute_rollback() — which
-            # carries the complete panic context (loss_at_panic, loss_threshold,
-            # consecutive_panics, panic_reason, any state_dict key mismatches, and
-            # Simic's rollback attribution context).
-            # Simic must NOT emit a second, partial GOVERNOR_ROLLBACK here; the governor
-            # is the panic authority. Simic only records the joinable morphology causal
-            # log rows below (which describe the *aborted lifecycle action*, not the
-            # panic itself).
-            rollback_blueprint_id = (
-                BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
-            )
-            rollback_payload = _build_rollback_causal_log_payload(
-                batch_idx=batch_idx,
-                epoch=epoch,
-                env_idx=env_idx,
-                op_action=op_action,
-                target_slot=target_slot,
-                topology=task_spec.topology if task_spec.topology is not None else "unknown",
-                observation_hash=_observation_hash(states_batch_normalized[env_idx]),
-                reason=panic_reason or "unknown",
-                loss_at_panic=panic_loss,
-                blueprint_id=rollback_blueprint_id,
-            )
-            rollback_phases: tuple[tuple[MorphologyCausalLogPhase, str], ...] = (
-                ("rollback", "Morphology rollback causal log"),
-                ("cooldown", "Morphology rollback cooldown"),
-                ("audit", "Morphology rollback audit"),
-            )
-            for rollback_phase, message in rollback_phases:
-                emitters[env_idx].emit(TelemetryEvent(
-                    event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
-                    data=replace(rollback_payload, phase=rollback_phase),
-                    severity="warning",
-                    message=message,
-                ))
-
-            action_outcome.rollback_occurred = True
-            action_outcome.action_success = False
-            action_outcome.reward_raw = 0.0
-            action_outcome.reward_normalized = 0.0
-            action_outcome.truncated = False
-            env_state.last_action_success = False
-            env_state.last_action_op = OP_WAIT
-
-            # Credit assignment: the panic was detected from the CURRENT val_loss
-            # (a consequence of the PRIOR executed transition); this step's sampled
-            # action never executed (rollback ran instead). We must NOT add a buffer
-            # row for that unexecuted action — doing so would make handle_rollbacks'
-            # mark_terminal_with_penalty (which targets the last transition) blame
-            # an innocent action and train PPO to avoid it. Instead we end the
-            # episode here so the PRIOR executed transition becomes the terminal
-            # row that receives the death penalty. If this env had no prior
-            # transition (first-step panic), the penalty is correctly dropped
-            # (mark_terminal_with_penalty returns False — nothing to attribute).
-            agent.buffer.end_episode(env_id=env_idx)
+        if _handle_governor_rollback(
+            context=context,
+            governor_panic_envs=governor_panic_envs,
+            env_idx=env_idx,
+            env_state=env_state,
+            record=record,
+            op_action=op_action,
+            blueprint_action=blueprint_action,
+            batch_idx=batch_idx,
+            epoch=epoch,
+            target_slot=target_slot,
+            states_batch_normalized=states_batch_normalized,
+        ):
             continue
 
         action_outcome.rollback_occurred = False
@@ -757,83 +911,27 @@ def execute_actions(
             prev_slot_params=env_state.prev_slot_params,
         )
 
-        mutation_allowed = True
-        morphology_context: LifecycleMutationCausalContext | None = None
-        morphology_blueprint_id: str | None = None
-        if slot_is_enabled and op_action in (
-            OP_GERMINATE,
-            OP_FOSSILIZE,
-            OP_PRUNE,
-            OP_SET_ALPHA_TARGET,
-            OP_ADVANCE,
-        ):
-            morphology_context = _build_lifecycle_mutation_context(
+        mutation_allowed, morphology_context, morphology_blueprint_id, action_for_reward = (
+            _preflight_lifecycle_mutation(
+                context=context,
+                env_idx=env_idx,
+                env_state=env_state,
+                model=model,
+                action_spec=action_spec,
+                seed_state=seed_state,
+                slot_is_enabled=slot_is_enabled,
+                op_action=op_action,
+                blueprint_action=blueprint_action,
+                alpha_target=alpha_target,
+                alpha_speed_action=alpha_speed_action,
+                alpha_curve_action=alpha_curve_action,
                 batch_idx=batch_idx,
                 epoch=epoch,
-                env_idx=env_idx,
-                op_action=op_action,
                 target_slot=target_slot,
-                observation_hash=_observation_hash(states_batch_normalized[env_idx]),
-                topology=task_spec.topology if task_spec.topology is not None else "unknown",
-            )
-            preflight_alpha_speed_steps = None
-            preflight_alpha_curve = None
-            if op_action in (OP_PRUNE, OP_SET_ALPHA_TARGET):
-                preflight_alpha_speed_steps = ALPHA_SPEED_TO_STEPS[
-                    AlphaSpeedAction(alpha_speed_action)
-                ]
-                preflight_alpha_curve = AlphaCurveAction(alpha_curve_action).name
-            preflight_blueprint_id = (
-                BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
-            )
-            morphology_blueprint_id = preflight_blueprint_id
-            emitters[env_idx].emit(TelemetryEvent(
-                event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
-                data=_build_morphology_causal_log_payload(
-                    phase="proposal",
-                    context=morphology_context,
-                    env_idx=env_idx,
-                    blueprint_id=preflight_blueprint_id,
-                ),
-                severity="debug",
-                message="Morphology proposal",
-            ))
-            preflight_verdict = env_state.governor.preflight_lifecycle_mutation(
-                operation=LifecycleOp(op_action),
-                slot_id=target_slot,
-                blueprint_id=preflight_blueprint_id,
-                alpha_target=alpha_target if op_action == OP_SET_ALPHA_TARGET else None,
-                alpha_speed_steps=preflight_alpha_speed_steps,
-                alpha_curve=preflight_alpha_curve,
-                val_loss=env_state.val_loss,
-                val_accuracy=env_state.val_acc,
-                seed_stage=seed_state.stage if seed_state is not None else None,
-                total_params=model.total_params,
                 effective_seed_params=effective_seed_params,
-                max_seeds=effective_max_seeds,
-                active_seed_count=model.total_seeds(),
-                cooldown_epochs_remaining=0,
-                event_id=morphology_context.proposal_id,
+                states_batch_normalized=states_batch_normalized,
             )
-            emitters[env_idx].emit(TelemetryEvent(
-                event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
-                data=_build_morphology_causal_log_payload(
-                    phase="verdict",
-                    context=morphology_context,
-                    env_idx=env_idx,
-                    blueprint_id=preflight_blueprint_id,
-                    governor_approved=preflight_verdict.approved,
-                    governor_reason=preflight_verdict.reason,
-                    governor_blocked_factor=preflight_verdict.blocked_factor,
-                ),
-                severity="debug" if preflight_verdict.approved else "warning",
-                message="Morphology governor verdict",
-            ))
-            if not preflight_verdict.approved:
-                action_spec.action_valid_for_reward = False
-                action_spec.action_for_reward = LifecycleOp.WAIT
-                action_for_reward = LifecycleOp.WAIT
-                mutation_allowed = False
+        )
 
         # Use op name for action counting only after rollback has ceded this step.
         env_state.action_counts[action_spec.action_for_reward.name] = (
@@ -1469,16 +1567,15 @@ def execute_actions(
         # stream into the buffer ONLY on the ON leg (explicit flag gate). On the OFF
         # leg these kwargs are omitted entirely, so buffer.add uses its 0.0 defaults
         # and the OFF path is byte-identical to today.
-        cf_buffer_kwargs: dict[str, float] = {}
+        buffer_extra_kwargs: dict[str, Any] = {}
         if hra_value_decomposition:
-            cf_buffer_kwargs["cf_value"] = cf_value
-            cf_buffer_kwargs["r_cf_norm"] = r_cf_norm
+            buffer_extra_kwargs["cf_value"] = cf_value
+            buffer_extra_kwargs["r_cf_norm"] = r_cf_norm
         # EV-stab Stage 0: thread the signed additend decomposition into the buffer SoA
         # ONLY when collecting (independent of the HRA leg). Omitted otherwise, so the
         # buffer's default None leaves the SoA as zeros (byte-identical).
-        component_buffer_kwargs: dict[str, object] = {}
         if component_additends is not None:
-            component_buffer_kwargs["component_additends"] = component_additends
+            buffer_extra_kwargs["component_additends"] = component_additends
         agent.buffer.add(
             env_id=env_idx,
             state=states_batch_normalized[env_idx].detach(),
@@ -1521,8 +1618,7 @@ def execute_actions(
             contribution_targets=contribution_targets_tensor,
             contribution_mask=contribution_mask_tensor,
             has_fresh_contribution=has_fresh_contribution,
-            **cf_buffer_kwargs,
-            **component_buffer_kwargs,
+            **buffer_extra_kwargs,
         )
         if truncated:
             truncated_bootstrap_targets.append((env_idx, step_idx))

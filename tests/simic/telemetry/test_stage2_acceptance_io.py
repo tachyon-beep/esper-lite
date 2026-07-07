@@ -289,6 +289,33 @@ def test_read_run_churn_is_mean_counts_per_episode_over_the_run():
     assert churn.fossilize == pytest.approx(2.0)
 
 
+def test_read_run_val_acc_rejects_null_terminal_accuracy():
+    rows = [
+        _outcome_row(env_id=0, episode_idx=0, final_accuracy=40.0),
+        _outcome_row(env_id=1, episode_idx=1, final_accuracy=None),
+    ]
+    with pytest.raises(ValueError, match="final_accuracy"):
+        read_run_val_acc(_conn_with_outcomes(rows), "/run")
+
+
+def test_read_run_added_params_rejects_null_terminal_param_ratio():
+    rows = [
+        _outcome_row(env_id=0, episode_idx=0, param_ratio=1.2),
+        _outcome_row(env_id=1, episode_idx=1, param_ratio=None),
+    ]
+    with pytest.raises(ValueError, match="param_ratio"):
+        read_run_added_params(_conn_with_outcomes(rows), "/run", host_params=100_000)
+
+
+def test_read_run_churn_rejects_null_churn_fields():
+    rows = [
+        _outcome_row(episode_idx=0, germinate_count=1, prune_count=1, fossilize_count=0),
+        _outcome_row(episode_idx=1, germinate_count=2, prune_count=None, fossilize_count=1),
+    ]
+    with pytest.raises(ValueError, match="churn fields"):
+        read_run_churn(_conn_with_outcomes(rows), "/run")
+
+
 def test_read_run_val_acc_fails_loud_on_unknown_run_dir():
     conn = _conn_with_outcomes([_outcome_row(run_dir="/run")])
     with pytest.raises(ValueError):
@@ -515,6 +542,80 @@ def test_build_report_rejects_seed_mismatch_as_invalid():
     assert built.report.verdict is Verdict.INVALID
 
 
+def test_build_report_rejects_duplicate_pairset_seed_as_invalid():
+    conn, pairings = _pairset(5)
+    bad = pairings[1]
+    pairings[1] = SeedPairing(
+        on_meta=_meta(bad.on_meta.run_dir, 0),
+        off_meta=_meta(bad.off_meta.run_dir, 0),
+        host_params=100_000,
+    )
+    built = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
+    assert built.report.verdict is Verdict.INVALID
+    assert any("duplicate seed" in reason for reason in built.validity.reasons)
+
+
+def test_build_report_rejects_duplicate_run_dir_as_invalid():
+    conn, pairings = _pairset(5)
+    bad = pairings[1]
+    pairings[1] = SeedPairing(
+        on_meta=_meta(pairings[0].on_meta.run_dir, 1),
+        off_meta=bad.off_meta,
+        host_params=100_000,
+    )
+    built = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
+    assert built.report.verdict is Verdict.INVALID
+    assert any("duplicate run_dir" in reason for reason in built.validity.reasons)
+
+
+def test_build_report_rejects_on_off_run_dir_overlap_as_invalid():
+    conn, pairings = _pairset(5)
+    bad = pairings[0]
+    pairings[0] = SeedPairing(
+        on_meta=bad.on_meta,
+        off_meta=_meta(bad.on_meta.run_dir, bad.off_meta.seed),
+        host_params=100_000,
+    )
+    built = build_report(conn, pairings, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
+    assert built.report.verdict is Verdict.INVALID
+    assert any("both ON and OFF" in reason for reason in built.validity.reasons)
+
+
+def test_build_report_rejects_global_frozen_config_drift_as_invalid():
+    conn, pairings = _pairset(5)
+    common_config = (("task", "cifar_baseline"), ("gamma", 0.99))
+    drifted_config = (("task", "cifar_baseline"), ("gamma", 0.90))
+
+    updated: list[SeedPairing] = []
+    for index, pairing in enumerate(pairings):
+        config = drifted_config if index == 1 else common_config
+        updated.append(
+            SeedPairing(
+                on_meta=RunMeta(
+                    run_dir=pairing.on_meta.run_dir,
+                    seed=pairing.on_meta.seed,
+                    reward_mode=pairing.on_meta.reward_mode,
+                    actor_advantage_source=pairing.on_meta.actor_advantage_source,
+                    uses_per_head_norm=pairing.on_meta.uses_per_head_norm,
+                    frozen_config=config,
+                ),
+                off_meta=RunMeta(
+                    run_dir=pairing.off_meta.run_dir,
+                    seed=pairing.off_meta.seed,
+                    reward_mode=pairing.off_meta.reward_mode,
+                    actor_advantage_source=pairing.off_meta.actor_advantage_source,
+                    uses_per_head_norm=pairing.off_meta.uses_per_head_norm,
+                    frozen_config=config,
+                ),
+                host_params=pairing.host_params,
+            )
+        )
+
+    built = build_report(conn, updated, _IO_THRESHOLDS, n=5, budget=2, g3_hold=True, g4_hold=True)
+    assert built.report.verdict is Verdict.INVALID
+    assert any("global frozen run config" in reason for reason in built.validity.reasons)
+
+
 def test_build_report_wires_paired_safety_g1_regression_to_reject():
     # ON val-acc 10pp below OFF on every seed -> paired Δ_G1 median = -10 < -τ_acc -> G1 FAIL -> REJECT.
     conn, pairings = _pairset(10, on_final=40.0, off_final=50.0)
@@ -526,70 +627,150 @@ def test_build_report_wires_paired_safety_g1_regression_to_reject():
 # ---- S7: read_run_meta — the runs-view provenance reader (§0/§1) ----
 
 
+_RUN_META_FROZEN_DEFAULTS = {
+    "task": "cifar_baseline",
+    "reward_family": "contribution",
+    "n_envs": 1,
+    "n_episodes": 5,
+    "max_epochs": 150,
+    "max_batches": 5,
+    "lr": 0.001,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "ppo_updates_per_batch": 1,
+    "recurrent_n_epochs": 1,
+    "clip_ratio": 0.2,
+    "entropy_coef": 0.01,
+    "per_head_advantage_norm": False,
+    "return_variance_telemetry": False,
+    "value_coef": 0.5,
+    "value_warmup_batches": 0,
+    "value_coef_start": None,
+    "param_budget": 100_000,
+    "param_penalty_weight": 0.1,
+    "sparse_reward_scale": 1.0,
+    "rent_host_params_floor": 200,
+    "basic_acc_delta_weight": 5.0,
+    "plateau_threshold": 0.5,
+    "improvement_threshold": 2.0,
+    "gradient_telemetry_stride": 10,
+    "lstm_hidden_dim": 512,
+    "chunk_length": 150,
+    "max_seeds": None,
+    "slot_ids_json": '["r0c1"]',
+    "env_devices_json": '["cpu"]',
+    "policy_device": "cpu",
+    "amp_enabled": False,
+    "amp_dtype": None,
+    "compile_enabled": False,
+    "compile_backend": None,
+    "compile_mode": None,
+    "permissive_gates": True,
+    "auto_forward_g1": False,
+    "auto_forward_g2": False,
+    "auto_forward_g3": False,
+    "disable_pbrs": False,
+    "disable_terminal_reward": False,
+    "disable_anti_gaming": False,
+    "max_grad_norm": None,
+    "host_params": 100_000,
+}
+
+_RUN_META_FROZEN_CONFIG = tuple(_RUN_META_FROZEN_DEFAULTS.items())
+
+_RUN_META_COLUMN_TYPES = {
+    "run_dir": "VARCHAR",
+    "seed": "INTEGER",
+    "reward_mode": "VARCHAR",
+    "actor_advantage_source": "VARCHAR",
+    "resume_path": "VARCHAR",
+    "start_episode": "INTEGER",
+    "task": "VARCHAR",
+    "reward_family": "VARCHAR",
+    "n_envs": "INTEGER",
+    "n_episodes": "INTEGER",
+    "max_epochs": "INTEGER",
+    "max_batches": "INTEGER",
+    "lr": "DOUBLE",
+    "gamma": "DOUBLE",
+    "gae_lambda": "DOUBLE",
+    "ppo_updates_per_batch": "INTEGER",
+    "recurrent_n_epochs": "INTEGER",
+    "clip_ratio": "DOUBLE",
+    "entropy_coef": "DOUBLE",
+    "per_head_advantage_norm": "BOOLEAN",
+    "return_variance_telemetry": "BOOLEAN",
+    "value_coef": "DOUBLE",
+    "value_warmup_batches": "INTEGER",
+    "value_coef_start": "DOUBLE",
+    "param_budget": "INTEGER",
+    "param_penalty_weight": "DOUBLE",
+    "sparse_reward_scale": "DOUBLE",
+    "rent_host_params_floor": "INTEGER",
+    "basic_acc_delta_weight": "DOUBLE",
+    "plateau_threshold": "DOUBLE",
+    "improvement_threshold": "DOUBLE",
+    "gradient_telemetry_stride": "INTEGER",
+    "lstm_hidden_dim": "INTEGER",
+    "chunk_length": "INTEGER",
+    "max_seeds": "INTEGER",
+    "slot_ids_json": "VARCHAR",
+    "env_devices_json": "VARCHAR",
+    "policy_device": "VARCHAR",
+    "amp_enabled": "BOOLEAN",
+    "amp_dtype": "VARCHAR",
+    "compile_enabled": "BOOLEAN",
+    "compile_backend": "VARCHAR",
+    "compile_mode": "VARCHAR",
+    "permissive_gates": "BOOLEAN",
+    "auto_forward_g1": "BOOLEAN",
+    "auto_forward_g2": "BOOLEAN",
+    "auto_forward_g3": "BOOLEAN",
+    "disable_pbrs": "BOOLEAN",
+    "disable_terminal_reward": "BOOLEAN",
+    "disable_anti_gaming": "BOOLEAN",
+    "max_grad_norm": "DOUBLE",
+    "host_params": "INTEGER",
+}
+
+_RUN_META_COLUMNS = tuple(_RUN_META_COLUMN_TYPES)
+
+
+def _create_runs_meta_table(conn: duckdb.DuckDBPyConnection) -> None:
+    column_sql = ", ".join(
+        f"{column} {_RUN_META_COLUMN_TYPES[column]}" for column in _RUN_META_COLUMNS
+    )
+    conn.execute(f"CREATE TABLE runs ({column_sql})")
+
+
+def _insert_run_meta(conn: duckdb.DuckDBPyConnection, row: dict) -> None:
+    full = {
+        "resume_path": "",
+        "start_episode": 0,
+        **_RUN_META_FROZEN_DEFAULTS,
+        **row,
+    }
+    placeholders = ", ".join("?" for _ in _RUN_META_COLUMNS)
+    conn.execute(
+        f"INSERT INTO runs VALUES ({placeholders})",
+        [full[column] for column in _RUN_META_COLUMNS],
+    )
+
+
 def _conn_with_runs_meta(rows: list[dict]) -> duckdb.DuckDBPyConnection:
     """runs + ppo_updates tables for read_run_meta (meta + §8F(i) per-head-norm scan)."""
     conn = duckdb.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE runs (run_dir VARCHAR, seed INTEGER, reward_mode VARCHAR, "
-        "actor_advantage_source VARCHAR, task VARCHAR, n_envs INTEGER, n_episodes INTEGER, "
-        "max_epochs INTEGER, max_batches INTEGER, lr DOUBLE, clip_ratio DOUBLE, "
-        "entropy_coef DOUBLE, param_budget INTEGER, host_params INTEGER)"
-    )
+    _create_runs_meta_table(conn)
     conn.execute(
         "CREATE TABLE ppo_updates (run_dir VARCHAR, advantage_per_head_normalized BOOLEAN)"
     )
-    for r in rows:
-        full = {
-            "task": "cifar_baseline",
-            "n_envs": 1,
-            "n_episodes": 5,
-            "max_epochs": 150,
-            "max_batches": 5,
-            "lr": 0.001,
-            "clip_ratio": 0.2,
-            "entropy_coef": 0.01,
-            "param_budget": 100_000,
-            "host_params": 100_000,
-        }
-        full.update(r)
-        conn.execute(
-            "INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [
-                full["run_dir"],
-                full["seed"],
-                full["reward_mode"],
-                full["actor_advantage_source"],
-                full["task"],
-                full["n_envs"],
-                full["n_episodes"],
-                full["max_epochs"],
-                full["max_batches"],
-                full["lr"],
-                full["clip_ratio"],
-                full["entropy_coef"],
-                full["param_budget"],
-                full["host_params"],
-            ],
-        )
+    for row in rows:
+        _insert_run_meta(conn, row)
         conn.execute(
             "INSERT INTO ppo_updates VALUES (?, ?)",
-            [full["run_dir"], full.get("per_head_norm", False)],
+            [row["run_dir"], row.get("per_head_norm", False)],
         )
     return conn
-
-
-_RUN_META_FROZEN_CONFIG = (
-    ("task", "cifar_baseline"),
-    ("n_envs", 1),
-    ("n_episodes", 5),
-    ("max_epochs", 150),
-    ("max_batches", 5),
-    ("lr", 0.001),
-    ("clip_ratio", 0.2),
-    ("entropy_coef", 0.01),
-    ("param_budget", 100_000),
-    ("host_params", 100_000),
-)
 
 
 def test_read_run_meta_reads_provenance_from_runs_view():
@@ -622,6 +803,30 @@ def test_read_run_meta_fails_loud_on_pre_s7_telemetry():
         "run_dir": "/A", "seed": 7, "reward_mode": "SHAPED", "actor_advantage_source": None,
     }])
     with pytest.raises(ValueError):
+        read_run_meta(conn, "/A")
+
+
+def test_read_run_meta_rejects_resume_run():
+    conn = _conn_with_runs_meta([{
+        "run_dir": "/A",
+        "seed": 7,
+        "reward_mode": "SHAPED",
+        "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+        "resume_path": "/tmp/checkpoint.pt",
+    }])
+    with pytest.raises(ValueError, match="fresh-init"):
+        read_run_meta(conn, "/A")
+
+
+def test_read_run_meta_rejects_nonzero_start_episode():
+    conn = _conn_with_runs_meta([{
+        "run_dir": "/A",
+        "seed": 7,
+        "reward_mode": "SHAPED",
+        "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+        "start_episode": 1,
+    }])
+    with pytest.raises(ValueError, match="fresh-init"):
         read_run_meta(conn, "/A")
 
 
@@ -668,6 +873,13 @@ def test_read_run_guard_channels_excludes_plateau_detected():
     assert counts.total() == 0
 
 
+def test_read_run_guard_channels_counts_reward_hacking_suspicion():
+    conn = _conn_with_anomalies([("/A", "REWARD_HACKING_SUSPECTED")])
+    counts = read_run_guard_channels(conn, "/A")
+    assert counts.reward_hacking == 1
+    assert counts.total() == 1
+
+
 def test_g4_hold_passes_when_on_not_materially_elevated():
     on = GuardChannelCounts(governor_rollback=8, value_collapse=0, ratio_explosion=0,
                             ratio_collapse=0, gradient_anomaly=1, gradient_pathology=0,
@@ -686,6 +898,16 @@ def test_g4_hold_fails_on_material_channel_elevation():
     off = GuardChannelCounts(governor_rollback=7, value_collapse=0, ratio_explosion=0,
                              ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0,
                              numerical_instability=0)
+    assert g4_hold_from_counts(on, off, ratio_max=2.0, abs_floor=5) is False
+
+
+def test_g4_hold_fails_on_any_on_reward_hacking_suspicion():
+    on = GuardChannelCounts(governor_rollback=0, value_collapse=0, ratio_explosion=0,
+                            ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0,
+                            numerical_instability=0, reward_hacking=1)
+    off = GuardChannelCounts(governor_rollback=0, value_collapse=0, ratio_explosion=0,
+                             ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0,
+                             numerical_instability=0, reward_hacking=0)
     assert g4_hold_from_counts(on, off, ratio_max=2.0, abs_floor=5) is False
 
 
@@ -733,12 +955,7 @@ def _full_stage2_conn(
     """Everything the CLI reads, fabricated: runs (meta + n_envs) / ppo_updates (series +
     per-head flag) / episode_outcomes / anomalies — plus the matching score spec."""
     conn = duckdb.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE runs (run_dir VARCHAR, seed INTEGER, reward_mode VARCHAR, "
-        "actor_advantage_source VARCHAR, n_envs INTEGER, n_episodes INTEGER, max_epochs INTEGER, "
-        "max_batches INTEGER, lr DOUBLE, clip_ratio DOUBLE, entropy_coef DOUBLE, "
-        "param_budget INTEGER, host_params INTEGER, task VARCHAR)"
-    )
+    _create_runs_meta_table(conn)
     conn.execute(
         """
         CREATE TABLE ppo_updates (
@@ -766,24 +983,16 @@ def _full_stage2_conn(
     for seed in range(n):
         for leg, expl in (("on", 0.85), ("off", 0.80)):
             run_dir = f"/{leg}/{seed}"
-            conn.execute(
-                "INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [
-                    run_dir,
-                    seed,
-                    "SHAPED",
-                    ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
-                    1,
-                    n,
-                    150,
-                    n,
-                    0.001,
-                    0.2,
-                    0.01,
-                    100_000,
-                    100_000,
-                    "cifar_baseline",
-                ],
+            _insert_run_meta(
+                conn,
+                {
+                    "run_dir": run_dir,
+                    "seed": seed,
+                    "reward_mode": "SHAPED",
+                    "actor_advantage_source": ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
+                    "n_episodes": n,
+                    "max_batches": n,
+                },
             )
             is_on = leg == "on"
             for b in range(4):
@@ -836,6 +1045,10 @@ def test_packet_from_spec_produces_a_scored_markdown_packet():
     assert "INVALID" not in packet.splitlines()[2]  # a clean fixture scores, §1 passes
     assert "value_main_target_scale" in packet
     assert "cf_value_target_scale" in packet
+    assert "G3 materiality threshold: ratio_max = 1.5" in packet
+    assert "G3 churn rates ON:" in packet
+    assert "G4 materiality thresholds: ratio_max = 2, abs_floor = 5" in packet
+    assert "reward_hacking=0" in packet
 
 
 def test_calibrate_from_spec_rejects_on_signature_run_in_off_dirs():
@@ -844,11 +1057,40 @@ def test_calibrate_from_spec_rejects_on_signature_run_in_off_dirs():
         calibrate_from_spec(conn, {"off_run_dirs": ["/on/0"], "w": 0, "budget": 2})
 
 
+def test_calibrate_from_spec_rejects_duplicate_off_dirs():
+    conn, _spec = _full_stage2_conn(5)
+    with pytest.raises(ValueError, match="duplicate OFF"):
+        calibrate_from_spec(conn, {"off_run_dirs": ["/off/0", "/off/0"], "w": 0, "budget": 2})
+
+
+def test_calibrate_from_spec_rejects_metadata_invalid_off_run():
+    conn, _spec = _full_stage2_conn(5)
+    conn.execute("UPDATE runs SET resume_path = '/tmp/checkpoint.pt' WHERE run_dir = '/off/0'")
+    with pytest.raises(ValueError, match="fresh-init"):
+        calibrate_from_spec(conn, {"off_run_dirs": ["/off/0"], "w": 0, "budget": 2})
+
+
 def test_packet_from_spec_material_guard_elevation_fails_g4():
     # 30 ON-leg governor rollbacks vs 0 OFF on seed 0 -> G4 hold fails for the pairset.
     conn, spec = _full_stage2_conn(5, anomaly_rows=[("/on/0", "GOVERNOR_ROLLBACK")] * 30)
     packet = packet_from_spec(conn, spec)
     assert "G4 guard channels within OFF baseline: False" in packet
+
+
+def test_packet_from_spec_reward_hacking_suspicion_hard_fails_g4():
+    conn, spec = _full_stage2_conn(5, anomaly_rows=[("/on/0", "REWARD_HACKING_SUSPECTED")])
+    packet = packet_from_spec(conn, spec)
+    assert "G4 guard channels within OFF baseline: False" in packet
+    assert "reward_hacking=1" in packet
+
+
+def test_packet_from_spec_rejects_duplicate_pairset_seed():
+    conn, spec = _full_stage2_conn(5)
+    spec["pairs"][1]["seed"] = 0
+    conn.execute("UPDATE runs SET seed = 0 WHERE run_dir IN ('/on/1', '/off/1')")
+    packet = packet_from_spec(conn, spec)
+    assert "## §1 Validity — INVALID" in packet
+    assert "duplicate seed" in packet
 
 
 def test_calibrate_from_spec_freezes_delta_from_off_arms_only():

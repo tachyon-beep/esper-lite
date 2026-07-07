@@ -464,6 +464,34 @@ class TrainingStartedPayload:
 
     # REQUIRED - training context
     reward_mode: str  # e.g. "shaped", "sparse", "minimal", "simplified"
+    reward_family: str = "contribution"
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    ppo_updates_per_batch: int = 1
+    recurrent_n_epochs: int = 1
+    per_head_advantage_norm: bool = False
+    return_variance_telemetry: bool = False
+    value_coef: float = 0.5
+    value_warmup_batches: int = 0
+    value_coef_start: float | None = None
+    param_penalty_weight: float = 0.1
+    sparse_reward_scale: float = 1.0
+    rent_host_params_floor: int = 200
+    basic_acc_delta_weight: float = 5.0
+    plateau_threshold: float = 0.5
+    improvement_threshold: float = 2.0
+    gradient_telemetry_stride: int = 10
+    lstm_hidden_dim: int = 512
+    chunk_length: int = 150
+    max_seeds: int | None = None
+    permissive_gates: bool = True
+    auto_forward_g1: bool = False
+    auto_forward_g2: bool = False
+    auto_forward_g3: bool = False
+    disable_pbrs: bool = False
+    disable_terminal_reward: bool = False
+    disable_anti_gaming: bool = False
+    max_grad_norm: float | None = None
 
     # Stage-2 §0 run provenance: which advantage the actor optimizes. A property of the
     # CODE (only objective A is implemented), hence a constant default — an objective-B
@@ -519,11 +547,35 @@ class TrainingStartedPayload:
             policy_device=data["policy_device"],
             env_devices=_ensure_tuple(data["env_devices"]),
             reward_mode=data["reward_mode"],
-            # Stage-2 §0 provenance: pre-S7 telemetry lacks the field; the constant default
-            # is truthful for it (only objective A has ever been implemented).
-            actor_advantage_source=data.get(
-                "actor_advantage_source", ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
-            ),
+            reward_family=data["reward_family"],
+            gamma=data["gamma"],
+            gae_lambda=data["gae_lambda"],
+            ppo_updates_per_batch=data["ppo_updates_per_batch"],
+            recurrent_n_epochs=data["recurrent_n_epochs"],
+            per_head_advantage_norm=data["per_head_advantage_norm"],
+            return_variance_telemetry=data["return_variance_telemetry"],
+            value_coef=data["value_coef"],
+            value_warmup_batches=data["value_warmup_batches"],
+            value_coef_start=data["value_coef_start"],
+            param_penalty_weight=data["param_penalty_weight"],
+            sparse_reward_scale=data["sparse_reward_scale"],
+            rent_host_params_floor=data["rent_host_params_floor"],
+            basic_acc_delta_weight=data["basic_acc_delta_weight"],
+            plateau_threshold=data["plateau_threshold"],
+            improvement_threshold=data["improvement_threshold"],
+            gradient_telemetry_stride=data["gradient_telemetry_stride"],
+            lstm_hidden_dim=data["lstm_hidden_dim"],
+            chunk_length=data["chunk_length"],
+            max_seeds=data["max_seeds"],
+            permissive_gates=data["permissive_gates"],
+            auto_forward_g1=data["auto_forward_g1"],
+            auto_forward_g2=data["auto_forward_g2"],
+            auto_forward_g3=data["auto_forward_g3"],
+            disable_pbrs=data["disable_pbrs"],
+            disable_terminal_reward=data["disable_terminal_reward"],
+            disable_anti_gaming=data["disable_anti_gaming"],
+            max_grad_norm=data["max_grad_norm"],
+            actor_advantage_source=data["actor_advantage_source"],
             # OPTIONAL: These fields have sensible defaults for single-GPU, non-resume runs.
             # Resume path and episode_id may be empty when starting fresh.
             episode_id=data.get("episode_id", ""),

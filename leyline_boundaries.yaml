@@ -147,6 +147,10 @@ allow_hits:
     owner: "john"
     reason: "Stage-2 acceptance G4 guard-channel input, simic-internal"
 
+  - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:SafetyEvidence"
+    owner: "john"
+    reason: "Stage-2 acceptance packet audit evidence, simic-internal"
+
   - key: "src/esper/simic/telemetry/stage2_acceptance_packet.py:dataclass:FrozenThresholds"
     owner: "john"
     reason: "Stage-2 acceptance frozen threshold bundle, simic-internal"
@@ -262,6 +266,30 @@ allow_hits:
   - key: "src/esper/simic/training/ppo_coordinator.py:dataclass:PPOCoordinatorConfig"
     owner: "john"
     reason: "PPO coordinator configuration, simic-internal"
+
+  - key: "src/esper/simic/training/oracle_sandbox.py:dataclass:OracleActionResult"
+    owner: "john"
+    reason: "Oracle sandbox execution result, simic-internal"
+
+  - key: "src/esper/simic/training/oracle_sandbox.py:dataclass:OracleStepResult"
+    owner: "john"
+    reason: "Oracle sandbox schedule trace row, simic-internal"
+
+  - key: "src/esper/simic/training/oracle_sandbox.py:dataclass:OracleRunResult"
+    owner: "john"
+    reason: "Oracle sandbox run result, simic-internal"
+
+  - key: "src/esper/simic/training/oracle_sandbox.py:dataclass:OracleScheduleStep"
+    owner: "john"
+    reason: "Oracle sandbox declared schedule step, simic-internal"
+
+  - key: "src/esper/simic/training/oracle_sandbox.py:dataclass:OracleSchedule"
+    owner: "john"
+    reason: "Oracle sandbox deterministic schedule, simic-internal"
+
+  - key: "src/esper/simic/training/oracle_sandbox.py:dataclass:OracleSandboxFixture"
+    owner: "john"
+    reason: "Oracle sandbox fixture bundle, simic-internal"
 
   # ============================================================================
   # SIMIC: Lifecycle Handlers (env-refactor)
@@ -399,6 +427,10 @@ allow_hits:
   - key: "src/esper/tamiyo/networks/factored_lstm.py:typeddict:_ForwardOutput"
     owner: "john"
     reason: "Internal TypedDict for forward() return"
+
+  - key: "src/esper/tamiyo/networks/factored_lstm.py:namedtuple:_EvalOutput"
+    owner: "john"
+    reason: "Internal evaluate_actions return tuple for factored LSTM"
 
   - key: "src/esper/tamiyo/tracker.py:dataclass:SignalTracker"
     owner: "john"

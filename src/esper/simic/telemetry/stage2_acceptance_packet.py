@@ -308,6 +308,7 @@ class GuardChannelCounts:
     gradient_anomaly: int
     gradient_pathology: int
     numerical_instability: int
+    reward_hacking: int = 0
 
     def total(self) -> int:
         return (
@@ -318,7 +319,25 @@ class GuardChannelCounts:
             + self.gradient_anomaly
             + self.gradient_pathology
             + self.numerical_instability
+            + self.reward_hacking
         )
+
+
+@dataclass(frozen=True)
+class SafetyEvidence:
+    """Auditable §6 G3/G4 inputs rendered with the verdict packet.
+
+    The booleans decide the gate; the evidence lets a reader see the actual churn rates,
+    guard-channel counts, and frozen materiality thresholds that produced those booleans.
+    """
+
+    g3_churn_on: tuple[ChurnRates, ...]
+    g3_churn_off: tuple[ChurnRates, ...]
+    g3_ratio_max: float
+    g4_counts_on: tuple[GuardChannelCounts, ...]
+    g4_counts_off: tuple[GuardChannelCounts, ...]
+    g4_ratio_max: float
+    g4_abs_floor: int
 
 
 def _materially_elevated(on: int, off: int, *, ratio_max: float, abs_floor: int) -> bool:
@@ -349,7 +368,10 @@ def g4_hold_from_counts(
         (on.gradient_anomaly, off.gradient_anomaly),
         (on.gradient_pathology, off.gradient_pathology),
         (on.numerical_instability, off.numerical_instability),
+        (on.reward_hacking, off.reward_hacking),
     )
+    if on.reward_hacking > 0:
+        return False
     return not any(
         _materially_elevated(on_count, off_count, ratio_max=ratio_max, abs_floor=abs_floor)
         for on_count, off_count in pairs
@@ -608,6 +630,7 @@ class Stage2Report:
     g2_hold: bool | None
     g3_hold: bool
     g4_hold: bool
+    safety_evidence: SafetyEvidence | None
     delta_a: tuple[float, ...]
     delta_b: tuple[float, ...]
     on_floored_fractions: tuple[float, ...]
@@ -676,6 +699,7 @@ def score(
     validity: Validity,
     g3_hold: bool,
     g4_hold: bool,
+    safety_evidence: SafetyEvidence | None = None,
 ) -> Stage2Report:
     """§10 step 4 — score the ON arms against the FROZEN thresholds and emit the verdict (§7).
 
@@ -695,6 +719,7 @@ def score(
             g2_hold=None,
             g3_hold=g3_hold,
             g4_hold=g4_hold,
+            safety_evidence=safety_evidence,
             delta_a=(),
             delta_b=(),
             on_floored_fractions=(),
@@ -713,6 +738,9 @@ def score(
         )
     if len(pairs) != n:
         raise ValueError(f"n={n} but received {len(pairs)} pairs")
+    seeds = [pair.seed for pair in pairs]
+    if len(set(seeds)) != len(seeds):
+        raise ValueError(f"duplicate seed(s) in Stage-2 pairset: {seeds!r}")
 
     delta_a = [pair.on.ev_level - pair.off.ev_level for pair in pairs]
     delta_b = [
@@ -776,6 +804,7 @@ def score(
         g2_hold=g2_hold,
         g3_hold=g3_hold,
         g4_hold=g4_hold,
+        safety_evidence=safety_evidence,
         delta_a=tuple(delta_a),
         delta_b=tuple(delta_b),
         on_floored_fractions=tuple(pair.on.floored_fraction for pair in pairs),
@@ -813,6 +842,36 @@ def _tier_label(n: int) -> str:
 def _fmt_floats(values: tuple[float, ...], prec: int = 4) -> str:
     """Render a per-seed float tuple; an empty tuple (e.g. INVALID) renders as an em-dash."""
     return ", ".join(f"{v:.{prec}f}" for v in values) if values else "—"
+
+
+def _fmt_churn(values: tuple[ChurnRates, ...]) -> str:
+    if not values:
+        return "—"
+    return "; ".join(
+        f"g={value.germinate:.3f}/p={value.prune:.3f}/f={value.fossilize:.3f}"
+        for value in values
+    )
+
+
+def _fmt_guard_counts(values: tuple[GuardChannelCounts, ...]) -> str:
+    if not values:
+        return "—"
+    return "; ".join(
+        "rollback={rollback}, value_collapse={value_collapse}, ratio_explosion={ratio_explosion}, "
+        "ratio_collapse={ratio_collapse}, gradient_anomaly={gradient_anomaly}, "
+        "gradient_pathology={gradient_pathology}, numerical_instability={numerical_instability}, "
+        "reward_hacking={reward_hacking}".format(
+            rollback=value.governor_rollback,
+            value_collapse=value.value_collapse,
+            ratio_explosion=value.ratio_explosion,
+            ratio_collapse=value.ratio_collapse,
+            gradient_anomaly=value.gradient_anomaly,
+            gradient_pathology=value.gradient_pathology,
+            numerical_instability=value.numerical_instability,
+            reward_hacking=value.reward_hacking,
+        )
+        for value in values
+    )
 
 
 def _gate(result: GateResult | None) -> str:
@@ -911,8 +970,19 @@ def render_packet(
         f"G2 added-params non-inflation: {report.g2_hold}   (Δparam_max = {thresholds.delta_param_max:g})",
         f"G3 churn not reward-farmed: {report.g3_hold}",
         f"G4 guard channels within OFF baseline: {report.g4_hold}",
-        "",
     ]
+    if report.safety_evidence is not None:
+        evidence = report.safety_evidence
+        lines += [
+            f"G3 materiality threshold: ratio_max = {evidence.g3_ratio_max:g}",
+            f"G3 churn rates ON:  {_fmt_churn(evidence.g3_churn_on)}",
+            f"G3 churn rates OFF: {_fmt_churn(evidence.g3_churn_off)}",
+            f"G4 materiality thresholds: ratio_max = {evidence.g4_ratio_max:g}, "
+            f"abs_floor = {evidence.g4_abs_floor}",
+            f"G4 guard counts ON:  {_fmt_guard_counts(evidence.g4_counts_on)}",
+            f"G4 guard counts OFF: {_fmt_guard_counts(evidence.g4_counts_off)}",
+        ]
+    lines += [""]
 
     lines += [
         "## §8B — floored-update exclusion",

@@ -211,6 +211,109 @@ def test_runs_view_exposes_proof_baseline_lifecycle_policy(tmp_path):
     assert schedule_action_count == FIXED_SCHEDULE_GERMINATE_R0C0_ACTION_COUNT
 
 
+def test_runs_view_exposes_stage2_frozen_config_fields(tmp_path):
+    run_dir = tmp_path / "stage2_run"
+    run_dir.mkdir()
+    event = {
+        "event_id": "start-stage2",
+        "event_type": "TRAINING_STARTED",
+        "timestamp": "2026-07-07T00:00:00+00:00",
+        "group_id": "stage2",
+        "message": "",
+        "data": {
+            "episode_id": "stage2",
+            "task": "cifar_baseline",
+            "reward_mode": "shaped",
+            "reward_family": "contribution",
+            "seed": 7,
+            "gamma": 0.99,
+            "gae_lambda": 0.95,
+            "ppo_updates_per_batch": 1,
+            "recurrent_n_epochs": 2,
+            "per_head_advantage_norm": False,
+            "return_variance_telemetry": True,
+            "value_coef": 0.5,
+            "value_warmup_batches": 3,
+            "value_coef_start": 0.05,
+            "slot_ids": ["r0c1"],
+            "env_devices": ["cpu"],
+            "resume_path": "",
+            "start_episode": 0,
+            "param_penalty_weight": 0.1,
+            "sparse_reward_scale": 1.0,
+            "rent_host_params_floor": 200,
+            "basic_acc_delta_weight": 5.0,
+            "plateau_threshold": 0.5,
+            "improvement_threshold": 2.0,
+            "gradient_telemetry_stride": 10,
+            "lstm_hidden_dim": 512,
+            "chunk_length": 150,
+            "max_seeds": None,
+            "permissive_gates": True,
+            "auto_forward_g1": False,
+            "auto_forward_g2": False,
+            "auto_forward_g3": False,
+            "disable_pbrs": False,
+            "disable_terminal_reward": False,
+            "disable_anti_gaming": False,
+            "max_grad_norm": None,
+            "compile_backend": None,
+            "compile_mode": None,
+        },
+        "severity": "info",
+    }
+    (run_dir / "events.jsonl").write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    row = conn.execute(
+        """
+        SELECT reward_family, gamma, gae_lambda, ppo_updates_per_batch,
+               recurrent_n_epochs, return_variance_telemetry, value_warmup_batches,
+               value_coef_start, slot_ids_json, env_devices_json, resume_path, start_episode
+        FROM runs
+        """
+    ).fetchone()
+
+    assert row == (
+        "contribution",
+        0.99,
+        0.95,
+        1,
+        2,
+        True,
+        3,
+        0.05,
+        '["r0c1"]',
+        '["cpu"]',
+        "",
+        0,
+    )
+
+
+def test_anomalies_view_includes_reward_hacking_suspected(tmp_path):
+    run_dir = tmp_path / "guard_run"
+    run_dir.mkdir()
+    event = {
+        "event_id": "reward-hack",
+        "event_type": "REWARD_HACKING_SUSPECTED",
+        "timestamp": "2026-07-07T00:00:00+00:00",
+        "group_id": "stage2",
+        "message": "",
+        "data": {"pattern": "rent-gaming"},
+        "severity": "warning",
+    }
+    (run_dir / "events.jsonl").write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    assert conn.execute("SELECT event_type FROM anomalies").fetchone() == (
+        "REWARD_HACKING_SUSPECTED",
+    )
+
+
 def test_phase_occupancy_view_expands_phase_timings(tmp_path):
     """phase_occupancy expands the per-epoch phases dict into one row per phase."""
     run_dir = tmp_path / "phase_run"

@@ -1272,6 +1272,8 @@ class PPOAgent:
                 & torch.isfinite(values).all()
                 & torch.isfinite(q_values).all()
             )
+            if cf_values is not None:
+                all_finite = all_finite & torch.isfinite(cf_values).all()
             if not bool(all_finite):  # single sync; per-head drill-down only on failure
                 # Check new log_probs - separate NaN from Inf per head
                 for key in HEAD_NAMES:
@@ -1306,6 +1308,13 @@ class PPOAgent:
                 if not torch.isfinite(q_values).all():
                     nonfinite_count = (~torch.isfinite(q_values)).sum()
                     nonfinite_sources.append(f"q_values: {nonfinite_count} non-finite")
+                    nonfinite_found = True
+
+                # Check HRA cf_values (head-only V_cf): a non-finite V_cf feeds
+                # cf_value_loss into total_loss and must skip the optimizer step.
+                if cf_values is not None and not torch.isfinite(cf_values).all():
+                    nonfinite_count = (~torch.isfinite(cf_values)).sum()
+                    nonfinite_sources.append(f"cf_values: {nonfinite_count} non-finite")
                     nonfinite_found = True
 
             if nonfinite_found:

@@ -280,6 +280,15 @@ def test_payload_round_trips_all_fields(cls: type) -> None:
     )
 
 
+def test_training_started_requires_actor_advantage_source() -> None:
+    """Stage-2 §0 provenance is required on the training-start payload."""
+    serialized = _serialize(_build_instance(T.TrainingStartedPayload))
+    del serialized["actor_advantage_source"]
+
+    with pytest.raises(KeyError, match="actor_advantage_source"):
+        T.TrainingStartedPayload.from_dict(serialized)
+
+
 def test_round_trip_covers_every_payload_with_from_dict() -> None:
     """Completeness guard: every telemetry dataclass with from_dict is covered.
 

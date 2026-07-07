@@ -32,7 +32,9 @@ from esper.tamiyo.policy import create_policy
 from esper.tamiyo.policy.features import get_feature_size
 
 
-def _build_agent(recurrent_n_epochs: int = 1) -> tuple[PPOAgent, SlotConfig]:
+def _build_agent(
+    recurrent_n_epochs: int = 1, *, hra_value_decomposition: bool = False
+) -> tuple[PPOAgent, SlotConfig]:
     torch.manual_seed(123)
     slot_config = SlotConfig.default()
     policy = create_policy(
@@ -40,6 +42,7 @@ def _build_agent(recurrent_n_epochs: int = 1) -> tuple[PPOAgent, SlotConfig]:
         slot_config=slot_config,
         device="cpu",
         compile_mode="off",
+        hra_value_decomposition=hra_value_decomposition,
     )
     agent = PPOAgent(
         policy=policy,
@@ -50,6 +53,7 @@ def _build_agent(recurrent_n_epochs: int = 1) -> tuple[PPOAgent, SlotConfig]:
         device="cpu",
         target_kl=None,
         recurrent_n_epochs=recurrent_n_epochs,
+        hra_value_decomposition=hra_value_decomposition,
     )
     return agent, slot_config
 
@@ -119,6 +123,8 @@ def _fill_buffer(agent: PPOAgent, slot_config: SlotConfig) -> None:
             hidden_c=pre_hidden[1],
             bootstrap_value=0.0,
             blueprint_indices=bp_indices.squeeze(0),
+            cf_value=result.cf_value.item() if result.cf_value is not None else 0.0,
+            r_cf_norm=reward * 0.25 if agent.hra_value_decomposition else 0.0,
         )
     agent.buffer.end_episode(0)
 
@@ -164,6 +170,36 @@ def test_nonfinite_q_value_skips_optimizer_step() -> None:
     assert metrics["finiteness_gate_skip_count"] >= 1
     assert _params_unchanged(agent, snapshot), (
         "Optimizer stepped on a NaN q_value: parameters were mutated."
+    )
+
+
+def test_nonfinite_cf_value_skips_optimizer_step_on_hra_leg() -> None:
+    """A non-finite HRA V_cf must trip the same skip gate as values and q_values."""
+    agent, slot_config = _build_agent(hra_value_decomposition=True)
+    _fill_buffer(agent, slot_config)
+
+    real_eval = agent.policy.evaluate_actions
+
+    def poisoned_eval(*args, **kwargs):
+        result = real_eval(*args, **kwargs)
+        bad_cf = result.cf_value.clone()
+        bad_cf[0] = float("nan")
+        return dataclasses.replace(result, cf_value=bad_cf)
+
+    agent.policy.evaluate_actions = poisoned_eval  # type: ignore[method-assign]
+
+    snapshot = _snapshot_params(agent)
+    metrics = agent.update(clear_buffer=True)
+
+    assert metrics["ppo_update_performed"] is False
+    assert metrics["finiteness_gate_skip_count"] >= 1
+    assert any(
+        "cf_values" in source
+        for failure in metrics["finiteness_gate_failures"]
+        for source in failure["sources"]
+    )
+    assert _params_unchanged(agent, snapshot), (
+        "Optimizer stepped on a NaN cf_value: parameters were mutated."
     )
 
 
