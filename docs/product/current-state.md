@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-07 23:39 AEST · code commit `3669934d` · checkpoint #30 (PDR-0044; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-08 00:27 AEST · code commit `7ebaff72` · checkpoint #31 (PDR-0045; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet) has its **Stage-2 MAJOR-1
@@ -26,8 +26,10 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
   fresh-init HRA ON/OFF A/B and packet read. This is the remaining value-validation step.
 - **Branch survivor pick (esper-lite-1f1e55f58f, open/unblocked):** unchanged
   (PDR-0038). Do not merge/delete/push or jettison a branch without explicit owner approval.
-- **Reward-efficiency statistics (esper-lite-a2abff5ec5, Next bet):** the live critical path
-  starts at esper-lite-441fbc6810 if the owner does not want to launch Stage-2 next.
+- **Reward-efficiency statistics (esper-lite-a2abff5ec5, Next bet):** first proof-provenance
+  blocker esper-lite-441fbc6810 is closed in `7ebaff72`; the live critical path now starts
+  at esper-lite-570d98c451, the Karn PPO traceability evidence section, if the owner does
+  not want to freeze/launch Stage-2 next.
 
 ## Facts the next session must not relitigate
 - **Wrapper architecture settled — PDR-0039.** Caller-supplied pairing, telemetry-verified
@@ -38,9 +40,10 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - **S7 built, then review-remediated and closed — PDR-0042/PDR-0043/PDR-0044.** The harness
   is no longer blocked on the known S7 review findings or the stale-gate/final-review validity
   blockers, but code-complete is not value-landed. No A/B before owner freeze.
-- **Verification baseline remains mixed:** focused Stage-2 + adjacent regression suites pass;
-  touched-file ruff, leyline lint, diff check, and wardline pass. Full mypy, full ruff,
-  defensive-pattern lint, and GPU-sync lint still report existing non-Stage-2 failures.
+- **Verification baseline remains mixed:** full default pytest passes at `7ebaff72`; touched-file
+  ruff, diff check, wardline, and added-line guardrail scan pass. Defensive-pattern lint and
+  GPU-sync lint still report existing non-touched failures; full mypy/full ruff were not
+  re-established in this checkpoint.
 - **Branch:** stay on `feat/ev-stab-stage2-hra`. Do not push without an explicit owner ask.
 
 ## Open questions / blocked-on-owner
@@ -53,7 +56,15 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - **Standing owner gates:** no push, tag, release, branch deletion, telemetry deletion, or remote
   action without explicit approval.
 
-## Last checkpoint did (checkpoint #30)
+## Last checkpoint did (checkpoint #31)
+- Committed PPO proof-provenance/missing-evidence fixes as `7ebaff72` and closed Filigree
+  task esper-lite-441fbc6810 with that commit anchor.
+- Recorded PDR-0045: PPO reward-efficiency remains Next; its autonomous critical path now
+  starts at esper-lite-570d98c451, while Stage-2 freeze/launch remains owner-gated.
+- Verified the proof fix with targeted red/green coverage, affected suites, full default
+  pytest, touched-file ruff, diff checks, Wardline, and an added-line guardrail scan.
+
+## Previous checkpoint did (checkpoint #30)
 - Committed the final-review Stage-2 fixset as `3669934d` and closed Filigree task
   esper-lite-2a4b56e719 with that commit anchor.
 - Recorded PDR-0044: implementation is closed, but the Stage-2 value read remains
@@ -61,7 +72,7 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 - Reoriented next product work: Stage-2 launch is first if the owner freezes it; otherwise
   the autonomous critical path starts at esper-lite-441fbc6810.
 
-## Previous checkpoint did (checkpoint #29)
+## Earlier checkpoint did (checkpoint #29)
 - Brought the stale Stage-2 gate doc current with the review-remediated wrapper/packet reality
   while preserving "not frozen / no A/B" owner gates.
 - Added final-review fixes for OFF calibration validity, spec-scoped traceback/run-log validity,
@@ -78,5 +89,5 @@ Stage-2 MAJOR-1 gate; no paired fresh-init HRA ON/OFF result has been read yet.
 Ask the owner whether to spend the next session freezing and launching the Stage-2 paired
 fresh-init HRA ON/OFF A/B. If yes, freeze `Δparam_max`, exact `W`, floored-EV asymmetry,
 G3/G4 materiality, and advantage-floor policy before any ON run. If no, start the P1
-reward-efficiency critical path at esper-lite-441fbc6810. Branch survivor cleanup is
+reward-efficiency critical path at esper-lite-570d98c451. Branch survivor cleanup is
 unblocked but remains owner-gated for any merge/jettison/push action.
