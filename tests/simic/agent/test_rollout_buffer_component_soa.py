@@ -22,7 +22,6 @@ from esper.simic.rewards.partition import (
     ADDITEND_SIGN_MAP,
     COMPONENT_TERMS,
     RESIDUAL_KEY,
-    decompose_additends,
 )
 from esper.simic.telemetry.reward_variance import (
     compute_return_variance_metrics,

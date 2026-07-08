@@ -97,10 +97,25 @@ def decompose_additends(
     Returns:
         ``{term: signed_contribution, ..., "residual": reward_raw - sum(named)}``.
     """
+    raw_values = {
+        "bounded_attribution": components.bounded_attribution,
+        "blending_warning": components.blending_warning,
+        "holding_warning": components.holding_warning,
+        "pbrs_bonus": components.pbrs_bonus,
+        "synergy_bonus": components.synergy_bonus,
+        "alpha_shock": components.alpha_shock,
+        "action_shaping": components.action_shaping,
+        "terminal_bonus": components.terminal_bonus,
+        "hindsight_credit": components.hindsight_credit,
+        "compute_rent": components.compute_rent,
+        "escrow_forfeit": components.escrow_forfeit,
+        "occupancy_rent": components.occupancy_rent,
+        "fossilized_rent": components.fossilized_rent,
+    }
     decomposed: dict[str, float] = {}
     named_sum = 0.0
     for term, sign in ADDITEND_SIGN_MAP.items():
-        raw = getattr(components, term)
+        raw = raw_values[term]
         # Explicit None branch (NOT a defensive ``or 0.0``): only ``bounded_attribution``
         # is Optional, and None means "no attribution this step" — a real 0.0-of-cf state,
         # the same semantics as ``split_reward_streams``.

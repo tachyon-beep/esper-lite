@@ -37,12 +37,12 @@ def _components(**overrides: float | None) -> RewardComponentsTelemetry:
 
 
 def test_additend_sign_map_keys_are_component_fields() -> None:
-    """Pin the map<->dataclass pairing the decomposition's getattr iteration relies on.
+    """Pin the map<->dataclass pairing the decomposition's typed field map relies on.
 
-    ``decompose_additends`` reads each ADDITEND_SIGN_MAP key off the typed
+    ``decompose_additends`` maps each ADDITEND_SIGN_MAP key from the typed
     RewardComponentsTelemetry instance. This makes a drift failure (e.g. porting a
     key like ``interaction_bonus`` that does not exist on this branch) a NAMED
-    contract violation rather than an incidental AttributeError mid-rollout.
+    contract violation rather than an incidental runtime error mid-rollout.
     """
     field_names = {f.name for f in dataclasses.fields(RewardComponentsTelemetry)}
     missing = set(ADDITEND_SIGN_MAP) - field_names
