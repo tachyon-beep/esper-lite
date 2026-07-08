@@ -40,6 +40,8 @@ DecisionSnapshot = SANCTUM_SCHEMA.DecisionSnapshot
 EnvState = SANCTUM_SCHEMA.EnvState
 EventLogEntry = SANCTUM_SCHEMA.EventLogEntry
 GPUStats = SANCTUM_SCHEMA.GPUStats
+GovernorState = SANCTUM_SCHEMA.GovernorState
+GovernorRollbackRecord = SANCTUM_SCHEMA.GovernorRollbackRecord
 GradientQualityMetrics = SANCTUM_SCHEMA.GradientQualityMetrics
 InfrastructureMetrics = SANCTUM_SCHEMA.InfrastructureMetrics
 MorphologyCausalLogEntry = SANCTUM_SCHEMA.MorphologyCausalLogEntry
@@ -246,6 +248,8 @@ def main() -> None:
         # Types with dependencies on base types
         BestRunRecord,
         TamiyoState,
+        GovernorRollbackRecord,
+        GovernorState,
         SystemVitals,
         EnvState,
         # Top-level snapshot (depends on everything)

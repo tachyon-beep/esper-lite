@@ -1,7 +1,7 @@
 """Tests for SanctumAggregator telemetry event processing."""
 
 from esper.karn.sanctum.aggregator import SanctumAggregator
-from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline import AnalyticsSnapshotPayload, TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
     AnomalyDetectedPayload,
     PPOUpdatePayload,
@@ -972,6 +972,26 @@ def test_aggregator_wires_rollback_counts():
     snapshot = agg.get_snapshot()
     assert snapshot.governor.rollback_attempt_count == 7
     assert snapshot.governor.rollback_unattributed_count == 3
+
+
+def test_aggregator_wires_batch_stats_rollback_counts_for_skipped_update():
+    """Skipped PPO updates still surface rollback counts through batch_stats snapshots."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        data=AnalyticsSnapshotPayload(
+            kind="batch_stats",
+            skipped_update=True,
+            rollback_attempt_count=5,
+            rollback_unattributed_count=5,
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.governor.rollback_attempt_count == 5
+    assert snapshot.governor.rollback_unattributed_count == 5
 
 
 def test_aggregator_tracks_previous_gradient_norms():

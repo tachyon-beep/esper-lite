@@ -1098,16 +1098,40 @@ class SanctumAggregator:
         # Per-head trust-region + learnability (aca0). Mirror the 8 action heads;
         # gradient_state/learnable_fraction are float|str | None on the payload
         # (None until the trainer emits them), preserved as-is (presence-gated in UI).
+        head_clip_fraction = {
+            "slot": payload.head_slot_clip_fraction,
+            "blueprint": payload.head_blueprint_clip_fraction,
+            "style": payload.head_style_clip_fraction,
+            "tempo": payload.head_tempo_clip_fraction,
+            "alpha_target": payload.head_alpha_target_clip_fraction,
+            "alpha_speed": payload.head_alpha_speed_clip_fraction,
+            "alpha_curve": payload.head_alpha_curve_clip_fraction,
+            "op": payload.head_op_clip_fraction,
+        }
+        head_learnable_fraction = {
+            "slot": payload.head_slot_learnable_fraction,
+            "blueprint": payload.head_blueprint_learnable_fraction,
+            "style": payload.head_style_learnable_fraction,
+            "tempo": payload.head_tempo_learnable_fraction,
+            "alpha_target": payload.head_alpha_target_learnable_fraction,
+            "alpha_speed": payload.head_alpha_speed_learnable_fraction,
+            "alpha_curve": payload.head_alpha_curve_learnable_fraction,
+            "op": payload.head_op_learnable_fraction,
+        }
+        head_gradient_state = {
+            "slot": payload.head_slot_gradient_state,
+            "blueprint": payload.head_blueprint_gradient_state,
+            "style": payload.head_style_gradient_state,
+            "tempo": payload.head_tempo_gradient_state,
+            "alpha_target": payload.head_alpha_target_gradient_state,
+            "alpha_speed": payload.head_alpha_speed_gradient_state,
+            "alpha_curve": payload.head_alpha_curve_gradient_state,
+            "op": payload.head_op_gradient_state,
+        }
         for head in HEAD_NAMES:
-            self._tamiyo.head_clip_fraction[head] = getattr(
-                payload, f"head_{head}_clip_fraction"
-            )
-            self._tamiyo.head_learnable_fraction[head] = getattr(
-                payload, f"head_{head}_learnable_fraction"
-            )
-            self._tamiyo.head_gradient_state[head] = getattr(
-                payload, f"head_{head}_gradient_state"
-            )
+            self._tamiyo.head_clip_fraction[head] = head_clip_fraction[head]
+            self._tamiyo.head_learnable_fraction[head] = head_learnable_fraction[head]
+            self._tamiyo.head_gradient_state[head] = head_gradient_state[head]
 
         # Learning rate and entropy coefficient - optional with None
         if payload.lr is not None:
@@ -1832,6 +1856,13 @@ class SanctumAggregator:
                 normalization_drift=obs.normalization_drift,
                 batch_size=obs.batch_size,
             )
+
+        if kind == "batch_stats":
+            if payload.rollback_attempt_count is not None:
+                self._governor.rollback_attempt_count = payload.rollback_attempt_count
+            if payload.rollback_unattributed_count is not None:
+                self._governor.rollback_unattributed_count = payload.rollback_unattributed_count
+            return
 
         # Batch-level action distribution
         if kind == "action_distribution":

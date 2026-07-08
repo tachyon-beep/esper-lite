@@ -475,6 +475,31 @@ export interface TamiyoState {
   value_function: ValueFunctionMetrics;
 }
 
+export interface GovernorRollbackRecord {
+  env_id: number;
+  epoch: number;
+  timestamp: string | null;
+  panic_reason: string;
+  loss_at_panic: number | null;
+  loss_threshold: number | null;
+  consecutive_panics: number | null;
+  triggering_action_id: string | null;
+  attributed: boolean;
+  rollback_severity: number | null;
+}
+
+export interface GovernorState {
+  present: boolean;
+  armed_env_count: number;
+  warming_env_count: number;
+  total_env_count: number;
+  rollback_attempt_count: number;
+  rollback_unattributed_count: number;
+  total_rollbacks: number;
+  rollbacks_by_reason: Record<string, number>;
+  rollback_ledger: GovernorRollbackRecord[];
+}
+
 export interface SystemVitals {
   gpu_stats: Record<number, GPUStats>;
   gpu_memory_used_gb: number;

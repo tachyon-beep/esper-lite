@@ -81,7 +81,7 @@ class ExperimentPanel(Static):
 
         ordered = self._ordered_group_ids()
 
-        # Metric rows: label, extractor, format spec, recent-window history attr
+        # Metric rows: label, extractor, format spec, recent-window history
         # (None = no window). None from the extractor renders as an em dash.
         # Contaminated diagnostics (cov_rcf/r_main_cov) are absent (PDR-0028).
         # These are single-update POINT ESTIMATES from ONE seed per leg — the Δ is
@@ -91,19 +91,67 @@ class ExperimentPanel(Static):
         def t(group: "SanctumSnapshot") -> Any:
             return group.tamiyo
 
+        def history(
+            extract: Callable[["SanctumSnapshot"], Any],
+        ) -> Callable[["SanctumSnapshot"], list[float]]:
+            def _extract(group: "SanctumSnapshot") -> list[float]:
+                return list(extract(group))
+
+            return _extract
+
         rows: list[
-            tuple[str, Callable[["SanctumSnapshot"], float | None], str, str | None]
+            tuple[
+                str,
+                Callable[["SanctumSnapshot"], float | None],
+                str,
+                Callable[["SanctumSnapshot"], list[float]] | None,
+            ]
         ] = [
-            ("EV", lambda s: t(s).explained_variance if t(s).ppo_data_received else None, ".2f", "explained_variance_history"),
-            ("EV main", lambda s: t(s).ev_main, ".2f", "ev_main_history"),
-            ("EV cf", lambda s: t(s).ev_cf, ".2f", "ev_cf_history"),
-            ("cf V.Loss", lambda s: t(s).cf_value_loss, ".3f", "cf_value_loss_history"),
-            ("CF var share", lambda s: t(s).return_var_cf_share, ".2f", "return_var_cf_share_history"),
+            (
+                "EV",
+                lambda s: t(s).explained_variance if t(s).ppo_data_received else None,
+                ".2f",
+                history(lambda s: t(s).explained_variance_history),
+            ),
+            ("EV main", lambda s: t(s).ev_main, ".2f", history(lambda s: t(s).ev_main_history)),
+            ("EV cf", lambda s: t(s).ev_cf, ".2f", history(lambda s: t(s).ev_cf_history)),
+            (
+                "cf V.Loss",
+                lambda s: t(s).cf_value_loss,
+                ".3f",
+                history(lambda s: t(s).cf_value_loss_history),
+            ),
+            (
+                "CF var share",
+                lambda s: t(s).return_var_cf_share,
+                ".2f",
+                history(lambda s: t(s).return_var_cf_share_history),
+            ),
             ("Main var share", lambda s: t(s).return_var_main_share, ".2f", None),
-            ("Entropy", lambda s: t(s).entropy if t(s).ppo_data_received else None, ".2f", "entropy_history"),
-            ("KL", lambda s: t(s).kl_divergence if t(s).ppo_data_received else None, ".3f", "kl_divergence_history"),
-            ("Clip frac", lambda s: t(s).clip_fraction if t(s).ppo_data_received else None, ".2f", "clip_fraction_history"),
-            ("Grad norm", lambda s: t(s).grad_norm if t(s).ppo_data_received else None, ".2f", "grad_norm_history"),
+            (
+                "Entropy",
+                lambda s: t(s).entropy if t(s).ppo_data_received else None,
+                ".2f",
+                history(lambda s: t(s).entropy_history),
+            ),
+            (
+                "KL",
+                lambda s: t(s).kl_divergence if t(s).ppo_data_received else None,
+                ".3f",
+                history(lambda s: t(s).kl_divergence_history),
+            ),
+            (
+                "Clip frac",
+                lambda s: t(s).clip_fraction if t(s).ppo_data_received else None,
+                ".2f",
+                history(lambda s: t(s).clip_fraction_history),
+            ),
+            (
+                "Grad norm",
+                lambda s: t(s).grad_norm if t(s).ppo_data_received else None,
+                ".2f",
+                history(lambda s: t(s).grad_norm_history),
+            ),
             ("Mean accuracy", lambda s: s.aggregate_mean_accuracy, ".1f", None),
             ("Mean reward", lambda s: s.aggregate_mean_reward, ".2f", None),
         ]
@@ -143,7 +191,10 @@ class ExperimentPanel(Static):
         return table
 
     def _within_noise(
-        self, delta: float, history_attr: str | None, ordered: list[str]
+        self,
+        delta: float,
+        history_extract: Callable[["SanctumSnapshot"], list[float]] | None,
+        ordered: list[str],
     ) -> bool:
         """Negative-only filter: is |Δ| inside either leg's recent-window wobble?
 
@@ -151,11 +202,11 @@ class ExperimentPanel(Static):
         This is used ONLY to demote a Δ (never to promote one to significance): a
         single autocorrelated run cannot support a positive claim.
         """
-        if history_attr is None:
+        if history_extract is None:
             return False
         wobbles: list[float] = []
         for group_id in ordered:
-            history = list(getattr(self._groups[group_id].tamiyo, history_attr))
-            if len(history) >= 2:
-                wobbles.append(max(history) - min(history))
+            values = history_extract(self._groups[group_id])
+            if len(values) >= 2:
+                wobbles.append(max(values) - min(values))
         return bool(wobbles) and abs(delta) <= max(wobbles)
