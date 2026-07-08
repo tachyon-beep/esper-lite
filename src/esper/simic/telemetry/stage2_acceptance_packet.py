@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import enum
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from esper.leyline.telemetry import ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
@@ -133,6 +134,12 @@ def sqrt_unexplained_series(ev_values: list[float]) -> list[float]:
     """
     if not ev_values:
         raise ValueError("sqrt_unexplained_series requires a non-empty ev series")
+    material_overshoot = [ev for ev in ev_values if ev > 1.0 + 1e-9]
+    if material_overshoot:
+        raise ValueError(
+            "ev must be <= 1.0 except for tiny floating-point overshoot; "
+            f"got {material_overshoot[0]}"
+        )
     return [math.sqrt(max(0.0, 1.0 - ev)) for ev in ev_values]
 
 
@@ -180,12 +187,21 @@ class LegSeries:
     ev_return_variance_max: float
 
 
+# §9 ON-only diagnostic scalars: the accessor is selected by an explicit mapping so an unknown
+# field name is an immediate KeyError, never a silent read of the wrong column (fail-loud, §0).
+_ON_DIAGNOSTIC_ACCESSORS: dict[str, Callable[[UpdateRow], float | None]] = {
+    "value_main_target_scale": lambda row: row.value_main_target_scale,
+    "cf_value_target_scale": lambda row: row.cf_value_target_scale,
+}
+
+
 def _optional_level_for_on(rows: list[UpdateRow], field_name: str) -> float | None:
     """Return the median when an ON-only diagnostic is fully emitted; fail on partial streams."""
+    accessor = _ON_DIAGNOSTIC_ACCESSORS[field_name]
     values: list[float] = []
     missing = 0
     for row in rows:
-        value = row.value_main_target_scale if field_name == "value_main_target_scale" else row.cf_value_target_scale
+        value = accessor(row)
         if value is None:
             missing += 1
         else:

@@ -73,7 +73,13 @@ def run_log_traceback_reasons(telemetry_dir: str, run_dirs: Sequence[str]) -> tu
         for log_file in sorted(log_files):
             if not log_file.is_file():
                 continue
-            with log_file.open("r", encoding="utf-8") as handle:
+            # Training logs may legitimately carry non-UTF-8 bytes (progress-bar control
+            # sequences, truncated multibyte writes, binary spew from a crashing C
+            # extension); errors="replace" keeps one stray byte from crashing the evidence
+            # CLI. The crash markers are emitted atomically as ASCII at the source
+            # (train.py print calls), so a stray byte lands between markers, never inside
+            # one — replacement cannot mask a well-formed marker line.
+            with log_file.open("r", encoding="utf-8", errors="replace") as handle:
                 for line_number, line in enumerate(handle, start=1):
                     for marker in _TRACEBACK_MARKERS:
                         if marker in line:

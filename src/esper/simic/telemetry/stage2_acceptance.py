@@ -171,7 +171,12 @@ def leg_a(delta_a: list[float], delta: float, n: int) -> GateResult:
 def leg_b(delta_b: list[float], eps: float, n: int) -> GateResult:
     """LEG B — advantage-path VOLATILITY reduction (§4). Gated downstream signal.
 
-    Δ_B(s) = relative change in IQR-over-updates of pre_norm_advantage_std, ON vs OFF.
+    Δ_B(s) = per-seed relative change (ON vs OFF) in IQR-over-updates of the
+    return-scale-invariant residual sqrt(1 − ev), ev = ev_sum (ON) /
+    explained_variance (OFF) over non-floored updates (§8B). The raw
+    IQR(pre_norm_advantage_std) is a descriptive covariate ONLY, not the gated
+    statistic — confounded by Var(returns_total) via pre_norm_advantage_std² =
+    (1 − ev_sum)·Var(returns_total) (§4; level variant rejected §12.1).
     n=5: >=4/5 seeds reduce (Δ_B<0) → PASS; >=3/5 → INCONCLUSIVE; else FAIL.
     n=10: median >= 0 → FAIL; else one-sided Wilcoxon (ON<OFF, p<0.05) AND
           median <= -ε → PASS; otherwise INCONCLUSIVE (null band → owner adjudication).

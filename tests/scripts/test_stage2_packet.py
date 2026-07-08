@@ -255,6 +255,34 @@ def test_traceback_off_run_log_aborts_calibration_before_freezing_delta(tmp_path
     assert "traceback" in capsys.readouterr().err.lower()
 
 
+def test_traceback_scan_survives_non_utf8_log_bytes(tmp_path, capsys):
+    # Training logs routinely carry non-UTF-8 bytes (progress-bar control sequences,
+    # truncated multibyte writes, binary spew from a crashing C extension). A stray byte
+    # must not crash the §1 scan (a UnicodeDecodeError would propagate out of main, not
+    # return an rc); the pure-ASCII crash markers stay detectable through errors="replace".
+    telemetry_dir = tmp_path / "telemetry"
+    telemetry_dir.mkdir()
+    _write_pairset(telemetry_dir, 5)
+    (telemetry_dir / "off_0" / "stderr.log").write_bytes(
+        b"epoch 3 progress: 45%\n"
+        b"\x80\xfe\n"  # raw non-UTF-8 bytes mid-file
+        b"Traceback (most recent call last):\n"
+        b"RuntimeError: training failed\n"
+    )
+
+    spec = tmp_path / "calibrate.json"
+    spec.write_text(
+        json.dumps({"off_run_dirs": [f"off_{s}" for s in range(5)], "w": 0, "budget": 2})
+    )
+    rc = stage2_packet_main(
+        ["calibrate", "--telemetry-dir", str(telemetry_dir), "--spec", str(spec)]
+    )
+    assert rc == 1  # (a) did not raise on the non-UTF-8 byte
+    err = capsys.readouterr().err
+    assert "Traceback (most recent call last):" in err  # (b) marker line still reported
+    assert "stderr.log" in err
+
+
 def test_traceback_unreferenced_run_log_does_not_block_calibration(tmp_path, capsys):
     telemetry_dir = tmp_path / "telemetry"
     telemetry_dir.mkdir()

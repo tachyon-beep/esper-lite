@@ -25,6 +25,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     Stage2Report,
     UpdateRow,
     Validity,
+    _optional_level_for_on,
     burn_in_discard,
     calibrate_off,
     floored_exclusion,
@@ -134,6 +135,11 @@ def test_sqrt_unexplained_series_clamps_tiny_fp_negative_to_zero():
     assert out[0] == pytest.approx(0.0)
 
 
+def test_sqrt_unexplained_series_rejects_material_ev_above_one():
+    with pytest.raises(ValueError, match="ev must be <= 1.0"):
+        sqrt_unexplained_series([1.5])
+
+
 def test_sqrt_unexplained_series_empty_input_fails_loud():
     with pytest.raises(ValueError):
         sqrt_unexplained_series([])
@@ -231,6 +237,14 @@ def test_leg_series_rejects_partially_emitted_on_target_scale():
     )
     with pytest.raises(ValueError):
         leg_series(rows, leg=Leg.ON, w=0)
+
+
+def test_optional_level_for_on_rejects_unknown_field_name():
+    # An unrecognized diagnostic name must fail loud (KeyError), never silently fall through to
+    # cf_value_target_scale and corrupt §9 diagnostics.
+    rows = _on_rows([0.7, 0.8, 0.9], [0.1, 0.2, 0.3])
+    with pytest.raises(KeyError):
+        _optional_level_for_on(rows, "value_main_taget_scale")  # typo'd field name
 
 
 def test_leg_series_adv_residual_vol_is_iqr_of_sqrt_unexplained_not_raw_ev():
