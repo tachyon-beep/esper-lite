@@ -157,6 +157,7 @@ class PPOUpdateMetrics(TypedDict, total=False):
     # Structured metrics
     head_entropies: dict[str, list[float]]  # Per-head, per-epoch
     conditional_head_entropies: dict[str, list[float]]  # Entropy when head is causally relevant
+    choice_conditional_head_entropies: dict[str, list[float]]  # Entropy over choice∩causal∩unforced steps
     head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
     head_learnable_fractions: dict[str, list[float]]  # Per-head, per-epoch learnable fraction
     head_gradient_states: dict[str, list[str]]  # finite, missing, nonfinite, or not_learnable

@@ -348,3 +348,18 @@ allow_hits:
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer._build_action_inputs:tolist
   owner: John
   reason: vectorized trainer sync point - build_action_inputs values to host list
+- key: src/esper/simic/agent/advantages.py:compute_per_head_advantages:item
+  owner: John
+  reason: Telemetry - post-renormalization per-head advantage std for adv-norm stats; once per head per PPO update, not per-step
+- key: src/esper/simic/agent/advantages.py:compute_per_head_advantages:item:2
+  owner: John
+  reason: Telemetry - post_norm_std fallback read when renormalization is skipped; once per head per PPO update
+- key: src/esper/simic/agent/advantages.py:compute_per_head_advantages:item:3
+  owner: John
+  reason: Telemetry - pre_norm_std for per-head advantage stats dict; once per head per PPO update
+- key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.collect_component_rewards:tolist
+  owner: John
+  reason: Telemetry - component-reward additends to host for return-variance decomposition; once per env at update-boundary collection
+- key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.collect_component_rewards:tolist:2
+  owner: John
+  reason: Telemetry - per-env done flags to host for return-to-go env-boundary reset in the same collection pass

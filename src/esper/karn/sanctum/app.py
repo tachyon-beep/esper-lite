@@ -29,7 +29,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
@@ -62,9 +62,17 @@ from esper.karn.sanctum.widgets.governor_screen import GovernorScreen
 from esper.karn.sanctum.widgets.policy_screen import PolicyScreen
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.schema import SanctumSnapshot
     from textual.timer import Timer
+    from textual.widget import Widget
+
+
+class SnapshotSource(Protocol):
+    """Data-source contract SanctumApp polls: the live SanctumBackend or the preview stand-in."""
+
+    def get_all_snapshots(self) -> dict[str, SanctumSnapshot]: ...
+
+    def compute_reward_health_by_group(self) -> dict[str, RewardHealthData]: ...
 
 
 HELP_TEXT = """\
@@ -402,7 +410,7 @@ class SanctumApp(App[None]):
     - TamiyoBrain requires width ≥ 80 for 4-column layout
 
     Args:
-        backend: SanctumBackend providing snapshot data.
+        backend: Snapshot source (live SanctumBackend or preview stand-in).
         num_envs: Number of training environments.
         refresh_rate: Snapshot refresh rate in Hz (default: 4).
     """
@@ -454,7 +462,7 @@ class SanctumApp(App[None]):
 
     def __init__(
         self,
-        backend: "SanctumBackend",
+        backend: SnapshotSource,
         num_envs: int = 16,
         refresh_rate: float = 4.0,
         training_thread: threading.Thread | None = None,
@@ -463,7 +471,7 @@ class SanctumApp(App[None]):
         """Initialize Sanctum app.
 
         Args:
-            backend: SanctumBackend providing snapshot data.
+            backend: Snapshot source (live SanctumBackend or preview stand-in).
             num_envs: Number of training environments.
             refresh_rate: Snapshot refresh rate in Hz.
             training_thread: Optional training thread to monitor.
@@ -774,7 +782,7 @@ class SanctumApp(App[None]):
         """Poll backend for new snapshot and refresh all panels.
 
         Called periodically by set_interval timer.
-        Thread-safe: backend.get_snapshot() is thread-safe.
+        Thread-safe: backend.get_all_snapshots() is thread-safe.
         """
         self._poll_count += 1
 
@@ -1077,7 +1085,7 @@ class SanctumApp(App[None]):
         "tab-governor": "#governor-screen",
     }
 
-    def _active_scroll_target(self):
+    def _active_scroll_target(self) -> Widget | None:
         """Return the scrollable widget for the active tab, or None on Overview."""
         try:
             tabs = self.query_one("#main-tabs", TabbedContent)

@@ -104,7 +104,7 @@ def _build_leg(
     for i in range(6):
         env = EnvState(env_id=i, status=statuses[i])
         env.host_accuracy = acc + rng.uniform(-3.0, 3.0)
-        env.episode_return = 11.0 + rng.uniform(-2.0, 3.0)
+        env.cumulative_reward = 11.0 + rng.uniform(-2.0, 3.0)
         s.envs[i] = env
     # Showcase the prune-attribution panel on the Governor & Growth tab: one slot
     # the system/governor auto-pruned (a health intervention) and one the policy
