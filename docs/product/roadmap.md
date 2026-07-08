@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-08 (PDR-0047)
+# Roadmap — Esper            Updated: 2026-07-08 (PDR-0048)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -15,8 +15,12 @@
   acceptance harness is **built, review-remediated, and tracker-closed in `3669934d`
   (PDR-0044)**. Escrow telescoping correctness is fixed in `89b50a16` (PDR-0047):
   reward-path escrow delta clipping is gone, and Obs V3 schema v2 exposes the stable
-  accuracy + escrow-credit state needed for the critic to model the potential. Next intent
-  is owner freeze of the remaining gate slots, then paired HRA ON/OFF A/B and packet read.**
+  accuracy + escrow-credit state needed for the critic to model the potential. **Gate
+  formulas FROZEN + OFF wave LAUNCHED 2026-07-08 (PDR-0048): owner ratified the §11
+  threshold set (drl-expert-reviewed, pre-data amendment folded in); 5 OFF arms (seeds
+  41–45, prior-A/B posture, 200 rounds/run) running on both GPUs. Next intent: §10
+  step-3 scalar resolution when the OFF wave completes, then owner-gated ON wave +
+  packet read.**
   · tracker: esper-lite-f25b71c165 (epic) · metric: EV Stage-0 gate (PASSED);
   Stage-2 MAJOR-1 gate NOT YET READ; watch fossilize/ep + k≥2 frequency as the
   organic-coverage signal
