@@ -2299,13 +2299,21 @@ class VectorizedPPOTrainer:
         # same shared mask); populated only on the ON leg.
         cf_bootstrap_values: list[float] = []
         if all_post_action_signals:
+            # Post-action feature rows are appended only for truncated envs. Use the same
+            # env ordering as truncated_bootstrap_targets for signals, slot reports, masks,
+            # env state, and hidden state.
+            bootstrap_env_indices = [
+                env_id for env_id, _step_idx in truncated_bootstrap_targets
+            ]
+            bootstrap_env_states = [env_states[env_id] for env_id in bootstrap_env_indices]
+
             # Unpack Obs V3 tuple (obs, blueprint_indices)
             post_action_features_batch, post_action_bp_indices = (
                 batch_signals_to_features(
                     batch_signals=all_post_action_signals,
                     batch_slot_reports=all_post_action_slot_reports,
                     slot_config=slot_config,
-                    env_states=env_states,
+                    env_states=bootstrap_env_states,
                     device=torch.device(device),
                     max_epochs=max_epochs,
                 )
@@ -2329,9 +2337,6 @@ class VectorizedPPOTrainer:
             # forward fails with a hidden/input batch mismatch. truncated_bootstrap_targets
             # is appended in lockstep with all_post_action_signals, so its env order is the
             # canonical bootstrap-batch order.
-            bootstrap_env_indices = [
-                env_id for env_id, _step_idx in truncated_bootstrap_targets
-            ]
             bootstrap_hidden = _select_hidden_for_envs(
                 batched_lstm_hidden, env_indices=bootstrap_env_indices
             )

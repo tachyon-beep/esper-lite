@@ -799,8 +799,10 @@ def test_trainer_writes_cf_bootstrap_at_main_bootstrap_indices(
     from esper.simic.training import vectorized_trainer as vt
     from esper.simic.training.action_execution import ActionExecutionResult
 
-    # Two truncated transitions across two envs -> two bootstrap writes.
-    targets = [(0, 3), (1, 7)]
+    # Two truncated transitions across two envs in NON-prefix order -> two
+    # bootstrap writes. Feature extraction must use the same env-state subset
+    # and order as truncated_bootstrap_targets.
+    targets = [(1, 3), (0, 7)]
     main_vals = [0.5, -0.25]
     cf_vals = [1.5, -2.0]
 
@@ -822,11 +824,16 @@ def test_trainer_writes_cf_bootstrap_at_main_bootstrap_indices(
 
     monkeypatch.setattr(vt, "execute_actions", _fake_execute_actions)
     # batch_signals_to_features returns (features, blueprint_indices).
-    monkeypatch.setattr(
-        vt,
-        "batch_signals_to_features",
-        lambda **kwargs: (torch.zeros((len(targets), 4)), torch.zeros((len(targets), 1), dtype=torch.long)),
-    )
+    feature_env_state_ids: list[int] = []
+
+    def _fake_batch_signals_to_features(**kwargs: object):
+        feature_env_state_ids.extend(id(env_state) for env_state in kwargs["env_states"])
+        return (
+            torch.zeros((len(targets), 4)),
+            torch.zeros((len(targets), 1), dtype=torch.long),
+        )
+
+    monkeypatch.setattr(vt, "batch_signals_to_features", _fake_batch_signals_to_features)
     # No terminal envs to reset.
     monkeypatch.setattr(vt, "_reset_hidden_for_terminal_envs", lambda hidden, terminal_envs: hidden)
     # Identity hidden slice (subset selection is exercised separately).
@@ -897,9 +904,11 @@ def test_trainer_writes_cf_bootstrap_at_main_bootstrap_indices(
 
     hidden = (torch.zeros(1, 2, 2), torch.zeros(1, 2, 2))
 
+    env_states = [_make_env_state(), _make_env_state()]
+
     vt.VectorizedPPOTrainer._run_action_transaction(
         trainer,
-        env_states=[_make_env_state(), _make_env_state()],
+        env_states=env_states,
         step_records=step_records,
         fused_result=SimpleNamespace(all_disabled_accs={}),
         aib=aib,
@@ -915,5 +924,6 @@ def test_trainer_writes_cf_bootstrap_at_main_bootstrap_indices(
     )
 
     # The cf bootstrap landed at the SAME [env_id, step_idx] indices as the main one.
-    assert buffer.bootstrap_values == {(0, 3): 0.5, (1, 7): -0.25}
-    assert buffer.cf_bootstrap_values == {(0, 3): 1.5, (1, 7): -2.0}
+    assert feature_env_state_ids == [id(env_states[1]), id(env_states[0])]
+    assert buffer.bootstrap_values == {(1, 3): 0.5, (0, 7): -0.25}
+    assert buffer.cf_bootstrap_values == {(1, 3): 1.5, (0, 7): -2.0}
