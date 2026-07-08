@@ -34,6 +34,13 @@ llm_policy:
     endpoint_url: https://openrouter.ai/api/v1
   provider: codex_cli
   session_token_ceiling: 1000000
+semantic_search:
+  allow_live_provider: false
+  dimensions: 384
+  enabled: true
+  endpoint_url: http://127.0.0.1:8770
+  model_id: bge-small-en-v1.5
+  provider: local_openai
 serve:
   http:
     enabled: true
@@ -41,10 +48,3 @@ serve:
   mcp:
     enable_write_tools: true
 version: 1
-semantic_search:
-  enabled: true
-  provider: local_openai
-  allow_live_provider: false
-  model_id: bge-small-en-v1.5
-  dimensions: 384
-  endpoint_url: http://127.0.0.1:8770
