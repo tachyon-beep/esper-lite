@@ -653,6 +653,7 @@ class SharedGPUGatherBatchIterator:
         is_train: bool = True,
         seed: int,
         cifar_precompute_aug: bool = False,
+        allow_batch_shrink: bool = False,
     ):
         if batch_size_per_env < 1:
             raise ValueError(
@@ -670,7 +671,7 @@ class SharedGPUGatherBatchIterator:
         self.batch_size_per_env = batch_size_per_env
         self.shuffle = shuffle
         self.is_train = is_train
-        self.drop_last = is_train
+        self.drop_last = is_train and not allow_batch_shrink
         self._total_batch = batch_size_per_env * n_envs
         self._cursor = 0
         self._initialized = False

@@ -405,6 +405,31 @@ def test_shared_gpu_gather_iterator_splits_cached_batches(monkeypatch) -> None:
     assert clear_gpu_dataset_cache() == 1
 
 
+def test_shared_gpu_gather_iterator_allows_training_batch_shrink(
+    monkeypatch,
+) -> None:
+    clear_gpu_dataset_cache()
+    _cached_cpu_cifar(seed=11)
+    monkeypatch.setattr(data, "_ensure_cifar10_cached", lambda *args, **kwargs: None)
+
+    iterator = SharedGPUGatherBatchIterator(
+        batch_size_per_env=5,
+        n_envs=3,
+        env_devices=["cpu", "cpu", "cpu"],
+        shuffle=False,
+        seed=11,
+        cifar_precompute_aug=True,
+        allow_batch_shrink=True,
+    )
+    batches = list(iter(iterator))
+
+    assert len(iterator) == 1
+    assert [[targets.tolist() for _inputs, targets in batch] for batch in batches] == [
+        [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
+    ]
+    assert clear_gpu_dataset_cache() == 1
+
+
 def test_shared_gpu_gather_iterator_rejects_mismatched_cached_tensor_lengths(
     monkeypatch,
 ) -> None:
