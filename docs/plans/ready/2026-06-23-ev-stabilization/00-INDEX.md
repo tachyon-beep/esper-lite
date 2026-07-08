@@ -61,14 +61,14 @@ which is unchanged.
 | **1 — Marginal V(s) / P0-1** | `esper-lite-e6382020d2` | **DONE (commit 6a27b8e3)** — re-scoped to verify (`stage1-marginal-v-verification.md`) | Already implemented; confirm acceptance evidence + close. |
 | **1b — Per-head adv re-standardization** | `esper-lite-89983714fb` | OPEN — plan pending | Flag-flip + A/B; flag still OFF (`advantages.py:138`). |
 | **2 — De-shape via HRA value head** | `esper-lite-2a4b56e719` | **PLAN CLEARED** (`stage2-deshape-hra-head.md`, v6; 5 review rounds, R5 panel all approved/approved-with-changes, 0 blockers/majors). Implementation gated on Stage 0. | **PRIMARY LEVER now** (B is done; residual EV volatility ⇒ target noise = A). HRA sum-of-heads (variant A); subtractive partition; single-GAE advantage; **head-only (detached-trunk) V_cf**. |
-| **3 — Escrow telescoping fix** | `esper-lite-3defe42928` | OPEN — plan pending | Correctness fix; clip still at `contribution.py:532-536`. |
+| **3 — Escrow telescoping fix** | `esper-lite-3defe42928` | **DONE (commit 89b50a16)** — Obs V3 schema v2 carries escrow state and reward-path escrow delta clipping is removed. | Correctness fix; the ledger telescopes over Markov observation state. |
 | **3x — COMA per-head baselines** | `esper-lite-6f30fdf089` | DEFERRED (experimental) | Redundant given the single shared V(s) baseline; only if 0/1b/2 plateau. |
 
 ## Corrected sequencing
 
 1. **Stage 0** (instrument) — no behavioural risk; establishes the per-stream EV baseline and the >40%-of-return-variance gate.
 2. **Stage 1 verification** — confirm P0-1 is implemented + the EV-liftoff acceptance evidence; close the Filigree task.
-3. In parallel after Stage 0 + review: **Stage 2** (de-shape, primary), **Stage 1b** (per-head norm A/B), **Stage 3** (escrow correctness).
+3. In parallel after Stage 0 + review: **Stage 2** (de-shape, primary) and **Stage 1b** (per-head norm A/B). Stage 3 is already implemented.
 4. **Stage 3x (COMA)** only if 0/1b/2 plateau.
 
 ## Verified entry-point reference (mapped 2026-06-23; reuse — do not re-derive)
@@ -116,7 +116,7 @@ which is unchanged.
 | Stage 1 (verify) | ⏳ | — | — | — | ✅ (this index) |
 | Stage 1b | ⏳ | ⏳ | — | — | ⏳ |
 | Stage 2 | ✅ (R5) | ✅ (R5, was R4 major) | ✅ (R5) | ✅ (R5) | ✅ (R5) |
-| Stage 3 | ⏳ | ⏳ | — | ⏳ | ⏳ |
+| Stage 3 | — | — | — | — | ✅ implemented |
 
 Legend: ⏳ pending · ✅ approved/approved-with-changes · `R1✗` round-1 needs-revision · `R1≈` round-1 approved-with-changes · `→v2` findings addressed in the rewrite · `R2⏳` round-2 review in flight. (Stage 2's pytorch column in R2 uses the alternated `yzmir-pytorch-engineering` reviewer; reality-check spans the planning trio.)
 

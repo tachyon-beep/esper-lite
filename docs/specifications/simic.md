@@ -23,7 +23,7 @@ Simic is the **reinforcement learning training infrastructure** for Tamiyo, Espe
 
 - **Factored action heads**: 8 independent policy heads (slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve, op) with causal masking
 - **LSTM temporal memory**: Tracks seed lifecycle state across 150-epoch episodes
-- **Op-conditioned critic**: Q(s, op) baseline reduces value aliasing
+- **State-value critic**: V(s) baseline estimates state value independently of the sampled operation
 - **Counterfactual reward attribution**: Measures seed value via ablation (alpha=0 validation)
 - **PBRS reward shaping**: Potential-based shaping that preserves optimal policy
 - **Vectorized parallel training**: N environments with CUDA stream optimization
@@ -208,7 +208,7 @@ alpha_target_logits: [batch, seq_len, NUM_ALPHA_TARGETS]
 alpha_speed_logits: [batch, seq_len, NUM_ALPHA_SPEEDS]
 alpha_curve_logits: [batch, seq_len, NUM_ALPHA_CURVES]
 op_logits: [batch, seq_len, NUM_OPS]
-value: [batch, seq_len]           # Q(s, op) baseline
+value: [batch, seq_len]           # V(s) baseline
 ```
 
 ### Buffer Shapes

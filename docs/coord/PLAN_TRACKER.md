@@ -127,11 +127,11 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 |--------|-------|-------|
 | 🔴 Critical | 0 | New governor-integrity issues are high-priority proof blockers, not active Tier 0 mainline breakage |
 | Completed | 18 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch + training-perf-master (2026-06-14) + green-state-recovery + p1-stability-batch-1 |
-| Ready | 11 | Implementation-ready plans after moving completed recovery/stability plans out of `ready/` and demoting main-merge integration back to planning |
+| Ready | 11 | Priority-matrix work items; the file index lists raw ready documents/workspaces and excludes completed/abandoned historical files |
 | In Progress | 2 | phase3-tinystories (85%); weft-phase-a-ci-migration (Phase A shadow-CI) |
 | Planning | 13 | Active design workspaces, including correctness defect burndown, main-merge integration, correctness proof strategy, governor-integrity, PPO oracle sandbox, and proof baseline controls |
 | Concept | 4 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals, gil-throughput-profiler |
-| Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
+| Abandoned | 3 | Priority-matrix decisions; the file index lists raw abandoned documents, including companion/obsolete implementation notes |
 | **Total Active** | **34** |
 
 ---
@@ -910,40 +910,28 @@ percent_complete: 0
 ```yaml
 id: shaped-delta-clip
 title: SHAPED Mode Delta Clipping
-type: ready
+type: abandoned
 created: 2026-01-10
-updated: 2026-01-10
-location: docs/plans/ready/shaped-mode-delta-clipping.md
+updated: 2026-07-08
+location: docs/plans/abandoned/shaped-mode-delta-clipping.md
 
-urgency: high
+urgency: N/A
 value: |
-  Fixes reward inflation in SHAPED mode where long-lived seeds get
-  unbounded rewards due to cumulative seed_contribution.
-  Adds shaped_delta_clip parameter (default 2.0) to mirror ESCROW's escrow_delta_clip.
+  Historical proposal only. Superseded by op-entropy-collapse; reward
+  inflation was not accepted as a live delta-clipping plan.
 
-complexity: S
-risk: low
+complexity: N/A
+risk: N/A
 risk_notes: |
-  - Mirrors proven ESCROW approach
-  - Rollback via shaped_delta_clip=0.0
+  - Do not implement shaped_delta_clip from this card.
+  - Keep this entry only to explain the abandoned file inventory.
 
 depends_on: []
 blocks: []
 
 status_notes: |
-  Telemetry analysis (2026-01-10) found episodes with 22-24% accuracy
-  getting 700+ episode rewards due to cumulative inflation.
-
-  DRL expert review confirmed delta-clipping is the correct fix.
-
-  6 phases:
-  1. Add shaped_delta_clip config param
-  2. Add telemetry fields
-  3. Implement delta clipping logic
-  4. Add function parameter
-  5. Wire through vectorized trainer
-  6. Add tests
-percent_complete: 0
+  Abandoned inventory is authoritative for this card.
+percent_complete: N/A
 ```
 
 ---
@@ -1012,7 +1000,7 @@ title: Counterfactual Auxiliary Supervision
 type: ready
 created: 2026-01-10
 updated: 2026-01-10
-location: docs/plans/ready/2026-01-10-counterfactual-auxiliary-supervision.md
+location: docs/plans/completed/2026-01-10-counterfactual-auxiliary-supervision.md
 
 urgency: high
 value: |
@@ -1397,19 +1385,23 @@ Quick reference for all tracked plans:
 ### ready/ (Implementation-Ready)
 | File | ID |
 |------|-----|
+| `2025-12-26-slot-transformer-architecture.md` | tamiyo4 |
+| `2025-12-29-sanctum-help-system.md` | sanctum-help |
+| `2026-01-02-telemetry-domain-separation.md` | telemetry-domain-sep |
 | `2026-01-09-blueprint-compiler-and-curriculum-seeds.md` | blueprint-compiler |
 | `2026-01-09-blueprint-compiler-appendix-antipatterns.md` | blueprint-antipatterns |
 | `2026-01-09-blueprint-compiler-appendix-future-blueprints.md` | blueprint-future |
-| `2026-01-02-telemetry-domain-separation.md` | telemetry-domain-sep |
-| `2026-01-10-counterfactual-auxiliary-supervision.md` | counterfactual-aux |
 | `2026-01-12-post-fossilization-drip-reward-impl.md` | drip-reward-impl |
+| `2026-06-17-recurrent-ppo-multiepoch-plan.md` | recurrent-ppo-multiepoch |
+| `2026-06-17-sprint12-trust-rules-plan.md` | sprint12-trust-rules |
+| `2026-06-18-post-p01-hardening-sprint-defect-report.md` | post-p01-hardening-defect-report |
+| `2026-06-18-post-p01-hardening-sprint.md` | post-p01-hardening-sprint |
+| `2026-06-18-weft-phase-a-ci-migration.md` | weft-phase-a-ci-migration |
+| `2026-06-23-ev-stabilization/` | ev-stabilization |
 | `defensive-pattern-fixes.md` | defensive-patterns |
-| `2025-12-29-sanctum-help-system.md` | sanctum-help |
-| `2025-12-26-slot-transformer-architecture.md` | tamiyo4 |
 | `h-tamiyo-updates.md` | heuristic-tamiyo |
 | `phase1-final-exam.md` | reward-efficiency |
 | `phase3-tinystories-strategy.md` | phase3-tinystories |
-| `2026-06-17-recurrent-ppo-multiepoch-plan.md` | recurrent-ppo-multiepoch |
 
 ### planning/ (Active Design)
 | Folder | ID |
@@ -1431,6 +1423,10 @@ Quick reference for all tracked plans:
 ### abandoned/ (Superseded)
 | File | ID |
 |------|-----|
+| `2025-12-18-scry-design.md` | scry-design |
+| `2025-12-18-scry-stage-0.5-1-2-implementation.md` | scry-implementation (superseded companion plan) |
+| `gpu-gather-iterator-buffer-reuse.md` | gpu-gather-buffer-reuse |
+| `overwatch-stage-6-live-telemetry.md` | overwatch-stage-6-live-telemetry |
 | `shaped-mode-delta-clipping.md` | shaped-delta-clip (superseded by op-entropy-collapse) |
 | `emrakul-submodule-editing-blending-holding.md` | emrakul-submodule-editing (superseded by Track A+C) |
 
