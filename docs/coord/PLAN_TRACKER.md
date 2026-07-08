@@ -223,6 +223,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | tele-610-episode-stats | TELE-610 Episode Stats Wiring | ✅ completed | 95% (19/20 tasks) | `docs/plans/completed/` |
 | value-function-metrics | Value Function Metrics Wiring | ✅ completed | 100% (97 tests passing) | `docs/plans/completed/` |
 | ev-telemetry-robustness | EV-Telemetry Robustness | ✅ completed | Robust-only value-collapse gate, proof-blocking regressions, Karn/Sanctum/Overwatch/W&B consumers verified | `docs/plans/completed/2026-06-18-ev-telemetry-robustness-plan.md` |
+| karn-ppo-traceability-evidence | Karn PPO Traceability Evidence | ✅ completed | PPO update/skip/malformed/robust-value evidence exposed through Karn and the proof packet (Filigree `esper-lite-570d98c451`, 2026-07-08) | `docs/plans/completed/2026-07-08-karn-ppo-traceability-evidence.md` |
 
 ### Abandoned
 
