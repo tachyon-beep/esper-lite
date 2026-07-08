@@ -1,12 +1,12 @@
 # Stage-2 HRA — MAJOR-1 Acceptance Gate (pre-registered)
 
-- **Status:** `DRAFT — review-remediated in the working tree after 6d2dd07e; owner freeze pending; FROZEN before any Stage-2 ON run.`
+- **Status:** `FORMULAS FROZEN 2026-07-08 (owner-ratified, drl-expert-reviewed) — OFF wave launched; OFF-derived scalars resolve at §10 step 3; ON launch remains owner-gated.`
 - **Epic / task:** `esper-lite-f25b71c165` (EV-stabilization) → `esper-lite-2a4b56e719` (Stage 2 — de-shape the regressand via HRA value head).
 - **Origin:** review-gate disposition PDR-0029 (MAJOR-1 `ev_sum` hard floor + MAJOR-3 provenance folded into Stage-2 acceptance); Stage-0 gate PDR-0032/0033; value-free-gate methodology PDR-0028.
 - **Scope fence:** this gate accepts/rejects Stage-2 as a **critic / value-target decomposition intervention (actor-objective A, below)**, NOT as a reward-redesign verdict. `share_attribution` and the Stage-0 variance gate are *variance facts*, not behavioural proof.
 - **Design provenance:** `drl-expert` spec (2026-07-06) merged with an independent external review; two external recommendations were rejected on code/algebra grounds (see §12).
 
-**Freeze status: REVIEW-REMEDIATED, NOT FROZEN.** The pure scorer and wrapper/packet layer now cover the §1 validity gates, §0 provenance block, burn-in `W`, §8B floored-update exclusion, §8C–G comparability guards/covariates, G3/G4 inputs, S7 diagnostic rendering, OFF-only calibration validity, spec-scoped traceback/run-log validity, and `advantage_std_floored` contamination reporting. This document is still not frozen and no paired HRA ON/OFF A/B has run. Freeze remains blocked on final verification, owner-set threshold slots, and explicit owner approval before ON launch.
+**Freeze status: FORMULAS FROZEN 2026-07-08.** The pure scorer and wrapper/packet layer cover the §1 validity gates, §0 provenance block, burn-in `W`, §8B floored-update exclusion, §8C–G comparability guards/covariates, G3/G4 inputs, S7 diagnostic rendering, OFF-only calibration validity, spec-scoped traceback/run-log validity, and `advantage_std_floored` contamination reporting. The owner ratified the §11 threshold set (values + resolution formulas) on 2026-07-08 after a drl-expert review (2 adjustments folded in: `g4_abs_floor` 5→2; ε_rel freeze-time validation added). Formulas are committed BEFORE the OFF arms run, closing the soft-peek channel: any slot that resolves from OFF data does so through a pre-committed rule at §10 step 3. The OFF wave (seeds 41–45, 400 ep/run) launched 2026-07-08. **Same-commit discipline: no training-path code change between the OFF and ON waves** (docs-only commits acceptable; `frozen_config` §1 equality covers hyperparameters, the discipline covers code). ON launch remains blocked on step-3 scalar resolution and explicit owner approval.
 
 Predicate ownership: *pure scorer* = LEG-A/LEG-B/MECH/G1/G2 statistics + composite (`n`-aware; ACCEPT only at n=10). *Wrapper* = everything that reads telemetry: §1, §0, burn-in, §8B, §8E covariates, §8F contamination reporting, G3/G4, and the tier-gated call into `composite_verdict`.
 
@@ -213,18 +213,30 @@ If `ev_main` improved *only* because `value_main_target_scale` collapsed, that i
 
 ## §11. Frozen thresholds
 
-| Symbol | Meaning | Value / rule |
+Owner-ratified 2026-07-08 (drl-expert review folded in). Formulas frozen NOW; rows marked
+*step-3* resolve their scalar from OFF-arm data only, through the pre-committed rule below.
+
+| Symbol | Meaning | Value / rule (FROZEN 2026-07-08) |
 |---|---|---|
-| `δ` | ev_sum non-inferiority margin | `max(0.05, paired_bootstrap_SE(OFF ev-level medians))`; fallback `max(0.05, 0.5·median OFF IQR)` |
-| `ε_rel` | adv-vol relative reduction floor | `0.10` |
+| `δ` | ev_sum non-inferiority margin | `max(0.05, paired_bootstrap_SE(OFF ev-level medians))`; fallback `max(0.05, 0.5·median OFF IQR)`. Deterministic bootstrap: 2000 resamples, `np.random.default_rng(0)` (code default, recorded). **Tier semantics: recomputed from all 10 OFF arms at the n=10 claim tier** (the 5-arm δ governs the screen only). *step-3* |
+| `ε_rel` | adv-vol relative reduction floor | `0.10` fixed — **with a mandatory step-3 validation:** compute the OFF seed-to-seed relative spread of `IQR_u(sqrt(1−ev))`; if spread ≥ 0.10, LEG-B sits inside its own noise floor → escalate to owner before ON (raise ε_rel or accept an explicitly underpowered LEG-B) |
 | `τ_acc` | val-acc regression deadband | `0.3pp` |
-| `Δparam_max` | added-param inflation ceiling | `<owner-set before ON>` |
-| `W` | burn-in updates discarded | exact integer frozen before ON from `max(value_warmup·updates_per_batch, plateau(value_target_scale, cf_value_loss))` |
-| `floored_asymmetry_max` | material ON/OFF floored-EV fraction asymmetry | `0.10` candidate code default; owner freeze before ON |
-| `g3_ratio_max` | churn material-elevation ratio | `<owner-set before ON>` (score spec field) |
-| `g4_ratio_max` / `g4_abs_floor` | guard-channel material-elevation thresholds | `<owner-set before ON>` (score spec fields) |
-| `advantage_std_floored` policy | LEG-B contamination handling | report exact ON/OFF fractions + `OBSERVED` flag; no hard cutoff unless owner freezes one |
+| `Δparam_max` | added-param inflation ceiling | `max(0.10 · median_s(added_params_off), IQR_s(added_params_off))`. Degenerate-zero guard: if `median_s(added_params_off) = 0`, do NOT auto-resolve — escalate to owner. *step-3* |
+| `W` | burn-in updates discarded | `max(10, plateau(value_target_scale on OFF arms) + 5)`, frozen as an exact integer. `plateau(x)` := first update `u` whose trailing 8-update window has max relative change of `x` < 5%. The ON-leg `cf_value_loss` plateau is a **post-hoc validity CHECK, not a re-freeze**: if `cf_value_loss` has not plateaued by `W` on an ON arm, that arm is INVALID → re-run with a larger *pre-registered* W; never a silent post-hoc W bump. *step-3* |
+| `floored_asymmetry_max` | material ON/OFF floored-EV fraction asymmetry | `0.10`, applied per seed-pair (`validate_pair` per-pair `|Δfrac|`). Symmetric heavy flooring is backstopped by the completeness gate: `budget` counts scored updates POST burn-in + POST §8B exclusion (verified in code) |
+| `g3_ratio_max` | churn material-elevation ratio | `1.5`, per channel (germinate / prune / fossilize gated separately — code shape). **Step-3 confirmation:** 1.5 must exceed the observed OFF seed-to-seed churn spread; if not, escalate |
+| `g4_ratio_max` / `g4_abs_floor` | guard-channel material-elevation thresholds | `2.0` / `2`. Code semantics: materially elevated ⟺ `(on − off) > abs_floor` AND `on > ratio_max · off`; `reward_hacking > 0` on the ON arm is a hardcoded zero-tolerance trip regardless of thresholds. Floor 2 (not 5) so an ON-specific alarm-channel elevation of 3+ events (value-collapse, gradient-anomaly, numerical-instability) routes to owner adjudication; the benign PDR-0026 rollback asymmetry (1.68×) still passes |
+| `advantage_std_floored` policy | LEG-B contamination handling | report exact ON/OFF fractions + `OBSERVED` flag; no hard cutoff. **Pre-committed asymmetry soft-gate:** per-pair `|frac_on − frac_off| > 0.10` → LEG-B is treated INCONCLUSIVE → owner adjudication (parallel to §8B) |
+| budget | pre-registered run size | **200 rounds/run hard-stop (= 200 PPO updates, 2400 env-episodes)** AND `budget = 150` minimum scored updates (post burn-in + §8B exclusion) per arm for §1 validity. AMENDED 2026-07-08 pre-data: the first ratification wrote "400 episodes" through a unit error (env-episodes vs updates — the prior A/B's "200 episodes/run" is 200 *rounds*); corrected before any OFF arm produced data. A low-update run flags INVALID rather than silently producing a noisy IQR |
+| posture | base config | **`configs/config-3slot-3seed-baseline-shaped.json`** — the prior Shapley A/B base (3 slots r0c0/r0c1/r0c2, 12 envs, entropy 0.15→0.08, gae_lambda 0.95, amp on, auto-forward G1–G3, task cifar_baseline) + `return_variance_telemetry: true` + `per_head_advantage_norm: false` pinned (§8F) + the `hra_value_decomposition` toggle. Arm configs generated from ONE base so §10 config-equality holds by construction: `configs/ablations/stage2-ab-{off,on}.json` |
+| seeds | pairing | paired fresh-init seeds `41–45` (screen tier), continuing the PDR-0021 convention |
+| stationarity | LEG-B pre-check | **step-3 check on OFF arms:** first-half vs second-half `IQR_u(sqrt(1−ev))` of the scored window; material non-stationarity (e.g. a late germination wave) → escalate before ON, pre-registering a windowed scored region if needed |
 | tiers | direction / claim | n=5 screen → n=10 claim (ACCEPT only at n=10) |
+
+Calibration principle (recorded at owner ratification): `floored_asymmetry_max`, `g3_ratio_max`,
+and `ε_rel` are noise-floor thresholds — each is validated at step 3 to exceed the observed OFF
+spread rather than trusted as a round number. Every gate in this table fails toward the owner
+(INVALID / INCONCLUSIVE / escalation), never toward a silent ACCEPT.
 
 ---
 
