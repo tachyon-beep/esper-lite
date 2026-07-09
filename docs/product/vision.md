@@ -31,7 +31,7 @@ script.
 - A codebase carrying **legacy / backwards-compat / shim** code (No Legacy Code policy).
 
 ## Authority grant
-Granted by: john (GitHub: tachyon-beep)     Last reviewed: 2026-07-05
+Granted by: john (GitHub: tachyon-beep)     Last reviewed: 2026-07-10
 Review cadence: on any vision change, or monthly — whichever first.
 
 Autonomous within strategy — the agent MAY, without asking:
@@ -39,6 +39,17 @@ Autonomous within strategy — the agent MAY, without asking:
   experiment runs within the active bet**, run analysis, accept against criteria,
   reprioritize, kill a failing bet per metrics.md, and **commit to the workspace at
   checkpoint**.
+  **Run authorization (owner-stated 2026-07-10, restated and broadened):** the agent
+  may CREATE NEW EXPERIMENTS, EXTEND runs, or ADD runs at its own discretion whenever
+  it judges that previous runs did not give us everything we need — within the active
+  research program, each recorded as a PDR with a pre-committed reading (the PDR-0053/
+  0054 pattern). Pre-registered acceptance gates stay owner-gated as before.
+  **Experiment-value principle (owner, 2026-07-10):** prefer tossing a week and
+  restarting with an experiment that answers the question 100% over salvaging a
+  near-done run that answers 20%. The test for any run, salvage, or redesign is:
+  *"will this give us insights that inform future decisions — by ruling things in or
+  out, or verifying a theory?"* Sunk cost and near-completeness are not reasons to
+  keep a compromised instrument.
 
 Escalate BEFORE acting — the agent MUST get owner sign-off for:
   changing this vision/strategy/grant; **pushing/tagging/releasing or any
