@@ -13,6 +13,7 @@ every downstream statistic.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -54,6 +55,7 @@ _PPO_UPDATE_COLUMNS: tuple[str, ...] = (
     "ev_cf",
     "value_main_target_scale",
     "cf_value_target_scale",
+    "cf_value_loss",
     "ev_return_variance",
     "pre_norm_advantage_std",
     "return_std",
@@ -178,6 +180,7 @@ def row_to_update(row: dict[str, Any]) -> UpdateRow:
         ev_cf=_optional_float(row, "ev_cf"),
         value_main_target_scale=_optional_float(row, "value_main_target_scale"),
         cf_value_target_scale=_optional_float(row, "cf_value_target_scale"),
+        cf_value_loss=_optional_float(row, "cf_value_loss"),
         ev_return_variance=float(_require(row, "ev_return_variance")),
         pre_norm_advantage_std=float(_require(row, "pre_norm_advantage_std")),
         return_std=float(_require(row, "return_std")),
@@ -222,40 +225,57 @@ def read_leg(conn: duckdb.DuckDBPyConnection, run_dir: str) -> list[UpdateRow]:
 
 
 def _per_env_terminal_mean(
-    conn: duckdb.DuckDBPyConnection, run_dir: str, column: str
+    conn: duckdb.DuckDBPyConnection, run_dir: str, column: str, *, lo: float, hi: float
 ) -> float:
     """Mean of ``column`` over EACH env's terminal (max-episode_idx) row; fail loud if none.
 
     ``episode_idx`` is a dense global counter, so envs terminate at different indices — a per-env
     window (``ROW_NUMBER() OVER (PARTITION BY env_id ORDER BY episode_idx DESC)``) selects each env's
-    own last episode, then we average across envs.
+    own last episode, then we average across envs. Every terminal value must be finite and inside
+    ``[lo, hi]`` — the episode-outcome contract (leyline/episode_outcome.py). The check runs
+    per env BEFORE the mean: impossible values must never average into §6 safety evidence
+    (two insane values can cancel into a plausible mean).
     """
     rows = _rows(
         conn,
         f"""
         WITH per_env AS (
-            SELECT {column} AS value,
+            SELECT env_id, {column} AS value,
                    ROW_NUMBER() OVER (PARTITION BY env_id ORDER BY episode_idx DESC) AS rn
             FROM episode_outcomes WHERE run_dir = ?
         )
-        SELECT COUNT(*) AS terminal_envs, COUNT(value) AS present_values, AVG(value) AS value
-        FROM per_env WHERE rn = 1
+        SELECT env_id, value FROM per_env WHERE rn = 1 ORDER BY env_id
         """,
         [run_dir],
     )
-    if not rows or rows[0]["terminal_envs"] == 0:
+    if not rows:
         raise ValueError(f"no episode_outcomes at the terminal episode for run_dir={run_dir!r}")
-    if rows[0]["terminal_envs"] != rows[0]["present_values"]:
+    null_envs = [row["env_id"] for row in rows if row["value"] is None]
+    if null_envs:
         raise ValueError(
             f"terminal episode_outcomes.{column} is NULL for "
-            f"{rows[0]['terminal_envs'] - rows[0]['present_values']} env(s) in run_dir={run_dir!r}"
+            f"{len(null_envs)} env(s) in run_dir={run_dir!r}"
         )
-    return float(rows[0]["value"])
+    values = {int(row["env_id"]): float(row["value"]) for row in rows}
+    violations = [
+        (env_id, value)
+        for env_id, value in values.items()
+        if not (math.isfinite(value) and lo <= value <= hi)
+    ]
+    if violations:
+        env_id, value = violations[0]
+        raise ValueError(
+            f"terminal episode_outcomes.{column}={value!r} for env {env_id} is outside "
+            f"[{lo}, {hi}] in run_dir={run_dir!r} — {len(violations)} env(s) violate the "
+            "episode-outcome contract (leyline/episode_outcome.py); impossible telemetry "
+            "must not enter §6 safety evidence"
+        )
+    return sum(values.values()) / len(values)
 
 
 def read_run_val_acc(conn: duckdb.DuckDBPyConnection, run_dir: str) -> float:
     """§6 G1 — the run's validation accuracy: mean over each env's terminal ``final_accuracy`` (pp)."""
-    return _per_env_terminal_mean(conn, run_dir, "final_accuracy")
+    return _per_env_terminal_mean(conn, run_dir, "final_accuracy", lo=0.0, hi=100.0)
 
 
 def read_run_added_params(
@@ -264,9 +284,10 @@ def read_run_added_params(
     """§6 G2 — terminal added-parameter footprint ``host_params * (param_ratio - 1)``.
 
     ``param_ratio`` = total_params/host_params (leyline), so this is total added params (fossilized +
-    transient), a conservative proxy for §6's fossilized-only quantity (owner-ratified).
+    transient), a conservative proxy for §6's fossilized-only quantity (owner-ratified). The host
+    never shrinks, so a terminal ratio below 1.0 is impossible telemetry (contract lo bound).
     """
-    param_ratio = _per_env_terminal_mean(conn, run_dir, "param_ratio")
+    param_ratio = _per_env_terminal_mean(conn, run_dir, "param_ratio", lo=1.0, hi=math.inf)
     return host_params * (param_ratio - 1.0)
 
 

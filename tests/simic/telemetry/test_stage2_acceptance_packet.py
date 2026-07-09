@@ -32,6 +32,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     calibrate_off,
     floored_exclusion,
     leg_series,
+    plateau,
     render_packet,
     score,
     sqrt_unexplained_series,
@@ -55,6 +56,7 @@ def _update(**overrides) -> UpdateRow:
         ev_cf=None,
         value_main_target_scale=None,
         cf_value_target_scale=None,
+        cf_value_loss=None,
         ev_return_variance=10.0,
         pre_norm_advantage_std=1.0,
         return_std=3.0,
@@ -169,9 +171,16 @@ def _off_rows(expl: list[float], **common) -> list[UpdateRow]:
 
 
 def _on_rows(ev_sum: list[float], ev_main: list[float], **common) -> list[UpdateRow]:
-    """ON-leg rows: ev_sum is the total-EV comparand; ev_main feeds the §5 MECH guard."""
+    """ON-leg rows: ev_sum is the total-EV comparand; ev_main feeds the §5 MECH guard.
+
+    ``cf_value_loss`` defaults to a flat (plateaued-from-birth) series so tests exercising
+    other gates satisfy the §11 W-rule plateau check; override per test to probe it.
+    """
     return [
-        _update(batch=i, explained_variance=s, ev_sum=s, ev_main=m, ev_cf=0.1, **common)
+        _update(
+            batch=i, explained_variance=s, ev_sum=s, ev_main=m, ev_cf=0.1,
+            cf_value_loss=0.02, **common,
+        )
         for i, (s, m) in enumerate(zip(ev_sum, ev_main, strict=True))
     ]
 
@@ -331,8 +340,10 @@ def _clean_off_rows(n: int = 3) -> list[UpdateRow]:
 
 
 def test_validate_pair_accepts_a_clean_fresh_init_pair():
+    # w=8 with 12 rows: the §11 ON cf_value_loss plateau check needs a trailing-8 window
+    # inside the burn-in region, so a fully-clean pair carries a real-sized series.
     v = validate_pair(
-        _meta(Leg.ON), _clean_on_rows(), _meta(Leg.OFF), _clean_off_rows(), w=0, budget=3
+        _meta(Leg.ON), _clean_on_rows(12), _meta(Leg.OFF), _clean_off_rows(12), w=8, budget=3
     )
     assert isinstance(v, Validity)
     assert v.valid is True
@@ -1017,3 +1028,65 @@ def test_validate_pair_rejects_placement_mismatch():
     v = validate_pair(on_meta, _clean_on_rows(), off_meta, _clean_off_rows(), w=0, budget=3)
     assert v.valid is False
     assert any("placement" in reason for reason in v.reasons)
+
+
+# ---- §11 W-rule: ON cf_value_loss plateau validity check ----
+
+
+def test_plateau_finds_first_stable_trailing_window():
+    assert plateau([1.0] * 8) == 8
+    halving = [2.0 ** -i for i in range(10)]  # 50% relative change every step
+    assert plateau(halving) is None
+    # Appended flat values equal halving[-1], so the first stable trailing-8 window ends at
+    # update 17 (indices 9..16: the last halving value plus seven flat ones).
+    assert plateau(halving + [halving[-1]] * 8) == 17
+
+
+def test_plateau_zero_handling():
+    assert plateau([0.0] * 8) == 8  # 0 -> 0 is zero change
+    assert plateau([0.0] * 7 + [1.0]) is None  # 0 -> nonzero inside the window is unstable
+
+
+def _on_rows_with_cf(cf: list[float], **common) -> list[UpdateRow]:
+    return [
+        _update(
+            batch=i, explained_variance=0.8, ev_sum=0.8, ev_main=0.2, ev_cf=0.1,
+            cf_value_loss=c, **common,
+        )
+        for i, c in enumerate(cf)
+    ]
+
+
+def test_validate_pair_does_not_gate_on_cf_value_loss_plateau():
+    # §11.2 (owner-ruled 2026-07-10): the cf-plateau check is DESCRIPTIVE, not a gate —
+    # real cf_value_loss is oscillatory (non-stationary cf target scale) and can never
+    # satisfy the frozen plateau() at any W; an un-plateaued series must NOT invalidate.
+    n = 20
+    on = _on_rows_with_cf([2.0 ** -i for i in range(n)], ev_return_variance=5.0)
+    off = _off_rows([0.8] * n, ev_return_variance=5.0)
+    v = validate_pair(_meta(Leg.ON), on, _meta(Leg.OFF), off, w=8, budget=3)
+    assert v.valid is True
+    assert not any("plateau" in reason for reason in v.reasons)
+
+
+def test_validate_pair_accepts_on_cf_value_loss_plateaued_by_w():
+    n = 20
+    on = _on_rows_with_cf([0.02] * n, ev_return_variance=5.0)
+    off = _off_rows([0.8] * n, ev_return_variance=5.0)
+    v = validate_pair(_meta(Leg.ON), on, _meta(Leg.OFF), off, w=8, budget=3)
+    assert not any("plateau" in reason for reason in v.reasons)
+
+
+def test_validate_pair_rejects_on_missing_cf_value_loss():
+    n = 20
+    on = [
+        _update(
+            batch=i, explained_variance=0.8, ev_sum=0.8, ev_main=0.2, ev_cf=0.1,
+            cf_value_loss=None, ev_return_variance=5.0,
+        )
+        for i in range(n)
+    ]
+    off = _off_rows([0.8] * n, ev_return_variance=5.0)
+    v = validate_pair(_meta(Leg.ON), on, _meta(Leg.OFF), off, w=8, budget=3)
+    assert v.valid is False
+    assert any("cf_value_loss" in reason for reason in v.reasons)

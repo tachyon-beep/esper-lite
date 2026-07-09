@@ -59,6 +59,7 @@ def _full_row(**overrides) -> dict:
         ev_cf=None,
         value_main_target_scale=None,
         cf_value_target_scale=None,
+        cf_value_loss=None,
         ev_return_variance=5.0,
         pre_norm_advantage_std=1.0,
         return_std=3.0,
@@ -76,13 +77,13 @@ def _full_row(**overrides) -> dict:
 def test_row_to_update_maps_all_fields():
     row = _full_row(
         inner_epoch=2, batch=3, explained_variance=0.7, ev_sum=0.7, ev_main=0.2, ev_cf=0.1,
-        value_main_target_scale=1.7, cf_value_target_scale=6.3,
+        value_main_target_scale=1.7, cf_value_target_scale=6.3, cf_value_loss=0.9,
         ev_return_variance=8.0, pre_norm_advantage_std=1.5, return_std=2.0, gradient_cv=0.4,
         advantage_std_floored=True,
     )
     assert row_to_update(row) == UpdateRow(
         inner_epoch=2, batch=3, explained_variance=0.7, ev_sum=0.7, ev_main=0.2, ev_cf=0.1,
-        value_main_target_scale=1.7, cf_value_target_scale=6.3,
+        value_main_target_scale=1.7, cf_value_target_scale=6.3, cf_value_loss=0.9,
         ev_return_variance=8.0, pre_norm_advantage_std=1.5, return_std=2.0, gradient_cv=0.4,
         advantage_std_floored=True,
     )
@@ -138,7 +139,7 @@ def _conn_with_updates(rows: list[dict]) -> duckdb.DuckDBPyConnection:
         CREATE TABLE ppo_updates (
             run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
+            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE, cf_value_loss DOUBLE,
             pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
             advantage_std_floored BOOLEAN, advantage_per_head_normalized BOOLEAN
         )
@@ -146,12 +147,13 @@ def _conn_with_updates(rows: list[dict]) -> duckdb.DuckDBPyConnection:
     )
     for r in rows:
         conn.execute(
-            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [
                 r["run_dir"], r["inner_epoch"], r["batch"], r["explained_variance"], r["ev_sum"],
                 r["ev_main"], r["ev_cf"], r["ev_return_variance"], r["value_main_target_scale"],
-                r["cf_value_target_scale"], r["pre_norm_advantage_std"], r["return_std"],
-                r["gradient_cv"], r["advantage_std_floored"], r["advantage_per_head_normalized"],
+                r["cf_value_target_scale"], r["cf_value_loss"], r["pre_norm_advantage_std"],
+                r["return_std"], r["gradient_cv"], r["advantage_std_floored"],
+                r["advantage_per_head_normalized"],
             ],
         )
     return conn
@@ -453,7 +455,7 @@ def test_env_count_completeness_flags_stale_nonterminal_env_rows():
 # injected (the G4 reader + churn threshold are S7/§6-definitional).
 
 
-_IO_THRESHOLDS = FrozenThresholds(delta=0.05, eps_rel=0.10, tau_acc=0.3, delta_param_max=1e9, w=0)
+_IO_THRESHOLDS = FrozenThresholds(delta=0.05, eps_rel=0.10, tau_acc=0.3, delta_param_max=1e9, w=8)
 
 
 def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
@@ -464,7 +466,7 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
         CREATE TABLE ppo_updates (
             run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
+            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE, cf_value_loss DOUBLE,
             pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
             advantage_std_floored BOOLEAN
         )
@@ -489,11 +491,14 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
             [s["run_dir"], s["n_envs"], s.get("n_episodes", s["n_envs"])],
         )
         is_on = s["leg"] == "on"
-        for b in range(4):
-            expl_b = s["expl"] + ev_jitter[b]
-            return_std_b = 3.0 + std_jitter[b]
+        # 12 updates so the §11 plateau check (trailing-8 window, w=8) is satisfiable; the
+        # jitter cycles per 4, so the post-burn-in scored window is one full cycle and every
+        # median/IQR matches the original 4-update fixture.
+        for b in range(12):
+            expl_b = s["expl"] + ev_jitter[b % 4]
+            return_std_b = 3.0 + std_jitter[b % 4]
             conn.execute(
-                "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     s["run_dir"], 0, b, expl_b,
                     expl_b if is_on else None,       # ev_sum: total-EV comparand on ON, null on OFF
@@ -502,6 +507,7 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
                     5.0,
                     1.7 if is_on else None,
                     6.3 if is_on else None,
+                    0.02 if is_on else None,         # cf_value_loss: flat => plateaued by w=8
                     1.0,
                     return_std_b,
                     0.10,
@@ -1039,7 +1045,7 @@ def _full_stage2_conn(
         CREATE TABLE ppo_updates (
             run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
             ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE,
+            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE, cf_value_loss DOUBLE,
             pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
             advantage_std_floored BOOLEAN, advantage_per_head_normalized BOOLEAN
         )
@@ -1073,19 +1079,22 @@ def _full_stage2_conn(
                 },
             )
             is_on = leg == "on"
-            for b in range(4):
+            # 12 updates (jitter cycled per 4) so the §11 plateau check is satisfiable under
+            # the spec's w=8 while the scored window keeps the original cycle's median/IQR.
+            for b in range(12):
                 conn.execute(
-                    "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     [
-                        run_dir, 0, b, expl + ev_jitter[b],
-                        expl + ev_jitter[b] if is_on else None,
+                        run_dir, 0, b, expl + ev_jitter[b % 4],
+                        expl + ev_jitter[b % 4] if is_on else None,
                         0.03 if is_on else None,
                         0.10 if is_on else None,
                         5.0,
                         1.7 if is_on else None,
                         6.3 if is_on else None,
+                        0.02 if is_on else None,  # cf_value_loss: flat => plateaued by w=8
                         1.0,
-                        3.0 + std_jitter[b],
+                        3.0 + std_jitter[b % 4],
                         0.10,
                         False,
                         False,
@@ -1108,7 +1117,7 @@ def _full_stage2_conn(
         "budget": 2,
         "thresholds": {
             "delta": 0.05, "eps_rel": 0.10, "tau_acc": 0.3,
-            "delta_param_max": 1e9, "w": 0,
+            "delta_param_max": 1e9, "w": 8,
         },
         "g3_ratio_max": 1.5,
         "g4_ratio_max": 2.0,
@@ -1204,10 +1213,11 @@ def test_calibrate_from_spec_rejects_frozen_config_drift_across_off_runs():
 
 def test_calibrate_from_spec_rejects_incomplete_off_series_budget():
     conn, _spec = _full_stage2_conn(5)
+    # The fixture emits 12 updates per run; a budget above that is an incomplete OFF series.
     with pytest.raises(ValueError, match="budget"):
         calibrate_from_spec(
             conn,
-            {"off_run_dirs": [f"/off/{seed}" for seed in range(5)], "w": 0, "budget": 5},
+            {"off_run_dirs": [f"/off/{seed}" for seed in range(5)], "w": 0, "budget": 13},
         )
 
 
@@ -1285,3 +1295,42 @@ def test_pairset_accepts_cross_seed_placement_heterogeneity():
         ),
     ]
     assert pairset_validity_reasons(pairings) == []
+
+
+# ---- §6 outcome-contract bounds on terminal safety evidence ----
+
+
+def test_read_run_val_acc_rejects_out_of_range_accuracy():
+    for bad in (150.0, -3.0, float("nan")):
+        rows = [_outcome_row(env_id=0, episode_idx=0, final_accuracy=bad)]
+        with pytest.raises(ValueError, match="outside"):
+            read_run_val_acc(_conn_with_outcomes(rows), "/run")
+
+
+def test_read_run_added_params_rejects_impossible_param_ratio():
+    for bad in (0.8, float("nan"), float("inf")):
+        rows = [_outcome_row(env_id=0, episode_idx=0, param_ratio=bad)]
+        with pytest.raises(ValueError, match="outside"):
+            read_run_added_params(_conn_with_outcomes(rows), "/run", host_params=100_000)
+
+
+def test_terminal_outcome_bounds_accept_boundary_values():
+    rows = [
+        _outcome_row(env_id=0, episode_idx=0, final_accuracy=0.0),
+        _outcome_row(env_id=1, episode_idx=1, final_accuracy=100.0),
+    ]
+    assert read_run_val_acc(_conn_with_outcomes(rows), "/run") == pytest.approx(50.0)
+    rows = [_outcome_row(env_id=0, episode_idx=0, param_ratio=1.0)]
+    assert read_run_added_params(
+        _conn_with_outcomes(rows), "/run", host_params=100_000
+    ) == pytest.approx(0.0)
+
+
+def test_outcome_bounds_apply_per_env_not_to_the_mean():
+    # Two insane values that average to a plausible mean must still be rejected.
+    rows = [
+        _outcome_row(env_id=0, episode_idx=0, final_accuracy=-40.0),
+        _outcome_row(env_id=1, episode_idx=1, final_accuracy=140.0),
+    ]
+    with pytest.raises(ValueError, match="outside"):
+        read_run_val_acc(_conn_with_outcomes(rows), "/run")

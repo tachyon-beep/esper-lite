@@ -88,6 +88,8 @@ class UpdateRow:
     ev_cf: float | None
     value_main_target_scale: float | None
     cf_value_target_scale: float | None
+    # ON-only like the ev_* columns; feeds the §11 W-rule plateau validity check.
+    cf_value_loss: float | None
     ev_return_variance: float
     pre_norm_advantage_std: float
     return_std: float
@@ -148,6 +150,35 @@ def var_returns_series(return_std_values: list[float]) -> list[float]:
     if not return_std_values:
         raise ValueError("var_returns_series requires a non-empty return_std series")
     return [std * std for std in return_std_values]
+
+
+def plateau(series: list[float], *, window: int = 8, rel_tol: float = 0.05) -> int | None:
+    """§11 plateau rule: first update ``u`` (1-based) whose trailing ``window`` updates have
+    max consecutive relative change < ``rel_tol``; ``None`` if the series never stabilizes.
+
+    A zero-to-nonzero step inside the window is unstable (relative change from zero is
+    unbounded); zero-to-zero is zero change. A non-finite value never certifies a window.
+    """
+    if window < 2:
+        raise ValueError("plateau window must span at least 2 updates")
+    for end in range(window, len(series) + 1):
+        chunk = series[end - window : end]
+        stable = True
+        for prev, cur in zip(chunk, chunk[1:], strict=False):
+            if not (math.isfinite(prev) and math.isfinite(cur)):
+                stable = False
+                break
+            if prev == 0.0:
+                if cur != 0.0:
+                    stable = False
+                    break
+                continue
+            if abs(cur - prev) / abs(prev) >= rel_tol:
+                stable = False
+                break
+        if stable:
+            return end
+    return None
 
 
 def _require_present(name: str, value: float | None) -> float:
@@ -447,6 +478,8 @@ def _nonfinite_fields(row: UpdateRow, leg: Leg) -> list[str]:
             bad.append("value_main_target_scale")
         if row.cf_value_target_scale is not None and not math.isfinite(row.cf_value_target_scale):
             bad.append("cf_value_target_scale")
+        if row.cf_value_loss is not None and not math.isfinite(row.cf_value_loss):
+            bad.append("cf_value_loss")
     return bad
 
 
@@ -513,6 +546,19 @@ def _validate_leg(
         require_hra_signature(rows, leg, run_dir=meta.run_dir)
     except ValueError as exc:
         reasons.append(str(exc))
+
+    if leg is Leg.ON:
+        # ON telemetry signature: cf_value_loss must be present on every update. The §11
+        # cf-plateau VALIDITY GATE is demoted to descriptive reporting (§11.2, owner-ruled
+        # 2026-07-10): the frozen plateau() is unsatisfiable on real cf_value_loss — the cf
+        # stream's target scale is non-stationary within-run (same cause as the LEG-B
+        # demotion), so no arm could ever pass at any W.
+        n_missing = sum(1 for row in rows if row.cf_value_loss is None)
+        if n_missing:
+            reasons.append(
+                f"ON arm missing cf_value_loss on {n_missing} update(s) — telemetry "
+                "signature does not match a hra_value_decomposition=True run"
+            )
 
     post_burnin = burn_in_discard(rows, w)
     if not post_burnin:
