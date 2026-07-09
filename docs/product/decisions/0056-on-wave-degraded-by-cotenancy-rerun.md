@@ -59,3 +59,16 @@ budget is a 20% instrument; the rerun is the 100% one.
 If the rerun ALSO drops events on a quiet box, the co-tenancy attribution is wrong —
 stop, treat as a telemetry-writer defect, and take the cross-commit rerun path
 (fix + rerun BOTH waves) rather than iterating on operational guesses.
+
+## Provenance postscript (rerun launch, 05:52)
+
+The rerun launched at commit `a0ad968e` (HEAD; the day's harness/docs commits landed
+between waves). Training-path tree diff vs the OFF arms' commit `fe177844` across
+simic/{training,agent,rewards}, tolaria, kasmina, tamiyo, nissa, scripts, leyline, and
+both arm configs: **exactly one file — `leyline/episode_outcome.py`, +11 lines of
+module-level contract CONSTANTS** (unread by any training code; all other changes are
+read-path harness/tests/docs). Training behavior is byte-equivalent; empirically, the
+rerun's epoch-1 losses are bit-identical to the OFF arms' (s41 2.3090133666992188,
+s42 2.2991979122161865). §10 pairing compares run config from telemetry, not commits;
+this note pre-declares the commit difference so the packet's §0 provenance block reads
+as expected, not as a surprise.
