@@ -244,3 +244,44 @@ spread rather than trusted as a round number. Every gate in this table fails tow
 
 1. **Downstream signal on advantage-std *level*.** Rejected: algebraically entangled with the ev_sum floor (§4 identity). Kept as descriptive-with-covariate only.
 2. **`EV_main` as the paired *primary* gate (`ΔEV_main = EV_main_ON − EV_main_OFF`).** Rejected: `ev_main` is ON-leg-only telemetry — `EV_main_OFF` does not exist, and the target-easier effect makes level-improvement weak evidence. Kept as the MECH guard (§5).
+
+---
+
+## §11.1 Step-3 resolutions & pre-ON amendment (2026-07-09, owner-ratified)
+
+Resolved from the 5 valid OFF arms (`telemetry/stage2_ab_off/seed{41..45}` @ `fe177844`,
+200/200 updates each; full record: `docs/analysis/2026-07-09-stage2-off-calibration-step3.md`;
+harness report: `docs/analysis/2026-07-09-stage2-off-calibration-report.txt`):
+
+| Symbol | Resolution |
+|---|---|
+| `W` | **17** (per-arm plateaus 8/8/12/8/8; rule applied as written — note the rule fires early because per-update relative change in `value_target_scale` is <5% almost immediately while the cumulative level drifts ~2.7→~25; the drift is handled by the stationarity ruling below) |
+| `δ` | **0.050311** (`calibrate_off`, 5 OFF arms) |
+| `Δparam_max` | **1527.8** (added_params/seed 2637.6/1308.3/3373.0/879.0/2836.1; median 2637.6; IQR_s 1527.8 dominates; NOT degenerate-zero) |
+| G3 spread confirm | PASS (germinate 1.006, prune 1.007, fossilize 1.379 — all < 1.5) |
+
+**Escalations fired and owner rulings (2026-07-09):**
+
+1. **ε_rel validation FAILED** — OFF seed-to-seed relative spread of `IQR_u(sqrt(1−ev))`
+   = 0.5716 ≥ 0.10 — AND **stationarity pre-check MATERIAL** — second-half/first-half
+   scored-window volatility ratios 8.41/7.70/4.50/13.55/2.38 across arms (EV lifts late
+   while Var(returns) grows ~10–25× within-run; the LEG-B statistic conflates
+   learning-drift with noise on this horizon).
+   **RULING: LEG-B is DEMOTED TO DESCRIPTIVE at the n=5 screen** (pre-registered option
+   "accept an explicitly underpowered LEG-B"). The screen composite predicate becomes
+   **LEG-A ∧ MECH ∧ G1–G4**. LEG-B numbers + covariates are still computed and reported.
+   The scorer's emitted composite `verdict` field composes the original §7 predicate
+   (including LEG-B) and is SUPERSEDED at the screen tier by this amendment: the screen
+   verdict is read from the packet's `leg_a` / `mech_hold` / `g1..g4` fields. Any
+   volatility-reduction CLAIM is deferred to the n=10 tier or a redesigned
+   windowed/detrended metric (pre-registered before use).
+2. **Device-placement homogeneity (harness spec-vs-code):** the §10 frozen list never
+   included device placement, but `_FROZEN_RUN_CONFIG_COLUMNS` swept in
+   `policy_device`/`env_devices_json`, rejecting the ratified two-GPU OFF wave.
+   **RULING: placement fields are provenance, excluded from cross-seed homogeneity;
+   per-pair ON/OFF placement equality is enforced in `validate_pair`.** Implemented
+   read-path-only with regression tests (RunMeta.placement; 182 harness tests green).
+   Consequence: **each ON arm MUST run on the same device as its OFF partner**
+   (41/43/45 → cuda:0, 42/44 → cuda:1).
+
+Amendment recorded BEFORE any ON arm produced data (no ON telemetry exists at ratification).

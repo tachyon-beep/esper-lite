@@ -1,0 +1,9 @@
+# Stage-2 OFF calibration (§10 step 2)
+
+delta (δ, freeze this): 0.050311
+eps_rel (ε_rel, fixed): 0.10
+OFF seed-to-seed adv-residual spread anchor: 0.5716  (ε_rel should exceed this, §4)
+OFF ev levels: 0.1316, 0.1138, 0.1936, 0.0449, 0.2823
+OFF ev IQRs:   0.3866, 0.4124, 0.4678, 0.2569, 0.4603
+
+Freeze δ + the §11 thresholds in the gate doc BEFORE reading any ON leg.
