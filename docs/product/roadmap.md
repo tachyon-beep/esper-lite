@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-08 (PDR-0048)
+# Roadmap — Esper            Updated: 2026-07-09 (PDR-0049/0050/0051)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -16,11 +16,13 @@
   (PDR-0044)**. Escrow telescoping correctness is fixed in `89b50a16` (PDR-0047):
   reward-path escrow delta clipping is gone, and Obs V3 schema v2 exposes the stable
   accuracy + escrow-credit state needed for the critic to model the potential. **Gate
-  formulas FROZEN + OFF wave LAUNCHED 2026-07-08 (PDR-0048): owner ratified the §11
-  threshold set (drl-expert-reviewed, pre-data amendment folded in); 5 OFF arms (seeds
-  41–45, prior-A/B posture, 200 rounds/run) running on both GPUs. Next intent: §10
-  step-3 scalar resolution when the OFF wave completes, then owner-gated ON wave +
-  packet read.**
+  formulas FROZEN + OFF wave LAUNCHED 2026-07-08 (PDR-0048); OFF wave COMPLETE 5/5
+  valid + step-3 scalars FROZEN 2026-07-09 (PDR-0050: W=17, δ=0.050311,
+  Δparam_max=1527.8; LEG-B demoted to descriptive after both pre-registered
+  escalations fired — screen predicate = LEG-A ∧ MECH ∧ G1–G4; device placement ruled
+  provenance, harness amended). ON wave IN FLIGHT since 23:33 2026-07-09 @ `fe177844`
+  (PDR-0051 relaunch provenance). Next intent: score the paired packet under the
+  amended predicate when the ON wave completes, then owner read.**
   · tracker: esper-lite-f25b71c165 (epic) · metric: EV Stage-0 gate (PASSED);
   Stage-2 MAJOR-1 gate NOT YET READ; watch fossilize/ep + k≥2 frequency as the
   organic-coverage signal
@@ -38,6 +40,18 @@
 ## Next (shaped, decreasing certainty)
 - **PPO learning-gate / reward-efficiency statistics** — paired multi-seed lockstep ROI
   verdicts. · tracker: esper-lite-a2abff5ec5
+- **Telemetry Improvement Program (TIP)** — make experimental reads self-defending:
+  manifest-driven scoring, machine-readable metric registry (population/denominator/
+  units/validity-envelope), reusable ValidityReport before interpretation,
+  historical-scar regression suite, mechanism-vs-outcome monitor discipline; later
+  phases = seed_uid lifecycle identity and per-site host-perception telemetry with
+  offline information-ceiling probes gating any Obs V4. Captured 2026-07-09 from an
+  owner-drafted plan, adapted (PDR-0049). Positioned AFTER the Stage-2 read; Phase A is
+  read-path-only and *technically* freeze-safe, but the owner ruled 2026-07-09: **do
+  not start early — finish Stage-2, then pick the next direction** (serial focus). · tracker: esper-lite-c62d4891b0
+  (epic) · concept: `docs/plans/concepts/2026-07-09-telemetry-improvement-program.md`
+  · metric: every scored verdict passes manifest+validity mechanically; scar-suite
+  green in CI; zero glob-scored reads
 - **A/B re-run at organic coverage** — only if the EV track raises k≥2 frequency
   materially (PDR-0027 reversal trigger); a ≥10× coverage null would then be
   informative and count against the term.
