@@ -285,3 +285,42 @@ harness report: `docs/analysis/2026-07-09-stage2-off-calibration-report.txt`):
    (41/43/45 → cuda:0, 42/44 → cuda:1).
 
 Amendment recorded BEFORE any ON arm produced data (no ON telemetry exists at ratification).
+
+---
+
+## §11.2 W-rule cf-plateau VALIDITY GATE demoted to descriptive (2026-07-10, owner-ruled)
+
+**Trigger.** A review found the §11 W-rule was only half-implemented: the acceptance
+reader never selected `cf_value_loss`, so the "an ON arm whose cf_value_loss has not
+plateaued by W is INVALID" clause could not fire — a still-warming cf head could reach
+SCREEN_PASS on unstable EV. The fix ingested `cf_value_loss` into `UpdateRow` and
+implemented the plateau gate faithfully (`plateau()`, frozen rule: first update whose
+trailing-8 window has max consecutive relative change < 5%).
+
+**Finding on real data.** With the gate implemented as frozen, **every ON arm is
+INVALID at any W.** Live ON telemetry (seeds 41/42, ~28 updates): `cf_value_loss`
+oscillates 0→50 per update — raw series never plateaus, and neither does its trailing-8
+median. The smooth normalizer analog `cf_value_target_scale` also fails to plateau on
+seed42 (step-jumps +62%/+73% past update 17). Root cause is the SAME within-run
+non-stationarity that demoted LEG-B (§11.1): the cf stream's target scale grows across
+the whole run (Var(returns) ↑ 10–25×), so a "cf head has stopped warming" criterion is
+unsatisfiable on this horizon regardless of W.
+
+**RULING (owner, 2026-07-10): the cf-plateau clause is DEMOTED TO DESCRIPTIVE.**
+- The plateau condition is NO LONGER a validity gate — an un-plateaued `cf_value_loss`
+  does not invalidate an ON arm. (Otherwise the entire pre-registered A/B is unscorable
+  for a reason unrelated to HRA's effect.)
+- **RETAINED as a hard gate:** `cf_value_loss` must be PRESENT on every ON update
+  (telemetry-signature completeness), and non-finite `cf_value_loss` on a scored update
+  fails finiteness. The reader now selects it and `validate_pair` enforces presence.
+- `plateau()` is retained and its per-arm index is reported descriptively in the step-3
+  / packet record (a genuinely warming-then-flat cf head would still show a finite
+  plateau; the oscillatory reality is the informative datum).
+- Any future warmup-stability CLAIM needs a redesigned, pre-registered criterion
+  (e.g. plateau on a detrended/log cf-scale, or a fixed-fraction burn-in) — banked, not
+  used at this screen.
+
+**Consequence for the screen predicate.** Unchanged from §11.1: LEG-A ∧ MECH ∧ G1–G4,
+with the cf-warmup no longer able to invalidate arms. Recorded while the ON wave was
+in flight (seeds 41/42 producing telemetry; the finding is derived from cf_value_loss
+shape, which HRA cannot make stationary — not from any EV/verdict quantity).
