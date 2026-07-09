@@ -88,7 +88,9 @@ class UpdateRow:
     ev_cf: float | None
     value_main_target_scale: float | None
     cf_value_target_scale: float | None
-    # ON-only like the ev_* columns; feeds the §11 W-rule plateau validity check.
+    # ON-only like the ev_* columns. §1 signature requires PRESENCE on every ON update and
+    # absence on OFF; finiteness is checked on scored updates. The §11 plateau over this
+    # series is DESCRIPTIVE ONLY (§11.2 owner ruling, 2026-07-10) — it must not gate.
     cf_value_loss: float | None
     ev_return_variance: float
     pre_norm_advantage_std: float
@@ -216,6 +218,98 @@ class LegSeries:
     ev_return_variance_min: float  # §8B caveat distribution
     ev_return_variance_median: float
     ev_return_variance_max: float
+    # §11.2 cf-warmup descriptive block; ON only, None on OFF. Report, do not gate.
+    cf_warmup: CfWarmupDescriptive | None = None
+
+
+@dataclass(frozen=True)
+class CfWarmupDescriptive:
+    """§11.2 cf-warmup DESCRIPTIVE block for one ON arm (report, do not gate).
+
+    Presence/finiteness counts run over the SCORED window (mirroring the §1 hard gates);
+    the plateau index and distribution stats run over the FULL series — warmup lives before
+    burn-in, which is exactly what this block exists to make visible. The plateau result
+    MUST NOT feed any gate (§11.2 owner ruling, 2026-07-10).
+    """
+
+    n_scored: int
+    present_scored: int
+    finite_scored: int
+    plateau_at: int | None  # frozen §11 plateau() over the full cf_value_loss series
+    loss_p50: float
+    loss_p90: float
+    loss_max: float
+    scale_p50: float | None  # cf_value_target_scale stats; None when the §9 scales are absent
+    scale_p90: float | None
+    scale_max: float | None
+    scale_q1_median: float | None  # first/last quartile medians of the full series (drift read)
+    scale_q4_median: float | None
+
+
+def _pctl(sorted_values: list[float], frac: float) -> float:
+    """Nearest-rank percentile over a pre-sorted, non-empty list (descriptive use only)."""
+    return sorted_values[min(len(sorted_values) - 1, int(frac * len(sorted_values)))]
+
+
+def _cf_warmup_descriptive(rows: list[UpdateRow], scored: list[UpdateRow]) -> CfWarmupDescriptive:
+    """Reduce one ON arm's cf streams to the §11.2 descriptive block.
+
+    Assumes the §1 signature gate runs alongside: a missing cf_value_loss or a partially
+    emitted scale stream is a validity breach, so this reducer fails loud rather than
+    describing an arm the gate must reject.
+    """
+    full = [row.cf_value_loss for row in rows]
+    n_missing = sum(1 for value in full if value is None)
+    if n_missing:
+        raise ValueError(
+            f"cf_value_loss missing on {n_missing} ON update(s) — the §1 signature gate "
+            "rejects this arm; §11.2 descriptive reduction is undefined on it"
+        )
+    losses = [value for value in full if value is not None]
+    finite_losses = sorted(value for value in losses if math.isfinite(value))
+    if not finite_losses:
+        raise ValueError(
+            "cf_value_loss has no finite values — §1 finiteness rejects this arm before "
+            "§11.2 descriptive reduction"
+        )
+
+    scales = [row.cf_value_target_scale for row in rows]
+    n_scale_missing = sum(1 for value in scales if value is None)
+    if n_scale_missing not in (0, len(scales)):
+        raise ValueError(
+            "cf_value_target_scale is partially emitted — §9 requires all-present or "
+            "all-absent; the signature gate rejects this arm"
+        )
+    if n_scale_missing == 0:
+        scale_values = [value for value in scales if value is not None]
+        sorted_scales = sorted(scale_values)
+        quartile = max(1, len(scale_values) // 4)
+        scale_p50: float | None = _pctl(sorted_scales, 0.5)
+        scale_p90: float | None = _pctl(sorted_scales, 0.9)
+        scale_max: float | None = sorted_scales[-1]
+        scale_q1_median: float | None = level(scale_values[:quartile])
+        scale_q4_median: float | None = level(scale_values[-quartile:])
+    else:
+        scale_p50 = scale_p90 = scale_max = scale_q1_median = scale_q4_median = None
+
+    return CfWarmupDescriptive(
+        n_scored=len(scored),
+        present_scored=sum(1 for row in scored if row.cf_value_loss is not None),
+        finite_scored=sum(
+            1
+            for row in scored
+            if row.cf_value_loss is not None and math.isfinite(row.cf_value_loss)
+        ),
+        plateau_at=plateau(losses),
+        loss_p50=_pctl(finite_losses, 0.5),
+        loss_p90=_pctl(finite_losses, 0.9),
+        loss_max=finite_losses[-1],
+        scale_p50=scale_p50,
+        scale_p90=scale_p90,
+        scale_max=scale_max,
+        scale_q1_median=scale_q1_median,
+        scale_q4_median=scale_q4_median,
+    )
 
 
 # §9 ON-only diagnostic scalars: the accessor is selected by an explicit mapping so an unknown
@@ -304,6 +398,7 @@ def leg_series(
         ev_return_variance_min=min(erv),
         ev_return_variance_median=level(erv),
         ev_return_variance_max=max(erv),
+        cf_warmup=_cf_warmup_descriptive(rows, scored) if leg is Leg.ON else None,
     )
 
 
@@ -488,10 +583,13 @@ def _hra_signature_violation(rows: list[UpdateRow], leg: Leg) -> str | None:
     none of them (they are emitted only under hra_value_decomposition=True). This is how the
     wrapper VERIFIES the caller-supplied ON/OFF pairing instead of trusting a self-reported flag."""
     if leg is Leg.ON:
-        if any(r.ev_sum is None or r.ev_main is None or r.ev_cf is None for r in rows):
+        if any(
+            r.ev_sum is None or r.ev_main is None or r.ev_cf is None or r.cf_value_loss is None
+            for r in rows
+        ):
             return (
-                "ON arm missing hra-gated ev_* metric (ev_sum/ev_main/ev_cf) — telemetry "
-                "signature does not match a hra_value_decomposition=True run"
+                "ON arm missing hra-gated metric (ev_sum/ev_main/ev_cf/cf_value_loss) — "
+                "telemetry signature does not match a hra_value_decomposition=True run"
             )
         return None
     if any(
@@ -500,6 +598,7 @@ def _hra_signature_violation(rows: list[UpdateRow], leg: Leg) -> str | None:
         or r.ev_cf is not None
         or r.value_main_target_scale is not None
         or r.cf_value_target_scale is not None
+        or r.cf_value_loss is not None
         for r in rows
     ):
         return "OFF arm carries a hra-gated HRA metric — a bug, not a null (§1/§9)"
@@ -547,20 +646,9 @@ def _validate_leg(
     except ValueError as exc:
         reasons.append(str(exc))
 
-    if leg is Leg.ON:
-        # ON telemetry signature: cf_value_loss must be present on every update. The §11
-        # cf-plateau VALIDITY GATE is demoted to descriptive reporting (§11.2, owner-ruled
-        # 2026-07-10): the frozen plateau() is not satisfiable on real cf_value_loss in the
-        # current 200-round regime — the cf stream's target scale is non-stationary
-        # within-run (same cause as the LEG-B demotion), so no W in this run design makes
-        # it a well-posed validity gate.
-        n_missing = sum(1 for row in rows if row.cf_value_loss is None)
-        if n_missing:
-            reasons.append(
-                f"ON arm missing cf_value_loss on {n_missing} update(s) — telemetry "
-                "signature does not match a hra_value_decomposition=True run"
-            )
-
+    # cf_value_loss presence lives in _hra_signature_violation (ON must carry it, OFF must
+    # not); the §11 cf-plateau VALIDITY GATE is demoted to descriptive reporting (§11.2,
+    # owner-ruled 2026-07-10) — see CfWarmupDescriptive; it must not gate here.
     post_burnin = burn_in_discard(rows, w)
     if not post_burnin:
         reasons.append(
@@ -622,7 +710,13 @@ def validate_pair(
             "frozen run config mismatch: only hra_value_decomposition may differ (§10); "
             f"ON={on_meta.frozen_config!r} OFF={off_meta.frozen_config!r}"
         )
-    if on_meta.placement != off_meta.placement:
+    if not on_meta.placement or not off_meta.placement:
+        empty_arm = "ON" if not on_meta.placement else "OFF"
+        reasons.append(
+            f"placement provenance missing (empty) on the {empty_arm} RunMeta — the §10 "
+            "per-pair device-equality check must not pass vacuously"
+        )
+    elif on_meta.placement != off_meta.placement:
         reasons.append(
             "placement mismatch: each ON arm must run on the same device as its OFF "
             f"partner (§10 pairing); ON={on_meta.placement!r} OFF={off_meta.placement!r}"
@@ -729,6 +823,8 @@ class Stage2Report:
     leg_b_confound_downgraded: bool
     provenance: str
     diagnostic_scalars_available: bool
+    # §11.2 per-ON-seed cf-warmup descriptive blocks (seed, block); report, do not gate.
+    cf_warmup_descriptives: tuple[tuple[int, CfWarmupDescriptive | None], ...] = ()
 
 
 def calibrate_off(
@@ -919,6 +1015,7 @@ def score(
         leg_b_confound_downgraded=leg_b_confound_downgraded,
         provenance=STAGE0_PROVENANCE_BLOCK,
         diagnostic_scalars_available=diagnostic_scalars_available,
+        cf_warmup_descriptives=tuple((pair.seed, pair.on.cf_warmup) for pair in pairs),
     )
 
 
@@ -1121,6 +1218,38 @@ def render_packet(
             "## §9 — diagnostic scalars",
             "",
             "UNAVAILABLE — value_main_target_scale / cf_value_target_scale are absent from the ON leg",
+            "",
+        ]
+
+    lines += ["## §11.2 — cf-warmup descriptive (report, do not gate)", ""]
+    if not report.cf_warmup_descriptives:
+        lines += ["unavailable (INVALID run — no scored ON arms)", ""]
+    else:
+        for seed, block in report.cf_warmup_descriptives:
+            if block is None:
+                lines.append(f"- seed {seed}: not computed")
+                continue
+            plateau_txt = (
+                "never" if block.plateau_at is None else f"update {block.plateau_at}"
+            )
+            if block.scale_p50 is None:
+                scale_txt = "absent"
+            else:
+                scale_txt = (
+                    f"p50/p90/max {block.scale_p50:.3g}/{block.scale_p90:.3g}/"
+                    f"{block.scale_max:.3g}, Q1→Q4 median "
+                    f"{block.scale_q1_median:.3g}→{block.scale_q4_median:.3g}"
+                )
+            lines.append(
+                f"- seed {seed}: cf_value_loss present {block.present_scored}/"
+                f"{block.n_scored} scored, finite {block.finite_scored}/{block.n_scored}; "
+                f"plateau {plateau_txt}; loss p50/p90/max {block.loss_p50:.3g}/"
+                f"{block.loss_p90:.3g}/{block.loss_max:.3g}; cf scale {scale_txt}"
+            )
+        lines += [
+            "Interpretation: presence+finiteness are the §1 hard gates; the plateau index and "
+            "scale drift are descriptive warmup evidence only (§11.2) and MUST NOT affect the "
+            "screen verdict.",
             "",
         ]
 

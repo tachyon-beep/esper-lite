@@ -528,6 +528,7 @@ def _meta(run_dir: str, seed: int) -> RunMeta:
         run_dir=run_dir, seed=seed, reward_mode="SHAPED",
         actor_advantage_source=ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED, uses_per_head_norm=False,
         frozen_config=_RUN_META_FROZEN_CONFIG,
+        placement=_RUN_META_PLACEMENT,
     )
 
 
@@ -1334,3 +1335,35 @@ def test_outcome_bounds_apply_per_env_not_to_the_mean():
     ]
     with pytest.raises(ValueError, match="outside"):
         read_run_val_acc(_conn_with_outcomes(rows), "/run")
+
+
+def test_terminal_reader_rejects_duplicate_terminal_rows():
+    # Two rows at the same (env_id, max episode_idx): ROW_NUMBER would pick one
+    # nondeterministically — fail loud instead of letting G1/G2 vary between invocations.
+    rows = [
+        _outcome_row(env_id=0, episode_idx=0, final_accuracy=60.0),
+        _outcome_row(env_id=0, episode_idx=0, final_accuracy=80.0),
+    ]
+    with pytest.raises(ValueError, match="duplicate"):
+        read_run_val_acc(_conn_with_outcomes(rows), "/run")
+
+
+def test_terminal_reader_rejects_null_env_id():
+    # A parseable EPISODE_OUTCOME missing env_id yields SQL NULL — reject with the
+    # contract-named ValueError, not an unattributed TypeError.
+    rows = [_outcome_row(env_id=None, episode_idx=0, final_accuracy=50.0)]
+    with pytest.raises(ValueError, match="env_id"):
+        read_run_val_acc(_conn_with_outcomes(rows), "/run")
+
+
+def test_env_coverage_flags_duplicate_outcome_rows():
+    # Per-env outcome count must equal n_episodes // n_envs — a duplicate row silently
+    # re-weights churn and marks a re-emission bug (SIMIC-PROD-001 class).
+    conn = _conn_with_runs_and_outcomes(
+        runs=[{"run_dir": "/on", "n_envs": 3}, {"run_dir": "/off", "n_envs": 3}],
+        outcomes=_terminal_outcomes("/on", [0, 1, 2])
+        + [{"run_dir": "/on", "env_id": 0, "episode_idx": 0}]  # duplicate for env 0
+        + _terminal_outcomes("/off", [0, 1, 2]),
+    )
+    reasons = env_count_completeness_reasons(conn, on_run_dir="/on", off_run_dir="/off")
+    assert any("ON" in r and ("row count" in r or "duplicate" in r) for r in reasons)

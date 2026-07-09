@@ -11,6 +11,14 @@ from pathlib import Path
 
 import duckdb
 
+from esper.leyline.episode_outcome import (
+    FINAL_ACCURACY_MAX,
+    FINAL_ACCURACY_MIN,
+    PARAM_RATIO_MIN,
+    STABILITY_SCORE_MAX,
+    STABILITY_SCORE_MIN,
+)
+
 VIEW_DEFINITIONS: dict[str, str] = {
     "raw_events": """
         CREATE OR REPLACE VIEW raw_events AS
@@ -774,7 +782,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
         FROM raw_events
         WHERE event_type = 'EPISODE_OUTCOME'
     """,
-    "ppo_traceability_evidence": """
+    "ppo_traceability_evidence": f"""
         CREATE OR REPLACE VIEW ppo_traceability_evidence AS
         WITH cohorts AS (
             SELECT run_dir, group_id FROM runs
@@ -796,9 +804,9 @@ VIEW_DEFINITIONS: dict[str, str] = {
               AND episode_idx IS NOT NULL
               AND episode_idx >= 0
               AND final_accuracy IS NOT NULL
-              AND final_accuracy BETWEEN 0.0 AND 100.0
+              AND final_accuracy BETWEEN {FINAL_ACCURACY_MIN} AND {FINAL_ACCURACY_MAX}
               AND param_ratio IS NOT NULL
-              AND param_ratio >= 1.0
+              AND param_ratio >= {PARAM_RATIO_MIN}
               AND num_fossilized IS NOT NULL
               AND num_fossilized >= 0
               AND num_contributing_fossilized IS NOT NULL
@@ -806,7 +814,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
               AND num_contributing_fossilized <= num_fossilized
               AND episode_reward IS NOT NULL
               AND stability_score IS NOT NULL
-              AND stability_score BETWEEN 0.0 AND 1.0
+              AND stability_score BETWEEN {STABILITY_SCORE_MIN} AND {STABILITY_SCORE_MAX}
               AND reward_mode IS NOT NULL
               AND reward_mode <> ''
               AND episode_length IS NOT NULL

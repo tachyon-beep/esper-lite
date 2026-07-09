@@ -33,6 +33,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     floored_exclusion,
     leg_series,
     plateau,
+    require_hra_signature,
     render_packet,
     score,
     sqrt_unexplained_series,
@@ -314,6 +315,9 @@ def test_leg_series_type_is_legseries():
 # ---- S3: §1 validity gates (validate_pair) ----
 
 
+_META_PLACEMENT = (("env_devices_json", '["cuda:0"]'), ("policy_device", "cuda:0"))
+
+
 def _meta(
     leg: Leg,
     *,
@@ -328,6 +332,7 @@ def _meta(
         reward_mode=reward_mode,
         actor_advantage_source=actor_advantage_source,
         uses_per_head_norm=uses_per_head_norm,
+        placement=_META_PLACEMENT,
     )
 
 
@@ -1069,12 +1074,65 @@ def test_validate_pair_does_not_gate_on_cf_value_loss_plateau():
     assert not any("plateau" in reason for reason in v.reasons)
 
 
-def test_validate_pair_accepts_on_cf_value_loss_plateaued_by_w():
-    n = 20
-    on = _on_rows_with_cf([0.02] * n, ev_return_variance=5.0)
+def test_hra_signature_rejects_off_arm_carrying_cf_value_loss():
+    # cf_value_loss is hra-gated exactly like ev_*: present on an OFF arm = leaked HRA
+    # machinery, a bug not a null (§1/§9) — must fail the OFF telemetry signature.
+    n = 12
+    off = [
+        _update(batch=i, explained_variance=0.8, ev_return_variance=5.0, cf_value_loss=0.02)
+        for i in range(n)
+    ]
+    with pytest.raises(ValueError, match="hra-gated"):
+        require_hra_signature(off, Leg.OFF, run_dir="/off/x")
+
+
+def test_validate_pair_rejects_empty_placement():
+    # placement provenance must be populated — an empty tuple would let the §10 per-pair
+    # device-equality check pass vacuously.
+    on_meta = dataclasses.replace(_meta(Leg.ON), placement=())
+    off_meta = dataclasses.replace(_meta(Leg.OFF), placement=())
+    v = validate_pair(on_meta, _clean_on_rows(12), off_meta, _clean_off_rows(12), w=8, budget=3)
+    assert v.valid is False
+    assert any("placement" in reason for reason in v.reasons)
+
+
+def test_leg_series_computes_cf_warmup_descriptive_on_on_leg_only():
+    # §11.2 descriptive block (report, do not gate): per ON arm — present/finite counts over
+    # the scored window, plateau over the full series, loss and scale distribution stats.
+    n = 12
+    cf = [50.0, 10.0, 5.0, 1.0] + [0.5] * (n - 4)
+    on = [
+        _update(
+            batch=i, explained_variance=0.8, ev_sum=0.8, ev_main=0.2, ev_cf=0.1,
+            cf_value_loss=cf[i], value_main_target_scale=1.0 + i, cf_value_target_scale=2.0 + i,
+            ev_return_variance=5.0,
+        )
+        for i in range(n)
+    ]
+    ls = leg_series(on, leg=Leg.ON, w=8)
+    d = ls.cf_warmup
+    assert d is not None
+    assert d.n_scored == 4  # 12 rows - 8 burn-in, none floored
+    assert d.present_scored == 4
+    assert d.finite_scored == 4
+    assert d.plateau_at == 12  # flat from index 4; first stable trailing-8 window ends at 12
+    assert d.loss_max == pytest.approx(50.0)
+    assert d.scale_max == pytest.approx(2.0 + (n - 1))
+    assert d.scale_q1_median is not None and d.scale_q4_median is not None
+    assert d.scale_q4_median > d.scale_q1_median  # growing scale => positive drift
+
     off = _off_rows([0.8] * n, ev_return_variance=5.0)
-    v = validate_pair(_meta(Leg.ON), on, _meta(Leg.OFF), off, w=8, budget=3)
-    assert not any("plateau" in reason for reason in v.reasons)
+    assert leg_series(off, leg=Leg.OFF, w=8).cf_warmup is None
+
+
+def test_render_packet_includes_cf_warmup_descriptive_section():
+    pairs = [_accept_pair(i) for i in range(5)]
+    report = score(
+        pairs, _THRESHOLDS, n=5, validity=Validity(True, ()), g3_hold=True, g4_hold=True
+    )
+    text = render_packet(report, thresholds=_THRESHOLDS, validity=Validity(True, ()))
+    assert "§11.2" in text
+    assert "do not gate" in text
 
 
 def test_validate_pair_rejects_on_missing_cf_value_loss():

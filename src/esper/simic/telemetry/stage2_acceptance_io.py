@@ -20,6 +20,11 @@ from typing import Any
 
 import duckdb
 
+from esper.leyline.episode_outcome import (
+    FINAL_ACCURACY_MAX,
+    FINAL_ACCURACY_MIN,
+    PARAM_RATIO_MIN,
+)
 from esper.leyline.telemetry import ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
 from esper.simic.telemetry.stage2_acceptance_packet import (
     ChurnRates,
@@ -241,15 +246,31 @@ def _per_env_terminal_mean(
         f"""
         WITH per_env AS (
             SELECT env_id, {column} AS value,
-                   ROW_NUMBER() OVER (PARTITION BY env_id ORDER BY episode_idx DESC) AS rn
+                   ROW_NUMBER() OVER (PARTITION BY env_id ORDER BY episode_idx DESC) AS rn,
+                   COUNT(*) OVER (PARTITION BY env_id, episode_idx) AS terminal_dup_n
             FROM episode_outcomes WHERE run_dir = ?
         )
-        SELECT env_id, value FROM per_env WHERE rn = 1 ORDER BY env_id
+        SELECT env_id, value, terminal_dup_n FROM per_env WHERE rn = 1 ORDER BY env_id
         """,
         [run_dir],
     )
     if not rows:
         raise ValueError(f"no episode_outcomes at the terminal episode for run_dir={run_dir!r}")
+    null_env_ids = sum(1 for row in rows if row["env_id"] is None)
+    if null_env_ids:
+        raise ValueError(
+            f"episode_outcomes.env_id is NULL on {null_env_ids} terminal row(s) in "
+            f"run_dir={run_dir!r} — malformed telemetry violates the episode-outcome "
+            "contract (leyline/episode_outcome.py)"
+        )
+    duplicated = [int(row["env_id"]) for row in rows if int(row["terminal_dup_n"]) > 1]
+    if duplicated:
+        raise ValueError(
+            f"duplicate terminal episode_outcomes rows for env(s) "
+            f"{', '.join(str(env_id) for env_id in duplicated)} in run_dir={run_dir!r} — "
+            "the terminal pick would be nondeterministic; re-emission is an emitter bug "
+            "(SIMIC-PROD-001 class), never data"
+        )
     null_envs = [row["env_id"] for row in rows if row["value"] is None]
     if null_envs:
         raise ValueError(
@@ -275,7 +296,9 @@ def _per_env_terminal_mean(
 
 def read_run_val_acc(conn: duckdb.DuckDBPyConnection, run_dir: str) -> float:
     """§6 G1 — the run's validation accuracy: mean over each env's terminal ``final_accuracy`` (pp)."""
-    return _per_env_terminal_mean(conn, run_dir, "final_accuracy", lo=0.0, hi=100.0)
+    return _per_env_terminal_mean(
+        conn, run_dir, "final_accuracy", lo=FINAL_ACCURACY_MIN, hi=FINAL_ACCURACY_MAX
+    )
 
 
 def read_run_added_params(
@@ -287,7 +310,9 @@ def read_run_added_params(
     transient), a conservative proxy for §6's fossilized-only quantity (owner-ratified). The host
     never shrinks, so a terminal ratio below 1.0 is impossible telemetry (contract lo bound).
     """
-    param_ratio = _per_env_terminal_mean(conn, run_dir, "param_ratio", lo=1.0, hi=math.inf)
+    param_ratio = _per_env_terminal_mean(
+        conn, run_dir, "param_ratio", lo=PARAM_RATIO_MIN, hi=math.inf
+    )
     return host_params * (param_ratio - 1.0)
 
 
@@ -500,6 +525,8 @@ def _terminal_env_coverage_reasons(
         )
 
     stale: list[str] = []
+    miscounted: list[str] = []
+    expected_rows_per_env = n_episodes // n_envs
     for row in rows:
         env_id = int(row["env_id"])
         if env_id not in expected_env_ids:
@@ -511,11 +538,21 @@ def _terminal_env_coverage_reasons(
                 f"env {env_id} max episode_idx {actual_terminal_idx} != "
                 f"expected terminal {expected_terminal_idx}"
             )
+        actual_rows = int(row["n_rows"])
+        if actual_rows != expected_rows_per_env:
+            miscounted.append(f"env {env_id} has {actual_rows} rows")
     if stale:
         reasons.append(
             f"{arm} arm episode_outcomes do not cover terminal evidence for every env: "
             + "; ".join(stale)
             + " (§6)"
+        )
+    if miscounted:
+        reasons.append(
+            f"{arm} arm episode_outcomes row count is wrong (expected "
+            f"{expected_rows_per_env} per env): " + "; ".join(miscounted) + " — a duplicate "
+            "or missing outcome re-weights churn and marks a re-emission bug "
+            "(SIMIC-PROD-001 class) (§6)"
         )
     return reasons
 

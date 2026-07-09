@@ -24,6 +24,17 @@ def _utc_now() -> datetime:
 # growth meets or exceeds this contribute nothing to the dominated hypervolume.
 MAX_PARAM_RATIO_REF: float = 2.0
 
+# The episode-outcome VALIDITY contract — the single source of truth every consumer
+# (Stage-2 acceptance readers, Karn proof views) must enforce. final_accuracy is a
+# percentage in [0, 100]; param_ratio = total_params / host_params and the host never
+# shrinks, so a value below 1.0 is impossible telemetry. stability_score is a [0, 1]
+# fraction. Values outside these ranges are emitter bugs, never data.
+FINAL_ACCURACY_MIN: float = 0.0
+FINAL_ACCURACY_MAX: float = 100.0
+PARAM_RATIO_MIN: float = 1.0
+STABILITY_SCORE_MIN: float = 0.0
+STABILITY_SCORE_MAX: float = 1.0
+
 
 @dataclass(frozen=True)
 class EpisodeOutcome:
