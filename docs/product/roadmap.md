@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-09 (PDR-0049/0050/0051)
+# Roadmap — Esper            Updated: 2026-07-10 (PDR-0052..0056)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -20,9 +20,17 @@
   valid + step-3 scalars FROZEN 2026-07-09 (PDR-0050: W=17, δ=0.050311,
   Δparam_max=1527.8; LEG-B demoted to descriptive after both pre-registered
   escalations fired — screen predicate = LEG-A ∧ MECH ∧ G1–G4; device placement ruled
-  provenance, harness amended). ON wave IN FLIGHT since 23:33 2026-07-09 @ `fe177844`
-  (PDR-0051 relaunch provenance). Next intent: score the paired packet under the
-  amended predicate when the ON wave completes, then owner read.**
+  provenance, harness amended). First ON wave DEGRADED
+  (telemetry writer starved by co-tenant review workload — operational, not code;
+  PDR-0056) → quarantined, full 5-seed RERUN in flight @ `a0ad968e` (training tree
+  byte-equivalent to the OFF arms' `fe177844`). §11.2 amendment: cf-plateau validity
+  gate demoted to descriptive after real-data infeasibility (PDR-0052); acceptance
+  reader hardened per high-effort review (OFF signature symmetry, outcome bounds from
+  leyline, duplicate/NULL guards, §11.2 descriptive block in the packet). Long-horizon
+  diagnostic tossed pre-start for a clean post-freeze redesign under the owner's
+  experiment-value principle (PDR-0053→0055). Next intent: score the paired packet
+  under the amended predicate when the rerun completes, then owner read; then freeze
+  lift → penalty-schedule fix (drl-reviewed) → clean 600-round diagnostic.**
   · tracker: esper-lite-f25b71c165 (epic) · metric: EV Stage-0 gate (PASSED);
   Stage-2 MAJOR-1 gate NOT YET READ; watch fossilize/ep + k≥2 frequency as the
   organic-coverage signal
