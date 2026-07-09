@@ -186,6 +186,7 @@ correctness-proof-strategy ──► morphogenesis-governor-integrity ──► 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
 | counterfactual-oracle | Learned Contribution Probe | concept | medium | XL | high | Blocked on reward-efficiency |
+| telemetry-improvement-program | Telemetry Improvement Program (TIP) | concept | high | XL | medium | Captured 2026-07-09 as roadmap-Next intent (PDR-0049; epic esper-lite-c62d4891b0). Self-defending experimental reads: manifest-driven scoring, metric registry w/ validity envelopes, ValidityReport layer, historical-scar regression suite, seed_uid lifecycle, per-site host perception + info-ceiling probes gating Obs V4. Phase A read-path-only (startable during Stage-2 freeze); B–D post-ON-wave. `docs/plans/concepts/2026-07-09-telemetry-improvement-program.md` |
 | emrakul-immune | Emrakul Immune System Architecture | planning | critical | XL | high | Master architecture doc, Phase 1 infra active |
 | kasmina-multichannel | Multichannel Slot Grid (2×N) | planning | medium | M | low | Expand injection surfaces |
 | esika-superstructure | Esika Host Superstructure | planning | medium | L | medium | Multi-cell coordination (future scaling) |
