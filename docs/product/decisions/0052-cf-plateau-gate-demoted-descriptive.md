@@ -31,21 +31,44 @@ Both were genuine (the reader code confirmed the omissions). Fixed TDD-style.
 
 ## The finding that forced a decision
 
-With the plateau gate implemented faithfully, **every real ON arm is INVALID at any W.**
-Live ON telemetry (seeds 41/42): `cf_value_loss` oscillates 0→50 per update; neither the
-raw series nor its trailing-8 median ever plateaus, and the smooth `cf_value_target_scale`
-analog also fails on seed42 (step-jumps past update 17). Root cause = the SAME within-run
-non-stationarity that demoted LEG-B (PDR-0050): the cf target scale grows all run, so
-"cf head stopped warming" is unsatisfiable on this horizon. A literal gate would make the
-entire pre-registered A/B unscorable for a reason unrelated to HRA's effect.
+With the plateau gate implemented faithfully, **no W in the current scored-update regime
+makes it satisfiable** — every real ON arm would be INVALID for this n=5 screen under the
+200-round design (scoped claim, not universal-over-all-schedules). Live ON telemetry
+(seeds 41/42): `cf_value_loss` oscillates 0→50 per update; neither the raw series nor its
+trailing-8 median ever plateaus, and the smooth `cf_value_target_scale` analog also fails
+on seed42 (step-jumps past update 17). Root cause = the SAME within-run non-stationarity
+that demoted LEG-B (PDR-0050): the cf target scale grows all run, so "cf head stopped
+warming" is not well-posed on this horizon. A literal gate would make the entire
+pre-registered A/B unscorable for a known property of the cf stream, unrelated to HRA.
+
+This is a **validity-gate infeasibility correction**, not "a gate was inconvenient so we
+demoted it": the reader had a real omission, the omitted check was implemented, the check
+was then shown structurally ill-posed under the live return-scale dynamics, and the hard
+requirement was reduced to its well-posed core.
 
 ## The call
 
-**Demote the cf-plateau clause to DESCRIPTIVE** (§11.2 amendment). Retain as hard gates:
-`cf_value_loss` PRESENCE on every ON update (signature completeness) and finiteness on
-scored updates. `plateau()` is kept and reported per-arm descriptively; a genuinely
-warming-then-flat cf head would still show a finite plateau, so the oscillatory reality
-is itself the informative datum. Screen predicate unchanged: LEG-A ∧ MECH ∧ G1–G4.
+**Demote the cf-plateau clause to DESCRIPTIVE** (§11.2 amendment). Retain as hard **§1
+validity**: `cf_value_loss` PRESENCE on every ON update (signature completeness) and
+finiteness on scored updates. `plateau()` is kept and reported per-arm descriptively; a
+genuinely warming-then-flat cf head would still show a finite plateau, so the oscillatory
+reality is itself the informative datum.
+
+The change is to the **§1 ON-arm VALIDITY definition** (arm eligibility), NOT to MECH
+(§5), which is the separate `ev_main` volatility guard and is untouched. The top-level
+screen predicate LEG-A ∧ MECH ∧ G1–G4 and MECH's contents are unchanged; what changed is
+which ON arms are eligible to be scored. (The plateau was a §1 validity check in this
+harness, not a MECH sub-gate — an earlier informal "screen predicate unchanged" phrasing
+is made precise here.)
+
+## No-outcome-peek attestation
+
+This amendment was derived ONLY from the shape, completeness, and finiteness of the
+`cf_value_loss` / `cf_value_target_scale` DIAGNOSTIC streams on the in-flight ON arms.
+NO paired ON/OFF acceptance quantity was computed or inspected: not `ev_sum` / LEG-A
+deltas, not `ev_main` / MECH, not G1–G4, not val-acc / param deltas, not any verdict
+field. The finding is a property of the cf target stream HRA cannot make stationary, so
+it carries no information about the treatment effect.
 
 ## Why not the alternatives
 

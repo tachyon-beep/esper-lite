@@ -550,9 +550,10 @@ def _validate_leg(
     if leg is Leg.ON:
         # ON telemetry signature: cf_value_loss must be present on every update. The §11
         # cf-plateau VALIDITY GATE is demoted to descriptive reporting (§11.2, owner-ruled
-        # 2026-07-10): the frozen plateau() is unsatisfiable on real cf_value_loss — the cf
-        # stream's target scale is non-stationary within-run (same cause as the LEG-B
-        # demotion), so no arm could ever pass at any W.
+        # 2026-07-10): the frozen plateau() is not satisfiable on real cf_value_loss in the
+        # current 200-round regime — the cf stream's target scale is non-stationary
+        # within-run (same cause as the LEG-B demotion), so no W in this run design makes
+        # it a well-posed validity gate.
         n_missing = sum(1 for row in rows if row.cf_value_loss is None)
         if n_missing:
             reasons.append(

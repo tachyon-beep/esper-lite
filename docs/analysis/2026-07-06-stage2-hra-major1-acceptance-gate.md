@@ -288,7 +288,13 @@ Amendment recorded BEFORE any ON arm produced data (no ON telemetry exists at ra
 
 ---
 
-## §11.2 W-rule cf-plateau VALIDITY GATE demoted to descriptive (2026-07-10, owner-ruled)
+## §11.2 W-rule cf-plateau VALIDITY-GATE infeasibility correction (2026-07-10, owner-ruled)
+
+This is a **validity-gate infeasibility correction**, not a routine pass/fail refinement:
+a hard §1 arm-eligibility requirement was found ill-posed for the current run regime and
+reduced to its well-posed core. The change is to the **§1 ON-arm VALIDITY definition**
+(which arms are eligible to be scored) — NOT to MECH (§5), which is the separate `ev_main`
+volatility guard and is untouched.
 
 **Trigger.** A review found the §11 W-rule was only half-implemented: the acceptance
 reader never selected `cf_value_loss`, so the "an ON arm whose cf_value_loss has not
@@ -297,30 +303,54 @@ SCREEN_PASS on unstable EV. The fix ingested `cf_value_loss` into `UpdateRow` an
 implemented the plateau gate faithfully (`plateau()`, frozen rule: first update whose
 trailing-8 window has max consecutive relative change < 5%).
 
-**Finding on real data.** With the gate implemented as frozen, **every ON arm is
-INVALID at any W.** Live ON telemetry (seeds 41/42, ~28 updates): `cf_value_loss`
-oscillates 0→50 per update — raw series never plateaus, and neither does its trailing-8
-median. The smooth normalizer analog `cf_value_target_scale` also fails to plateau on
-seed42 (step-jumps +62%/+73% past update 17). Root cause is the SAME within-run
-non-stationarity that demoted LEG-B (§11.1): the cf stream's target scale grows across
-the whole run (Var(returns) ↑ 10–25×), so a "cf head has stopped warming" criterion is
-unsatisfiable on this horizon regardless of W.
+**Finding on real data.** With the gate implemented as frozen, **no W in the current
+scored-update regime makes the plateau rule satisfiable** — every ON arm would be INVALID
+for this n=5 screen under the 200-round run design. (Scoped to this horizon/config +
+observed dynamics, NOT a universal claim over all conceivable schedules.) Live ON
+telemetry (seeds 41/42, ~28 updates): `cf_value_loss` oscillates 0→50 per update — raw
+series never plateaus, and neither does its trailing-8 median. The smooth normalizer
+analog `cf_value_target_scale` also fails to plateau on seed42 (step-jumps +62%/+73%
+past update 17). Root cause is the SAME within-run non-stationarity that demoted LEG-B
+(§11.1): the cf stream's target scale grows across the whole run (Var(returns) ↑ 10–25×),
+so a "cf head has stopped warming" criterion is not well-posed on this horizon.
 
 **RULING (owner, 2026-07-10): the cf-plateau clause is DEMOTED TO DESCRIPTIVE.**
 - The plateau condition is NO LONGER a validity gate — an un-plateaued `cf_value_loss`
   does not invalidate an ON arm. (Otherwise the entire pre-registered A/B is unscorable
-  for a reason unrelated to HRA's effect.)
-- **RETAINED as a hard gate:** `cf_value_loss` must be PRESENT on every ON update
+  for a known property of the cf target stream, unrelated to HRA's effect.)
+- **RETAINED as hard §1 validity:** `cf_value_loss` must be PRESENT on every ON update
   (telemetry-signature completeness), and non-finite `cf_value_loss` on a scored update
   fails finiteness. The reader now selects it and `validate_pair` enforces presence.
 - `plateau()` is retained and its per-arm index is reported descriptively in the step-3
   / packet record (a genuinely warming-then-flat cf head would still show a finite
   plateau; the oscillatory reality is the informative datum).
 - Any future warmup-stability CLAIM needs a redesigned, pre-registered criterion
-  (e.g. plateau on a detrended/log cf-scale, or a fixed-fraction burn-in) — banked, not
-  used at this screen.
+  (e.g. plateau on a detrended/log cf-scale, or a fixed-fraction burn-in, at a horizon
+  that supports it) — banked, not used at this screen.
 
-**Consequence for the screen predicate.** Unchanged from §11.1: LEG-A ∧ MECH ∧ G1–G4,
-with the cf-warmup no longer able to invalidate arms. Recorded while the ON wave was
-in flight (seeds 41/42 producing telemetry; the finding is derived from cf_value_loss
-shape, which HRA cannot make stationary — not from any EV/verdict quantity).
+**Before → after (the hard requirement that changed).**
+
+| §1 ON-arm validity component | Before (as frozen) | After (§11.2) |
+|---|---|---|
+| `cf_value_loss` present every ON update | required (but never checked — reader bug) | **required (enforced)** |
+| `cf_value_loss` finite on scored updates | implied | **required (enforced)** |
+| `cf_value_loss` plateau by W | **required → INVALID if not** | **descriptive only** |
+| MECH (§5 `ev_main` vol guard), LEG-A, G1–G4 | unchanged | unchanged |
+
+Top-level screen predicate remains **LEG-A ∧ MECH ∧ G1–G4**; MECH's contents are
+unchanged. What changed is the §1 eligibility that decides which ON arms reach scoring.
+
+**No-outcome-peek attestation.** This amendment was derived ONLY from the shape,
+completeness, and finiteness of the `cf_value_loss` / `cf_value_target_scale` DIAGNOSTIC
+streams on the in-flight ON arms. NO paired ON/OFF acceptance quantity was computed or
+inspected: not `ev_sum`/LEG-A deltas, not `ev_main`/MECH, not G1–G4, not val-acc/param
+deltas, not any verdict field. The finding is a property of the cf target stream that HRA
+cannot make stationary, so it carries no information about the treatment effect.
+
+**§11.2 descriptive block for the final packet** (report, do not gate) — per ON seed:
+`cf_value_loss` present/scored + finite/scored counts (these two ARE hard validity);
+`cf_value_loss` plateau result; `cf_value_loss` p50/p90/max; `cf_value_target_scale`
+p50/p90/max and Q1→Q4 drift. Interpretation: presence+finite = hard validity; plateau =
+descriptive (future warmup-design input); scale drift = caveat on any cf-head-specific
+claim. The descriptive plateau result MUST NOT affect the n=5 screen absent a pre-ratified
+reversal trigger.
