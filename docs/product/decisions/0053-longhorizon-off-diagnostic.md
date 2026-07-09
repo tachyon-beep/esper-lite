@@ -1,7 +1,9 @@
 # PDR-0053 — Long-horizon OFF diagnostic: transient vs structural non-stationarity
 
 Date: 2026-07-10
-Status: accepted (owner grant: "authorised to extend/add runs at your discretion if perceived benefit")
+Status: accepted — SUPERSEDED IN PART by PDR-0054 (pre-data): the determinism
+cross-check claim is retracted and the read window is corrected to rounds 251–451
+(the entropy-floor penalty schedule normalizes by horizon; see PDR-0054)
 Decider: owner-agent under the explicit run-authorization grant
 Relates-to: PDR-0050 (LEG-B demotion), PDR-0052 (cf-plateau demotion) — both caused by
 within-run non-stationarity; this diagnostic tests whether that cause is fixable.
