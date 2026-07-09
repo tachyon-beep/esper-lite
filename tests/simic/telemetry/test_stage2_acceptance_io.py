@@ -1314,6 +1314,20 @@ def test_terminal_reader_rejects_null_env_id():
         read_run_val_acc(_conn_with_outcomes(rows), "/run")
 
 
+def test_env_coverage_reports_null_env_id_as_reason_not_crash():
+    # A NULL env_id row reaches the coverage pass FIRST (it runs before the terminal
+    # reader's guard) — it must land in the reasons list, not abort build_report with
+    # an unattributed TypeError.
+    conn = _conn_with_runs_and_outcomes(
+        runs=[{"run_dir": "/on", "n_envs": 3}, {"run_dir": "/off", "n_envs": 3}],
+        outcomes=_terminal_outcomes("/on", [0, 1, 2])
+        + [{"run_dir": "/on", "env_id": None, "episode_idx": 5}]
+        + _terminal_outcomes("/off", [0, 1, 2]),
+    )
+    reasons = env_count_completeness_reasons(conn, on_run_dir="/on", off_run_dir="/off")
+    assert any("ON" in r and "env_id" in r and "NULL" in r for r in reasons)
+
+
 def test_env_coverage_flags_duplicate_outcome_rows():
     # Per-env outcome count must equal n_episodes // n_envs — a duplicate row silently
     # re-weights churn and marks a re-emission bug (SIMIC-PROD-001 class).

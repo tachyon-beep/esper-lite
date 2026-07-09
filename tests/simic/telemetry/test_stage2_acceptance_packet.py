@@ -1125,6 +1125,33 @@ def test_leg_series_computes_cf_warmup_descriptive_on_on_leg_only():
     assert leg_series(off, leg=Leg.OFF, w=8).cf_warmup is None
 
 
+def test_cf_warmup_descriptive_tolerates_nonfinite_scale_in_burn_in():
+    # §1 finiteness covers only the SCORED window; a transient NaN cf scale inside
+    # burn-in is exactly the warmup behavior this block exists to DESCRIBE — it must
+    # be skipped from the descriptive stats, never crash leg_series on a pair that
+    # validate_pair already accepted.
+    n = 12
+    on = [
+        _update(
+            batch=i, explained_variance=0.8, ev_sum=0.8, ev_main=0.2, ev_cf=0.1,
+            cf_value_loss=0.02,
+            value_main_target_scale=1.0,
+            cf_value_target_scale=float("nan") if i == 0 else 2.0 + i,
+            ev_return_variance=5.0,
+        )
+        for i in range(n)
+    ]
+    v = validate_pair(
+        _meta(Leg.ON), on, _meta(Leg.OFF), _off_rows([0.8] * n, ev_return_variance=5.0),
+        w=8, budget=3,
+    )
+    assert v.valid is True  # NaN sits in burn-in; the scored window is clean
+    ls = leg_series(on, leg=Leg.ON, w=8)
+    d = ls.cf_warmup
+    assert d is not None
+    assert d.scale_max == pytest.approx(2.0 + (n - 1))  # NaN excluded from the stats
+
+
 def test_render_packet_includes_cf_warmup_descriptive_section():
     pairs = [_accept_pair(i) for i in range(5)]
     report = score(

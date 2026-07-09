@@ -505,9 +505,19 @@ def _terminal_env_coverage_reasons(
 ) -> list[str]:
     n_envs, n_episodes = _read_run_episode_shape(conn, run_dir)
     rows = _episode_outcome_env_rows(conn, run_dir)
+    reasons: list[str] = []
+    null_env_rows = [row for row in rows if row["env_id"] is None]
+    if null_env_rows:
+        # This pass runs BEFORE the terminal reader's guard — report as a §6 reason
+        # (accumulate-and-continue contract), never an unattributed TypeError.
+        reasons.append(
+            f"{arm} arm episode_outcomes carry a NULL env_id "
+            f"({int(null_env_rows[0]['n_rows'])} row(s)) — malformed telemetry violates "
+            "the episode-outcome contract (leyline/episode_outcome.py) (§6)"
+        )
+        rows = [row for row in rows if row["env_id"] is not None]
     expected_env_ids = set(range(n_envs))
     present_env_ids = {int(row["env_id"]) for row in rows}
-    reasons: list[str] = []
 
     missing = sorted(expected_env_ids - present_env_ids)
     if missing:
@@ -530,6 +540,9 @@ def _terminal_env_coverage_reasons(
     for row in rows:
         env_id = int(row["env_id"])
         if env_id not in expected_env_ids:
+            continue
+        if row["max_episode_idx"] is None:
+            stale.append(f"env {env_id} has only NULL episode_idx rows")
             continue
         expected_terminal_idx = n_episodes - n_envs + env_id
         actual_terminal_idx = int(row["max_episode_idx"])

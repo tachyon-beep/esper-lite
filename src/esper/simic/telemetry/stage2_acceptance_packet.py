@@ -248,7 +248,7 @@ class CfWarmupDescriptive:
 
 def _pctl(sorted_values: list[float], frac: float) -> float:
     """Nearest-rank percentile over a pre-sorted, non-empty list (descriptive use only)."""
-    return sorted_values[min(len(sorted_values) - 1, int(frac * len(sorted_values)))]
+    return sorted_values[max(0, math.ceil(frac * len(sorted_values)) - 1)]
 
 
 def _cf_warmup_descriptive(rows: list[UpdateRow], scored: list[UpdateRow]) -> CfWarmupDescriptive:
@@ -280,15 +280,20 @@ def _cf_warmup_descriptive(rows: list[UpdateRow], scored: list[UpdateRow]) -> Cf
             "cf_value_target_scale is partially emitted — §9 requires all-present or "
             "all-absent; the signature gate rejects this arm"
         )
-    if n_scale_missing == 0:
-        scale_values = [value for value in scales if value is not None]
-        sorted_scales = sorted(scale_values)
-        quartile = max(1, len(scale_values) // 4)
+    # §1 finiteness covers only the SCORED window; the full series may carry transient
+    # non-finite values inside burn-in — exactly the warmup this block describes. Filter
+    # to the finite (chronological) subset rather than crash on a pair validity accepted.
+    finite_scales = [
+        value for value in scales if value is not None and math.isfinite(value)
+    ]
+    if n_scale_missing == 0 and finite_scales:
+        sorted_scales = sorted(finite_scales)
+        quartile = max(1, len(finite_scales) // 4)
         scale_p50: float | None = _pctl(sorted_scales, 0.5)
         scale_p90: float | None = _pctl(sorted_scales, 0.9)
         scale_max: float | None = sorted_scales[-1]
-        scale_q1_median: float | None = level(scale_values[:quartile])
-        scale_q4_median: float | None = level(scale_values[-quartile:])
+        scale_q1_median: float | None = level(finite_scales[:quartile])
+        scale_q4_median: float | None = level(finite_scales[-quartile:])
     else:
         scale_p50 = scale_p90 = scale_max = scale_q1_median = scale_q4_median = None
 
