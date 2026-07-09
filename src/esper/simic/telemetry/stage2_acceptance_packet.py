@@ -290,6 +290,11 @@ class RunMeta:
     actor_advantage_source: str
     uses_per_head_norm: bool
     frozen_config: tuple[tuple[str, FrozenConfigValue], ...] = ()
+    # Device placement (policy_device / env_devices_json): §10 freezes the training
+    # configuration, not run placement — seeds may legitimately spread across GPUs
+    # (2026-07-09 owner ruling). Cross-seed homogeneity checks ignore this field;
+    # validate_pair enforces ON == OFF placement per pair.
+    placement: tuple[tuple[str, FrozenConfigValue], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -569,6 +574,11 @@ def validate_pair(
         reasons.append(
             "frozen run config mismatch: only hra_value_decomposition may differ (§10); "
             f"ON={on_meta.frozen_config!r} OFF={off_meta.frozen_config!r}"
+        )
+    if on_meta.placement != off_meta.placement:
+        reasons.append(
+            "placement mismatch: each ON arm must run on the same device as its OFF "
+            f"partner (§10 pairing); ON={on_meta.placement!r} OFF={off_meta.placement!r}"
         )
     if on_meta.uses_per_head_norm or off_meta.uses_per_head_norm:
         reasons.append(

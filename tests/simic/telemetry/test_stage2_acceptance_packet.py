@@ -7,6 +7,8 @@ scorer (stage2_acceptance.py). These tests ARE the pre-registered contract — d
 to make a run pass.
 """
 
+import dataclasses
+
 import pytest
 
 from esper.leyline.telemetry import ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED
@@ -1001,3 +1003,17 @@ def test_render_packet_includes_calibration_provenance_when_provided():
     )
     assert "OFF" in packet
     assert "frozen" in packet.lower() or "calibrat" in packet.lower()
+
+
+def test_validate_pair_rejects_placement_mismatch():
+    on_meta = dataclasses.replace(
+        _meta(Leg.ON),
+        placement=(("env_devices_json", '["cuda:0"]'), ("policy_device", "cuda:0")),
+    )
+    off_meta = dataclasses.replace(
+        _meta(Leg.OFF),
+        placement=(("env_devices_json", '["cuda:1"]'), ("policy_device", "cuda:1")),
+    )
+    v = validate_pair(on_meta, _clean_on_rows(), off_meta, _clean_off_rows(), w=0, budget=3)
+    assert v.valid is False
+    assert any("placement" in reason for reason in v.reasons)

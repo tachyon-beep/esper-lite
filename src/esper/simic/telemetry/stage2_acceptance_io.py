@@ -92,8 +92,6 @@ _FROZEN_RUN_CONFIG_COLUMNS: tuple[str, ...] = (
     "chunk_length",
     "max_seeds",
     "slot_ids_json",
-    "env_devices_json",
-    "policy_device",
     "amp_enabled",
     "amp_dtype",
     "compile_enabled",
@@ -108,6 +106,16 @@ _FROZEN_RUN_CONFIG_COLUMNS: tuple[str, ...] = (
     "disable_anti_gaming",
     "max_grad_norm",
     "host_params",
+)
+
+# §10 freezes the training configuration, not run *placement*: the ratified Stage-2
+# launch plan splits seeds across GPUs, so device fields may vary across seeds and are
+# excluded from the cross-seed homogeneity checks. Per-pair ON/OFF placement equality is
+# enforced in validate_pair (2026-07-09 owner ruling;
+# docs/analysis/2026-07-09-stage2-off-calibration-step3.md).
+_PLACEMENT_PROVENANCE_COLUMNS: tuple[str, ...] = (
+    "env_devices_json",
+    "policy_device",
 )
 
 _NULLABLE_FROZEN_RUN_CONFIG_COLUMNS: frozenset[str] = frozenset({
@@ -291,7 +299,7 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
     rows = _rows(
         conn,
         "SELECT seed, reward_mode, actor_advantage_source, resume_path, start_episode, "
-        + ", ".join(_FROZEN_RUN_CONFIG_COLUMNS)
+        + ", ".join(_FROZEN_RUN_CONFIG_COLUMNS + _PLACEMENT_PROVENANCE_COLUMNS)
         + " FROM runs WHERE run_dir = ?",
         [run_dir],
     )
@@ -303,6 +311,7 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
         "resume_path",
         "start_episode",
         *_FROZEN_RUN_CONFIG_COLUMNS,
+        *_PLACEMENT_PROVENANCE_COLUMNS,
     )
     for column in required_columns:
         if row[column] is None and column not in _NULLABLE_FROZEN_RUN_CONFIG_COLUMNS:
@@ -324,6 +333,7 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
             f"run_dir={run_dir!r} is not fresh-init telemetry: start_episode={row['start_episode']!r}"
         )
     frozen_config = tuple((column, row[column]) for column in _FROZEN_RUN_CONFIG_COLUMNS)
+    placement = tuple((column, row[column]) for column in _PLACEMENT_PROVENANCE_COLUMNS)
     return RunMeta(
         run_dir=run_dir,
         seed=int(row["seed"]),
@@ -332,6 +342,7 @@ def read_run_meta(conn: duckdb.DuckDBPyConnection, run_dir: str) -> RunMeta:
         uses_per_head_norm=bool(row["per_head_advantage_norm"])
         or read_run_uses_per_head_norm(conn, run_dir),
         frozen_config=frozen_config,
+        placement=placement,
     )
 
 

@@ -7,6 +7,8 @@ NULL / DOUBLE marshalling is on the test path; the JSONL->view extraction is Kar
 concern and is exercised end-to-end at the CLI slice.
 """
 
+import dataclasses
+
 import duckdb
 import pytest
 
@@ -17,6 +19,8 @@ from esper.simic.telemetry.stage2_acceptance_io import (
     SeedPairing,
     build_report,
     env_count_completeness_reasons,
+    off_calibration_validity_reasons,
+    pairset_validity_reasons,
     read_leg,
     read_run_added_params,
     read_run_churn,
@@ -716,7 +720,15 @@ _RUN_META_FROZEN_DEFAULTS = {
     "host_params": 100_000,
 }
 
-_RUN_META_FROZEN_CONFIG = tuple(_RUN_META_FROZEN_DEFAULTS.items())
+_RUN_META_PLACEMENT_COLUMNS = ("env_devices_json", "policy_device")
+_RUN_META_FROZEN_CONFIG = tuple(
+    (key, value)
+    for key, value in _RUN_META_FROZEN_DEFAULTS.items()
+    if key not in _RUN_META_PLACEMENT_COLUMNS
+)
+_RUN_META_PLACEMENT = tuple(
+    (key, _RUN_META_FROZEN_DEFAULTS[key]) for key in _RUN_META_PLACEMENT_COLUMNS
+)
 
 _RUN_META_COLUMN_TYPES = {
     "run_dir": "VARCHAR",
@@ -824,6 +836,7 @@ def test_read_run_meta_reads_provenance_from_runs_view():
         actor_advantage_source=ACTOR_ADVANTAGE_SOURCE_TOTAL_RECONSTRUCTED,
         uses_per_head_norm=False,
         frozen_config=_RUN_META_FROZEN_CONFIG,
+        placement=_RUN_META_PLACEMENT,
     )
 
 
@@ -1241,3 +1254,34 @@ def test_calibrate_from_spec_freezes_delta_from_off_arms_only():
     )
     assert "delta" in report.lower() or "δ" in report
     assert "eps_rel" in report.lower() or "ε_rel" in report
+
+
+# ---- placement provenance (2026-07-09 owner ruling: device is placement, not frozen config) ----
+
+
+_PLACEMENT_CUDA0 = (("env_devices_json", '["cuda:0"]'), ("policy_device", "cuda:0"))
+_PLACEMENT_CUDA1 = (("env_devices_json", '["cuda:1"]'), ("policy_device", "cuda:1"))
+
+
+def test_off_calibration_accepts_cross_seed_placement_heterogeneity():
+    metas = [
+        dataclasses.replace(_meta("/off/41", 41), placement=_PLACEMENT_CUDA0),
+        dataclasses.replace(_meta("/off/42", 42), placement=_PLACEMENT_CUDA1),
+    ]
+    assert off_calibration_validity_reasons(metas) == []
+
+
+def test_pairset_accepts_cross_seed_placement_heterogeneity():
+    pairings = [
+        SeedPairing(
+            on_meta=dataclasses.replace(_meta("/on/0", 0), placement=_PLACEMENT_CUDA0),
+            off_meta=dataclasses.replace(_meta("/off/0", 0), placement=_PLACEMENT_CUDA0),
+            host_params=100_000,
+        ),
+        SeedPairing(
+            on_meta=dataclasses.replace(_meta("/on/1", 1), placement=_PLACEMENT_CUDA1),
+            off_meta=dataclasses.replace(_meta("/off/1", 1), placement=_PLACEMENT_CUDA1),
+            host_params=100_000,
+        ),
+    ]
+    assert pairset_validity_reasons(pairings) == []
