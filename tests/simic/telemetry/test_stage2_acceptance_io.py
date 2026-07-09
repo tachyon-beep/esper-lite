@@ -45,6 +45,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     g4_hold_from_counts,
     render_packet,
 )
+from tests.simic.telemetry.conftest import create_ppo_updates_table, insert_ppo_update
 
 
 def _full_row(**overrides) -> dict:
@@ -134,28 +135,9 @@ def test_row_to_update_fails_loud_on_missing_optional_column():
 
 def _conn_with_updates(rows: list[dict]) -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect(":memory:")
-    conn.execute(
-        """
-        CREATE TABLE ppo_updates (
-            run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
-            ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE, cf_value_loss DOUBLE,
-            pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
-            advantage_std_floored BOOLEAN, advantage_per_head_normalized BOOLEAN
-        )
-        """
-    )
+    create_ppo_updates_table(conn)
     for r in rows:
-        conn.execute(
-            "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [
-                r["run_dir"], r["inner_epoch"], r["batch"], r["explained_variance"], r["ev_sum"],
-                r["ev_main"], r["ev_cf"], r["ev_return_variance"], r["value_main_target_scale"],
-                r["cf_value_target_scale"], r["cf_value_loss"], r["pre_norm_advantage_std"],
-                r["return_std"], r["gradient_cv"], r["advantage_std_floored"],
-                r["advantage_per_head_normalized"],
-            ],
-        )
+        insert_ppo_update(conn, r)
     return conn
 
 
@@ -461,17 +443,7 @@ _IO_THRESHOLDS = FrozenThresholds(delta=0.05, eps_rel=0.10, tau_acc=0.3, delta_p
 def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
     """Full ppo_updates + episode_outcomes + runs fixture. Each spec is one run (ON or OFF)."""
     conn = duckdb.connect(":memory:")
-    conn.execute(
-        """
-        CREATE TABLE ppo_updates (
-            run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
-            ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE, cf_value_loss DOUBLE,
-            pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
-            advantage_std_floored BOOLEAN
-        )
-        """
-    )
+    create_ppo_updates_table(conn)
     conn.execute(
         """
         CREATE TABLE episode_outcomes (
@@ -497,23 +469,21 @@ def _build_conn(specs: list[dict]) -> duckdb.DuckDBPyConnection:
         for b in range(12):
             expl_b = s["expl"] + ev_jitter[b % 4]
             return_std_b = 3.0 + std_jitter[b % 4]
-            conn.execute(
-                "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [
-                    s["run_dir"], 0, b, expl_b,
-                    expl_b if is_on else None,       # ev_sum: total-EV comparand on ON, null on OFF
-                    0.03 if is_on else None,         # ev_main (feeds §5 MECH), null on OFF
-                    0.10 if is_on else None,         # ev_cf, null on OFF
-                    5.0,
-                    1.7 if is_on else None,
-                    6.3 if is_on else None,
-                    0.02 if is_on else None,         # cf_value_loss: flat => plateaued by w=8
-                    1.0,
-                    return_std_b,
-                    0.10,
-                    False,
-                ],
-            )
+            insert_ppo_update(conn, dict(
+                run_dir=s["run_dir"], inner_epoch=0, batch=b, explained_variance=expl_b,
+                ev_sum=expl_b if is_on else None,  # total-EV comparand on ON, null on OFF
+                ev_main=0.03 if is_on else None,   # feeds §5 MECH, null on OFF
+                ev_cf=0.10 if is_on else None,
+                ev_return_variance=5.0,
+                value_main_target_scale=1.7 if is_on else None,
+                cf_value_target_scale=6.3 if is_on else None,
+                cf_value_loss=0.02 if is_on else None,  # flat => plateaued by w=8
+                pre_norm_advantage_std=1.0,
+                return_std=return_std_b,
+                gradient_cv=0.10,
+                advantage_std_floored=False,
+                advantage_per_head_normalized=False,
+            ))
         for env_id in s.get("env_ids", list(range(s["n_envs"]))):
             conn.execute(
                 "INSERT INTO episode_outcomes VALUES (?,?,?,?,?,?,?,?)",
@@ -1041,17 +1011,7 @@ def _full_stage2_conn(
     per-head flag) / episode_outcomes / anomalies — plus the matching score spec."""
     conn = duckdb.connect(":memory:")
     _create_runs_meta_table(conn)
-    conn.execute(
-        """
-        CREATE TABLE ppo_updates (
-            run_dir VARCHAR, inner_epoch INTEGER, batch INTEGER, explained_variance DOUBLE,
-            ev_sum DOUBLE, ev_main DOUBLE, ev_cf DOUBLE, ev_return_variance DOUBLE,
-            value_main_target_scale DOUBLE, cf_value_target_scale DOUBLE, cf_value_loss DOUBLE,
-            pre_norm_advantage_std DOUBLE, return_std DOUBLE, gradient_cv DOUBLE,
-            advantage_std_floored BOOLEAN, advantage_per_head_normalized BOOLEAN
-        )
-        """
-    )
+    create_ppo_updates_table(conn)
     conn.execute(
         """
         CREATE TABLE episode_outcomes (
@@ -1083,24 +1043,22 @@ def _full_stage2_conn(
             # 12 updates (jitter cycled per 4) so the §11 plateau check is satisfiable under
             # the spec's w=8 while the scored window keeps the original cycle's median/IQR.
             for b in range(12):
-                conn.execute(
-                    "INSERT INTO ppo_updates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    [
-                        run_dir, 0, b, expl + ev_jitter[b % 4],
-                        expl + ev_jitter[b % 4] if is_on else None,
-                        0.03 if is_on else None,
-                        0.10 if is_on else None,
-                        5.0,
-                        1.7 if is_on else None,
-                        6.3 if is_on else None,
-                        0.02 if is_on else None,  # cf_value_loss: flat => plateaued by w=8
-                        1.0,
-                        3.0 + std_jitter[b % 4],
-                        0.10,
-                        False,
-                        False,
-                    ],
-                )
+                insert_ppo_update(conn, dict(
+                    run_dir=run_dir, inner_epoch=0, batch=b,
+                    explained_variance=expl + ev_jitter[b % 4],
+                    ev_sum=expl + ev_jitter[b % 4] if is_on else None,
+                    ev_main=0.03 if is_on else None,
+                    ev_cf=0.10 if is_on else None,
+                    ev_return_variance=5.0,
+                    value_main_target_scale=1.7 if is_on else None,
+                    cf_value_target_scale=6.3 if is_on else None,
+                    cf_value_loss=0.02 if is_on else None,  # flat => plateaued by w=8
+                    pre_norm_advantage_std=1.0,
+                    return_std=3.0 + std_jitter[b % 4],
+                    gradient_cv=0.10,
+                    advantage_std_floored=False,
+                    advantage_per_head_normalized=False,
+                ))
             for episode_idx in range(n):
                 conn.execute(
                     "INSERT INTO episode_outcomes VALUES (?,?,?,?,?,?,?,?)",
