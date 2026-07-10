@@ -108,6 +108,9 @@ def _write_run(telemetry_dir: Path, run_name: str, *, seed: int, on: bool, expl:
             data["ev_cf"] = 0.10
             data["value_main_target_scale"] = 1.7
             data["cf_value_target_scale"] = 6.3
+            # §11.2 signature: ON must carry cf_value_loss on every update (flat = plateaued
+            # from birth, satisfying the descriptive block without probing it here).
+            data["cf_value_loss"] = 0.02
         events.append(
             {
                 "event_id": f"ppo-{run_name}-{b}",

@@ -1,0 +1,13 @@
+# Stage-2 rescore input manifest (2026-07-11, pre-rescore per §11.3 governance)
+
+6ec5df0a903ac39938e3811624a75959fdf6e0208fccbef09a62ca1c54e0d0c0  docs/analysis/2026-07-11-stage2-score-spec.json
+af58a73fca14f84a144d2c266934fc1219306e0036b040734d769767a04e25ba  telemetry/stage2_ab_off/packet_root/off_s41//events.jsonl (2216276954 bytes)
+e41f615e840c741c70f11a6f5f40aca94a3fd1b12c823192e4472d531fb21951  telemetry/stage2_ab_off/packet_root/off_s42//events.jsonl (2216173112 bytes)
+90f4f2d064106e2c7e1809531d0b40abf658e0f5b69d388c53c3c0e57279ecee  telemetry/stage2_ab_off/packet_root/off_s43//events.jsonl (2217751506 bytes)
+34ba89cb2c3e37a38072731cb2227ac5f20b768fb70e210d82dba544c52c3e61  telemetry/stage2_ab_off/packet_root/off_s44//events.jsonl (2201248358 bytes)
+5e25a30f1eab5731b36cbd65a1591b73d656d4ce08d95692418af468a469904d  telemetry/stage2_ab_off/packet_root/off_s45//events.jsonl (2223098376 bytes)
+54616a7b2fb494da34b39b49f4270ca31a8c51fd641618497a6d98681200ab0d  telemetry/stage2_ab_off/packet_root/on_s41//events.jsonl (2203006883 bytes)
+71b907f507398806a8d9c58fc56f346723ccdae60e4982f10baa9d438cd178d5  telemetry/stage2_ab_off/packet_root/on_s42//events.jsonl (2214069607 bytes)
+b6336ea9a26064de4b0b9be86ea8a9ed7d8a99cef3853899c53e4a77f8728881  telemetry/stage2_ab_off/packet_root/on_s43//events.jsonl (2210477480 bytes)
+5dac0f5eec246097b97d0d511f15893421d7936c55d1c3fe3afb482ab669f728  telemetry/stage2_ab_off/packet_root/on_s44//events.jsonl (2222883877 bytes)
+f57862fd8ace687cb38ec69da5d505f1a28291caaa5ebe19d80c837317ba9bb8  telemetry/stage2_ab_off/packet_root/on_s45//events.jsonl (2225110602 bytes)

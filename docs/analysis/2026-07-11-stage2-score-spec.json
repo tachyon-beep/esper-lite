@@ -1,0 +1,22 @@
+{
+  "pairs": [
+    {"seed": 41, "on_run_dir": "on_s41", "off_run_dir": "off_s41"},
+    {"seed": 42, "on_run_dir": "on_s42", "off_run_dir": "off_s42"},
+    {"seed": 43, "on_run_dir": "on_s43", "off_run_dir": "off_s43"},
+    {"seed": 44, "on_run_dir": "on_s44", "off_run_dir": "off_s44"},
+    {"seed": 45, "on_run_dir": "on_s45", "off_run_dir": "off_s45"}
+  ],
+  "host_params": 6418,
+  "n": 5,
+  "budget": 150,
+  "thresholds": {
+    "delta": 0.050311,
+    "eps_rel": 0.10,
+    "tau_acc": 0.3,
+    "delta_param_max": 1527.8,
+    "w": 17
+  },
+  "g3_ratio_max": 1.5,
+  "g4_ratio_max": 2.0,
+  "g4_abs_floor": 2
+}

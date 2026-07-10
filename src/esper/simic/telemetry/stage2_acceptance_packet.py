@@ -129,6 +129,42 @@ def floored_exclusion(
     return kept, floored_fraction
 
 
+@dataclass(frozen=True)
+class PopulationDecomposition:
+    """The one canonical §1/§8 scoring-population decomposition (§11.3).
+
+    Both the validity layer (``_validate_leg``) and the statistics layer (``leg_series``) MUST
+    build their populations through ``decompose_population`` — the original INVALID-adjudication
+    (2026-07-11) traced to the validity sweep checking a broader population (post-burn-in) than
+    the statistics consumed (post-§8B "scored updates", the gate doc's own definition).
+
+    ``floored_fraction`` is ``None`` iff ``post_burnin`` is empty (no §8B fraction is computable);
+    callers treat that as the §1 completeness failure it is.
+    """
+
+    post_burnin: tuple[UpdateRow, ...]
+    scored: tuple[UpdateRow, ...]  # post-burn-in ∧ ev_return_variance > floor (the "scored updates")
+    floored: tuple[UpdateRow, ...]  # post-burn-in ∧ ev_return_variance <= floor (§8B-excluded)
+    floored_fraction: float | None
+
+
+def decompose_population(rows: list[UpdateRow], *, w: int, floor: float) -> PopulationDecomposition:
+    """Decompose one leg's ordered updates into the canonical §8-W / §8B populations."""
+    post_burnin = burn_in_discard(rows, w)
+    if not post_burnin:
+        return PopulationDecomposition(
+            post_burnin=(), scored=(), floored=(), floored_fraction=None
+        )
+    scored, floored_fraction = floored_exclusion(post_burnin, floor)
+    floored = [row for row in post_burnin if row.ev_return_variance <= floor]
+    return PopulationDecomposition(
+        post_burnin=tuple(post_burnin),
+        scored=tuple(scored),
+        floored=tuple(floored),
+        floored_fraction=floored_fraction,
+    )
+
+
 def sqrt_unexplained_series(ev_values: list[float]) -> list[float]:
     """§4 — the return-scale-invariant residual ``sqrt(1 - ev)`` per update.
 
@@ -355,10 +391,11 @@ def leg_series(
     scored set, using the same median/IQR convention as the pure scorer (imported ``level``/
     ``vol``, correction-immune within a series, §8C).
     """
-    post_burnin = burn_in_discard(rows, w)
-    if not post_burnin:
+    decomp = decompose_population(rows, w=w, floor=floor)
+    if decomp.floored_fraction is None:
         raise ValueError(f"no updates survive the burn-in window w={w} (a §1 completeness failure)")
-    scored, floored_fraction = floored_exclusion(post_burnin, floor)
+    post_burnin = list(decomp.post_burnin)
+    scored, floored_fraction = list(decomp.scored), decomp.floored_fraction
     if not scored:
         raise ValueError(
             "every post-burn-in update is floored (ev_return_variance <= floor); the fit is a "
@@ -550,15 +587,16 @@ def g3_hold_from_churn(on: ChurnRates, off: ChurnRates, *, ratio_max: float) -> 
     )
 
 
-def _nonfinite_fields(row: UpdateRow, leg: Leg) -> list[str]:
-    """Names of the scored numeric fields on ``row`` that are NaN/Inf (§1 finiteness).
+def _nonfinite_global_fields(row: UpdateRow) -> list[str]:
+    """§11.3 layer 1 — numerical-health fields that must be finite on EVERY post-burn-in candidate.
 
+    ``ev_return_variance`` is the §8B flooring key: the scored population itself cannot be
+    constructed from a non-finite value. The other three carry no undefined-marker convention,
+    so a NaN/Inf anywhere post-burn-in is a numerical failure regardless of §8B status.
     Explicit field-by-field access (not ``getattr``) — the schema is fixed and every field is
     required, so this is a finiteness check, not defensive attribute-masking.
     """
     bad: list[str] = []
-    if not math.isfinite(row.explained_variance):
-        bad.append("explained_variance")
     if not math.isfinite(row.pre_norm_advantage_std):
         bad.append("pre_norm_advantage_std")
     if not math.isfinite(row.return_std):
@@ -567,19 +605,45 @@ def _nonfinite_fields(row: UpdateRow, leg: Leg) -> list[str]:
         bad.append("gradient_cv")
     if not math.isfinite(row.ev_return_variance):
         bad.append("ev_return_variance")
-    if leg is Leg.ON:
-        if row.ev_sum is not None and not math.isfinite(row.ev_sum):
-            bad.append("ev_sum")
-        if row.ev_main is not None and not math.isfinite(row.ev_main):
-            bad.append("ev_main")
-        if row.ev_cf is not None and not math.isfinite(row.ev_cf):
-            bad.append("ev_cf")
-        if row.value_main_target_scale is not None and not math.isfinite(row.value_main_target_scale):
-            bad.append("value_main_target_scale")
-        if row.cf_value_target_scale is not None and not math.isfinite(row.cf_value_target_scale):
-            bad.append("cf_value_target_scale")
-        if row.cf_value_loss is not None and not math.isfinite(row.cf_value_loss):
-            bad.append("cf_value_loss")
+    return bad
+
+
+def _strict_ev_fields(row: UpdateRow, leg: Leg) -> list[tuple[str, float]]:
+    """§11.3 layer 2 — ON-leg EV-family values with NO undefined-marker convention.
+
+    ``ev_sum``/``ev_main``/``ev_cf`` are plain scalar means at the emitter (vectorized.py
+    reducer whitelist); only the batch-aggregate ``explained_variance`` key carries the
+    deliberate low-return-variance NaN marker. A non-finite value here is therefore a
+    numerical failure on ANY post-burn-in update, floored or not.
+    """
+    if leg is not Leg.ON:
+        return []
+    out: list[tuple[str, float]] = []
+    if row.ev_sum is not None:
+        out.append(("ev_sum", row.ev_sum))
+    if row.ev_main is not None:
+        out.append(("ev_main", row.ev_main))
+    if row.ev_cf is not None:
+        out.append(("ev_cf", row.ev_cf))
+    return out
+
+
+def _nonfinite_scored_diagnostics(row: UpdateRow, leg: Leg) -> list[str]:
+    """§11.2-hard ON diagnostics — finite on SCORED updates (the gate doc's own population).
+
+    ``cf_value_loss`` and the §9 target scales are pre-registered as "finite on scored
+    updates" (gate doc §11 table); a transient non-finite value on a §8B-floored update never
+    enters a statistic and does not gate.
+    """
+    if leg is not Leg.ON:
+        return []
+    bad: list[str] = []
+    if row.value_main_target_scale is not None and not math.isfinite(row.value_main_target_scale):
+        bad.append("value_main_target_scale")
+    if row.cf_value_target_scale is not None and not math.isfinite(row.cf_value_target_scale):
+        bad.append("cf_value_target_scale")
+    if row.cf_value_loss is not None and not math.isfinite(row.cf_value_loss):
+        bad.append("cf_value_loss")
     return bad
 
 
@@ -654,30 +718,69 @@ def _validate_leg(
     # cf_value_loss presence lives in _hra_signature_violation (ON must carry it, OFF must
     # not); the §11 cf-plateau VALIDITY GATE is demoted to descriptive reporting (§11.2,
     # owner-ruled 2026-07-10) — see CfWarmupDescriptive; it must not gate here.
-    post_burnin = burn_in_discard(rows, w)
-    if not post_burnin:
+    decomp = decompose_population(rows, w=w, floor=floor)
+    if decomp.floored_fraction is None:
         reasons.append(
             f"{leg.value.upper()} arm incomplete: no updates survive the burn-in window w={w}"
         )
         return reasons, None
 
-    nonfinite = sorted({name for row in post_burnin for name in _nonfinite_fields(row, leg)})
-    if nonfinite:
+    # §11.3 layer 1 — numerical health on every post-burn-in candidate.
+    global_bad = sorted(
+        {name for row in decomp.post_burnin for name in _nonfinite_global_fields(row)}
+    )
+    if global_bad:
         reasons.append(
-            f"{leg.value.upper()} arm has non-finite (NaN/Inf) scored metric(s): "
-            f"{', '.join(nonfinite)}"
+            f"{leg.value.upper()} arm has non-finite (NaN/Inf) metric(s) on post-burn-in "
+            f"updates: {', '.join(global_bad)}"
         )
         # A non-finite ev_return_variance corrupts the floored-fraction; do not compute it.
-        if "ev_return_variance" in nonfinite:
+        if "ev_return_variance" in global_bad:
             return reasons, None
 
-    kept, floored_fraction = floored_exclusion(post_burnin, floor)
-    if len(kept) < budget:
+    # §11.3 layer 2 — EV-family undefined-marker envelope. The emitter deliberately writes
+    # explained_variance=NaN when every update in the batch is variance-floored (vectorized.py
+    # flagged-exclusion); that marker is valid ONLY on a §8B-floored update. ±Inf is never a
+    # marker, and NaN on an unfloored update is a numerical failure hiding behind the floor.
+    envelope_bad: set[str] = set()
+    for row in decomp.post_burnin:
+        ev = row.explained_variance
+        if not math.isfinite(ev):
+            if math.isinf(ev):
+                envelope_bad.add(
+                    "explained_variance is infinite — outside the low-return-variance "
+                    "undefined-marker envelope (§11.3)"
+                )
+            elif row.ev_return_variance > floor:
+                envelope_bad.add(
+                    "explained_variance is NaN on an unfloored update (ev_return_variance > "
+                    "floor) — a numerical failure, not the low-return-variance marker (§11.3)"
+                )
+        for name, value in _strict_ev_fields(row, leg):
+            if not math.isfinite(value):
+                envelope_bad.add(
+                    f"{name} is non-finite (NaN/Inf) — no undefined-marker convention exists "
+                    f"for {name} (§11.3)"
+                )
+    reasons.extend(f"{leg.value.upper()} arm: {message}" for message in sorted(envelope_bad))
+
+    # §11.3 layer 3 — scored-population finiteness (§1 "scored updates" = post burn-in + post
+    # §8B exclusion, the gate doc's own definition): the §11.2-hard ON diagnostics.
+    scored_bad = sorted(
+        {name for row in decomp.scored for name in _nonfinite_scored_diagnostics(row, leg)}
+    )
+    if scored_bad:
         reasons.append(
-            f"{leg.value.upper()} arm incomplete: {len(kept)} scored updates after burn-in + "
-            f"floored-exclusion < pre-registered budget {budget}"
+            f"{leg.value.upper()} arm has non-finite (NaN/Inf) scored metric(s): "
+            f"{', '.join(scored_bad)}"
         )
-    return reasons, floored_fraction
+
+    if len(decomp.scored) < budget:
+        reasons.append(
+            f"{leg.value.upper()} arm incomplete: {len(decomp.scored)} scored updates after "
+            f"burn-in + floored-exclusion < pre-registered budget {budget}"
+        )
+    return reasons, decomp.floored_fraction
 
 
 def validate_pair(

@@ -30,6 +30,7 @@ from esper.simic.telemetry.stage2_acceptance_packet import (
     _optional_level_for_on,
     burn_in_discard,
     calibrate_off,
+    decompose_population,
     floored_exclusion,
     leg_series,
     plateau,
@@ -493,6 +494,124 @@ def test_validate_pair_rejects_frozen_config_mismatch():
     v = validate_pair(on_meta, _clean_on_rows(), off_meta, _clean_off_rows(), w=0, budget=3)
     assert v.valid is False
     assert any("frozen run config" in r for r in v.reasons)
+
+
+# ---- §11.3: EV undefined-marker validity envelope (owner-ruled 2026-07-11) ----
+#
+# The emitter deliberately writes explained_variance=NaN when a batch's only update is
+# variance-floored (vectorized.py flagged-exclusion). §1 finiteness is evaluated on the
+# SCORED population (post burn-in + post §8B); the marker is permitted ONLY on a §8B-floored
+# update. These tests ARE the amended pre-registered contract — do not weaken them.
+
+
+def test_nan_ev_on_floored_update_is_a_valid_marker_and_excluded():
+    # The real 2026-07-11 pattern (off_s44 u65 / on_s45 u57): one floored NaN-marker row per
+    # arm; §1 must proceed and the row must never enter a scored statistic.
+    off = _off_rows([0.8] * 12, ev_return_variance=5.0)
+    off[5] = _update(batch=5, explained_variance=float("nan"), ev_return_variance=0.8)
+    on = _on_rows(ev_sum=[0.8] * 12, ev_main=[0.2] * 12, ev_return_variance=5.0)
+    on[7] = dataclasses.replace(on[7], explained_variance=float("nan"), ev_return_variance=0.87)
+    v = validate_pair(_meta(Leg.ON), on, _meta(Leg.OFF), off, w=0, budget=3)
+    assert v.valid is True
+    assert v.reasons == ()
+
+
+def test_nan_ev_marker_rows_never_enter_leg_series_statistics():
+    rows = _off_rows([0.5] * 6, ev_return_variance=5.0)
+    with_marker = list(rows)
+    with_marker[3] = _update(
+        batch=3, explained_variance=float("nan"), ev_return_variance=0.8
+    )
+    clean = leg_series(rows[:3] + rows[4:], leg=Leg.OFF, w=0)
+    marked = leg_series(with_marker, leg=Leg.OFF, w=0)
+    assert marked.ev_level == clean.ev_level
+    assert marked.n_updates_scored == clean.n_updates_scored == 5
+
+
+def test_nan_ev_on_unfloored_update_is_hard_invalid():
+    # A NaN with healthy return variance is a numerical failure, not the marker.
+    off = _off_rows([0.8] * 12, ev_return_variance=5.0)
+    off[5] = _update(batch=5, explained_variance=float("nan"), ev_return_variance=5.0)
+    v = validate_pair(_meta(Leg.ON), _clean_on_rows(12), _meta(Leg.OFF), off, w=0, budget=3)
+    assert v.valid is False
+    assert any("unfloored" in r for r in v.reasons)
+
+
+def test_infinite_ev_is_hard_invalid_even_below_the_floor():
+    off = _off_rows([0.8] * 12, ev_return_variance=5.0)
+    off[5] = _update(batch=5, explained_variance=float("inf"), ev_return_variance=0.5)
+    v = validate_pair(_meta(Leg.ON), _clean_on_rows(12), _meta(Leg.OFF), off, w=0, budget=3)
+    assert v.valid is False
+    assert any("infinite" in r for r in v.reasons)
+
+
+def test_nonfinite_ev_return_variance_is_hard_invalid():
+    # The flooring key itself must be finite everywhere — the scored population cannot be
+    # constructed otherwise.
+    off = _off_rows([0.8] * 12, ev_return_variance=5.0)
+    off[5] = _update(batch=5, explained_variance=0.8, ev_return_variance=float("nan"))
+    v = validate_pair(_meta(Leg.ON), _clean_on_rows(12), _meta(Leg.OFF), off, w=0, budget=3)
+    assert v.valid is False
+    assert any("ev_return_variance" in r for r in v.reasons)
+
+
+def test_nan_ev_sum_has_no_marker_convention_and_is_hard_invalid_even_floored():
+    # ev_sum/ev_main/ev_cf are plain scalar means at the emitter — no undefined-marker
+    # convention exists, so a NaN is a numerical failure even on a §8B-floored update.
+    on = _on_rows(ev_sum=[0.8] * 12, ev_main=[0.2] * 12, ev_return_variance=5.0)
+    on[7] = dataclasses.replace(on[7], ev_sum=float("nan"), ev_return_variance=0.5)
+    v = validate_pair(_meta(Leg.ON), on, _meta(Leg.OFF), _clean_off_rows(12), w=0, budget=3)
+    assert v.valid is False
+    assert any("ev_sum" in r and "no undefined-marker convention" in r for r in v.reasons)
+
+
+def test_marker_rows_count_against_the_scored_budget():
+    # Low-variance exclusions that leave fewer scored updates than budget stay INVALID.
+    off = _off_rows([0.8] * 5, ev_return_variance=5.0)
+    off[4] = _update(batch=4, explained_variance=float("nan"), ev_return_variance=0.5)
+    v = validate_pair(_meta(Leg.ON), _clean_on_rows(5), _meta(Leg.OFF), off, w=0, budget=5)
+    assert v.valid is False
+    assert any("scored updates" in r and "budget" in r for r in v.reasons)
+
+
+def test_nonfinite_cf_diagnostic_on_floored_update_does_not_gate():
+    # §11.2-hard diagnostics are pre-registered "finite on scored updates": a transient NaN
+    # cf scale on a §8B-floored update never enters a statistic and must not gate.
+    on = _on_rows(
+        ev_sum=[0.8] * 12, ev_main=[0.2] * 12,
+        value_main_target_scale=1.7, cf_value_target_scale=6.3, ev_return_variance=5.0,
+    )
+    on[7] = dataclasses.replace(
+        on[7],
+        explained_variance=float("nan"),
+        cf_value_target_scale=float("nan"),
+        ev_return_variance=0.5,
+    )
+    v = validate_pair(_meta(Leg.ON), on, _meta(Leg.OFF), _clean_off_rows(12), w=0, budget=3)
+    assert v.valid is True
+
+
+def test_nonfinite_cf_diagnostic_on_scored_update_remains_hard_invalid():
+    on = _on_rows(
+        ev_sum=[0.8] * 12, ev_main=[0.2] * 12,
+        value_main_target_scale=1.7, cf_value_target_scale=6.3, ev_return_variance=5.0,
+    )
+    on[7] = dataclasses.replace(on[7], cf_value_loss=float("nan"))
+    v = validate_pair(_meta(Leg.ON), on, _meta(Leg.OFF), _clean_off_rows(12), w=0, budget=3)
+    assert v.valid is False
+    assert any("scored metric" in r and "cf_value_loss" in r for r in v.reasons)
+
+
+def test_validity_and_statistics_share_one_population_decomposition():
+    # Split-brain regression: the §1 validity layer and leg_series must consume the same
+    # scored rows for the same input (the 2026-07-11 INVALID traced to divergent populations).
+    rows = _off_rows([0.5, 0.6, 0.7, 0.8, 0.9, 0.4], ev_return_variance=5.0)
+    rows[2] = _update(batch=2, explained_variance=0.7, ev_return_variance=0.5)  # floored
+    decomp = decompose_population(rows, w=1, floor=1.0)
+    ls = leg_series(rows, leg=Leg.OFF, w=1)
+    assert ls.n_updates_scored == len(decomp.scored)
+    assert ls.floored_fraction == decomp.floored_fraction
+    assert [r.batch for r in decomp.scored] == [1, 3, 4, 5]
 
 
 # ---- S4: assembly + calibrate/score entrypoints + provenance block ----

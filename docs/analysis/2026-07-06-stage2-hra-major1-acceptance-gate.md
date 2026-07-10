@@ -354,3 +354,65 @@ p50/p90/max and Q1→Q4 drift. Interpretation: presence+finite = hard validity; 
 descriptive (future warmup-design input); scale drift = caveat on any cf-head-specific
 claim. The descriptive plateau result MUST NOT affect the n=5 screen absent a pre-ratified
 reversal trigger.
+
+## §11.3 EV undefined-marker validity-envelope correction (2026-07-11, owner-ruled)
+
+**What happened.** The first full-wave scoring (ON rerun complete 5/5, zero drops) returned
+INVALID on one §1 breach: non-finite `explained_variance` on both arms. Diagnosis
+(`docs/analysis/2026-07-11-stage2-invalid-adjudication.md`): exactly 2 rows of 2000 —
+`off_s44` update 65 and `on_s45` update 57 — the only two sub-floor-variance updates in all
+ten arms. `value_loss`/`value_nrmse` finite on the same rows (no numerical event). The
+emitter deliberately writes the batch-aggregate `explained_variance` as NaN when every
+update in the batch is variance-floored (vectorized.py "EV-telemetry-robustness
+flagged-exclusion" — a pre-existing undefined-EV marker, not a measurement). The §1
+implementation checked EV-family finiteness on post-burn-in candidates BEFORE applying the
+frozen §8B exclusion — a broader population than this document's own definition of "scored
+updates" (§11 table: POST burn-in + POST §8B) and than §11.2's "finiteness on scored
+updates".
+
+**Owner ruling (Option B, 2026-07-11).** Not a discretionary relaxation after an
+inconvenient result — a correction of the validity population to match the emitter
+convention, the pre-registered §8B exclusion, and this document's own scored-updates
+definition:
+
+> The original §1 implementation checked EV-family finiteness over candidate updates before
+> applying the frozen §8B low-return-variance exclusion. This conflicted with the emitter's
+> pre-existing convention of emitting `NaN` as an undefined-EV marker on variance-floored
+> updates and with the gate document's definition of scored updates. The corrected validity
+> envelope requires the variance key and general numerical-health metrics to be finite on
+> all candidate updates, validates that any non-finite EV is exclusively and exactly
+> explained by the frozen floor, excludes those updates under §8B, and requires EV-family
+> finiteness on the resulting scored population. No acceptance threshold or treatment
+> statistic changed.
+
+**The three-layer envelope (implemented in `_validate_leg`, tested as pre-registered
+contract):**
+
+1. **Raw-update health (every post-burn-in candidate):** `ev_return_variance` (the §8B
+   flooring key), `pre_norm_advantage_std`, `return_std`, `gradient_cv` must be finite.
+2. **Undefined-marker envelope:** `explained_variance` NaN is permitted ONLY on a
+   §8B-floored update (`ev_return_variance <= floor`); ±Inf is never a marker; NaN on an
+   unfloored update is a numerical failure. `ev_sum`/`ev_main`/`ev_cf` are plain scalar
+   means with NO marker convention — non-finite anywhere post-burn-in is a hard failure.
+3. **Scored-population finiteness (§1 "scored updates"):** the §11.2-hard ON diagnostics
+   (`cf_value_loss`, target scales) finite on every scored update (their pre-registered
+   population; previously checked on the broader candidate set).
+
+Validity and statistics now build their populations through one shared
+`decompose_population` (no split-brain between `_validate_leg` and `leg_series`;
+calibration used `leg_series` throughout and is unchanged).
+
+**No-peek record.** Before this ruling, only the §1 breach text, emitter semantics, the two
+rows' return-variance/`value_loss`/`value_nrmse` values, and floored-update counts were
+inspected. No LEG-A/MECH/G1–G4/val-acc/param quantity or verdict field was computed or
+read; the counterfactual verdict was not computed. The first packet output is retained
+as ADJUDICATION-HOLD evidence; the rescore of the identical frozen spec follows this
+amendment.
+
+**Declined scope (recorded):** adding `value_loss`/`value_nrmse` as new §1 hard conditions
+was declined for this packet — they are not in the pre-registered row schema and tightening
+a frozen gate post-data is the same class of error in the opposite direction; proposed for
+the n=10 pre-registration instead. Per-pair floored-exclusion reporting already exists
+(per-pair `floored_fraction` + §8B asymmetry guard). A future telemetry schema should
+replace the NaN marker with `ev_defined: bool` + `ev_undefined_reason` (TIP
+missingness-semantics registry item).

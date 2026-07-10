@@ -1,0 +1,25 @@
+# Stage-2 HRA MAJOR-1 acceptance verdict
+
+**Verdict: INVALID**  (n=5, direction-screen tier — a clean screen is SCREEN_PASS, NEVER banked as ACCEPT)
+
+## §1 Validity — INVALID
+
+The pair failed validity; per §1, NO leg/guard interpretation is performed.
+
+Breaches:
+- OFF arm has non-finite (NaN/Inf) scored metric(s): explained_variance
+- ON arm has non-finite (NaN/Inf) scored metric(s): explained_variance
+
+## §0 Provenance (Stage-0 evidence is NOT HRA evidence)
+
+```
+Stage-0 variance gate:
+    metric:  Cov(R_cf, R_total) / Var(R_total)  (value-free, raw-scale, per-return)
+    reading: median 1.017 (PDR-0032/0033), Stage-2-OFF control
+    licenses: running the Stage-2 HRA A/B at all
+    HRA evidence: NO — it does not test the HRA implementation
+
+Stage-2 HRA acceptance (THIS gate):
+    source:  fresh paired HRA-OFF / HRA-ON A/B (§10)
+    metrics: EV_main, EV_sum, advantage-path volatility, safety (§6)
+```
