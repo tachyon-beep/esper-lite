@@ -1,0 +1,83 @@
+# Stage-2 HRA MAJOR-1 acceptance verdict
+
+**Verdict: REJECT**  (n=5, direction-screen tier — a clean screen is SCREEN_PASS, NEVER banked as ACCEPT)
+
+## §1 Validity
+
+VALID — pairing, finiteness, and completeness gates pass.
+
+## §3 LEG-A — ev_sum non-inferiority (MAJOR-1 floor)
+
+Result: **FAIL**   (δ = 0.0503, frozen from OFF calibration)
+Per-seed Δ_A (ev_level ON − OFF): -0.1022, -0.0876, -0.0978, 0.1742, -0.0928
+
+## §4 LEG-B — advantage-path volatility reduction (gated)
+
+Result: **INCONCLUSIVE**   (ε_rel = 0.10)
+Per-seed Δ_B (rel. adv-residual IQR ON vs OFF): -0.1886, -0.0330, -0.2292, 0.5550, -0.0556
+Covariate IQR(Var(returns_total)) — ON:  252.5555, 452.3795, 349.4055, 377.5610, 382.5207
+Covariate IQR(Var(returns_total)) — OFF: 379.7626, 359.3988, 399.5565, 275.1548, 428.6731
+Covariate raw IQR(pre_norm_advantage_std) — ON:  8.9499, 11.9319, 9.2944, 9.7266, 8.7128
+Covariate raw IQR(pre_norm_advantage_std) — OFF: 9.2335, 9.2281, 8.4300, 9.6499, 8.8700
+Corroboration IQR(gradient_cv) — ON:  0.1880, 0.2069, 0.2036, 0.1923, 0.1947
+Corroboration IQR(gradient_cv) — OFF: 0.1787, 0.1765, 0.2150, 0.1879, 0.1839
+§4 confound downgrade: YES — the reduction is matched by a return-regime or gradient-CV volatility confound (demoted to INCONCLUSIVE)
+
+## §5 MECH — EV_main mechanism guard
+
+Hold: False   (ON ev_main volatility below the OFF explained_variance baseline on ≥⌈0.8n⌉ seeds)
+
+## §6 Safety guards
+
+G1 val-acc non-regression: **PASS**   (τ_acc = 0.30 pp)
+G2 added-params non-inflation: True   (Δparam_max = 1527.8)
+G3 churn not reward-farmed: True
+G4 guard channels within OFF baseline: False
+G3 materiality threshold: ratio_max = 1.5
+G3 churn rates ON:  g=12.423/p=11.592/f=0.214; g=12.425/p=11.581/f=0.237; g=12.380/p=11.515/f=0.218; g=12.392/p=11.515/f=0.227; g=12.442/p=11.603/f=0.210
+G3 churn rates OFF: g=12.404/p=11.598/f=0.178; g=12.374/p=11.530/f=0.207; g=12.450/p=11.614/f=0.240; g=12.395/p=11.590/f=0.180; g=12.394/p=11.540/f=0.245
+G4 materiality thresholds: ratio_max = 2, abs_floor = 2
+G4 guard counts ON:  rollback=8, value_collapse=1, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=6, numerical_instability=0, reward_hacking=51; rollback=34, value_collapse=0, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=6, numerical_instability=0, reward_hacking=36; rollback=11, value_collapse=1, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=6, numerical_instability=0, reward_hacking=31; rollback=10, value_collapse=1, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=4, numerical_instability=0, reward_hacking=45; rollback=7, value_collapse=2, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=7, numerical_instability=1, reward_hacking=47
+G4 guard counts OFF: rollback=10, value_collapse=10, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=0, numerical_instability=0, reward_hacking=27; rollback=3, value_collapse=3, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=1, numerical_instability=0, reward_hacking=60; rollback=6, value_collapse=4, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=9, numerical_instability=0, reward_hacking=25; rollback=5, value_collapse=11, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=2, numerical_instability=1, reward_hacking=40; rollback=5, value_collapse=9, ratio_explosion=0, ratio_collapse=0, gradient_anomaly=0, gradient_pathology=2, numerical_instability=0, reward_hacking=59
+
+## §8B — floored-update exclusion
+
+Floored fraction ON:  0.000, 0.000, 0.000, 0.000, 0.005
+Floored fraction OFF: 0.000, 0.000, 0.000, 0.005, 0.000
+Caveat: telemetry exposes only the total `ev_return_variance` (per-stream blindness); the floor bites on the total, so the M1/MECH per-stream artifact travels with this verdict.
+
+## §8F — advantage-normalizer floor contamination
+
+advantage_std_floored flag: clear
+advantage_std_floored fraction ON:  0.000, 0.000, 0.000, 0.000, 0.000
+advantage_std_floored fraction OFF: 0.000, 0.000, 0.000, 0.000, 0.000
+Interpretation: nonzero fractions are contamination evidence for LEG-B; this packet reports the exact fractions because no frozen frequency cutoff is registered in §11.
+
+## §9 — diagnostic scalars
+
+available
+value_main_target_scale per seed: 5.3003, 4.7259, 5.2582, 5.1095, 3.6392
+cf_value_target_scale per seed: 14.4067, 15.0371, 15.6919, 17.9278, 15.5773
+
+## §11.2 — cf-warmup descriptive (report, do not gate)
+
+- seed 41: cf_value_loss present 183/183 scored, finite 183/183; plateau never; loss p50/p90/max 0.379/4.23/54.3; cf scale p50/p90/max 13.1/26.2/28.2, Q1→Q4 median 2.25→25.4
+- seed 42: cf_value_loss present 183/183 scored, finite 183/183; plateau never; loss p50/p90/max 0.342/3.79/51.3; cf scale p50/p90/max 13.7/28/30.3, Q1→Q4 median 4.17→27.8
+- seed 43: cf_value_loss present 183/183 scored, finite 183/183; plateau never; loss p50/p90/max 0.316/3.28/31.1; cf scale p50/p90/max 13.9/27.5/28.7, Q1→Q4 median 4.19→27.2
+- seed 44: cf_value_loss present 183/183 scored, finite 183/183; plateau never; loss p50/p90/max 0.251/1.13/7.97; cf scale p50/p90/max 16/28.4/35, Q1→Q4 median 7.42→27.1
+- seed 45: cf_value_loss present 182/182 scored, finite 182/182; plateau never; loss p50/p90/max 0.378/2.71/49.9; cf scale p50/p90/max 13.6/24.4/26.7, Q1→Q4 median 4.11→23.8
+Interpretation: presence+finiteness are the §1 hard gates; the plateau index and scale drift are descriptive warmup evidence only (§11.2) and MUST NOT affect the screen verdict.
+
+## §0 Provenance (Stage-0 evidence is NOT HRA evidence)
+
+```
+Stage-0 variance gate:
+    metric:  Cov(R_cf, R_total) / Var(R_total)  (value-free, raw-scale, per-return)
+    reading: median 1.017 (PDR-0032/0033), Stage-2-OFF control
+    licenses: running the Stage-2 HRA A/B at all
+    HRA evidence: NO — it does not test the HRA implementation
+
+Stage-2 HRA acceptance (THIS gate):
+    source:  fresh paired HRA-OFF / HRA-ON A/B (§10)
+    metrics: EV_main, EV_sum, advantage-path volatility, safety (§6)
+```
