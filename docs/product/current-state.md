@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-11 (~01:00) · checkpoint #37 (PDR-0057..0059; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-11 (~02:00) · checkpoint #38 (PDR-0060; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
 **EV-stabilization** (esper-lite-f25b71c165, Now bet): the **Stage-2 MAJOR-1 n=5
@@ -36,6 +36,15 @@ run). Packet of record: `docs/analysis/2026-07-11-stage2-major1-packet.txt`
   `docs/plans/concepts/2026-07-10-entropy-floor-population-audit.md`.
 - **PDR-0056 trigger resolved:** rerun 5/5 clean, zero drops — co-tenancy
   attribution CONFIRMED; quiet-box rule stays standing for future evidence runs.
+- **PDR-0060 (pre-DECIDE evidence):** BANKED = LEG-A deficit late-training +
+  seed-heterogeneous (warmup-tax falsified); ev_main healthy (0.68–0.77 Q4) vs
+  cf partially learnable (0.44–0.54) with 3.7–11.3× scale growth; cf target partly
+  ENDOGENOUS (per-stream GAE bootstraps its own head, rollout_buffer.py:678).
+  PROVISIONAL (do not cite as fact): error-covariance anticorrelation; seed-44
+  scale-stabilization mechanism; interference absence. Gram-matrix telemetry
+  contract (~14 scalars/update) adopted — rides the post-freeze observability
+  landing; enables the held-out calibration-rescue A′/B discriminator (not
+  retroactive). Path lean: slightly B, A′ credible — ADVISORY ONLY.
 - **Owner grant confirmed 2026-07-10 in-session** ("Yes") — wording stands as
   recorded in vision.md.
 
@@ -52,18 +61,18 @@ run). Packet of record: `docs/analysis/2026-07-11-stage2-major1-packet.txt`
 - North-star target/date, rent ceiling, host-accuracy floor: owner-unset.
 - Standing: no push/tag/release/branch-deletion/telemetry-deletion/remote action.
 
-## Last checkpoint did (checkpoint #37)
-- ON rerun completed 5/5 clean; wave stewarded under quiet-mode (log-tails only).
-- First scoring INVALID → diagnosed as checker-population artifact (2/2000 emitter
-  NaN-markers) → owner ruled Option B → §11.3 envelope implemented, tested,
-  committed pre-rescore with hashed inputs and no-peek held (PDR-0058).
-- Rescore: §1 VALID → **REJECT** read banked + delivered (PDR-0059); packet,
-  metrics, roadmap, tracker all updated.
-- Entropy-floor population audit adopted from 3-round external review, all claims
-  code-verified; concept doc + tracker row landed (PDR-0057).
+## Last checkpoint did (checkpoint #38)
+- Ran the owner-approved post-verdict analysis (esper-lite-c004d67fb9, closed):
+  error decomposition + seed-44 contrast over the completed A/B arms; pipeline
+  validated by reproducing the packet's Δ_A per seed.
+- Second external review calibrated the claims (banked vs provisional register in
+  the analysis doc addendum); two additions of our own: bootstrap-feedback
+  endogeneity + Gram-matrix sufficient-statistic telemetry contract (PDR-0060).
+- Metrics pointer added; tracker reconciled (task closed with full comment trail).
 
 ## Next session, start here
-Run the penalty-schedule fix under PDR-0055 (drl-expert review gate) and relaunch
-the 600-round diagnostic — session-proof launcher, quiet box. If the owner is
-present, surface the two unblocked DECIDEs (epic direction; branch survivor)
-before starting long work.
+Run the penalty-schedule fix under PDR-0055 (drl-expert review gate) with the
+PDR-0060 Gram-matrix emission riding the same observability landing, then relaunch
+the 600-round diagnostic — session-proof launcher, quiet box while it writes. If
+the owner is present, surface the two unblocked DECIDEs (epic direction — now with
+the full pre-DECIDE evidence base; branch survivor) before starting long work.
