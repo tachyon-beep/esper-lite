@@ -107,3 +107,75 @@ availability-denominator correction.
 - The 600-round diagnostic question ("does the cf scale plateau?") is sharpened:
   seeds differ mainly in WHEN the scale stabilizes, so the diag should read scale
   slope and EV recovery jointly.
+
+---
+
+## Addendum (2026-07-11, post-review claim calibration)
+
+A second external review (owner-relayed) calibrated the first pass. Adopted demotions,
+one correction of our own framing, and two additions the review missed.
+
+### Claim status after calibration
+
+| Finding | Status |
+|---|---|
+| Objective-A REJECT | **Banked** (unchanged, PDR-0059) |
+| Deficit not merely warm-up; late divergence on s41/s43 | **Banked** (exact EV inputs; reproduces packet) |
+| Main target easier; main head learns it well (ev_main 0.68–0.77 Q4) | **Banked** |
+| cf target large and strongly non-stationary (3.7–11.3× scale growth) | **Banked** |
+| cf stream is the dominant residual burden | **Likely — qualitative**; quoted Var(e) magnitudes are running-scale approximations (lag band ±50–70% early) |
+| Component errors beneficially anticorrelated | **Suggestive, NOT banked** — `corr_e` beyond ±1 proves the reconstruction is not calibrated for covariance; sign can flip in marginal cells (s42 Q4 −6.5, s45 Q3 −9.9, s45 Q1 +4.6) and the lag errors are correlated across cells, so cross-cell sign consistency is weaker evidence than it looks |
+| No shared-trunk interference | **Softened**: no GROSS interference evident; interference relative to a main-only critic is UNIDENTIFIED (that arm does not exist) |
+| Seed-44 = early-scale-stabilization support for Path A | **Demoted to n=1 observational association**: its advantage vanishes in the last 50 (ends at parity); its Q1 lag ratio is the LARGEST (1.735), so the high early running scale does not prove a well-matched normalizer; equal learnable fractions do not establish equal behaviour |
+| "cf effectively unlearnable" | **Corrected**: partially learnable (ev_cf reaches 0.44–0.54 by Q4) — the scale grows faster than relative error falls, so the ABSOLUTE burden keeps expanding |
+
+### Correction — the missing total-value loss, stated precisely
+
+At the population optimum, per-component MSE heads ARE aligned with the total target
+(`E[G_m|s] + E[G_cf|s] = E[G|s]`) — the first pass's "two proxies" framing overstated
+the conceptual mismatch. The accurate durable statement: **Objective A did not
+directly optimise total prediction error; its component objectives align with the
+total only at their ideal optimum, and in this finite, shared-trunk, non-stationary,
+scale-mismatched regime the total fit was left unprotected.** Still a strong reason
+any Path-A′ successor carries a direct total objective; no longer an in-principle
+indictment.
+
+### Addition 1 — bootstrap feedback makes the cf target partly ENDOGENOUS
+
+Per-stream GAE constructs each stream's target from its own head:
+`returns_cf = A_cf + V_cf` (`rollout_buffer.py:678`; gate doc §0 declares this, and
+`cov_rcf_return_share` is documented as "V_cf-contaminated" for the same reason). A
+poorly-fit V_cf therefore pollutes its own future targets — some of the observed cf
+non-stationarity is self-inflicted, not just reward-side scale drift. Consequence for
+the DECIDE: a primary-`V_total` design (A′) or main-primary design (B) changes the
+bootstrap TOPOLOGY, not merely the loss — the strongest mechanical reason the rejected
+architecture cannot be rescued by head-size/loss-weight tuning.
+
+### Addition 2 — sufficient-statistic telemetry supersedes the field list
+
+Emit per update the means and full second-moment (Gram) matrix of
+`x = (V_main, V_cf, G_main, G_cf)` on the raw scale (~14 scalars). Everything both
+reviews asked for becomes computable offline on ANY window, forever: exact
+Var(e_main)/Var(e_cf)/Cov(e_main,e_cf)/Var(e_sum), the identity assertion, normalizer
+lag (against running scales), AND the held-out affine calibration-rescue test
+(`Ĝ = a·V_main + b·V_cf + c`, fit early / test late — Path A′ vs B discriminator).
+Note: that calibration test CANNOT run on the existing arms (no per-sample or moment
+data persisted); it is forward-looking emission for the next ON-leg run. On the
+600-round OFF diagnostic the matrix degenerates to (V, G) — still worth emitting for
+normalizer-lag and scale-slope reads.
+
+### Decision-rule capture (advisory, for the owner DECIDE)
+
+- **Path A′** (primary V_total directly trained + stabilised auxiliary component
+  heads + consistency term — NOT a rerun of Objective A) if: exact cf residual is
+  manageable after scale stabilisation; normalizer lag explains much of the deficit;
+  held-out recalibration rescues total EV; ev_cf keeps improving as scale slope falls.
+- **Path B** (main-primary de-shaping; cf via auxiliary/control-variate; new objective,
+  fresh PDR covering bias/optimum/exploration/safety) if: cf residual stays dominant
+  after stabilisation; calibration cannot rescue the sum; cf target stays severely
+  non-stationary while main stays learnable.
+- **Path C** (information-first) if: both streams hit low ceilings even after
+  stabilisation and offline Obs-V3 probes cannot beat the recurrent critic. Current
+  evidence does NOT point here for this failure (ev_main is high).
+- Current lean: **slightly toward Path B**, with A′ credible — held for the owner
+  DECIDE after the schedule-correct 600-round diagnostic.
