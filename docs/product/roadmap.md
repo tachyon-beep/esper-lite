@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-10 (PDR-0052..0056)
+# Roadmap — Esper            Updated: 2026-07-11 (PDR-0057..0059)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -22,18 +22,21 @@
   escalations fired — screen predicate = LEG-A ∧ MECH ∧ G1–G4; device placement ruled
   provenance, harness amended). First ON wave DEGRADED
   (telemetry writer starved by co-tenant review workload — operational, not code;
-  PDR-0056) → quarantined, full 5-seed RERUN in flight @ `a0ad968e` (training tree
-  byte-equivalent to the OFF arms' `fe177844`). §11.2 amendment: cf-plateau validity
-  gate demoted to descriptive after real-data infeasibility (PDR-0052); acceptance
-  reader hardened per high-effort review (OFF signature symmetry, outcome bounds from
-  leyline, duplicate/NULL guards, §11.2 descriptive block in the packet). Long-horizon
-  diagnostic tossed pre-start for a clean post-freeze redesign under the owner's
-  experiment-value principle (PDR-0053→0055). Next intent: score the paired packet
-  under the amended predicate when the rerun completes, then owner read; then freeze
-  lift → penalty-schedule fix (drl-reviewed) → clean 600-round diagnostic.**
+  PDR-0056) → quarantined; full 5-seed RERUN completed CLEAN 2026-07-11 (5× rc=0,
+  zero drops — PDR-0056 reversal trigger never fired). First scoring INVALID on a
+  checker-population artifact → owner-ruled Option B validity-envelope correction
+  (§11.3, PDR-0058) → rescore of the identical frozen spec: **Stage-2 MAJOR-1 n=5
+  screen verdict = REJECT (PDR-0059)** — LEG-A FAIL (median Δ_A ≈ −0.093 < −δ;
+  4/5 seeds regress) ∧ MECH fail ∧ G4 fail; G1/G2/G3 pass; LEG-B descriptive
+  INCONCLUSIVE (confound downgrade). NO n=10 for HRA objective-A as implemented;
+  Stage-0 de-shaping diagnosis untouched. Next intent (already licensed):
+  penalty-schedule fix (drl-reviewed, PDR-0055) → clean 600-round seed-41 OFF
+  diagnostic; entropy-floor population audit adopted front-of-TIP (PDR-0057).
+  EPIC DIRECTION after the diagnostic = owner DECIDE (TIP / reward-efficiency /
+  redesigned HRA with cf-target stabilization / Stage-1 flag).**
   · tracker: esper-lite-f25b71c165 (epic) · metric: EV Stage-0 gate (PASSED);
-  Stage-2 MAJOR-1 gate NOT YET READ; watch fossilize/ep + k≥2 frequency as the
-  organic-coverage signal
+  Stage-2 MAJOR-1 gate READ 2026-07-11 = REJECT; watch fossilize/ep + k≥2
+  frequency as the organic-coverage signal
 
 ## Parked (banked, not dead)
 - **Committed-Shapley top-up (reward credit-assignment redesign)** — PARKED 2026-07-05
