@@ -32,6 +32,15 @@
       "env": {},
       "type": "stdio"
     },
+    "plainweave": {
+      "args": [
+        "--root",
+        "/home/john/esper-lite"
+      ],
+      "command": "/home/john/.local/share/uv/tools/plainweave/bin/plainweave-mcp",
+      "env": {},
+      "type": "stdio"
+    },
     "wardline": {
       "args": [
         "mcp",
