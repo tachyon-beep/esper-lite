@@ -419,7 +419,7 @@ Two failure modes deserve a specific response:
   the actual intent.
 <!-- /filigree:instructions -->
 
-<!-- loomweave:instructions:v1.1.0-rc10:ca999d34 -->
+<!-- loomweave:instructions:v1.4.1:ca999d34 -->
 <!-- loomweave:last-writer:loomweave install -->
 ## Loomweave (code archaeology)
 
