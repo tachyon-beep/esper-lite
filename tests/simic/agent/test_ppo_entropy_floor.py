@@ -395,16 +395,24 @@ class TestEntropyFloorIntegration:
 
 
 class TestPenaltySchedule:
-    """Tests for three-phase penalty schedule in PPOAgent.
+    """Entropy-floor penalty schedule: ABSOLUTE update-round breakpoints (PDR-0055).
 
-    Schedule:
-    - 0-25% (early): 1.5x boost - establish diverse exploration habits
-    - 25-75% (mid): 1.0x baseline
-    - 75-100% (late): decay from 1.0x to 0.5x - allow natural convergence
+    Breakpoints are pinned to the 200-round experiment shape and expressed in
+    update rounds (leyline constants), NOT run-relative progress:
+    - rounds [0, 50):    1.5x boost - establish diverse exploration habits
+    - rounds [50, 150):  1.0x baseline
+    - rounds [150, 200): linear decay 1.0x -> 0.5x
+    - rounds >= 200:     hold 0.5x (longer runs are true continuations)
+
+    Shape-preserving property: every 200-round run behaves bit-identically to the
+    retired horizon-normalized schedule (progress = round / total_train_steps with
+    total_train_steps=200), so the completed A/B arms and any future 200-round arms
+    stay comparable. The coefficient-identity regression below is the
+    pre-registered test for that property (PDR-0055/0057).
     """
 
-    def test_early_training_boost(self) -> None:
-        """Schedule factor should be 1.5 during first 25% of training."""
+    @staticmethod
+    def _make_agent():
         from esper.simic.agent.ppo_agent import PPOAgent
         from esper.tamiyo.policy.factory import create_policy
         from esper.leyline.slot_config import SlotConfig
@@ -415,209 +423,109 @@ class TestPenaltySchedule:
             slot_config=slot_config,
             device="cpu",
         )
-        agent = PPOAgent(
-            policy=policy,
-            slot_config=slot_config,
-            device="cpu",
-            total_train_steps=1000,
-        )
-
-        # Test early-training boost (0-25%)
-        assert agent._get_penalty_schedule(0.0) == 1.5, "Schedule at 0% should be 1.5"
-        assert agent._get_penalty_schedule(0.10) == 1.5, "Schedule at 10% should be 1.5"
-        assert agent._get_penalty_schedule(0.24) == 1.5, "Schedule at 24% should be 1.5"
-        assert agent._get_penalty_schedule(0.249) == 1.5, "Schedule at 24.9% should be 1.5"
-
-    def test_mid_training_baseline(self) -> None:
-        """Schedule factor should be 1.0 during 25-75% of training."""
-        from esper.simic.agent.ppo_agent import PPOAgent
-        from esper.tamiyo.policy.factory import create_policy
-        from esper.leyline.slot_config import SlotConfig
-
-        slot_config = SlotConfig.for_grid(2, 2)
-        policy = create_policy(
-            policy_type="lstm",
-            slot_config=slot_config,
-            device="cpu",
-        )
-        agent = PPOAgent(
-            policy=policy,
-            slot_config=slot_config,
-            device="cpu",
-            total_train_steps=1000,
-        )
-
-        # Test mid-training baseline (25-75%)
-        assert agent._get_penalty_schedule(0.25) == 1.0, "Schedule at 25% should be 1.0"
-        assert agent._get_penalty_schedule(0.50) == 1.0, "Schedule at 50% should be 1.0"
-        assert agent._get_penalty_schedule(0.74) == 1.0, "Schedule at 74% should be 1.0"
-        assert agent._get_penalty_schedule(0.749) == 1.0, "Schedule at 74.9% should be 1.0"
-
-    def test_linear_decay_after_75_percent(self) -> None:
-        """Decay should linearly decrease from 1.0 at 75% to 0.5 at 100%."""
-        from esper.simic.agent.ppo_agent import PPOAgent
-        from esper.tamiyo.policy.factory import create_policy
-        from esper.leyline.slot_config import SlotConfig
-
-        slot_config = SlotConfig.for_grid(2, 2)
-        policy = create_policy(
-            policy_type="lstm",
-            slot_config=slot_config,
-            device="cpu",
-        )
-        agent = PPOAgent(
-            policy=policy,
-            slot_config=slot_config,
-            device="cpu",
-            total_train_steps=1000,
-        )
-
-        # At 75% -> 1.0 (boundary, start of decay)
-        assert agent._get_penalty_schedule(0.75) == pytest.approx(1.0)
-
-        # At 87.5% -> 0.75 (halfway between 1.0 and 0.5)
-        assert agent._get_penalty_schedule(0.875) == pytest.approx(0.75)
-
-        # At 93.75% -> 0.625 (3/4 of the way)
-        assert agent._get_penalty_schedule(0.9375) == pytest.approx(0.625)
-
-        # At 100% -> 0.5
-        assert agent._get_penalty_schedule(1.0) == pytest.approx(0.5)
-
-    def test_schedule_at_exact_boundaries(self) -> None:
-        """Test exact boundary values for numerical precision."""
-        from esper.simic.agent.ppo_agent import PPOAgent
-        from esper.tamiyo.policy.factory import create_policy
-        from esper.leyline.slot_config import SlotConfig
-
-        slot_config = SlotConfig.for_grid(2, 2)
-        policy = create_policy(
-            policy_type="lstm",
-            slot_config=slot_config,
-            device="cpu",
-        )
-        agent = PPOAgent(
+        return PPOAgent(
             policy=policy,
             slot_config=slot_config,
             device="cpu",
         )
 
-        # Verify exact boundary values
-        assert agent._get_penalty_schedule(0.0) == 1.5, "Start of training should be boosted"
-        assert agent._get_penalty_schedule(0.25) == 1.0, "At 25%, transition to baseline"
-        assert agent._get_penalty_schedule(0.75) == 1.0, "At 75%, start of decay (still 1.0)"
+    @staticmethod
+    def _retired_horizon_normalized_schedule(update_round: int, total: int = 200) -> float:
+        """The retired formula, evaluated at the 200-round shape (the A/B arm config).
 
-        # Verify decay decreases monotonically after 75%
-        prev_factor = 1.0
-        for progress in [0.76, 0.80, 0.85, 0.90, 0.95, 1.0]:
-            factor = agent._get_penalty_schedule(progress)
-            assert factor < prev_factor, f"Factor should decrease: {factor} < {prev_factor} at {progress}"
-            prev_factor = factor
+        Bit-identity REFERENCE for the coefficient-identity regression: progress =
+        round / total; 1.5x below 25%, 1.0x below 75%, then linear decay to 0.5x
+        at 100%. Kept verbatim (same operations, same literals) so the comparison
+        is against the exact arithmetic the completed arms ran.
+        """
+        progress = min(1.0, max(0.0, update_round / total))
+        if progress < 0.25:
+            return 1.5
+        elif progress < 0.75:
+            return 1.0
+        return 1.0 - 0.5 * ((progress - 0.75) / 0.25)
+
+    def test_coefficient_identity_rounds_0_199(self) -> None:
+        """PRE-REGISTERED REGRESSION (PDR-0055/0057): bit-identical over rounds 0-199.
+
+        Every 200-round run must produce EXACTLY the coefficients the retired
+        horizon-normalized schedule produced (float ==, not approx). This is the
+        shape-preserving property that keeps the completed A/B arms comparable
+        with all future 200-round arms.
+        """
+        agent = self._make_agent()
+        for update_round in range(200):
+            assert agent._get_penalty_schedule(update_round) == (
+                self._retired_horizon_normalized_schedule(update_round)
+            ), f"coefficient identity broken at update round {update_round}"
+
+    def test_boost_boundary_off_by_one(self) -> None:
+        """Boost applies on rounds [0, 50): round 49 is boosted, round 50 is not."""
+        agent = self._make_agent()
+        assert agent._get_penalty_schedule(0) == 1.5
+        assert agent._get_penalty_schedule(49) == 1.5
+        assert agent._get_penalty_schedule(50) == 1.0
+
+    def test_decay_boundary_off_by_one(self) -> None:
+        """Baseline holds through round 150 (decay start is still 1.0); round 151 is
+        the first strictly-decayed round."""
+        agent = self._make_agent()
+        assert agent._get_penalty_schedule(149) == 1.0
+        assert agent._get_penalty_schedule(150) == 1.0
+        factor_151 = agent._get_penalty_schedule(151)
+        assert 0.5 < factor_151 < 1.0
+
+    def test_horizon_boundary_off_by_one(self) -> None:
+        """Decay completes AT round 200: round 199 is the last partially-decayed round."""
+        agent = self._make_agent()
+        assert agent._get_penalty_schedule(199) == pytest.approx(0.51)
+        assert agent._get_penalty_schedule(200) == 0.5
+        assert agent._get_penalty_schedule(201) == 0.5
+
+    def test_hold_beyond_horizon(self) -> None:
+        """Rounds >= 200 hold 0.5x exactly - the 600-round diagnostic property.
+
+        Under the retired schedule a 600-round run recomputed every breakpoint
+        (boost would persist through round 150); under the absolute schedule,
+        rounds 200-599 are a flat 0.5x continuation of the 200-round shape.
+        """
+        agent = self._make_agent()
+        for update_round in (200, 250, 300, 599, 10_000):
+            assert agent._get_penalty_schedule(update_round) == 0.5
+
+    def test_decay_strictly_monotone(self) -> None:
+        """Factor strictly decreases across the decay window (rounds 150-200)."""
+        agent = self._make_agent()
+        prev = agent._get_penalty_schedule(150)
+        for update_round in range(151, 201):
+            factor = agent._get_penalty_schedule(update_round)
+            assert factor < prev, f"decay not monotone at round {update_round}"
+            prev = factor
 
     def test_schedule_bounds(self) -> None:
-        """Schedule factor should always be in [0.5, 1.5]."""
-        from esper.simic.agent.ppo_agent import PPOAgent
-        from esper.tamiyo.policy.factory import create_policy
-        from esper.leyline.slot_config import SlotConfig
-
-        slot_config = SlotConfig.for_grid(2, 2)
-        policy = create_policy(
-            policy_type="lstm",
-            slot_config=slot_config,
-            device="cpu",
-        )
-        agent = PPOAgent(
-            policy=policy,
-            slot_config=slot_config,
-            device="cpu",
-        )
-
-        # Test full range of progress values
-        for progress in [0.0, 0.10, 0.24, 0.25, 0.5, 0.74, 0.75, 0.8, 0.9, 0.99, 1.0]:
-            factor = agent._get_penalty_schedule(progress)
-            assert 0.5 <= factor <= 1.5, f"Schedule factor {factor} out of bounds at progress {progress}"
-
-    def test_schedule_clamps_progress_above_one(self) -> None:
-        """Overrunning planned train steps must not invert entropy penalty into reward."""
-        from esper.simic.agent.ppo_agent import PPOAgent
-        from esper.tamiyo.policy.factory import create_policy
-        from esper.leyline.slot_config import SlotConfig
-
-        slot_config = SlotConfig.for_grid(2, 2)
-        policy = create_policy(
-            policy_type="lstm",
-            slot_config=slot_config,
-            device="cpu",
-        )
-        agent = PPOAgent(
-            policy=policy,
-            slot_config=slot_config,
-            device="cpu",
-        )
-
-        assert agent._get_penalty_schedule(1.5) == pytest.approx(0.5)
-
-    def test_total_train_steps_must_be_positive(self) -> None:
-        """Zero total_train_steps would make update progress undefined."""
-        from esper.simic.agent.ppo_agent import PPOAgent
-        from esper.tamiyo.policy.factory import create_policy
-        from esper.leyline.slot_config import SlotConfig
-
-        slot_config = SlotConfig.for_grid(2, 2)
-        policy = create_policy(
-            policy_type="lstm",
-            slot_config=slot_config,
-            device="cpu",
-        )
-
-        with pytest.raises(ValueError, match="total_train_steps"):
-            PPOAgent(
-                policy=policy,
-                slot_config=slot_config,
-                device="cpu",
-                total_train_steps=0,
-            )
+        """Schedule factor always lies in [0.5, 1.5]."""
+        agent = self._make_agent()
+        for update_round in (0, 10, 49, 50, 100, 149, 150, 175, 199, 200, 500, 100_000):
+            factor = agent._get_penalty_schedule(update_round)
+            assert 0.5 <= factor <= 1.5, f"factor out of bounds at round {update_round}"
 
     def test_schedule_applied_to_coefficients_in_update(self) -> None:
-        """Verify that schedule factor is applied to coefficients during update."""
-        from esper.simic.agent.ppo_agent import PPOAgent
-        from esper.tamiyo.policy.factory import create_policy
-        from esper.leyline.slot_config import SlotConfig
+        """The update path drives the schedule with train_steps as the update round."""
+        agent = self._make_agent()
 
-        slot_config = SlotConfig.for_grid(2, 2)
-        policy = create_policy(
-            policy_type="lstm",
-            slot_config=slot_config,
-            device="cpu",
-        )
+        agent.train_steps = 10
+        assert agent._get_penalty_schedule(agent.train_steps) == 1.5
 
-        # Test at different progress points
-        agent = PPOAgent(
-            policy=policy,
-            slot_config=slot_config,
-            device="cpu",
-            total_train_steps=1000,
-        )
-
-        # Early training (10% progress) - should have 1.5x boost
         agent.train_steps = 100
-        expected_boost = agent._get_penalty_schedule(0.1)
-        assert expected_boost == 1.5
+        assert agent._get_penalty_schedule(agent.train_steps) == 1.0
 
-        # Mid training (50% progress) - should have 1.0x baseline
-        agent.train_steps = 500
-        expected_baseline = agent._get_penalty_schedule(0.5)
-        assert expected_baseline == 1.0
+        agent.train_steps = 175
+        expected_decay = agent._get_penalty_schedule(agent.train_steps)
+        assert expected_decay == pytest.approx(0.75)
 
-        # Late training (90% progress) - should have 0.7x decay
-        agent.train_steps = 900
-        expected_decay = agent._get_penalty_schedule(0.9)
-        assert expected_decay == pytest.approx(0.7)
-
-        # Verify scheduled coefficients are correct at 90%
         scheduled_coef = {
             head: coef * expected_decay
             for head, coef in agent.entropy_floor_penalty_coef.items()
         }
         blueprint_base = agent.entropy_floor_penalty_coef["blueprint"]
-        assert scheduled_coef["blueprint"] == pytest.approx(blueprint_base * 0.7)
+        assert scheduled_coef["blueprint"] == pytest.approx(blueprint_base * 0.75)

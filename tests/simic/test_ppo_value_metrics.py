@@ -746,3 +746,87 @@ class TestAuxEVRobustnessEmit:
         # gate -- it is not a gate input. value_loss/bellman_error are the only gate triggers.
         import math as _math
         assert _math.isfinite(metrics["aux_explained_variance"]), "floored aux-EV stays finite"
+
+
+class TestComputeVgSufficientStats:
+    """PDR-0060 sufficient-statistic telemetry: per-update means + Gram matrix.
+
+    The helper turns a named vector family (raw-scale values/targets) into the
+    exact sufficient statistics for offline error decomposition: count, first
+    moments, and the upper-triangle second-moment (Gram) matrix E[x_i * x_j].
+    """
+
+    def test_two_vector_exact_math(self):
+        from esper.leyline.value_metrics import compute_vg_sufficient_stats
+
+        stats = compute_vg_sufficient_stats({
+            "v": torch.tensor([1.0, 2.0, 3.0]),
+            "g": torch.tensor([2.0, 4.0, 6.0]),
+        })
+        assert stats["vg_count"].item() == 3.0
+        assert stats["vg_mean_v"].item() == pytest.approx(2.0)
+        assert stats["vg_mean_g"].item() == pytest.approx(4.0)
+        assert stats["vg_gram_v_v"].item() == pytest.approx(14.0 / 3.0)
+        assert stats["vg_gram_v_g"].item() == pytest.approx(28.0 / 3.0)
+        assert stats["vg_gram_g_g"].item() == pytest.approx(56.0 / 3.0)
+        assert set(stats) == {
+            "vg_count", "vg_mean_v", "vg_mean_g",
+            "vg_gram_v_v", "vg_gram_v_g", "vg_gram_g_g",
+        }
+
+    def test_four_vector_key_set_matches_contract(self):
+        """ON-leg shape: 4 named vectors -> count + 4 means + 10 Gram entries."""
+        from esper.leyline.value_metrics import compute_vg_sufficient_stats
+
+        vectors = {
+            "v_main": torch.randn(8),
+            "v_cf": torch.randn(8),
+            "g_main": torch.randn(8),
+            "g_cf": torch.randn(8),
+        }
+        stats = compute_vg_sufficient_stats(vectors)
+        assert set(stats) == {
+            "vg_count",
+            "vg_mean_v_main", "vg_mean_v_cf", "vg_mean_g_main", "vg_mean_g_cf",
+            "vg_gram_v_main_v_main", "vg_gram_v_main_v_cf",
+            "vg_gram_v_main_g_main", "vg_gram_v_main_g_cf",
+            "vg_gram_v_cf_v_cf", "vg_gram_v_cf_g_main", "vg_gram_v_cf_g_cf",
+            "vg_gram_g_main_g_main", "vg_gram_g_main_g_cf",
+            "vg_gram_g_cf_g_cf",
+        }
+
+    def test_error_variance_reconstruction(self):
+        """The offline use-case: Var(e), e = g - v, is exact from the stats alone."""
+        from esper.leyline.value_metrics import compute_vg_sufficient_stats
+
+        torch.manual_seed(0)
+        v = torch.randn(64)
+        g = torch.randn(64) * 3.0 + 1.0
+        stats = compute_vg_sufficient_stats({"v": v, "g": g})
+
+        e_second_moment = (
+            stats["vg_gram_g_g"] - 2.0 * stats["vg_gram_v_g"] + stats["vg_gram_v_v"]
+        )
+        e_mean = stats["vg_mean_g"] - stats["vg_mean_v"]
+        var_e = e_second_moment - e_mean**2
+
+        direct = (g - v).var(correction=0)
+        assert var_e.item() == pytest.approx(direct.item(), rel=1e-5)
+
+    def test_rejects_mismatched_lengths(self):
+        from esper.leyline.value_metrics import compute_vg_sufficient_stats
+
+        with pytest.raises(ValueError, match="length"):
+            compute_vg_sufficient_stats({
+                "v": torch.randn(4),
+                "g": torch.randn(5),
+            })
+
+    def test_rejects_empty_vectors(self):
+        from esper.leyline.value_metrics import compute_vg_sufficient_stats
+
+        with pytest.raises(ValueError, match="empty"):
+            compute_vg_sufficient_stats({
+                "v": torch.empty(0),
+                "g": torch.empty(0),
+            })

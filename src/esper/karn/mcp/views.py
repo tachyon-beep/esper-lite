@@ -244,6 +244,31 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.value_target_scale')::DOUBLE as value_target_scale,
             json_extract(data, '$.value_main_target_scale')::DOUBLE as value_main_target_scale,
             json_extract(data, '$.cf_value_target_scale')::DOUBLE as cf_value_target_scale,
+            -- PDR-0060 vg sufficient statistics: count + means + upper-triangle Gram
+            -- (raw-scale second moments) of the value/target family, once per update.
+            -- Leg-dependent families (NULL on the other leg): OFF emits (v, g), the
+            -- HRA ON leg (v_main, v_cf, g_main, g_cf). Pure telemetry, never gate
+            -- inputs; sufficient for exact offline error decomposition.
+            json_extract(data, '$.vg_count')::DOUBLE as vg_count,
+            json_extract(data, '$.vg_mean_v')::DOUBLE as vg_mean_v,
+            json_extract(data, '$.vg_mean_g')::DOUBLE as vg_mean_g,
+            json_extract(data, '$.vg_gram_v_v')::DOUBLE as vg_gram_v_v,
+            json_extract(data, '$.vg_gram_v_g')::DOUBLE as vg_gram_v_g,
+            json_extract(data, '$.vg_gram_g_g')::DOUBLE as vg_gram_g_g,
+            json_extract(data, '$.vg_mean_v_main')::DOUBLE as vg_mean_v_main,
+            json_extract(data, '$.vg_mean_v_cf')::DOUBLE as vg_mean_v_cf,
+            json_extract(data, '$.vg_mean_g_main')::DOUBLE as vg_mean_g_main,
+            json_extract(data, '$.vg_mean_g_cf')::DOUBLE as vg_mean_g_cf,
+            json_extract(data, '$.vg_gram_v_main_v_main')::DOUBLE as vg_gram_v_main_v_main,
+            json_extract(data, '$.vg_gram_v_main_v_cf')::DOUBLE as vg_gram_v_main_v_cf,
+            json_extract(data, '$.vg_gram_v_main_g_main')::DOUBLE as vg_gram_v_main_g_main,
+            json_extract(data, '$.vg_gram_v_main_g_cf')::DOUBLE as vg_gram_v_main_g_cf,
+            json_extract(data, '$.vg_gram_v_cf_v_cf')::DOUBLE as vg_gram_v_cf_v_cf,
+            json_extract(data, '$.vg_gram_v_cf_g_main')::DOUBLE as vg_gram_v_cf_g_main,
+            json_extract(data, '$.vg_gram_v_cf_g_cf')::DOUBLE as vg_gram_v_cf_g_cf,
+            json_extract(data, '$.vg_gram_g_main_g_main')::DOUBLE as vg_gram_g_main_g_main,
+            json_extract(data, '$.vg_gram_g_main_g_cf')::DOUBLE as vg_gram_g_main_g_cf,
+            json_extract(data, '$.vg_gram_g_cf_g_cf')::DOUBLE as vg_gram_g_cf_g_cf,
             -- D5 slot-saturation / actor-agency diagnostics
             json_extract(data, '$.forced_step_ratio')::DOUBLE as forced_step_ratio,
             json_extract(data, '$.usable_actor_timesteps')::INTEGER as usable_actor_timesteps,

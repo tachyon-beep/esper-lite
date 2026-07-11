@@ -1349,7 +1349,6 @@ def test_recurrent_n_epochs_reaches_agent(monkeypatch):
 
     def _spy(*args, **kwargs):
         captured["recurrent_n_epochs"] = kwargs["recurrent_n_epochs"]
-        captured["total_train_steps"] = kwargs["total_train_steps"]
         raise _SpyDone
 
     # Preserve classmethods/attributes the entrypoint may touch before the ctor.
@@ -1368,12 +1367,10 @@ def test_recurrent_n_epochs_reaches_agent(monkeypatch):
             chunk_length=2,
             ppo_updates_per_batch=1,
             recurrent_n_epochs=4,
-            total_train_steps=7,
             slots=["r0c0"],
         )
 
     assert captured["recurrent_n_epochs"] == 4
-    assert captured["total_train_steps"] == 7
 
 
 def test_run_ppo_updates_uses_policy_amp_context_when_enabled(monkeypatch):
@@ -2028,3 +2025,23 @@ def test_classification_correct_tensor_shape_still_works():
     assert total == fused_batch_size, (
         f"Total should be {fused_batch_size} samples, got {total}"
     )
+
+
+def test_aggregate_ppo_metrics_reduces_vg_sufficient_stats():
+    """PDR-0060 vg stats are mean-reduced across updates like their EV siblings.
+
+    The strict whitelist raises KeyError for undeclared reducers, so this pins
+    both the declaration and the reduction semantics.
+    """
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {"vg_count": 100.0, "vg_mean_v": 1.0, "vg_gram_v_g": 4.0},
+        {"vg_count": 100.0, "vg_mean_v": 3.0, "vg_gram_v_g": 8.0},
+    ])
+    assert metrics["vg_count"] == 100.0
+    assert metrics["vg_mean_v"] == 2.0
+    assert metrics["vg_gram_v_g"] == 6.0
+
+    on_leg = _aggregate_ppo_metrics([{"vg_gram_v_main_g_cf": 5.0}])
+    assert on_leg["vg_gram_v_main_g_cf"] == 5.0

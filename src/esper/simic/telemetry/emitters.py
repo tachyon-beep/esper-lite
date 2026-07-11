@@ -36,7 +36,7 @@ from esper.leyline import (
     TelemetryEventType,
     TrendDetectedPayload,
 )
-from esper.leyline.telemetry import HeadTelemetry
+from esper.leyline.telemetry import HeadTelemetry, PPO_VG_SUFFICIENT_STAT_FIELDS
 from esper.nissa import get_hub
 
 from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
@@ -1104,6 +1104,10 @@ def emit_ppo_update_event(
             return_var_cf_share=metrics.get("return_var_cf_share"),
             return_var_main_share=metrics.get("return_var_main_share"),
             return_var_residual_share=metrics.get("return_var_residual_share"),
+            # PDR-0060 vg sufficient statistics (leg-dependent family; .get() None =>
+            # absent on this leg, dropped at serialization — same optional-numeric
+            # pattern as ev_main above).
+            **{key: metrics.get(key) for key in PPO_VG_SUFFICIENT_STAT_FIELDS},
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=metrics.get("inf_grad_count", 0),

@@ -181,6 +181,35 @@ class TestPPOCheckpointValidation:
 class TestPPOCheckpointNoBackwardsCompatibility:
     """Verify legacy checkpoints are rejected (No Legacy Code Policy)."""
 
+    def test_pre_pdr0055_checkpoint_with_total_train_steps_fails_with_clear_error(
+        self, tmp_path: Path
+    ):
+        """A pre-schedule-fix checkpoint (config carries the retired total_train_steps)
+        must fail with the descriptive retrain error, not a raw ctor TypeError.
+
+        Same break-naming pattern as the n_epochs guard: no remap, no compat — the
+        guard exists only so the failure names the break.
+        """
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, slot_config=slot_config, device="cpu")
+        agent.save(tmp_path / "agent.pt")
+
+        # Simulate a pre-PDR-0055 checkpoint: the retired schedule param in config.
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        checkpoint['config']['total_train_steps'] = 200
+        torch.save(checkpoint, tmp_path / "pre_fix.pt")
+
+        with pytest.raises(RuntimeError, match="total_train_steps is no longer supported"):
+            PPOAgent.load(tmp_path / "pre_fix.pt", device="cpu")
+
+
     def test_legacy_checkpoint_fails_fast(self, tmp_path: Path):
         """Legacy checkpoint (missing checkpoint_version) fails with clear error."""
         # Create checkpoint with current format
@@ -500,3 +529,4 @@ class TestPPOCheckpointCompileMode:
 
         assert result.values.shape == (1,)
         assert 0 <= result.actions["slot"].item() < slot_config.num_slots
+

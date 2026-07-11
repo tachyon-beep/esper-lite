@@ -89,6 +89,32 @@ class PPOUpdateMetrics(TypedDict, total=False):
     ev_sum: float  # EV(V_total, returns_total) (== explained_variance on the ON leg)
     cov_rcf_return_share: float  # ON-leg λ-return DIAGNOSTIC (V_cf-contaminated, NOT the gate)
     r_main_cov: float  # std(returns_main)/(|mean(returns_main)|+eps): ON-leg λ CoV diagnostic
+    # PDR-0060 vg sufficient statistics: count + means + upper-triangle Gram (raw-scale
+    # second moments) of the value/target family, once per update. LEG-DEPENDENT key
+    # families, disjoint by design: OFF emits the (v, g) family, ON the
+    # (v_main, v_cf, g_main, g_cf) family. Enables exact offline error decomposition,
+    # the V_total identity assertion, normalizer-lag reads, and the held-out affine
+    # calibration-rescue discriminator.
+    vg_count: float
+    vg_mean_v: float
+    vg_mean_g: float
+    vg_gram_v_v: float
+    vg_gram_v_g: float
+    vg_gram_g_g: float
+    vg_mean_v_main: float
+    vg_mean_v_cf: float
+    vg_mean_g_main: float
+    vg_mean_g_cf: float
+    vg_gram_v_main_v_main: float
+    vg_gram_v_main_v_cf: float
+    vg_gram_v_main_g_main: float
+    vg_gram_v_main_g_cf: float
+    vg_gram_v_cf_v_cf: float
+    vg_gram_v_cf_g_main: float
+    vg_gram_v_cf_g_cf: float
+    vg_gram_g_main_g_main: float
+    vg_gram_g_main_g_cf: float
+    vg_gram_g_cf_g_cf: float
     # EV-stab Stage 0 GATE (value-free, both legs; gated on return_variance_telemetry). The
     # TRUE gate (PDR-0028): raw per-return covariance shares, identical on both legs.
     return_var_cf_share: float  # Cov(R_cf, R)/Var(R) — the >0.40 Stage-0 gate

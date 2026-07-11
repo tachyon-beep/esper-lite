@@ -72,17 +72,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     n_episodes = args.n_episodes
-    # entropy anneal spans the whole run; total_train_steps pins the penalty schedule
-    # identically across arms (==n_episodes since ppo_updates_per_batch=1 for LSTM).
+    # entropy anneal spans the whole run; the entropy-floor penalty schedule is pinned
+    # to absolute update rounds (PDR-0055), so it is identical across arms by construction.
     entropy_anneal_episodes = n_episodes
-    total_train_steps = n_episodes
 
     print(
         f"[ev-liftoff] arm K={args.k} device={args.device} "
         f"n_episodes={n_episodes} seed={SEED} task={args.task} "
         f"entropy_anneal_episodes={entropy_anneal_episodes} "
         f"entropy_anneal_steps={math.ceil(entropy_anneal_episodes / N_ENVS)} "
-        f"total_train_steps={total_train_steps} gpu_preload={args.gpu_preload} "
+        f"gpu_preload={args.gpu_preload} "
         f"telemetry_dir={args.telemetry_dir}",
         flush=True,
     )
@@ -106,7 +105,6 @@ def main(argv: list[str]) -> int:
         gae_lambda=GAE_LAMBDA,
         ppo_updates_per_batch=1,            # mandatory for LSTM; K is internal
         recurrent_n_epochs=args.k,          # THE independent variable
-        total_train_steps=total_train_steps,
         seed=SEED,
         amp=True,
         amp_dtype="bfloat16",

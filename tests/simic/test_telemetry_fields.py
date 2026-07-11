@@ -303,3 +303,90 @@ class TestEntropyCollapsed:
         entropy = 0.1
         collapsed = entropy < 0.1
         assert collapsed is False
+
+
+class TestPPOUpdatePayloadVgSufficientStatFields:
+    """PDR-0060 sufficient-statistic contract on PPOUpdatePayload (leyline).
+
+    20 optional fields: count + means + upper-triangle Gram of the raw-scale
+    value/target family. OFF-leg keys ((V, G) family) and ON-leg keys
+    ((V_main, V_cf, G_main, G_cf) family) are disjoint; absent fields are
+    DROPPED from serialization (absence, not null — the leg-signature rule).
+    """
+
+    OFF_KEYS = {
+        "vg_mean_v", "vg_mean_g",
+        "vg_gram_v_v", "vg_gram_v_g", "vg_gram_g_g",
+    }
+    ON_KEYS = {
+        "vg_mean_v_main", "vg_mean_v_cf", "vg_mean_g_main", "vg_mean_g_cf",
+        "vg_gram_v_main_v_main", "vg_gram_v_main_v_cf",
+        "vg_gram_v_main_g_main", "vg_gram_v_main_g_cf",
+        "vg_gram_v_cf_v_cf", "vg_gram_v_cf_g_main", "vg_gram_v_cf_g_cf",
+        "vg_gram_g_main_g_main", "vg_gram_g_main_g_cf",
+        "vg_gram_g_cf_g_cf",
+    }
+    ALL_KEYS = OFF_KEYS | ON_KEYS | {"vg_count"}
+
+    @staticmethod
+    def _minimal_payload(**overrides):
+        return PPOUpdatePayload(
+            policy_loss=0.0,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+            **overrides,
+        )
+
+    def test_registry_and_fields_match_contract(self):
+        from esper.leyline.telemetry import PPO_VG_SUFFICIENT_STAT_FIELDS
+
+        assert set(PPO_VG_SUFFICIENT_STAT_FIELDS) == self.ALL_KEYS
+        fields = {f.name for f in dataclasses.fields(PPOUpdatePayload)}
+        assert self.ALL_KEYS <= fields
+
+        payload = self._minimal_payload()
+        for key in self.ALL_KEYS:
+            assert getattr(payload, key) is None
+
+    def test_to_dict_drops_absent_vg_fields(self):
+        # No vg stats set: serialized payload carries no vg keys at all.
+        data = self._minimal_payload().to_dict()
+        assert not (self.ALL_KEYS & set(data))
+
+        # OFF-leg stats set: exactly those keys serialize; ON-leg keys stay absent.
+        off_payload = self._minimal_payload(
+            vg_count=2400.0,
+            vg_mean_v=1.5,
+            vg_mean_g=2.5,
+            vg_gram_v_v=10.0,
+            vg_gram_v_g=11.0,
+            vg_gram_g_g=12.0,
+        )
+        data = off_payload.to_dict()
+        assert data["vg_count"] == 2400.0
+        assert data["vg_gram_v_g"] == 11.0
+        assert not (self.ON_KEYS & set(data))
+
+    def test_from_dict_roundtrip_and_old_event_compat(self):
+        off_payload = self._minimal_payload(
+            vg_count=100.0,
+            vg_mean_v=1.25,
+            vg_mean_g=2.0,
+            vg_gram_v_v=3.0,
+            vg_gram_v_g=4.0,
+            vg_gram_g_g=5.0,
+        )
+        parsed = PPOUpdatePayload.from_dict(off_payload.to_dict())
+        assert parsed.vg_mean_v == 1.25
+        assert parsed.vg_gram_v_g == 4.0
+        assert parsed.vg_mean_v_main is None
+
+        # Old persisted event (pre-PDR-0060, no vg keys): parses with all-None stats.
+        old_event = self._minimal_payload().to_dict()
+        parsed_old = PPOUpdatePayload.from_dict(old_event)
+        for key in self.ALL_KEYS:
+            assert getattr(parsed_old, key) is None

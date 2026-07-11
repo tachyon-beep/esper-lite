@@ -277,6 +277,18 @@ ENTROPY_FLOOR_PENALTY_COEF: dict[str, float] = {
     "alpha_curve": 0.1,
 }
 
+# Entropy-floor penalty schedule breakpoints (PDR-0055): ABSOLUTE update rounds,
+# pinned to the 200-round experiment shape rather than normalized by run length.
+# Runs longer than the pinned horizon hold the final factor, so a 600-round run
+# is a true continuation of a 200-round run instead of a stretched schedule;
+# every 200-round run reproduces the retired horizon-normalized schedule
+# bit-identically (the pre-registered coefficient-identity regression).
+ENTROPY_PENALTY_SCHEDULE_ROUNDS = 200    # pinned horizon (update rounds)
+ENTROPY_PENALTY_BOOST_END_ROUND = 50     # 1.5x boost applies on rounds [0, 50)
+ENTROPY_PENALTY_DECAY_START_ROUND = 150  # linear decay runs on rounds [150, 200)
+ENTROPY_PENALTY_BOOST_FACTOR = 1.5
+ENTROPY_PENALTY_FINAL_FACTOR = 0.5
+
 # Per-head probability floor (guarantees minimum exploration mass)
 # These are HARD floors enforced in MaskedCategorical - probabilities are
 # clamped and renormalized, ensuring gradients can always flow.
@@ -928,6 +940,11 @@ __all__ = [
     "ENTROPY_FLOOR_PER_HEAD",
     "ENTROPY_COLLAPSE_PER_HEAD",
     "ENTROPY_FLOOR_PENALTY_COEF",
+    "ENTROPY_PENALTY_SCHEDULE_ROUNDS",
+    "ENTROPY_PENALTY_BOOST_END_ROUND",
+    "ENTROPY_PENALTY_DECAY_START_ROUND",
+    "ENTROPY_PENALTY_BOOST_FACTOR",
+    "ENTROPY_PENALTY_FINAL_FACTOR",
     "PROBABILITY_FLOOR_PER_HEAD",
     "DEFAULT_RATIO_EXPLOSION_THRESHOLD",
     "DEFAULT_RATIO_COLLAPSE_THRESHOLD",

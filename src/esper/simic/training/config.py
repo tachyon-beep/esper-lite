@@ -391,9 +391,6 @@ class TrainingConfig:
             "gae_lambda": self.gae_lambda,
             "ppo_updates_per_batch": self.ppo_updates_per_batch,
             "recurrent_n_epochs": self.recurrent_n_epochs,
-            # total_train_steps drives the agent's late-training decay schedule.
-            # For LSTM ppo_updates_per_batch is pinned to 1, so this reduces to n_episodes.
-            "total_train_steps": self.n_episodes * self.ppo_updates_per_batch,
             "amp": self.amp,
             "amp_dtype": self.amp_dtype,
             "compile_mode": self.compile_mode,

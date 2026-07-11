@@ -441,6 +441,38 @@ _PPO_HRA_ON_ONLY_FIELDS: tuple[str, ...] = (
     "cf_value_target_scale",
 )
 
+# PDR-0060 sufficient-statistic telemetry: count + means + upper-triangle Gram
+# (raw-scale second moments E[x_i * x_j]) of the value/target family, emitted once
+# per PPO update. LEG-DEPENDENT presence: the OFF leg emits the (v, g) family
+# (total critic vs total returns), the HRA ON leg the (v_main, v_cf, g_main, g_cf)
+# family; the two key sets are disjoint so persisted payloads can never be
+# cross-leg conflated. Absent fields are DROPPED from serialization (absence,
+# not null), mirroring _PPO_HRA_ON_ONLY_FIELDS above.
+PPO_VG_SUFFICIENT_STAT_FIELDS: tuple[str, ...] = (
+    "vg_count",
+    # OFF leg: x = (V, G)
+    "vg_mean_v",
+    "vg_mean_g",
+    "vg_gram_v_v",
+    "vg_gram_v_g",
+    "vg_gram_g_g",
+    # ON leg: x = (V_main, V_cf, G_main, G_cf)
+    "vg_mean_v_main",
+    "vg_mean_v_cf",
+    "vg_mean_g_main",
+    "vg_mean_g_cf",
+    "vg_gram_v_main_v_main",
+    "vg_gram_v_main_v_cf",
+    "vg_gram_v_main_g_main",
+    "vg_gram_v_main_g_cf",
+    "vg_gram_v_cf_v_cf",
+    "vg_gram_v_cf_g_main",
+    "vg_gram_v_cf_g_cf",
+    "vg_gram_g_main_g_main",
+    "vg_gram_g_main_g_cf",
+    "vg_gram_g_cf_g_cf",
+)
+
 
 @dataclass(slots=True, frozen=True)
 class TrainingStartedPayload:
@@ -1106,6 +1138,32 @@ class PPOUpdatePayload:
     rollback_attempt_count: int = 0
     rollback_unattributed_count: int = 0
 
+    # === PDR-0060 vg sufficient statistics (leg-dependent; absent when not emitted) ===
+    # Count + means + upper-triangle Gram (raw-scale second moments) of the
+    # value/target family: (v, g) on the OFF leg, (v_main, v_cf, g_main, g_cf) on
+    # the HRA ON leg. None => not emitted on this leg; to_dict() drops None fields
+    # so each leg's persisted payload carries only its own family.
+    vg_count: float | None = None
+    vg_mean_v: float | None = None
+    vg_mean_g: float | None = None
+    vg_gram_v_v: float | None = None
+    vg_gram_v_g: float | None = None
+    vg_gram_g_g: float | None = None
+    vg_mean_v_main: float | None = None
+    vg_mean_v_cf: float | None = None
+    vg_mean_g_main: float | None = None
+    vg_mean_g_cf: float | None = None
+    vg_gram_v_main_v_main: float | None = None
+    vg_gram_v_main_v_cf: float | None = None
+    vg_gram_v_main_g_main: float | None = None
+    vg_gram_v_main_g_cf: float | None = None
+    vg_gram_v_cf_v_cf: float | None = None
+    vg_gram_v_cf_g_main: float | None = None
+    vg_gram_v_cf_g_cf: float | None = None
+    vg_gram_g_main_g_main: float | None = None
+    vg_gram_g_main_g_cf: float | None = None
+    vg_gram_g_cf_g_cf: float | None = None
+
     def __post_init__(self) -> None:
         if len(self.op_q_values) != NUM_OPS:
             raise ValueError(
@@ -1119,7 +1177,7 @@ class PPOUpdatePayload:
     def to_dict(self) -> dict[str, Any]:
         """Serialize PPO update telemetry while preserving ON-only field absence on OFF legs."""
         payload = dataclasses.asdict(self)
-        for key in _PPO_HRA_ON_ONLY_FIELDS:
+        for key in _PPO_HRA_ON_ONLY_FIELDS + PPO_VG_SUFFICIENT_STAT_FIELDS:
             if payload[key] is None:
                 del payload[key]
         return payload
@@ -1274,6 +1332,9 @@ class PPOUpdatePayload:
             # OPTIONAL: Stage-2 §9 per-stream target scales (S7) — same ON-leg-only pattern.
             value_main_target_scale=data.get("value_main_target_scale"),
             cf_value_target_scale=data.get("cf_value_target_scale"),
+            # OPTIONAL: PDR-0060 vg sufficient statistics (leg-dependent family; a
+            # missing key = the other leg or a pre-PDR-0060 event, same .get pattern).
+            **{key: data.get(key) for key in PPO_VG_SUFFICIENT_STAT_FIELDS},
             # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],

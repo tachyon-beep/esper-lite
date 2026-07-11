@@ -2405,3 +2405,62 @@ def test_runs_view_exposes_actor_advantage_source(tmp_path):
     ).fetchone()
     assert source == "total_reconstructed"
     assert seed == 7
+
+
+def test_ppo_updates_exposes_vg_sufficient_stat_columns(tmp_path):
+    """ppo_updates view exposes the PDR-0060 vg sufficient-statistic columns.
+
+    All 20 columns exist (count + means + upper-triangle Gram for both leg
+    families); values from a persisted event round-trip, and columns for the
+    other leg's family read NULL.
+    """
+    from datetime import datetime
+
+    run_dir = tmp_path / "vg_run"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+
+    event = {
+        "event_id": "ppo-vg-1",
+        "event_type": "PPO_UPDATE_COMPLETED",
+        "timestamp": datetime.now().isoformat(),
+        "seed_id": None,
+        "slot_id": None,
+        "epoch": 7,
+        "group_id": "A",
+        "message": "",
+        "data": {
+            "vg_count": 2400.0,
+            "vg_mean_v": 1.5,
+            "vg_gram_v_g": 12.5,
+        },
+        "severity": "info",
+    }
+    events_file.write_text(json.dumps(event) + "\n")
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    expected_columns = {
+        "vg_count", "vg_mean_v", "vg_mean_g",
+        "vg_gram_v_v", "vg_gram_v_g", "vg_gram_g_g",
+        "vg_mean_v_main", "vg_mean_v_cf", "vg_mean_g_main", "vg_mean_g_cf",
+        "vg_gram_v_main_v_main", "vg_gram_v_main_v_cf",
+        "vg_gram_v_main_g_main", "vg_gram_v_main_g_cf",
+        "vg_gram_v_cf_v_cf", "vg_gram_v_cf_g_main", "vg_gram_v_cf_g_cf",
+        "vg_gram_g_main_g_main", "vg_gram_g_main_g_cf",
+        "vg_gram_g_cf_g_cf",
+    }
+    view_columns = {
+        row[0] for row in conn.execute("DESCRIBE ppo_updates").fetchall()
+    }
+    missing = expected_columns - view_columns
+    assert not missing, f"ppo_updates view missing vg columns: {sorted(missing)}"
+
+    row = conn.execute(
+        """
+        SELECT vg_count, vg_mean_v, vg_gram_v_g, vg_mean_v_main, vg_gram_g_cf_g_cf
+        FROM ppo_updates
+        """
+    ).fetchone()
+    assert row == (2400.0, 1.5, 12.5, None, None)

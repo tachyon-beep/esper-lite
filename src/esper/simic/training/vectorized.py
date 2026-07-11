@@ -205,6 +205,29 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     # mean-reduced over updates like their total sibling value_target_scale below.
     "value_main_target_scale",
     "cf_value_target_scale",
+    # PDR-0060 vg sufficient statistics (leg-dependent key families: OFF emits the
+    # (v, g) family, ON the (v_main, v_cf, g_main, g_cf) family). Each is a single
+    # scalar per update, mean-reduced over updates like the EV family above.
+    "vg_count",
+    "vg_mean_v",
+    "vg_mean_g",
+    "vg_gram_v_v",
+    "vg_gram_v_g",
+    "vg_gram_g_g",
+    "vg_mean_v_main",
+    "vg_mean_v_cf",
+    "vg_mean_g_main",
+    "vg_mean_g_cf",
+    "vg_gram_v_main_v_main",
+    "vg_gram_v_main_v_cf",
+    "vg_gram_v_main_g_main",
+    "vg_gram_v_main_g_cf",
+    "vg_gram_v_cf_v_cf",
+    "vg_gram_v_cf_g_main",
+    "vg_gram_v_cf_g_cf",
+    "vg_gram_g_main_g_main",
+    "vg_gram_g_main_g_cf",
+    "vg_gram_g_cf_g_cf",
     # EV-stab Stage 0 value-free GATE (gated on return_variance_telemetry, both legs). Each a
     # single scalar per update, mean-reduced over updates like the ON-leg diagnostics above.
     "return_var_cf_share",
@@ -771,7 +794,6 @@ def train_ppo_vectorized(
     gae_lambda: float = DEFAULT_GAE_LAMBDA,  # From leyline
     ppo_updates_per_batch: int = 1,
     recurrent_n_epochs: int = 1,
-    total_train_steps: int | None = None,
     save_path: str | None = None,
     resume_path: str | None = None,
     seed: int = 42,
@@ -866,8 +888,6 @@ def train_ppo_vectorized(
             K epochs of optimization run WITHIN a single agent.update() against an
             anchored reference pass, avoiding GAE re-runs and value-normalizer drift.
             Default: 1.
-        total_train_steps: Total optimizer steps over the run, used by the agent's
-            late-training decay schedule. None lets the agent fall back to its default.
         save_path: Optional path to save model
         resume_path: Optional path to resume from checkpoint
         seed: Random seed for reproducibility
@@ -1241,7 +1261,6 @@ def train_ppo_vectorized(
             num_envs=n_envs,
             max_steps_per_env=max_epochs,
             recurrent_n_epochs=recurrent_n_epochs,
-            total_train_steps=total_train_steps,
             compile_mode=effective_compile_mode,  # Persisted for checkpoint resume
         )
 

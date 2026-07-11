@@ -25,6 +25,7 @@ from esper.simic.telemetry.lstm_health import compute_lstm_health
 from esper.simic.telemetry.reward_variance import compute_return_variance_metrics
 from esper.simic.control import ValueNormalizer
 from esper.leyline.value_metrics import (
+    compute_vg_sufficient_stats,
     ValueFunctionMetricsDict,
     compute_floored_aux_explained_variance,
     compute_floored_explained_variance,
@@ -49,6 +50,11 @@ from esper.leyline import (
     DEFAULT_VALUE_COEF,
     ENTROPY_FLOOR_PER_HEAD,
     ENTROPY_FLOOR_PENALTY_COEF,
+    ENTROPY_PENALTY_SCHEDULE_ROUNDS,
+    ENTROPY_PENALTY_BOOST_END_ROUND,
+    ENTROPY_PENALTY_DECAY_START_ROUND,
+    ENTROPY_PENALTY_BOOST_FACTOR,
+    ENTROPY_PENALTY_FINAL_FACTOR,
     HEAD_NAMES,
     NUM_OPS,
     PROBABILITY_FLOOR_PER_HEAD,
@@ -174,7 +180,6 @@ class PPOAgent:
         # Unlike entropy penalties, this clamps action probabilities to a minimum,
         # ensuring gradients can always flow even when entropy would collapse.
         probability_floor: dict[str, float] | None = None,
-        total_train_steps: int | None = None,  # For late-training decay schedule
         # Auxiliary contribution supervision (Expert-reviewed defaults)
         aux_contribution_coef: float = 0.05,  # DRL Expert: reduced from 0.1
         aux_warmup_steps: int = 1000,  # DRL + PyTorch Expert: ramp from 0 → full
@@ -288,9 +293,6 @@ class PPOAgent:
             probability_floor if probability_floor is not None
             else dict(PROBABILITY_FLOOR_PER_HEAD)
         )
-        if total_train_steps is not None and total_train_steps <= 0:
-            raise ValueError(f"total_train_steps must be positive, got {total_train_steps}")
-        self.total_train_steps = total_train_steps if total_train_steps is not None else 1_000_000
         self.value_coef = value_coef
         # Value warmup: start at 10% of target by default, ramp up over warmup_steps
         self.value_coef_start = value_coef_start if value_coef_start is not None else 0.1 * value_coef
@@ -517,36 +519,47 @@ class PPOAgent:
         progress = min(1.0, self.train_steps / self.value_warmup_steps)
         return self.value_coef_start + progress * (self.value_coef - self.value_coef_start)
 
-    def _get_penalty_schedule(self, progress: float) -> float:
-        """Schedule entropy floor penalty coefficient across training phases.
+    def _get_penalty_schedule(self, update_round: int) -> float:
+        """Schedule entropy floor penalty coefficient by ABSOLUTE update round.
 
-        DRL Expert recommendation: Early-training boost + late-training decay.
+        Breakpoints are pinned to the 200-round experiment shape (leyline
+        constants), not normalized by run length (PDR-0055): runs longer than the
+        pinned horizon hold the final factor, so a 600-round run is a true
+        continuation of a 200-round run rather than a stretched schedule.
 
-        Schedule:
-        - 0-25% (early): 1.5x boost - establish diverse exploration habits
-        - 25-75% (mid): 1.0x baseline
-        - 75-100% (late): decay from 1.0x to 0.5x - allow natural convergence
+        Schedule (update rounds):
+        - [0, 50): 1.5x boost - establish diverse exploration habits
+        - [50, 150): 1.0x baseline
+        - [150, 200): linear decay from 1.0x to 0.5x - allow natural convergence
+        - >= 200: hold 0.5x
 
         PyTorch Expert Note: Apply as scalar multiplier OUTSIDE compute_losses
         to maintain clean separation of concerns.
 
         Args:
-            progress: Training progress [0, 1] (train_steps / total_train_steps)
+            update_round: Zero-based PPO update round (train_steps at update time)
 
         Returns:
             Schedule factor [0.5, 1.5]
         """
-        progress = min(1.0, max(0.0, progress))
-        if progress < 0.25:
-            # Early training: 1.5x boost to establish exploration
-            return 1.5
-        elif progress < 0.75:
-            # Mid training: baseline
+        # Computed via pinned-horizon progress fractions with the exact arithmetic
+        # of the retired horizon-normalized schedule: round-based decay arithmetic
+        # ((round - 150) / 50) differs in the last ulp on 16 of the 50 decay rounds
+        # and would break the pre-registered coefficient-identity regression.
+        # The breakpoint fractions (50/200, 150/200) are exact binary fractions.
+        progress = min(1.0, max(0.0, update_round / ENTROPY_PENALTY_SCHEDULE_ROUNDS))
+        boost_end = ENTROPY_PENALTY_BOOST_END_ROUND / ENTROPY_PENALTY_SCHEDULE_ROUNDS
+        decay_start = ENTROPY_PENALTY_DECAY_START_ROUND / ENTROPY_PENALTY_SCHEDULE_ROUNDS
+        if progress < boost_end:
+            # Early rounds: boost to establish exploration
+            return ENTROPY_PENALTY_BOOST_FACTOR
+        elif progress < decay_start:
+            # Mid rounds: baseline
             return 1.0
         else:
-            # Late training: decay from 1.0 at 75% to 0.5 at 100%
-            decay_progress = (progress - 0.75) / 0.25
-            return 1.0 - 0.5 * decay_progress
+            # Late rounds: linear decay to the final factor, then hold (via clamp)
+            decay_progress = (progress - decay_start) / (1.0 - decay_start)
+            return 1.0 - (1.0 - ENTROPY_PENALTY_FINAL_FACTOR) * decay_progress
 
     def _collect_cuda_memory_metrics(self) -> dict[str, float]:
         """Collect CUDA memory statistics for infrastructure monitoring.
@@ -813,6 +826,28 @@ class PPOAgent:
             )
         metrics["return_mean"] = [return_mean]
         metrics["return_std"] = [return_std]
+
+        # PDR-0060 sufficient-statistic telemetry: count + means + upper-triangle Gram
+        # (raw-scale second moments) of the value/target family, once per update on the
+        # same pre-normalizer-update population as the EV family above. Makes the exact
+        # error decomposition (Var(e_main)/Var(e_cf)/Cov/Var(e_sum)), the V_total
+        # identity assertion, normalizer-lag reads, and the held-out affine
+        # calibration-rescue A'/B discriminator computable offline on any window. The
+        # ON and OFF key families are disjoint by design (no cross-leg conflation);
+        # on the OFF leg the matrix degenerates to (V, G). Placed AFTER the non-finite
+        # return-stat raise above so a degenerate batch dies with the canonical B3
+        # hard-bug error, not a vg ValueError.
+        if self.hra_value_decomposition:
+            vg_vectors = {
+                "v_main": raw_v_main,
+                "v_cf": raw_v_cf,
+                "g_main": valid_returns_main,
+                "g_cf": valid_returns_cf,
+            }
+        else:
+            vg_vectors = {"v": raw_values, "g": valid_returns}
+        for vg_key, vg_value in compute_vg_sufficient_stats(vg_vectors).items():
+            metrics[vg_key] = [vg_value]
 
         # P1 BUG FIX: Use running value normalizer instead of batch std
         # 1. Update normalizer with current batch returns (tracks running distribution)
@@ -1459,11 +1494,11 @@ class PPOAgent:
             valid_old_values = data["values"][valid_mask]
             entropy_coef = self.get_entropy_coef()
 
-            # Compute training progress for penalty schedule
-            # Schedule: 1.5x boost (0-25%), 1.0x baseline (25-75%), decay to 0.5x (75-100%)
-            # This prevents early entropy collapse while allowing late-training convergence
-            progress = self.train_steps / self.total_train_steps
-            schedule_factor = self._get_penalty_schedule(progress)
+            # Entropy-floor penalty schedule by absolute update round (PDR-0055):
+            # 1.5x boost (rounds <50), 1.0x baseline (50-150), decay to 0.5x (150-200),
+            # hold 0.5x thereafter. Prevents early entropy collapse while allowing
+            # late-training convergence; train_steps is the zero-based update round.
+            schedule_factor = self._get_penalty_schedule(self.train_steps)
 
             # Apply schedule to ALL per-head coefficients uniformly
             scheduled_coef = {
@@ -1875,7 +1910,6 @@ class PPOAgent:
                 'entropy_coef_per_head': self.entropy_coef_per_head,
                 'entropy_floor': self.entropy_floor,
                 'entropy_floor_penalty_coef': self.entropy_floor_penalty_coef,
-                'total_train_steps': self.total_train_steps,
                 'value_coef': self.value_coef,
                 'value_coef_start': self.value_coef_start,
                 'value_warmup_steps': self.value_warmup_steps,
@@ -2117,6 +2151,12 @@ class PPOAgent:
         if "n_epochs" in config:
             raise RuntimeError(
                 "Incompatible checkpoint: config.n_epochs is no longer supported. "
+                "Please retrain the model to create a compatible checkpoint."
+            )
+        if "total_train_steps" in config:
+            raise RuntimeError(
+                "Incompatible checkpoint: config.total_train_steps is no longer supported "
+                "(the entropy-floor penalty schedule uses absolute update rounds, PDR-0055). "
                 "Please retrain the model to create a compatible checkpoint."
             )
         # Remove config params that are now part of PolicyBundle.

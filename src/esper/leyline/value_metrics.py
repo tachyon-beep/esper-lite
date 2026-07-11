@@ -226,9 +226,49 @@ def compute_floored_aux_explained_variance(
     )
 
 
+def compute_vg_sufficient_stats(
+    vectors: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Per-update sufficient statistics of the raw-scale value/target family (PDR-0060).
+
+    Returns count, first moments, and the upper-triangle second-moment (Gram)
+    matrix ``E[x_i * x_j]`` (population means, correction=0 convention) for the
+    named vector family — ``(v, g)`` on the HRA-OFF leg, ``(v_main, v_cf,
+    g_main, g_cf)`` on the ON leg. Everything the offline error decomposition
+    needs becomes computable on any window, forever: exact
+    Var(e_main)/Var(e_cf)/Cov(e_main, e_cf)/Var(e_sum), the V_total identity
+    assertion, normalizer-lag reads, and the held-out affine calibration-rescue
+    discriminator. Key names: ``vg_count``, ``vg_mean_{name}``, and
+    ``vg_gram_{a}_{b}`` for pairs in declaration order (upper triangle).
+
+    All vectors must share one non-zero length; anything else is a caller bug
+    (fail loud — no degenerate-convention outputs).
+    """
+    names = list(vectors)
+    first = vectors[names[0]]
+    if first.numel() == 0:
+        raise ValueError("vg sufficient stats require non-empty vectors")
+    for name in names:
+        if vectors[name].numel() != first.numel():
+            raise ValueError(
+                f"vg vector length mismatch: '{name}' has {vectors[name].numel()} "
+                f"elements, '{names[0]}' has {first.numel()}"
+            )
+    stats: dict[str, torch.Tensor] = {
+        "vg_count": torch.tensor(float(first.numel()), device=first.device)
+    }
+    for name in names:
+        stats[f"vg_mean_{name}"] = vectors[name].mean()
+    for i, name_a in enumerate(names):
+        for name_b in names[i:]:
+            stats[f"vg_gram_{name_a}_{name_b}"] = (vectors[name_a] * vectors[name_b]).mean()
+    return stats
+
+
 __all__ = [
     "ValueFunctionMetricsDict",
     "compute_value_function_metrics",
     "compute_floored_explained_variance",
     "compute_floored_aux_explained_variance",
+    "compute_vg_sufficient_stats",
 ]
