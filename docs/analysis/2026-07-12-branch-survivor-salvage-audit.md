@@ -108,14 +108,33 @@ in the shared zone).
 
 ## Consolidation plan (execute POST-diagnostic)
 
+Ordering note (advisor, 2026-07-12): the merge executes AFTER both the diagnostic read
+and the epic-direction DECIDE, so every direction-contingent disposition below is
+decided with full information — there is no interim in which dead code sits on the trunk.
+
 1. Read out the 600-round diagnostic (gates execution; do not start before).
-2. Branch off `main`; `git merge feat/ev-stab-stage2-hra` (history-preserving).
-3. Excise the rejected HRA (DROP table) as one deliberate change on top; roll back
+2. **Epic-direction DECIDE happens first** (also post-diagnostic) — its outcome drives
+   step 5's acceptance-harness disposition.
+3. **Tag the branch tip before any retirement** (owner, 2026-07-12): a durable,
+   recoverable ref (e.g. `archive/ev-stab-stage2-hra-<sha>`) so nothing vanishes
+   irrecoverably; the branch is then let go naturally as unreferenced — NO hard delete.
+4. Branch off `main`; `git merge feat/ev-stab-stage2-hra` (history-preserving).
+5. Excise the rejected HRA (DROP table) as one deliberate change on top; roll back
    VALUE_HEAD_SCHEMA v3 with it.
-4. Verify main's reward-redesign/Shapley/PIN-E track survived the merge intact.
-5. Reconcile the small overlap zone (entropy fix, telemetry field lists, Stage-0).
-6. Full suite green; then retire `feat/ev-stab-stage2-hra` (owner-gated: branch
-   deletion is escalation).
+6. **EXPLICIT GATED LINE ITEM — acceptance-harness excise/keep (do NOT let it ride in
+   by default).** A merge carries everything across, so "defer" becomes "keep by
+   accident" unless this is an explicit step. Apply the pre-agreed discriminator on the
+   epic-direction outcome:
+   - epic = **redesigned HRA (A′/B)** or **TIP** → KEEP-and-adapt the reusable core
+     (manifest-driven scorer, §11.3 validity envelope, scar-suite, mechanism-vs-outcome
+     discipline); it is live seed material.
+   - epic = **reward-efficiency** or **Stage-1 flag** → EXCISE the harness at merge; the
+     tag (step 3) preserves it for later resurrection if TIP is picked up under serial
+     focus.
+7. Verify main's reward-redesign/Shapley/PIN-E track survived the merge intact.
+8. Reconcile the small overlap zone (entropy fix, telemetry field lists, Stage-0).
+9. Full suite green; then retire `feat/ev-stab-stage2-hra` per step 3 (tag-anchored,
+   natural vanish — owner-approved 2026-07-12; hard deletion remains escalation).
 
 ## Anti-recurrence (owner's second ask — own PDR)
 
@@ -126,10 +145,13 @@ Divergence was organizational, not technical. Durable fix: **one trunk, short-li
 branches merged back promptly, product workspace owned in a single place.** Record
 as its own PDR; secondary to getting the reconciliation right.
 
-## Owner sign-off required (PDR-0038)
+## Owner sign-off (PDR-0038) — resolved 2026-07-12
 
-- [ ] Confirm DROP list (rejected HRA excised from trunk, both lineages)
-- [ ] Confirm KEEP-branch salvage set (esp. acceptance harness: keep for a future
-      re-pre-registration, or drop with the dead design?)
-- [ ] Approve branch retirement after salvage (deletion is escalation-gated)
-- [ ] Approve the anti-recurrence process PDR
+- [x] **DROP list confirmed** — rejected HRA excised from trunk, both lineages.
+- [~] **Acceptance harness = DEFERRED to the epic-direction DECIDE** (advisor-recommended;
+      the merge post-dates that DECIDE, so it is decided with full information). Pre-agreed
+      discriminator: A′/B or TIP → keep-and-adapt; reward-efficiency or Stage-1 → excise.
+      Explicit gated line item in the consolidation plan (step 6); tag-preserved either way.
+- [x] **Branch retirement approved WITH a safety anchor** — tag the tip before retiring;
+      let it vanish naturally as an unreferenced branch; no hard delete.
+- [~] **Anti-recurrence (PDR-0063) = DEFERRED** — stays `proposed`; owner will revisit.
