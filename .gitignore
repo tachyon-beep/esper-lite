@@ -81,3 +81,7 @@ findings.jsonl
 # Legis — local working dir / config (regenerated/local; never commit)
 /.weft/legis/operator_session.json
 /.weft/legis/operator.age
+
+# Legis — local working dir / config (regenerated/local; never commit)
+/.mcp.json.legis.lock
+/.mcp.json*.tmp
