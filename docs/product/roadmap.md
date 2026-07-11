@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-11 (PDR-0057..0059)
+# Roadmap — Esper            Updated: 2026-07-11 (PDR-0061)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -29,10 +29,12 @@
   screen verdict = REJECT (PDR-0059)** — LEG-A FAIL (median Δ_A ≈ −0.093 < −δ;
   4/5 seeds regress) ∧ MECH fail ∧ G4 fail; G1/G2/G3 pass; LEG-B descriptive
   INCONCLUSIVE (confound downgrade). NO n=10 for HRA objective-A as implemented;
-  Stage-0 de-shaping diagnosis untouched. Next intent (already licensed):
-  penalty-schedule fix (drl-reviewed, PDR-0055) → clean 600-round seed-41 OFF
-  diagnostic; entropy-floor population audit adopted front-of-TIP (PDR-0057).
-  EPIC DIRECTION after the diagnostic = owner DECIDE (TIP / reward-efficiency /
+  Stage-0 de-shaping diagnosis untouched. **Penalty-schedule fix + vg Gram
+  telemetry LANDED `7ea84dc6` 2026-07-11 (drl APPROVE-WITH-NITS, nits closed,
+  PDR-0061); clean 600-round seed-41 OFF diagnostic IN FLIGHT since 2026-07-11
+  19:29 on the fixed code (read window rounds 250–600, pre-committed readings
+  PDR-0055).** Entropy-floor population audit remains front-of-TIP (PDR-0057).
+  EPIC DIRECTION after the diagnostic read = owner DECIDE (TIP / reward-efficiency /
   redesigned HRA with cf-target stabilization / Stage-1 flag).**
   · tracker: esper-lite-f25b71c165 (epic) · metric: EV Stage-0 gate (PASSED);
   Stage-2 MAJOR-1 gate READ 2026-07-11 = REJECT; watch fossilize/ep + k≥2
