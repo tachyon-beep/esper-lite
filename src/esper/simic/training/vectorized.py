@@ -62,6 +62,7 @@ from esper.leyline import (
     TopologyManifestPayload,
     TrainingStartedPayload,
 )
+from esper.leyline.telemetry import PPO_VG_SUFFICIENT_STAT_FIELDS
 from esper.simic.telemetry import (
     AnomalyDetector,
     AnomalyReport,
@@ -205,29 +206,6 @@ _PPO_MEAN_REDUCED_METRICS = frozenset({
     # mean-reduced over updates like their total sibling value_target_scale below.
     "value_main_target_scale",
     "cf_value_target_scale",
-    # PDR-0060 vg sufficient statistics (leg-dependent key families: OFF emits the
-    # (v, g) family, ON the (v_main, v_cf, g_main, g_cf) family). Each is a single
-    # scalar per update, mean-reduced over updates like the EV family above.
-    "vg_count",
-    "vg_mean_v",
-    "vg_mean_g",
-    "vg_gram_v_v",
-    "vg_gram_v_g",
-    "vg_gram_g_g",
-    "vg_mean_v_main",
-    "vg_mean_v_cf",
-    "vg_mean_g_main",
-    "vg_mean_g_cf",
-    "vg_gram_v_main_v_main",
-    "vg_gram_v_main_v_cf",
-    "vg_gram_v_main_g_main",
-    "vg_gram_v_main_g_cf",
-    "vg_gram_v_cf_v_cf",
-    "vg_gram_v_cf_g_main",
-    "vg_gram_v_cf_g_cf",
-    "vg_gram_g_main_g_main",
-    "vg_gram_g_main_g_cf",
-    "vg_gram_g_cf_g_cf",
     # EV-stab Stage 0 value-free GATE (gated on return_variance_telemetry, both legs). Each a
     # single scalar per update, mean-reduced over updates like the ON-leg diagnostics above.
     "return_var_cf_share",
@@ -422,6 +400,25 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
 
     aggregated: dict[str, Any] = {}
     keys = {key for metrics in update_metrics for key in metrics}
+
+    vg_updates = [metrics for metrics in update_metrics if "vg_count" in metrics]
+    if vg_updates:
+        aggregated["vg_count"] = sum(metrics["vg_count"] for metrics in vg_updates)
+        for key in PPO_VG_SUFFICIENT_STAT_FIELDS[1:]:
+            contributors: list[tuple[float, float]] = []
+            for metrics in vg_updates:
+                if key not in metrics:
+                    continue
+                value = metrics[key]  # type: ignore[literal-required]
+                if value is not None:
+                    contributors.append((metrics["vg_count"], value))
+            if contributors:
+                represented_count = sum(count for count, _ in contributors)
+                aggregated[key] = (
+                    sum(count * value for count, value in contributors)
+                    / represented_count
+                )
+        keys.difference_update(PPO_VG_SUFFICIENT_STAT_FIELDS)
 
     # EV-telemetry-robustness flagged-exclusion (special case BEFORE the frozenset dispatch).
     # The per-key loop below processes one key at a time and cannot read a sibling key, so the

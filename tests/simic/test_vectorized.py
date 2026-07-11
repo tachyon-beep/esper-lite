@@ -2027,21 +2027,20 @@ def test_classification_correct_tensor_shape_still_works():
     )
 
 
-def test_aggregate_ppo_metrics_reduces_vg_sufficient_stats():
-    """PDR-0060 vg stats are mean-reduced across updates like their EV siblings.
-
-    The strict whitelist raises KeyError for undeclared reducers, so this pins
-    both the declaration and the reduction semantics.
-    """
+def test_aggregate_ppo_metrics_pools_vg_sufficient_stats_by_count():
+    """PDR-0060 vg stats preserve the represented population across updates."""
     from esper.simic.training.vectorized import _aggregate_ppo_metrics
 
     metrics = _aggregate_ppo_metrics([
         {"vg_count": 100.0, "vg_mean_v": 1.0, "vg_gram_v_g": 4.0},
-        {"vg_count": 100.0, "vg_mean_v": 3.0, "vg_gram_v_g": 8.0},
+        {"vg_count": 300.0, "vg_mean_v": 3.0, "vg_gram_v_g": 8.0},
     ])
-    assert metrics["vg_count"] == 100.0
-    assert metrics["vg_mean_v"] == 2.0
-    assert metrics["vg_gram_v_g"] == 6.0
+    assert metrics["vg_count"] == 400.0
+    assert metrics["vg_mean_v"] == pytest.approx(2.5)
+    assert metrics["vg_gram_v_g"] == pytest.approx(7.0)
 
-    on_leg = _aggregate_ppo_metrics([{"vg_gram_v_main_g_cf": 5.0}])
+    on_leg = _aggregate_ppo_metrics([{
+        "vg_count": 25.0,
+        "vg_gram_v_main_g_cf": 5.0,
+    }])
     assert on_leg["vg_gram_v_main_g_cf"] == 5.0

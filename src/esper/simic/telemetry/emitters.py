@@ -36,7 +36,7 @@ from esper.leyline import (
     TelemetryEventType,
     TrendDetectedPayload,
 )
-from esper.leyline.telemetry import HeadTelemetry, PPO_VG_SUFFICIENT_STAT_FIELDS
+from esper.leyline.telemetry import HeadTelemetry
 from esper.nissa import get_hub
 
 from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
@@ -1104,10 +1104,28 @@ def emit_ppo_update_event(
             return_var_cf_share=metrics.get("return_var_cf_share"),
             return_var_main_share=metrics.get("return_var_main_share"),
             return_var_residual_share=metrics.get("return_var_residual_share"),
-            # PDR-0060 vg sufficient statistics (leg-dependent family; .get() None =>
-            # absent on this leg, dropped at serialization — same optional-numeric
-            # pattern as ev_main above).
-            **{key: metrics.get(key) for key in PPO_VG_SUFFICIENT_STAT_FIELDS},
+            # PDR-0060 vg sufficient statistics (leg-dependent family; None means
+            # absent on this leg and is dropped at serialization).
+            vg_count=metrics.get("vg_count"),
+            vg_mean_v=metrics.get("vg_mean_v"),
+            vg_mean_g=metrics.get("vg_mean_g"),
+            vg_gram_v_v=metrics.get("vg_gram_v_v"),
+            vg_gram_v_g=metrics.get("vg_gram_v_g"),
+            vg_gram_g_g=metrics.get("vg_gram_g_g"),
+            vg_mean_v_main=metrics.get("vg_mean_v_main"),
+            vg_mean_v_cf=metrics.get("vg_mean_v_cf"),
+            vg_mean_g_main=metrics.get("vg_mean_g_main"),
+            vg_mean_g_cf=metrics.get("vg_mean_g_cf"),
+            vg_gram_v_main_v_main=metrics.get("vg_gram_v_main_v_main"),
+            vg_gram_v_main_v_cf=metrics.get("vg_gram_v_main_v_cf"),
+            vg_gram_v_main_g_main=metrics.get("vg_gram_v_main_g_main"),
+            vg_gram_v_main_g_cf=metrics.get("vg_gram_v_main_g_cf"),
+            vg_gram_v_cf_v_cf=metrics.get("vg_gram_v_cf_v_cf"),
+            vg_gram_v_cf_g_main=metrics.get("vg_gram_v_cf_g_main"),
+            vg_gram_v_cf_g_cf=metrics.get("vg_gram_v_cf_g_cf"),
+            vg_gram_g_main_g_main=metrics.get("vg_gram_g_main_g_main"),
+            vg_gram_g_main_g_cf=metrics.get("vg_gram_g_main_g_cf"),
+            vg_gram_g_cf_g_cf=metrics.get("vg_gram_g_cf_g_cf"),
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=metrics.get("inf_grad_count", 0),
