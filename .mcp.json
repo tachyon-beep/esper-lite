@@ -21,9 +21,7 @@
         "claude-code"
       ],
       "command": "/home/john/.local/bin/legis",
-      "env": {
-        "PLAINWEAVE_MCP_CMD": "/home/john/.local/share/uv/tools/plainweave/bin/plainweave-mcp --root /home/john/esper-lite"
-      },
+      "env": {},
       "type": "stdio"
     },
     "loomweave": {
