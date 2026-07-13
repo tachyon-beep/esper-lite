@@ -1,0 +1,170 @@
+# Reviewer catch-up brief — decision-point diagnosis (Esper / Tamiyo)
+
+**For: claude-prime (claudeweb) and gpt-prime. You are each one round behind; this supersedes
+both of your last reviews. Read the reconciliation section addressed to you.**
+
+Context in one line: we are diagnosing WHY Tamiyo (an LSTM factored-action RL controller that
+grows/prunes neural "seeds" during host training) rarely fossilises (commits) seeds. This brief
+covers the last several correction rounds and lands on a clean, both-seeds result plus a verified
+telemetry mechanism. Runs: `stage2_on_longdiag/seed{41,42}` (600-round diagnostic, ON leg).
+Zero-GPU throughout — pure telemetry reads.
+
+---
+
+## TL;DR (the corrected, current finding)
+
+**On current leave-one-out contribution (LOO), Tamiyo cannot be distinguished by whether she
+COMMITS a seed or DISCARDS it from HOLDING.** Measured at the actual decision, identity-clean,
+0% missingness, both seeds:
+
+| decision | median last-measured c (acc-pts) | % ≥5 | % <0 |
+|---|---|---|---|
+| **FOSSILIZE** (commit) | **10.4** | ~66% | ~10% |
+| **PRUNE-from-HOLDING** (discard) | **9.6** | ~63% | ~11% |
+| PRUNE-from-BLENDING | 5.8 | ~53% | ~12% |
+| PRUNE-from-TRAINING (α=0) | *unmeasured — structurally 0* | — | — |
+
+The commit and HOLDING-discard cohorts have **the same contribution distribution.** The gate
+leaks on both tails of the same causal metric in the same run: **~10% of FOSSILISED seeds are
+net-negative** (harmful commits) and **~65% of HOLDING-prunes are ≥5 acc-pts** (load-bearing
+discards). This is consistent with a policy optimising a signal that is *correlated with*
+commit-worthiness but is not commit-worthiness — and, critically, cannot measure what the product
+is actually for (retained/transferred value).
+
+---
+
+## What changed since your last review (both of you)
+
+This diagnosis swung repeatedly; every miss was a **load-bearing input assumed instead of read**
+(never the reasoning). The relevant recent swings:
+
+- **Over-read #6 (banked, then retracted):** "productive scaffold retirement — the gate correctly
+  retires seeds whose value the host ABSORBED." Rested on a prune-cohort "contribution 0.12" that
+  turned out to be a **`None`-filter artifact**: `SEED_PRUNED.counterfactual` is `None` ~7/8 of
+  the time, so a "median 0.12" over the non-`None` sliver never described the cohort. There is no
+  gliding decay to 0.12. (This is the conclusion **gpt-prime reviewed** — fully retracted.)
+- **Over-read #7 (caught before banking):** split the prune cohort into "ransomware vs leak" using
+  `total_improvement`. That field is `current_val_acc − initial_val_acc` (host progress over the
+  seed's residency), explicitly warned NON-CAUSAL in-code ("conflates host training gains with
+  seed impact"). It manufactured a false 68/32 split. No causal ransomware discriminator exists.
+- **Over-read #8 (caught before banking):** "PRUNE-after-HOLD median 0.84 / 30% discard ≥5 /
+  majority-correct retirement." (This is the conclusion **claudeweb reviewed**.) Artifact of
+  carrying the last non-`None` contribution FORWARD across the 74k TRAINING prunes that have no
+  counterfactual. Gating on the decision row's own `seed_stage` with NO carry-forward gives the
+  clean table above: real lifecycle prunes have **0% missingness** and HOLD-prune median is **9.6,
+  not 0.84.**
+
+---
+
+## The verified telemetry mechanism (load-bearing — read this)
+
+From `vectorized_trainer.py:1365-1394` and `features.py:61-75`, confirmed by owner domain
+knowledge:
+
+- `counterfactual_contribution = val_acc − solo_acc` — a true LOO (host+seed minus host+seed-off).
+- It is computed **only when a "solo" config is evaluated for that slot**, i.e. for **BLENDING+
+  seeds, not every epoch.** An `epochs_since_counterfactual` staleness tracker is reset on each
+  fresh measurement, and the policy is fed `freshness = γ^epochs_since_cf` in its observation (obs
+  V3). So the value on any decision row is the **LAST-MEASURED** LOO, possibly a few epochs stale.
+- **TRAINING runs at α=0** — the seed is not wired into the forward pass at all (it trains in
+  isolation to match host errors before BLENDING ramps α up). So a TRAINING seed's counterfactual
+  is **structurally zero/undefined**, not a data gap. The 74k TRAINING-prunes are rejections
+  during isolated training, before the seed ever enters the computation. Correctly excluded.
+
+Two consequences: (1) the "91% of prunes have no contribution" fact is entirely these α=0 TRAINING
+prunes — a red herring for the lifecycle question. (2) The clean numbers are "last-measured"
+values; staleness applies to fossils and HOLD-prunes under the same cadence, so the *comparison*
+is robust — **unless fossilise decisions act on systematically fresher counterfactuals than prune
+decisions** (see residuals).
+
+---
+
+## Reconciliation — gpt-prime (you reviewed the "scaffold retirement" version)
+
+Your review was correct and we acted on all of the free items:
+- **"Not bankable: host absorbed value / gate correctly retires absorbed scaffolds / 0.12 = retained
+  value / n=1 / peak includes pre-HOLDING / ∫5.29 is the full integral."** — All correct. That
+  entire conclusion is retracted (#6). We no longer make any retention/absorption claim.
+- **Problem 1 (identity: `(env,episode,slot)` conflates lifecycles).** Valid. Resolved for a
+  point-in-time measure by gating on the decision ROW's own `seed_stage` — that is the acting
+  seed's stage, so there is no cross-lifecycle carry. (Trajectory reconstruction still needs a
+  real seed_id + germination reset; we did not attempt trajectories in the clean read.)
+- **Problem 2 (carry-forward; `last` ≠ contribution at fate).** This was the DOMINANT bug (#8),
+  not a footnote. Fixed by no-carry-forward + stage gate; real lifecycle prunes are 0% `None`.
+- **Problem 3 (snapshot is per-decision, not per-residency).** Valid. The clean headline is a
+  point-in-time decision measure, which does not need residency continuity; all ∫/peak/first-HOLDING
+  claims are dropped.
+- **Problem 5 (falling LOO ≠ retained value).** Adopted verbatim; no retention claim survives.
+- **Problem 6 (seed 41 only).** The clean read is n=2 (41 and 42 agree closely).
+- **Your step 4 (condition on α)** — still open (residual). **Your step 5 (measure where the value
+  went)** — this is now the primary way-forward.
+
+## Reconciliation — claudeweb (you reviewed the "median 0.84 / 30% tail" version)
+
+- **"The median is safe — it's a decision on a real seed; the ~30% survives."** — Refuted by a
+  direct probe: 91% of prune rows had NO decision-time contribution (α=0 TRAINING prunes), and my
+  median was carry-forward over them. The clean HOLD-prune median is **9.6, not 0.84**, and the
+  load-bearing discards are not a 30% tail — they are the **majority (~65% ≥5).** You were
+  directionally right that identity corrupts trajectories not point-decisions — but the point
+  measure itself was contaminated by missingness, which neither of us had checked.
+- **"Distribution is the finding, not the center; the cohort is bimodal."** — Adopted. The clean
+  distribution is high-c-dominated (65% ≥5), not balance-bimodal; the negatives are only ~11%.
+- **"The gate leaks both ways: ~10% harmful commits, ~30% load-bearing discards → a policy
+  optimising a signal correlated with but not equal to commit-worthiness."** — VINDICATED and
+  stronger: ~10% harmful commits AND ~65% load-bearing HOLD-discards; the two fates share one
+  contribution distribution. This is now the central supported claim.
+- **Read C trap (host trains continuously; a rebound proves nothing without a background-training
+  control).** — Correct and adopted into the instrument spec below.
+- **"Build the instrument before the next arm."** — Adopted as the primary recommendation.
+
+---
+
+## Banked / Not-bankable / Live residuals
+
+**BANKED (clean, both seeds):**
+1. Current terminal LOO does NOT separate commit from HOLDING-discard (fossil 10.4 ≈ HOLD-prune 9.6).
+2. The gate leaks on both tails: ~10% net-negative fossils; ~65% ≥5 HOLDING-prunes.
+3. Counterfactual is computed for BLENDING+ only, staleness-tracked; TRAINING α=0 → structurally
+   uncomputed.
+4. `hindsight_credit` is inert (fires 0.005% of the time) — the explicit settlement channel for a
+   scaffold's durable value is de-facto dead. This has survived EVERY swing, benign and alarming.
+5. ~200 negative-LOO fossils exist (harmful commits), unexplained.
+
+**NOT BANKABLE (either direction):**
+- Any "the gate selects correctly / incorrectly" verdict — the *cause* of the high-c HOLD-discards
+  (ransomware dependency / turntable-retirement / budget-pressure / genuine waste) is not
+  separable with current telemetry. No causal net-ensemble-value field exists.
+- Absorption / retained value (retracted).
+
+**LIVE RESIDUALS (the only threats left to the headline):**
+- **Freshness asymmetry** — if fossilise acts on fresher counterfactuals than prune (a
+  confirm-before-commit pattern), the "same distribution" could be partly a staleness artifact.
+  Checkable by joining `COUNTERFACTUAL_MATRIX_COMPUTED` timing to each decision.
+- **α at the HOLD-prune** — separating full-α load-bearing from turntabled-α (partial) prunes.
+- **Where the pruned value went** — the causal question, currently unmeasurable.
+
+---
+
+## The way-forward (convergent across all corrections)
+
+The finding that has NOT changed in four rounds, benign or alarming: **the reward optimises a
+signal (current LOO) that (a) does not separate commit from discard, (b) is only defined for
+BLENDING+ seeds, and (c) cannot measure retained or transferred value — which is the mechanism the
+product exists to produce.**
+
+The single most actionable item is therefore a **schema/instrument finding, not a new reward or
+critic arm**: build per-seed causal value instrumentation BEFORE the next experiment —
+
+- host-only (all-seeds-off) accuracy captured at: seed germination, immediately pre-prune,
+  immediately post-prune, and at terminal;
+- with a **background-training control** (the host's own trend rate just before the event), because
+  the host is training continuously and a naive post-prune rebound proves nothing;
+- optionally downstream-enablement (does an upstream partial-α seed lift a downstream seed's
+  eventual contribution/fossilisation vs matched controls) and compute-to-target.
+
+Rationale: every experiment anyone has proposed (new reward term, critic redesign, HRA, escrow) is
+currently **unscoreable on the quantity that matters**, because "did this seed's value transfer
+into the host or a downstream seed" does not exist as a measurable field. Fix the instrument, then
+run arms.
+
+Durable record: `docs/analysis/2026-07-13-decision-point-diagnosis.md` (commit a748abda).
