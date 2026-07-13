@@ -28,7 +28,7 @@
       "args": [
         "serve"
       ],
-      "command": "/home/john/.local/share/uv/tools/loomweave/bin/loomweave",
+      "command": "/home/john/.local/bin/loomweave-with-weft-identity",
       "env": {},
       "type": "stdio"
     },

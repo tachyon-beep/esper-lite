@@ -44,6 +44,7 @@ semantic_search:
 serve:
   http:
     enabled: true
+    identity_token_env: WEFT_IDENTITY_SECRET
     wardline_taint_write: true
   mcp:
     enable_write_tools: true
