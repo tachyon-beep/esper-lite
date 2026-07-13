@@ -7,6 +7,35 @@ global epoch counter, unfiltered SET_ALPHA population, two different "contributi
 a bonus computed at c≲1 when actual c≈10, "unpayable" stated as absolute). The reasoning was
 consistently fine. The rule: **read the variable in the sentence before you write it.**
 
+## READ B result — the gate retires ABSORBED scaffolds; the prune cohort is not junk
+
+Field identity resolved (slot.py:1537,1624): `SEED_PRUNED.counterfactual` and
+`reward_components.seed_contribution` are the SAME field (`metrics.counterfactual_contribution`)
+read at different TIMES. So "prune cohort 0.12" (at the prune moment) vs "8.6 during HOLDING
+life" is one seed's contribution DECAYING, not two metrics disagreeing.
+
+Read B trajectories (per-seed, from `reward_components`, seed 41):
+| cohort | c@first-HOLDING | PEAK c | c@fate (last snap) | c@prune event | decay | ∫bounded_attr after HOLDING | re-blend |
+|---|---|---|---|---|---|---|---|
+| FOSSILIZE (n=2043) | 9.4 | 14.9 | 10.8 | — | **0.48** | 2.88 | 0 |
+| PRUNE-after-HOLD (n=3873) | 8.5 | 16.2 | 8.6 | **0.12** | **2.64+** | 5.29 | 1 |
+
+**73% of pruned-after-HOLDING seeds peaked ≥ 5.0** — they were once strongly useful, NOT
+marginal. The gate selects on the RIGHT signal: **fossilise seeds whose value STAYS
+load-bearing (decay 0.48); prune seeds whose value the host has ABSORBED (decay to 0.12 →
+removal is cheap because the benefit is retained in the host).** This is **productive
+scaffold retirement**, and it maps to gpt-prime's "prune cohort high early, host benefit
+retained → LOO under-credits historical value," NOT to a selection defect. The 0.12
+removal-cost IS the retained-value evidence (cheap to remove ⇒ value is in the host). The
+pruned scaffolds WERE paid attribution during residency (∫ = 5.29, more than fossils' 2.88).
+
+Calibration guard (do not over-swing to "no problems"): this rehabilitates the SELECTION
+(largely correct), but the narrow gaps stand — `hindsight_credit` for the durable value is
+inert (0.005%; residency attribution + weak indirect GAE is all a scaffold gets), and the
+185 negative-LOO fossils are still an unexplained commitment candidate. Not yet confirmed:
+a single seed's counterfactual traced continuously 16→0.12 (inferred from two time-points);
+whether the host benefit is measurably retained post-prune (the 0.12 is strong proxy).
+
 ## The calibrated diagnosis (authoritative)
 
 > Tamiyo preferentially fossilises seeds that are currently important to the forward network
