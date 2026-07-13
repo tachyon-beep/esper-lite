@@ -18,13 +18,15 @@ above it, OFFLINE-REPLAY before any run, DESIGN-don't-land, floor + critic held 
 farm fossils.
 
 ## In flight
-- **drl-expert L1/L2 deliverable DONE** (design + reads + offline replay). Results: L1 = freeze-value + RISING UNCERTAINTY
-  (H7: post-commit drift UNMEASURABLE offline → do NOT bake a decay-γ; L3 for true drift); L2 = **settle-then-annuitize,
-  EWMA-priced** — the offline FARM VERDICT: A[ewma]+`staleness==0`+one-shot-netting VIABLE (removes −113, no systematic
-  windfall); A[spot] and B(continue-stream) FARM → rejected; EWMA/staleness are necessary-NOT-sufficient (timing
-  selection persists 45-47%). **de-shape NOT survivable** (H8: cf stream ~95% of positive reward). **ESCROW fail-closed
-  guard LANDED + tested** (5 new + 545 green). **L3 still required** for product-validity (legibility ≠ causality).
-  **Primes review pack written:** `docs/analysis/2026-07-14-permanence-visibility-primes-review-pack.md`.
+- **drl-expert deliverable DONE + primes round-13 review IN (PDR-0077).** L1 = freeze-value; **CORRECTED: shrink the
+  value dim toward UNKNOWN as staleness rises + an explicit obs status/mask** (a −1 sentinel alone isn't self-describing;
+  frozen-forever is the mirror lie — H7's rising slope ⇒ biased HIGH). **L2 A[ewma] = BLOCKED, NOT viable** — median-0 /
+  mean-+5.8 is a right-tail ~48:1 farm a policy will time; the static replay scored the OLD policy's timing. Unblock gates
+  (zero-GPU): oracle-timing replay + commitment-hazard null + RCT-CATE. Redesign to remove the policy's control of the
+  settlement instant (fixed-time / lagged-quote / confirmation-window). **de-shape:** SOFTENED (reward-mass ≠ gradient
+  signal; diagnostic control). **ESCROW guard LANDED + tested** (5 new + 545 green). **Cheaper causal read than full L3:**
+  existing |H|=1 RCT-CATE on proxy-free product outcomes + a terminal host-level objective (validate the 95% proxy).
+  Pack + round-13 outcome: `docs/analysis/2026-07-14-permanence-visibility-primes-review-pack.md`.
 - **Harness enablers** (esper-lite-7fe21bd091, decision ACCEPTED, task OPEN, no GPU): default-on checkpointing +
   per-decision advantage/pre-floor/per-head-KL logging + **K>1** (Read B, P8=0). Correct regardless of the epic.
 - **EV-stabilization epic** (esper-lite-f25b71c165): reframed by PDR-0074; comment #181.
@@ -83,11 +85,16 @@ farm fossils.
   not symptom 2 → THREE symptoms not four).
 
 ## Next session, start here
-1. **Await the primes' round-13 review** of the pack (`docs/analysis/2026-07-14-permanence-visibility-primes-review-pack.md`,
-   owner relaying). Red-team targets in §7: the L1 freeze-don't-decay resolution, L2 sell-at-spike (necessary-not-sufficient),
-   whether L3 is truly required, de-shape non-survivability.
-2. **Then the L1/L2 LAND decision (owner-gated):** land L1 + L2-A2(EWMA, `staleness==0`, one-shot-netting) TELEMETRY-FIRST
-   only after the primes clear it; obs schema bump v3→v4 ⇒ re-warm/retrain (not a silent swap). Then re-run the |H|=1 RCT
-   with the working instrument (P2 — never done); L3 scheduled to validate the imputation + measure decay-γ.
-3. **P0 harness (independent, do regardless):** K>1 (Read B), default-on checkpointing, per-decision telemetry. Floor is P3
-   (packaged with the reward, never alone). Do NOT run the λ=0 floor smoke until K is fixed.
+1. **The two zero-GPU L2-gating reads (PDR-0077), if the owner authorizes:** (a) **oracle-timing farm replay** — settle at
+   EVERY eligible commit time out-of-sample (tune s41 / test s42, then reverse); report max-over-eligible-times gain +
+   percentiles; (b) **commitment-hazard null** — `P(spike|FOSSILIZE)` vs `P(spike|all eligible)` (the 45–47% is meaningless
+   without the baseline). These decide whether A[ewma] un-blocks or the settlement must be redesigned (fixed-time /
+   lagged-quote / confirmation-window).
+2. **The proxy-free product-validity read (zero-GPU):** existing |H|=1 RCT-CATE, `β3 = FOSSILIZE×q_t` on val-acc@{1,5,10,25}
+   / terminal acc / AUC / compute-to-target / destructive events (episode-clustered). β3≤0 ⇒ EWMA is not a valid
+   retained-value proxy regardless of the farm test.
+3. **L1 land decision (owner-gated):** land the canonical `ContributionState` + explicit obs status/mask + shrink-toward-
+   UNKNOWN; obs v3→v4 ⇒ re-warm/retrain. Do NOT run L1 alone (repairs obs while the reward still forfeits). Land L2 only
+   after gate (1)+(2) clear.
+4. **P0 harness (independent, do regardless):** **K>1** (Read B — five rounds open, free, contaminating every run),
+   default-on checkpointing, per-decision telemetry. Floor is P3 (packaged with the reward, never alone).
