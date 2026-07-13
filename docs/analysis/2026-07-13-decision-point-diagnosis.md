@@ -24,32 +24,54 @@ right signal." **That is refuted.** Two artifacts produced it:
    PROGRESS over residency, explicitly warned NON-CAUSAL (slot.py:251-256, "conflates host
    training gains with seed impact"). It cannot separate ransomware from leak from anything.
 
-**The clean read — causal decision-time contribution AT the commit/discard decision**
-(`counterfactual_contribution` = `seed_contribution` at the FOSSILIZE / PRUNE decision row;
-NOT peak, NOT the `None`-riddled event field, NOT `total_improvement`), seeds 41/42:
+**The clean read (identity-robust + missingness-aware)** — gate on the decision ROW's own
+`seed_stage` (that IS the acting seed's stage → no cross-lifecycle carry, closes gpt-prime's
+identity objection for a point-in-time measure), and count `seed_contribution` ONLY when
+non-`None` (NO carry-forward — closes gpt-prime's Problem 2). Seeds 41/42:
 
-| decision | n | median c | mean | %≥5 | %1–5 | %0–1 | %<0 |
-|---|---|---|---|---|---|---|---|
-| **FOSSILIZE** (commit) | 2043 / 2108 | **10.4** | 11.2 | **66%** | 12% | 12% | 10% |
-| **PRUNE-after-HOLD** (discard) | 11.4k / 12.3k | **0.84** | 4.3 | **30%** | 18% | 30% | 22% |
+| decision (0% missing unless noted) | n (41/42) | median c | %≥5 | %<0 |
+|---|---|---|---|---|
+| **FOSSILIZE** (commit) | 2043/2108 | **10.4** | 66/65% | 9/11% |
+| **PRUNE-from-HOLDING** (discard) | 1434/1617 | **9.6** | 65/61% | 10/12% |
+| **PRUNE-from-BLENDING** | 5955/5183 | **5.8** | 55/51% | 12/13% |
+| PRUNE-from-TRAINING (exploration) | 74435/75307 | *unmeasured — 100% `None`* | — | — |
 
-Reading, calibrated both ways:
-- **FOSSILIZE selection is genuinely positive** — Tamiyo commits strongly, causally
-  load-bearing seeds (median c≈10, 66% ≥5, only ~10% net-negative). Not inverted, not a defect.
-- **Prune-after-HOLDING is MAJORITY-correct by the causal metric** — median c≈0.8; ~51% are
-  <1 (spent) including ~22% net-negative (harmful). The CENTER of the cohort is correct retirement.
-- **BUT ~30% (~3,600/run) of HOLDING-seed prunes discard a seed causally contributing ≥5
-  accuracy points** — removing it costs ≥5 pts AT the prune decision. This is claudeweb's
-  "load-bearing discard," now on a causal metric that survives scrutiny. It is real, substantial,
-  and NOT the wholesale inversion (30%, not 68%) and NOT explained away by absorption.
+**The headline, both seeds, 0% missingness on the measured cohorts:**
+- **Current terminal LOO does NOT separate commit from HOLDING-discard.** Fossilised seeds
+  (median c≈10.4) and seeds pruned from HOLDING (median c≈9.6) have the SAME contribution
+  distribution (~65% ≥5, ~10% net-negative in both). At the actual commit-vs-discard decision
+  point, current contribution does not discriminate the two fates.
+- There IS a stage gradient across the FULL prune population (fossil≈HOLD-prune 10 >
+  BLEND-prune 5.8 > TRAIN-prune unmeasured exploration) — so "prunes are lower-contribution
+  than fossils" is true ONLY because it lumps in exploration/BLENDING churn. The seeds that
+  reached the last decision point (HOLDING) are contributing as much as the ones committed.
+- The 74k TRAINING-stage prunes have NO counterfactual (100% `None`) — exploration churn at
+  α≈0, correctly excluded; carrying their `None` forward is what produced the retracted 0.84.
 
-**Cause of the ~30% tail is UNRESOLVED and NOT cleanly measurable with current fields.**
-Candidate benign explanations — ransomware/dependency (high self-LOO, net-harmful),
-param-budget/compute pressure (freeing a slot for a better seed), turntable-retirement — cannot
-be separated from genuine waste because the only "net ensemble value" field (`total_improvement`)
-is non-causal. A CAUSAL ransomware/leak discriminator does not currently exist in telemetry;
-building one is the prerequisite to pricing this tail. Do NOT bank the tail as a defect OR as
-benign.
+**Counterfactual computation mechanism (verified — vectorized_trainer.py:1365-1394,
+features.py:61-75).** `counterfactual_contribution = val_acc − solo_acc` (true LOO), computed
+ONLY when a "solo" config is evaluated for the slot — i.e. for BLENDING+ seeds, NOT every epoch.
+An `epochs_since_counterfactual` staleness tracker is reset on each fresh measurement, and the
+policy is fed `freshness = γ^epochs_since_cf` (obs V3). Consequences: (a) TRAINING prunes are
+100% `None` because TRAINING runs at **α=0** — the seed is NOT in the forward pass at all (it
+trains in isolation before BLENDING ramps α up), so its counterfactual is STRUCTURALLY zero by
+construction, not a data gap. Those 74k prunes reject seeds during isolated training, before they
+are ever wired in. (b) the non-`None` value on any decision row is the LAST-MEASURED LOO, up to a
+few epochs stale.
+So the honest statement is "last-measured contribution ≈10," and the fossil-vs-HOLD-prune
+comparison is robust to staleness ONLY IF both fates act on equally-fresh counterfactuals.
+
+**Still NOT measurable / the live residuals (do not resolve either way):**
+- Whether the high-c HOLDING-discards are ransomware (net-harmful dependencies),
+  turntable-retirements, budget-pressure, or genuine waste — no CAUSAL net-ensemble-value field
+  exists (`total_improvement` is host-progress, non-causal).
+- **Freshness asymmetry** — IF fossilize decisions systematically act on FRESHER counterfactuals
+  than prune decisions (e.g. a confirm-before-commit pattern), the "identical distribution" could
+  be partly a staleness artifact. Checkable by joining COUNTERFACTUAL_MATRIX_COMPUTED timing to
+  each decision (not free). This is the one remaining threat to the headline.
+- Alpha at the HOLD-prune — contribution is measured at the seed's CURRENT alpha, so "last
+  measured cost to remove ≈10" holds at that alpha; separating full-α from turntabled-α needs the
+  residency/stage stream (gpt-prime step 4).
 
 ## The calibrated diagnosis (authoritative)
 
@@ -62,14 +84,16 @@ benign.
 
 ## BANK (solid)
 
-- **Terminal current-LOO selection is strongly positive, not inverted.** At the causal
-  decision moment: FOSSILIZE median c≈10.4 (66% ≥5, ~10% <0) vs PRUNE-after-HOLD median c≈0.84
-  (51% <1, ~22% <0). P(FOSSILIZE|c≥1)=62–63%, |c≥5=80–82%, |0≤c<1=12–13%. n=2.
-  (NOTE: the old "prune cohort 0.12" was a `SEED_PRUNED.counterfactual` `None`-filter artifact —
-  that field is `None` ~7/8 of the time; use decision-time `seed_contribution`, median 0.84.)
-- **~30% of prune-after-HOLDING decisions discard a seed causally contributing ≥5 acc-pts.**
-  Real on the causal metric; cause (ransomware / budget-pressure / waste) UNRESOLVED because no
-  causal net-ensemble-value field exists (`total_improvement` is host-progress, non-causal).
+- **Current terminal LOO does NOT separate commit from HOLDING-discard.** Identity-clean
+  (stage-on-row), 0% missingness, n=2: FOSSILIZE last-measured c median **10.4** (66/65% ≥5,
+  ~10% <0) vs PRUNE-from-HOLDING median **9.6** (65/61% ≥5, ~11% <0) — the SAME distribution.
+  BLEND-prune median 5.8; TRAIN-prune unmeasured (exploration). The commit-vs-discard decision
+  is NOT explained by current contribution. (Retracts BOTH the old "0.12" `None`-filter artifact
+  AND the "median 0.84 / strongly-positive-selection" carry-forward artifact — see over-read #8.)
+- **The gate leaks on both tails, same causal metric, same run:** ~10% of FOSSILIZED seeds are
+  net-negative (harmful commits) AND ~65% of HOLDING-prunes are ≥5 (load-bearing discards).
+  Cause of the discards (ransomware / turntable / budget / waste) UNRESOLVED — no causal
+  net-ensemble-value field exists (`total_improvement` is host-progress, non-causal).
 - Current selection is IMPERFECT: substantial above-threshold non-fossilisation and some
   negative-current-LOO fossilisation both exist.
 - Re-blending after HOLDING is common (75%); most re-blenders never fossilise (88%).
@@ -98,6 +122,13 @@ benign.
   is `current_val_acc − initial_val_acc` (host progress since germination), explicitly non-causal
   (slot.py:251-256). Read as "seed's net help to the ensemble" it manufactured a false 68%/32%
   split. Any ransomware/leak claim needs a CAUSAL discriminator, which telemetry lacks today.
+- **(#8) "PRUNE-after-HOLD median 0.84 / 30% ≥5 / majority-correct retirement" — ARTIFACT.**
+  Caught by the user's hint to check the counterfactual code + a `None`-rate probe:
+  `seed_contribution` is `None` on 91% of ALL prune rows — but that is ENTIRELY the 74k TRAINING
+  prunes (α=0, no counterfactual). My read carried the last non-`None` value forward across them,
+  manufacturing a low median. Gated on stage-at-decision with NO carry-forward, real lifecycle
+  prunes have 0% missingness and HOLD-prune median is 9.6, not 0.84. Lesson: check a field's
+  null-rate AND its computation condition before taking any statistic of it.
 - "Re-blending is mostly loitering" AND "mostly useful turntabling" — both unresolved.
 - "The successful modulator receives NO temporal credit" (my over-claim) — TOO STRONG. Direct
   per-seed LOO doesn't pay historical modulation, but an **indirect RL channel exists**:
