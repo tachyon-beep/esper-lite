@@ -221,11 +221,15 @@ A code trace (not telemetry) settles what the observational reads could not:
    Two GPU-days produced no artifact from which any "what did the policy LEARN" question can be
    re-asked — the PDR-0026 failure recurring. Fix in the harness so every future run yields the
    logits for free. Do this regardless of anything else.
-2. **Floor-binding + mandatory-mass audit on EXISTING telemetry (gpt-prime), IF `alternatives`
-   carries per-legal-op post-floor probs** — binding rate P(P(FOSS)≈f | LOO bin); among above-floor
-   FOSS, does P(FOSS) or log P(FOSS)/P(SET_ALPHA) move with LOO; decompose q_i = f + (q_i−f) into
-   mandatory-floor mass vs learned excess (estimates how much of the negative-LOO fossils / high-LOO
-   prunes is mandatory exploration). Zero-GPU. (Feasibility gate: check `alternatives` completeness.)
+2. **Floor-binding audit — INFEASIBLE from current telemetry (gpt-prime Q1 answered).**
+   `alternatives` is top-2 ops EXCLUDING the chosen action (action_execution.py:1498), NOT per-legal-op
+   post-floor probabilities — so the binding-rate / mandatory-mass decomposition cannot be computed
+   from existing events. It needs per-op pre-/post-floor logging, which folds into the re-run (step 4).
+   (Near-miss caught here: `alternatives` excluding the chosen action made SET_ALPHA appear absent from
+   its own decisions — I nearly banked a false "action_name ≠ op-sample" inconsistency; reading the
+   field definition resolved it. The op head DOES weakly prefer SET_ALPHA: op_confidence≈0.40 is
+   SET_ALPHA's chosen-prob, WAIT is the usual runner-up, FOSSILIZE/PRUNE sit near floor — which
+   SUPPORTS "SET_ALPHA is the new WAIT" and is consistent with the dead-zone.)
 3. **DROP path 2 (Jan-checkpoint proxy)** — both primes: different config/reward family, low decision
    value; the transform's capacity to hide a signal is already settled by algebra + the autograd test.
 4. **The one GPU arm worth buying (claudeweb): test the floor's NECESSITY, not the pre-floor logits.**
