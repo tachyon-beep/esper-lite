@@ -243,6 +243,68 @@ A code trace (not telemetry) settles what the observational reads could not:
 5. **Retained/transferred-value instrumentation stays an INDEPENDENT, active track** — no floor fix
    makes transfer measurable; the two invariants are unaffected.
 
+## ⭐⭐ ROOT-CAUSE SYNTHESIS (round 6, both primes; zero-GPU, both seeds, code-confirmed)
+
+The dead-zone is now MEASURED and the plan corrected. Both seeds 41/42:
+
+**1. The dead-zone blast radius is near-total for the commit ops.** `action_confidence` (=P(chosen
+op), verified POST-floor by an exact spike at 0.15): **FOSSILIZE is floor-bound in 93-94% of
+HOLDING decisions, PRUNE in 93-95%, WAIT ~70-86%** — i.e. ~94% of fossilize/prune samples produced
+ZERO op-head gradient (claudeweb's over-read-#9 un-retracted in quantified form). **SET_ALPHA is 0%
+floor-bound (median 0.55) — a genuine LEARNED preference.** So the head CAN learn (SET_ALPHA proves
+it); FOSSILIZE/PRUNE specifically are floor-frozen. This weakens the entropy-bonus competing
+explanation (uniform-forcing pressure could not let SET_ALPHA reach 0.55).
+
+**2. Stronger maths (both primes, verified):** within a fixed underweight set the partition function
+cancels — underweight logits are REMOVED from the transform output entirely (`∂q/∂z_U = 0` for ALL
+outputs, not just their own), a piecewise policy-gradient CENSORING region. The PPO ratio for a
+floor-bound op is EXACTLY 1.0 (`logp_new=logp_old=log f`) → contributes `A·1` to the surrogate and
+ZERO to op-head approx-KL (a second, independently observable symptom: per-head KL biased low). Only
+the op-head COMPONENT is zeroed — other heads still train around the frozen op logit.
+
+**3. POLICY-WIDE (gpt-prime, code-confirmed).** `_apply_floor_to_logits` is applied to EVERY head
+with a nonzero floor in BOTH the rollout (factored_lstm.py:1104-1106) and update
+(1527-1533) legs — all 8 heads (op 0.15, slot 0.05, blueprint 0.12, tempo 0.12, …). So a rare
+efficient blueprint below its 0.12 floor cannot be raised by its own good outcomes either — a
+candidate for "finds excellent motifs but can't make them dominant."
+
+**4. THE GATE PASSES — the commit reward IS strongly LOO-graded (resolves claudeweb's
+invariant-contradiction).** Advantage is not logged per-decision (folds into the re-run), but the
+reward-vs-LOO proxy for FOSSILIZE (both seeds): **c<0 → −0.7 ; 0–1 → +0.1 ; 1–5 → +2.0 ; 5–15 →
++4.1 ; ≥15 → +8.2** — a strong monotonic rise. claudeweb argued the arm would be unscoreable because
+`hindsight_credit` is dead — but that conflates two channels: the IMMEDIATE commit reward is strongly
+LOO-graded (fossilize bonus 0.5+0.1c + contribution shaping); only the DOWNSTREAM transfer settlement
+is inert. And because `V(s)` is op-independent (P0-1), a fossilize reward rising this steeply implies
+the fossilize ADVANTAGE rises too. So **the learning signal exists; the dead-zone is why the policy
+cannot act on it.**
+
+**The coherent root cause:** *a strong, LOO-graded commit reward that the policy CANNOT LEARN FROM,
+because ~94% of commit samples are gradient-censored by the anti-WAIT floor.* Explains flat-in-LOO
+fossilize, the fossil/prune LOO overlap, SET_ALPHA dominance (the one op that stayed above floor and
+learned), and the negative-LOO fossils (a c<0 fossil earns −0.7 but is floor-forced; the penalty
+produces zero gradient to stop it). The two problems are SEPARABLE: (A) commit-learning = dead-zone +
+live reward → SCOREABLE + fixable in code; (B) transfer/developmental value = `hindsight_credit` dead
+→ separate, unaffected by the floor fix.
+
+**Corrected plan (supersedes the earlier "straight-through" and "floor-necessity" wording):**
+- **Fix primitive = a DIFFERENTIABLE mixture floor, NOT straight-through** (STE back-props the
+  unfloored gradient while sampling the floored dist → biased PPO ratio, the exact class of bug this
+  codebase is made of). Options: `q = (1−λ)·softmax(z) + λ·uniform(legal)` (claudeweb) or gpt-prime's
+  smooth `P(non-WAIT) ≥ ε` that reserves ε of WAIT's mass and redistributes by LEARNED relative probs
+  (preserves relative preferences, no per-op floor on irreversible actions). Both give exact `log q`
+  for a valid ratio and non-zero gradient everywhere.
+- **Separate the two GPU questions (gpt-prime):** Stage-1 = a short NO-FLOOR necessity smoke (current
+  reward, floor disabled, abort if WAIT-collapse recurs) — tests whether the Dec-2025 pathology still
+  exists under the twice-changed reward. Stage-2 = paired hard-floor vs mixture-floor A/B (n=5), only
+  if anti-WAIT is still needed. Do NOT call a mixture-floor arm a "necessity" test.
+- **Zero-GPU reads still to run:** the entropy-coefficient audit (is the bonus on post-floor probs;
+  coefficient magnitude — rule out the residual competing explanation); whether floor-bound (zero-
+  gradient) transitions still enter global advantage standardisation (scale distortion); per-head
+  floor-binding rates across all 8 heads (blueprint especially).
+- **Re-run must add (gpt-prime):** pre/post-floor per-op logits + per-decision advantage + periodic
+  checkpoints (weights + optimiser + normaliser + RNG + config), so the advantage-vs-LOO GATE and the
+  pre-floor policy are directly readable next time.
+
 ## The calibrated diagnosis (authoritative)
 
 > Tamiyo preferentially fossilises seeds that are currently important to the forward network
