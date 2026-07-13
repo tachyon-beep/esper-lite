@@ -1,89 +1,84 @@
-# Decision-point diagnosis (CALIBRATED — retract the claim, not the argument)
+# Decision-point diagnosis (read-the-variable pass)
 
-Date: 2026-07-13 · Runs: `stage2_on_longdiag/seed{41,42}` (n=2). Code + telemetry, no GPU.
-This file has now swung twice — over-claimed ("50×, the reward pays Tamiyo not to commit"),
-then over-retracted ("the commit gate selects correctly"). Both wrong. Calibration fails in
-BOTH directions; after a hard hit, "I was wrong about everything" is as costly a distortion
-as the tidy verdict, because it discards true findings. The rule that catches both:
-**retract the CLAIM, not the ARGUMENT.**
+Date: 2026-07-13 · Runs: `stage2_on_longdiag/seed{41,42}` (READ 3 & the reward_components
+reads are seed 41; Q1/Q2 behaviour is n=2). Code + telemetry, no GPU.
 
-## The commit gate is PARTIALLY correct — and leaks both ways
+**Meta (the one durable lesson): every over-read AND over-retraction this session —
+five of them — was a load-bearing input ASSUMED, not read.** `c=0.5`, the global epoch
+counter, the unfiltered SET_ALPHA population, `num_contributing_fossilized`, and comparing
+two different "contribution" fields. Never the reasoning. This pass reads the variables from
+`ANALYTICS_SNAPSHOT.reward_components` (which carries decision-time `seed_contribution`,
+`bounded_attribution`, `seed_stage`, `hindsight_credit`, within-episode `epoch` — it was in
+the schema the whole time).
 
-Split HOLDING-reachers by terminal fate and terminal counterfactual contribution:
+## Read 1 — `hindsight_credit` is inert (NEW solid finding)
 
-| | seed 41 | seed 42 |
-|---|---|---|
-| P(FOSSILIZE \| contribution ≥ 1.0) | **62%** | **63%** |
-| P(FOSSILIZE \| contribution ≥ 5.0) | 80% | 82% |
-| **good-at-terminal (≥1.0) seeds PRUNED** | **977** | **958** |
-| P(FOSSILIZE \| 0 ≤ c < 1.0) | 13% | 12% |
-| **NEGATIVE-contribution seeds FOSSILIZED (committed harm)** | **185** | **228** |
+Non-zero `hindsight_credit` fires on **58 of ~1,079,932 decisions (0.005%)**, spread across
+ALL actions (WAIT 29, GERMINATE 5, PRUNE 11, SET_ALPHA 11, FOSSILIZE 2). The scaffold-
+retroactive-credit mechanism is **effectively dead**. A seed that germinates, teaches the
+host, is absorbed, and is correctly pruned receives its residency attribution but ~zero
+credit for the durable value it locked in. This is a strong candidate cause for any
+"good seeds pruned for nothing" pattern — and it is unrelated to the one-shot/integral argument.
 
-So the gate mostly commits good seeds (62–80%) and mostly prunes weak ones (13% commit
-below threshold) — it is NOT inverted (the peer's selection-inversion is still refuted). BUT
-it **leaks ~38% of still-good seeds to pruning** and **commits ~200 actively-harmful seeds**.
-The cohort medians (fossils 10.8, prunes 0.12) hid both leaks in the tails. My "selects
-correctly / good seeds commit" headline over-corrected.
+## Read 3 — the re-blend loop is real and HOLDING-originated (Q3 "refuted" RETRACTED)
 
-## Retract the claim, keep the argument
+`SET_ALPHA_TARGET` conditioned on `seed_stage == 6` (HOLDING), the CORRECT population
+(n=6,429): targets chosen 0.5 (40%) / 0.7 (44%) / 1.0 (17%). HOLDING seeds overwhelmingly set
+**partial** targets, triggering re-entry to BLENDING (`slot.py:1837`). My prior "re-blends are
+real retunes, loophole refuted" used all 34,811 SET_ALPHA decisions (mostly BLENDING ramp
+tweaks) — wrong population, retracted. Note also `alpha_shock` at the SET_ALPHA decision is
+~−1.5e-5 (negligible; the SLOW ramp — 70% of speeds — keeps per-step Δα tiny), and
+`holding_warning` resets on the stage exit. So the guards-evasion concern is **supported, not
+refuted**; whether the amplitude cycle (1.0→partial→1.0, all HOLDING *entries* still α=1.0) is
+gaming vs legitimate re-tuning is not yet settled.
 
-- **RETRACTED (claim, invented input):** "re-blend beats fossilize ~50×." Used a guessed
-  `c=0.5` and a constant-`c` model; contribution decays, so the income integral is not `c·T`.
-  No magnitude is bankable without the decay curve.
-- **NOT RETRACTED (argument, a fact about the equations):** the fossilize bonus is a **one-shot**
-  `(0.5 + 0.1c)`; pre-commit attribution is an **income stream** `≈ (decaying c)` per step;
-  the two anti-loiter guards are structurally blind to a null-return re-blend (`alpha_shock`
-  Δα≈0, `holding_warning` resets on stage exit) at cost −0.005. A one-shot cannot generally
-  match an integral. No cohort read touches this. Its *bite* depends on the decay curve
-  (unmeasured) — and the Query-1 leak (38% of good seeds pruned) is exactly the footprint an
-  incentive-to-delay would leave.
+## Reopened — the commit gate does NOT cleanly select by the reward's contribution
 
-## What survives (n=2, both seeds)
+Using **decision-time** `seed_contribution` from `reward_components`:
 
-- Selection-inversion REFUTED (fossils high-c, prunes low-c on the median).
-- **The measured, durable defect:** the gate leaks — **~38% of still-good seeds pruned**
-  (Q1) and **~200 harmful seeds committed** (Q2), pending the caveats below.
-- The re-blend loop is real (75% re-blend, ≤7 cycles, 88% never commit) and concentrated on
-  marginal seeds — but its **MECHANISM is NOT the "null no-op loophole."** Q3 nullity check
-  (seed 41, `ANALYTICS_SNAPSHOT`, n=34,811 `SET_ALPHA_TARGET` decisions): targets chosen are
-  0.5 (37%) / 0.7 (43%) / 1.0 (20%), speed and curve varied. Re-blends are REAL retunes to
-  partial amplitude, and a 1.0→0.5 change is a large Δα that `alpha_shock` DOES see. So the
-  earlier "null re-blend evades both guards at −0.005" claim is **likely REFUTED** (caveat:
-  the ~35k SET_ALPHA_TARGET decisions include BLENDING-phase ramp tweaks; the ~6,682
-  re-blend-triggering ones aren't cleanly isolated here). The one-shot-vs-integral ARGUMENT
-  still stands as an equation fact, but its "guards are blind" leg is weakened, and its
-  magnitude is unmeasured — the decay curve is nested in `reward_components`, not the
-  top-level `bounded_attribution` (which is null in the snapshots), so Q3-proper is still open.
+| cohort (from HOLDING) | median seed_contribution | ≥1.0 | n |
+|---|---|---|---|
+| FOSSILIZE | 10.79 | 78% | 2,043 |
+| PRUNE-from-HOLDING | **10.14** | 76% | 1,434 |
 
-## Structural limits (what these metrics CANNOT tell me — stated before banking)
+By the reward's own contribution measure the two cohorts are **indistinguishable** (~10, both
+~77% above the 1.0 threshold). My earlier "the gate selects correctly (fossils 10.8 vs prunes
+0.12)" **conflated two fields**: nominal `seed_contribution` (≈10) vs `SEED_PRUNED.counterfactual`
+(≈0.12, a *cost-to-remove* measure). They diverge ~85×. So both my "selects correctly" AND the
+peer's "inverts selection" are **unestablished** — the gate is roughly *indifferent* to the
+reward's contribution at the commit choice. The two readings imply different worlds:
+- prune-cohort seeds are **redundant scaffolds** (nominal 10, cost-to-remove 0.12 → host
+  absorbed them → pruning is CORRECT, and attribution was over-paid on the nominal figure), OR
+- they are **reward-good seeds being pruned** (a real leak).
+Disambiguating needs: does `bounded_attribution` track nominal contribution even after the host
+has absorbed the seed? (The reward formula pays on nominal `seed_contribution`, so provisionally
+yes — the "over-pay for absorbed contribution" hypothesis — but confirm per-seed.)
 
-1. Terminal counterfactual is **post-decay** — catches "pruned a still-good seed," misses
-   "loitered a good seed until it decayed, then pruned" (hides as a correct prune). So the 38%
-   leak is a LOWER bound on good-seed loss.
-2. `SEED_{FOSSILIZED,PRUNED}.counterfactual` may not equal the reward's decision-time
-   `seed_contribution` — the "committed harm" and "pruned good" counts need the field identity
-   confirmed before banking as defects.
-3. **Ransomware prunes** (high counterfactual + negative total_improvement) are *legitimate*
-   and inflate "good seeds pruned"; separate them before pricing the leak.
+## Read 4 — 185 harmful fossils confirmed (solid)
 
-## Corrections that stand (earlier reads, unaffected)
+185 seeds fossilized at **negative** decision-time `seed_contribution` (sample −0.36…−2.04),
+median `total_reward` −0.57 — the reward PENALIZED the commit (`action_shaping` −0.5…−0.9) and
+the policy committed anyway. Permanent, at full param rent, in the shipping product. Survives
+every mechanism story.
 
-PDR-0026's null ≠ mask topology (43% free surface); the germinate/prune VOLUME is exploration
-(74k TRAINING-prunes at α≈0); the α-throttle is refuted (all commits at α≈1.0). Scoreboard:
-median-0 fossils is `<1/episode` + LOO-population artifact, not "ships nothing."
+## Read 2 — attribution income is ~flat ≈3/step (population, not per-seed decay)
 
-## Not banked
+`bounded_attribution` by within-episode epoch: 0.11 (ep 0–15) → rises to ~3.2 (ep 45–60) →
+flat ~3.0 to episode end. So per-step attribution is substantial and sustained at the
+population level (3/step ≫ the ~0.5 one-shot fossilize bonus). This does NOT give the per-seed
+decay curve (population conflates seed-ages); the true decay curve needs per-seed age tracking
+through `reward_components` — the remaining open read.
 
-`50× / any crossover magnitude` (needs decay curve); `the gate is clean` (it leaks ~38% good +
-~200 harmful); `committed harm / pruned good are certain defects` (pending caveat 2/3);
-`the reward is the sole cause of the re-blend`.
+## Status — solid vs open (no theory banked as headline)
 
-## Remaining reads that settle it (all free, in order)
+SOLID: hindsight_credit inert (0.005%); HOLDING sets partial targets 83% (re-blend real);
+185 harmful fossils; the two "contribution" fields diverge ~85× so the earlier cohort verdict
+is void; attribution ~3/step sustained. Earlier corrections that stand: PDR-0026 null ≠ mask
+topology; volume is exploration; α-throttle refuted at HOLDING *entry*.
 
-3. **Units of `seed_contribution`, then per-step `bounded_attribution` traces for the fossilize
-   vs never-commit cohorts** → the **decay curve** → the pricing stops being a debate (measured,
-   not assumed). This is the one that turns the surviving argument into a number.
-4. Separate ransomware/age/scheduled prunes from the "good seeds pruned" count.
-5. Confirm the counterfactual field == decision-time contribution (caveat 2).
-6. Time-remaining-by-fate, re-run with the within-episode epoch.
-7. Full re-blend nullity over style/speed/curve/output (action-hygiene claim).
+OPEN (do these deliberately, then write the way-forward): (1) per-seed decay curve + whether
+attribution is paid on nominal contribution after absorption (the over-pay hypothesis);
+(2) disambiguate redundant-scaffold vs leaked-good-seed for the prune-from-HOLDING cohort
+using cost-to-remove; (3) what paid for the 185 harmful fossils (per-component); (4) real
+product read (all-on vs all-off). Anchor the way-forward on the two things that survive every
+variable: **hindsight_credit is inert** and **185 harmful commits ship**.
