@@ -210,3 +210,45 @@ under THIS reward, committing is not locally rewarded.
    instrumentation** (measure a fossil's true contribution), floor + critic held constant/deferred. Confirmatory next
    reads (zero-GPU): H3 `hindsight_credit` numerator/denominator/trigger; H4 escrow clawback trigger at FOSSILIZE; H5
    confirm `attributed` derives from the LOO (structure says yes: `contribution.py:539-552`).
+
+## ROUND-11 amendments + H6 result (2026-07-14) — ONE gap, FOUR symptoms; critic retires as a SYMPTOM; the fix is cheaper than conceded
+- **H6 CONFIRMED (the decisive read):** the OBSERVATION coerces `counterfactual_contribution is None → 0.0`
+  (`features.py:829-830`), so a fossil's contribution FEATURE reads 0; and `counterfactual_fresh = γ^epochs_since_cf`
+  (`features.py:896`) → ~0 for a fossil. The machinery to say "STALE, not zero" (freshness) EXISTS and is bypassed.
+- **ONE gap (counterfactual undefined at α=0 birth AND at permanence), FOUR downstream symptoms:** (1) reward
+  `bounded_attribution` stops firing → −113 [confirmed]; (2) `hindsight_credit` settlement inert [H3, predicted];
+  (3) observation contribution feature = 0 [H6, CONFIRMED]; (4) V_main "overstates" the commit penalty 4-6× — **EXPLAINED
+  by (3): the critic is not mis-fit, it is perfectly fit to a state vector that says the fossil contributes 0** and
+  correctly predicts accuracy damage that never materializes. **Retire the critic as an INDEPENDENT defect** (PDR-0066
+  "critic is the wrong lever" was right for a new reason); do NOT bank it as separate. Symptom 4 is provisional on H6,
+  now CONFIRMED.
+- **Terminology (gpt-prime, adopt):** NOT "measurement gap, not a reward specification" (false dichotomy). Correct:
+  **the root defect is a permanent-value MEASUREMENT gap; its training manifestation is a measurement-induced
+  discontinuity in the reward, the observation, AND the value function.** Three things are simultaneously true: the
+  ablation is correctly withheld after integration; the permanent seed's value is consequently unmeasured; the experienced
+  objective nevertheless penalises FOSSILIZE.
+- **No reward transform fixes a MISSING INPUT (claude-prime §3):** ESCROW, telescoping/PBRS, de-shape all take
+  `attributed` as input, which is the missing thing. Telescoping → Φ(final)=0 at permanence → converts the −113 stream
+  into a −Φ_accrued cliff (smaller, same sign, does NOT wash out). ESCROW reads the collapse as "transient" → claws back.
+  De-shape → no per-seed credit at all. **Mark `RewardMode.ESCROW` CONTRAINDICATED (in code, before a future session
+  flips it).**
+- **The exclusion rationale is a JUDGMENT, not a fact (claude-prime §4):** the code comment claims the naive fossil
+  ablation is biased-high (host depends on the fossil). But (a) the fix for a biased estimator is a bias CORRECTION, not
+  substituting ZERO; (b) "the host became dependent" may be the PRODUCT THESIS, not an artifact (the unseparated
+  ransomware-vs-load-bearing question, decided by fiat in the reward). **Do NOT scope a hard measurement programme before
+  H7 measures the drift.**
+- **The fix, three layers — L1/L2 use EXISTING data:** **L1 freeze-don't-zero** (observation: carry the last valid LOO in
+  the contribution feature, let freshness decay — a one-line change at `features.py:830`); **L2 settle-at-fossilize**
+  (reward: capitalize the last-valid-LOO stream as a lump sum — `hindsight_credit`'s designed job; hazard = sell-at-spike,
+  mitigate with EWMA/min-over-window + `staleness==0`); **L3 measure permanence** — gated on **H7** (ablation-drift probe:
+  anchor on the valid fossilize-instant LOO, run the "invalid" ablation at t+1/+5/+20; slow drift → decay-corrected
+  ablation is cheap; fast drift → shadow-host/terminal-only, a real programme).
+- **Refocus wording (replaces item 9's "build a valid causal measure (hard)"):** *the premise "under-fossilization is a
+  defect" has NEVER been tested with a working instrument (every commitment-value read to date was taken through a reward
+  and observation that value a fossil at exactly 0). Now bet = MAKE PERMANENCE VISIBLE (L1 + L2, H7 before any hard L3),
+  then re-ask the founding question.* Floor, critic, de-shape all downstream; none ship alone.
+- **Sequencing:** P0 harness (K>1, checkpointing, per-decision telemetry) regardless; P1 the instrument (H6✓/H7 → L1+L2);
+  P2 re-run the |H|=1 RCT with a working instrument (never done); P3 floor (only after P1/P2, packaged with reward).
+- **Remaining zero-GPU reads:** H7 (drift — decides epic cost) · H3 (hindsight) · H8 (shaping as % of episode return —
+  decides whether de-shape is survivable / whether the product objective is even trainable) · H4 (escrow trigger) ·
+  H5 (attributed provenance).
