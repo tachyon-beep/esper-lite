@@ -8,7 +8,7 @@
 ## North-star
 | Metric | Target (falsifiable) | Current (BASELINE) | Read on | Trend |
 |--------|----------------------|--------------------|---------|-------|
-| **Committed J** = Σ_seed (1/params)·Σ_t cf·α over committed (FOSSILIZED) residency | ≥ placebo-noise-floor + TARGET by `<owner-set date>` | **~0 on control (defect under repair). MECHANISM ESTABLISHED 2026-07-13 (PDR-0069/0071; round-8 eval): the floor gradient dead-zone — floor-bound commit samples deliver ZERO gradient to their own logits. CAUSAL SUFFICIENCY (does removing it restore commit J?) is HYPOTHESIZED, pending the λ-sweep — the head still trains from the |H|≥2 minority + trunk; "SET_ALPHA is the new WAIT" is not ruled out.** fossilize/ep 0.207±0.006 | 2026-06-25 (n=5 control) | → |
+| **Committed J** = Σ_seed (1/params)·Σ_t cf·α over committed (FOSSILIZED) residency | ≥ placebo-noise-floor + TARGET by `<owner-set date>` | **~0 on control (defect under repair). BINDING CAUSE RE-IDENTIFIED 2026-07-14 (PDR-0074, round-9/10): a fossil MEASUREMENT gap.** Fossilized seeds are excluded from the counterfactual ablation by design → their contribution is unmeasured → the recurring `bounded_attribution` credit can only pay a PROVISIONAL seed → committing forfeits it (realized FOSS−SET_ALPHA return penalty −113/−102, ~99% this cf-stream; fire-rate 88%→11% collapse). The floor dead-zone (PDR-0069) is a real SECONDARY defect, coupled (FOSSILIZE is floor-forced 94%). Critic overstates the main-stream FOSSILIZE penalty 4-6× (secondary). Read on seeds 41/42, `reward_mode="shaped"`. fossilize/ep 0.207±0.006 | 2026-06-25 (n=5 control) | → |
 
 ## Input metrics (the levers that move the north-star)
 | Metric | Target | Current | Read on |

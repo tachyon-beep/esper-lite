@@ -1,82 +1,62 @@
-# Current State — Esper        Checkpoint: 2026-07-14 (#43) · round-8 evaluation calibrates the floor reframe + read-before-build (PDR-0072/0073; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-14 (#44) · commitment defect RESOLVED to a fossil measurement gap; instrument-first refocus proposed (PDR-0074 accepted, PDR-0075 proposed; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
-**Fix the commitment defect at its root — the floor gradient dead-zone — via the exploration primitive
-(PDR-0069/0071; CALIBRATED by the round-8 evaluation `docs/analysis/2026-07-13-round8-findings-evaluation.md`,
-PDR-0072).** MECHANISM ESTABLISHED (autograd-forced; dual-expert numeric-confirmed on the shipping symbols):
-the **op-policy loss cannot DIRECTLY update the op logits on these decisions** — the PPO log-prob is locally
-independent of the underweight raw logits, and at |H|=1 the entire post-floor op distribution is locally
-constant → zero gradient to ALL op logits (bit-exact). Shared-trunk + other-state gradients still move them
-(NOT "permanently frozen"). Leading PROXIMAL mechanism for flat commitment. **CAUSAL SUFFICIENCY is
-HYPOTHESIZED, NOT established** — the live alternative ("SET_ALPHA is the new WAIT; the policy does not want
-to commit and the floor merely masks it") is not yet ruled out. The only unproven bridge is **advantage-vs-LOO**,
-which is UNMEASURED and directionally ambiguous — **now under test (Read A, in flight).** Reframe status:
-sound as a REPRIORITIZATION, overstated as a supersession — hold to PDR-0071's calibration.
+**The commitment defect is a MEASUREMENT gap, not a policy/optimizer/floor/critic defect (PDR-0074).** Fossilized seeds
+are excluded from the counterfactual ablation BY DESIGN (`vectorized_trainer.py:956-975` — ablating a baked-in fossil
+measures host damage, not contribution), so a fossil's `seed_contribution` is structurally `None` → the recurring
+`bounded_attribution` credit can't fire → **the reward pays a seed for its contribution ONLY while provisional.** The
+policy would never commit (SET_ALPHA 55%). PROPOSED refocus (PDR-0075, owner-gated): move the epic Now bet to **causal
+permanent-seed instrumentation** (measure/settle a fossil's contribution), floor-fix deferred, critic secondary.
+· metric: can a genuinely-contributing seed be committed WITHOUT forfeiting its credit.
 
 ## In flight
-- **Read A — the RCT (§5, PDR-0073):** offline advantage-vs-LOO reconstruction from existing `value_estimate`
-  telemetry; pre-registered GRADED/FLAT/**INVERTED** rule in `docs/analysis/2026-07-14-advantage-loo-read-preregistration.md`.
-  Zero-GPU, launched this session (drl-expert). **The premise test** — INVERTED would collapse the epic's founding
-  assumption.
+- **Instrument-first fix design (next):** drl-expert to design the valid permanent-seed contribution measure — likely
+  **settle-at-fossilize** (carry the last valid HOLDING LOO forward), NOT fossil-ablation (host-damage artifact) and NOT
+  ESCROW (would claw back on the measurement-zero). Then telemetry-first, then a coupled floor-fix + rerun. Owner offered
+  the measurement change + rerun; drl-design + a spec for owner review come first.
 - **Harness enablers** (esper-lite-7fe21bd091, decision ACCEPTED, task OPEN, no GPU): default-on checkpointing +
-  per-decision advantage/pre-floor logits/per-head KL. Lands before any instrumented run.
-- **EV-stabilization epic** (esper-lite-f25b71c165): commitment-premise reframed; critic (PDR-0064/0065) and
-  cf-earns-keep/SNR (PDR-0067/0068) demoted to secondary.
-- **Branch-survivor** (esper-lite-1f1e55f58f): main-as-trunk decided (PDR-0062); gated on the merge window — untouched.
+  per-decision advantage/pre-floor/per-head-KL logging. Still the enabler for any instrumented run.
+- **EV-stabilization epic** (esper-lite-f25b71c165): reframed by PDR-0074; comment #181.
+- **Branch-survivor** (esper-lite-1f1e55f58f): main-as-trunk (PDR-0062); gated on merge window — untouched.
 
 ## Facts the next session must not relitigate
-- **Dead-zone mechanism (PDR-0069/0071/0072):** floor-bound ⇒ op-policy loss can't directly update those op logits;
-  |H|=1 ⇒ whole op head constant (bit-exact zero), corroborated at **63% (s41)/72% (s42)** of HOLDING decisions
-  (telemetry; reconstructed 67/80 was slightly high). SET_ALPHA 0.55 = analytic cap, not learned. Policy-wide (all 8
-  heads, differentiable update path). **Single-pass floor CONFIRMED** — it does NOT strictly enforce its floor/cap at
-  the margin (so an "entropy ≥ H_min or STOP" gate would false-fire; do not use it).
-- **`hindsight_credit` is OFF the shipping gate (PDR-0072, supersedes the PDR-0071 co-requisite framing):** it is keyed
-  on the non-causal `total_improvement`, and its 0.005% is a rare-trigger artifact (functional, not broken). Restate the
-  co-requisite in ADVANTAGE terms (per-decision FOSSILIZE advantage graded by transferred value, not current LOO).
-- **Experiment redesign (PDR-0073, supersedes the PDR-0071 global λ-sweep):** change ONLY the op head first; ρ∈{0,0.5,1}
-  endpoint-matched per-num_valid (`f+(1−nf)p_i`); fresh hard-floor control arm. A global λ=0.6 is confounded (moves both
-  axes on 7 of 8 heads, N5). Score on mechanism metrics, NOT "floor-bound rate→0" (a tautology).
-- **Gate caveat:** −0.7→+8.2 is IMMEDIATE reward; advantage-vs-LOO is directionally ambiguous ("V(s) op-independent ⇒
-  advantage rises" is a non-sequitur — V(s) absorbs the LOO-driven part of the return). **Scope:** the floor does NOT
-  erase the prior HRA fit-failure or coverage-bound Shapley null.
-- **Round-8 NEW findings (verified, in the eval doc):** N1 wide-head expressiveness clamp — mechanism real but severity
-  REVISED DOWN (realized num_valid=7, ceiling ~2× uniform, realized 1.3-1.4× → mild, NOT a new epic item); N2 `approx_kl`
-  dilution → optimizer step size — **Read B DONE, reframed:** the trust region IS vacuous (P8=0.000%, both seeds) but the
-  cause is **K=1** (`recurrent_n_epochs=1` → epoch-0 KL = KL(θ‖θ) = 0 by construction; ratio≡1.0, ratio-clip also inert),
-  NOT head-dilution; N2's dilution claim is untestable on K=1 (real only at K≥2). N3 entropy/collapse monitoring STRUCTURALLY
-  BLIND to the dead-zone (a TIP scar); N4 floor-bound samples contaminate global advantage standardization.
-- Docs: eval `2026-07-13-round8-findings-evaluation.md`; pre-reg `2026-07-14-advantage-loo-read-preregistration.md`;
-  round-1..7 `2026-07-13-decision-point-diagnosis.md`. Memory `floor-gradient-dead-zone`.
+- **Measurement gap (PDR-0074), fire-rate not magnitude:** fossil `bounded_attribution` collapses 88%→11% FIRE-RATE
+  (magnitude barely moves). Realized FOSS−SET_ALPHA return penalty −113/−102 = ~99% forfeited cf-credit, ~0.8% accuracy,
+  ~0.3% rent. Bonus:forfeit ≈ 75:1.
+- **RETRACTED:** PDR-0069 "the gate passes"/"reward already correct"; PDR-0071 §4 "signal survives the 9-pt spread"; the
+  round-9 "reward-specification / vindicates the epic" over-read; "ESCROW as fix." Un-retracted: PDR-0071's
+  settlement/transfer co-requisite (it is the missing revenue line).
+- **The premise is UNMEASURED, not refuted:** τ_main ≈ 0 once the cf phantom is stripped; G3's "no positive region" is
+  bounded to THIS floored policy's seeds. Read A was PROXY-tier; the "measurement gap CAUSES avoidance" causal claim is a
+  strong hypothesis (policy gradient-frozen on 94% of commits), not intervention-confirmed.
+- **Floor + reward are a PACKAGE:** FOSSILIZE is floor-bound 93-94%; the ~17% rate is the FLOOR's, not the policy's.
+  Fixing the gradient alone → fossilization ~0. Floor ρ-sweep CONTRAINDICATED + deferred (not rejected).
+- **Critic:** V_main overstates the FOSSILIZE main-stream penalty 4-6× (subject to MC/value-target parity) — real,
+  SECONDARY (not "the critic is broken"); qualifies PDR-0066. Hold critic + floor CONSTANT in the first reward experiment.
+- **Read B (K=1):** the configured target-KL early-stop supplies no operative pre-emptive guard under the K=1 loop (P8=0)
+  — a competing, reward-independent structural fact; the λ=0 necessity smoke would be uninterpretable. Fix K before any
+  floor smoke.
+- Docs: eval `2026-07-13-round8-findings-evaluation.md`; the Read-A→round-10 arc `2026-07-14-advantage-loo-read-preregistration.md`.
 
 ## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted)
-- **Owner-gated core-training-loop changes (drafted/surfaced, awaiting sign-off):** the op-isolated **ρ-sweep primitive**
-  (action dist / PPO ratio; needs drl-expert review); and a **trust-region fix** — Read B showed the K=1 runs have NO
-  trust region (KL early-stop AND ratio-clip both inert), so the real levers are **K≥2 epochs OR post-step KL gating**,
-  NOT the aggregation fix (moot at K=1). Neither built.
-- **AUTHORIZE the ρ-sweep GPU arm** — only after Read A returns GRADED (VALID tier) and Read B clears sequencing. GPU +
-  owner acceptance; pre-registered gates owner-gated.
-- **Potential vision-level escalation:** if Read A returns **INVERTED**, the epic's founding premise ("under-fossilization
-  is a defect") is the over-read → a strategy re-examination, owner-gated.
+- **Confirm the instrument-first REFOCUS (PDR-0075)?** A strategy re-scope of the epic Now bet (vision-level). You've
+  signalled the direction (change+rerun offer); `vision.md`/roadmap band NOT rewritten pending your explicit go.
+- **Approve the measurement change + rerun** — after the drl-expert design + a spec for your review (do NOT just flip the
+  fossilized-exclusion flag: it reintroduces the host-damage artifact). Owner-gated core-loop change + GPU.
+- Owner-gated + deferred: the ρ-sweep floor primitive; the trust-region fix (K≥2 / post-step KL, Read B).
 - North-star target/date, rent ceiling, host-accuracy floor: owner-unset.
 - Standing: git identity tachyon-beep; no push/tag/release/branch-deletion/telemetry-deletion/remote action without an explicit ask.
 
-## Last did (this checkpoint, #43)
-- Evaluated the round-7 findings on owner request: independent drl-expert + pytorch-expert (both numeric on the shipping
-  symbols) + telemetry recompute (~1.08M decisions/seed) + two relayed prime reviews. Verdict: mechanism SOUND,
-  reframe = reprioritization-not-supersession; localized the one overclaim (claim 5).
-- Fixed the causal-sufficiency DRIFT across current-state/metrics/roadmap + a preserve-and-annotate banner on PDR-0069
-  (owner-directed wording). Confirmed the floor is single-pass; took `hindsight_credit` off the shipping gate; revised
-  N1 down empirically. PDR-0072 (calibration), PDR-0073 (read-before-build).
-- Launched two pre-registered zero-GPU reads. **Read B (KL gate) LANDED: P8 = 0.000% both seeds — the trust region is
-  vacuous, but via K=1 (`recurrent_n_epochs=1` → self-vs-self KL = 0, ratio-clip also inert), NOT head-dilution. A
-  competing, reward-independent structural fact for the owner DECIDE; the aggregation fix is misdirected at K=1.** Read A
-  (advantage RCT) still in flight.
+## Last did (this checkpoint, #44)
+- Ran the pre-registered reads (PDR-0073): Read A = INVERTED (PROXY); Read B = K=1 no-trust-region (P8=0). Round-9 G1/G2/G3
+  + round-10 fire-rate decomposition + a code read (H2) RESOLVED the commitment defect to a **fossil measurement gap**.
+- Banked the facts + retractions (PDR-0074, accepted); proposed the instrument-first refocus (PDR-0075, owner-gated);
+  reconciled the epic (comment #181). Multiple over-reads caught and retracted (advisor + claude-prime) before banking.
 
 ## Next session, start here
-**Fold in Read A + Read B when they land** (they were in flight at checkpoint). Read A's classification is the pivot:
-GRADED (VALID) → license the ρ-sweep design for owner GPU authorization; FLAT → reopen the reward/critic line (N2 first);
-INVERTED → escalate a premise re-examination (owner-gated). Read B is DONE (P8=0.000%, K=1 no-trust-region) — a
-trust-region decision (K≥2 or post-step KL gating, NOT the aggregation fix) joins the DECIDE. Then bring the owner the
-DECIDE: ρ-sweep primitive build + trust-region fix (both owner-gated) + GPU authorization. Remaining
-zero-GPU reads if useful: hindsight numerator/denominator/eligibility; adaptive-LR/ent-coef coupling of `approx_kl`. Do
-NOT start a reward/critic arm unless Read A is FLAT.
+1. **drl-expert: design the valid permanent-seed contribution measure** (settle-at-fossilize vs retrain-without vs
+   influence) + **H3** (`hindsight_credit` numerator/denominator/trigger — is it dead for the same measurement reason?).
+2. Bring the owner a concrete, drl-reviewed **measurement change + telemetry-first spec** for approval BEFORE modifying
+   training code or spending the rerun; and the explicit **refocus confirmation** (PDR-0075).
+3. Then: telemetry-first change → confirm fossils retain contribution → reward fold-in → coupled floor-fix → GPU rerun
+   (hard floor + critic held constant for attribution). Do NOT run the λ=0 floor smoke until K is fixed.

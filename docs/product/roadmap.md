@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-14 (PDR-0072, PDR-0073 — round-8 calibration + read-before-build)
+# Roadmap — Esper            Updated: 2026-07-14 (PDR-0074 — commitment defect = fossil MEASUREMENT gap; PDR-0075 refocus PROPOSED, owner-gated, band unchanged pending sign-off)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
