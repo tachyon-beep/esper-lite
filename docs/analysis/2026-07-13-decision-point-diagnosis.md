@@ -1,115 +1,100 @@
-# Decision-point diagnosis (read-the-variable pass)
+# Decision-point diagnosis — calibrated status (gpt-prime synthesis)
 
-Date: 2026-07-13 · Runs: `stage2_on_longdiag/seed{41,42}` (READ 3 & the reward_components
-reads are seed 41; Q1/Q2 behaviour is n=2). Code + telemetry, no GPU.
+Date: 2026-07-13 · Runs: `stage2_on_longdiag/seed{41,42}`. Code + telemetry, no GPU.
+Multi-model diagnostic (owner-orchestrated: advisor + ChatGPT + Claude). This file swung
+many times; every miss was **a load-bearing input assumed instead of read** (invented `c`,
+global epoch counter, unfiltered SET_ALPHA population, two different "contribution" fields,
+a bonus computed at c≲1 when actual c≈10, "unpayable" stated as absolute). The reasoning was
+consistently fine. The rule: **read the variable in the sentence before you write it.**
 
-**Meta (the one durable lesson): every over-read AND over-retraction this session —
-five of them — was a load-bearing input ASSUMED, not read.** `c=0.5`, the global epoch
-counter, the unfiltered SET_ALPHA population, `num_contributing_fossilized`, and comparing
-two different "contribution" fields. Never the reasoning. This pass reads the variables from
-`ANALYTICS_SNAPSHOT.reward_components` (which carries decision-time `seed_contribution`,
-`bounded_attribution`, `seed_stage`, `hindsight_credit`, within-episode `epoch` — it was in
-the schema the whole time).
+## The calibrated diagnosis (authoritative)
 
-## Read 1 — `hindsight_credit` is inert (NEW solid finding)
+> Tamiyo preferentially fossilises seeds that are currently important to the forward network
+> (terminal-current-LOO selection is strongly POSITIVE, not inverted). But current LOO is NOT
+> a measure of historical developmental value, so whether the seeds she later prunes were
+> failed experiments or successful developmental modulators is UNRESOLVED. Re-blending after
+> HOLDING is common; whether it is productive turntabling, recovery, or waste is UNMEASURED
+> because HOLDING-origin excursions and their downstream effects have not been isolated.
 
-Non-zero `hindsight_credit` fires on **58 of ~1,079,932 decisions (0.005%)**, spread across
-ALL actions (WAIT 29, GERMINATE 5, PRUNE 11, SET_ALPHA 11, FOSSILIZE 2). The scaffold-
-retroactive-credit mechanism is **effectively dead**. A seed that germinates, teaches the
-host, is absorbed, and is correctly pruned receives its residency attribution but ~zero
-credit for the durable value it locked in. This is a strong candidate cause for any
-"good seeds pruned for nothing" pattern — and it is unrelated to the one-shot/integral argument.
+## BANK (solid)
 
-## Read 3 — the re-blend loop is real and HOLDING-originated (Q3 "refuted" RETRACTED)
+- **Terminal current-LOO selection is strongly positive, not inverted.** Fossils median LOO
+  ~10–11 vs prune-after-HOLDING ~0.12 (SEED_PRUNED.counterfactual); P(FOSSILIZE|c≥1)=62–63%,
+  |c≥5=80–82%, |0≤c<1=12–13%. n=2.
+- Current selection is IMPERFECT: substantial above-threshold non-fossilisation and some
+  negative-current-LOO fossilisation both exist.
+- Re-blending after HOLDING is common (75%); most re-blenders never fossilise (88%).
+- Raw germinate/prune churn is largely EXPLORATION, not farming (74k TRAINING-prunes at α≈0).
+- **Current LOO (`seed_contribution`) cannot measure historical modulation or seed→seed
+  transfer** — a Phase-0-documented limitation, now operational not theoretical.
+- Field identity (Read A): `seed_contribution` = LOO marginal in **accuracy points** (0–100).
+  Fossilize bonus = `0.5 + 0.1·c` on RAW c → **~1.5 for c≈10** (NOT ≤0.6). `bounded_attribution`
+  = discounted `sqrt(progress·c)`-type function × attribution_discount × timing_discount — NOT
+  raw c. Decision surface ~43% free; α-throttle refuted; Objective-A rejected, PPO baseline is
+  op-independent `V(s)`.
 
-`SET_ALPHA_TARGET` conditioned on `seed_stage == 6` (HOLDING), the CORRECT population
-(n=6,429): targets chosen 0.5 (40%) / 0.7 (44%) / 1.0 (17%). HOLDING seeds overwhelmingly set
-**partial** targets, triggering re-entry to BLENDING (`slot.py:1837`). My prior "re-blends are
-real retunes, loophole refuted" used all 34,811 SET_ALPHA decisions (mostly BLENDING ramp
-tweaks) — wrong population, retracted. Note also `alpha_shock` at the SET_ALPHA decision is
-~−1.5e-5 (negligible; the SLOW ramp — 70% of speeds — keeps per-step Δα tiny), and
-`holding_warning` resets on the stage exit. So the guards-evasion concern is **supported, not
-refuted**; whether the amplitude cycle (1.0→partial→1.0, all HOLDING *entries* still α=1.0) is
-gaming vs legitimate re-tuning is not yet settled.
+## DO NOT BANK (over-reads, incl. mine this round)
 
-## Reopened — the commit gate does NOT cleanly select by the reward's contribution
+- "38% of above-threshold seeds pruned = a 38% product-quality failure" — it's
+  above-threshold-current-LOO non-fossilisation; can include ransomware prunes (positive
+  self-LOO, negative ensemble), field-mismatch, deliberate post-help removal, stale telemetry.
+- "185–228 negative-LOO fossils = certainly harmful commits" — correct label is
+  **negative-current-LOO fossilisation**; a seed can have negative instantaneous LOO yet be a
+  developmental enabler / synergistic / noisy. Needs the per-cohort reward + downstream read.
+- "Re-blending is mostly loitering" AND "mostly useful turntabling" — both unresolved.
+- "The successful modulator receives NO temporal credit" (my over-claim) — TOO STRONG. Direct
+  per-seed LOO doesn't pay historical modulation, but an **indirect RL channel exists**:
+  upstream action → future downstream/terminal reward → GAE return assigned to the earlier
+  action. It is indirect, shared, delayed, discounted, high-variance, and weakened by
+  truncation/bootstrapping — NOT absent. An explicit scaffold-hindsight term may still help,
+  but the system is not mathematically incapable of learning turntabling. (`hindsight_credit`
+  fires 0.005% of the time — so the EXPLICIT settlement channel is de facto inert, which is the
+  real gap; ordinary future-return credit remains.)
+- Any fixed multiplier for the commitment economics; any constant-`c` crossover.
 
-Using **decision-time** `seed_contribution` from `reward_components`:
+## Turntabling (owner domain knowledge) + the measured screen
 
-| cohort (from HOLDING) | median seed_contribution | ≥1.0 | n |
-|---|---|---|---|
-| FOSSILIZE | 10.79 | 78% | 2,043 |
-| PRUNE-from-HOLDING | **10.14** | 76% | 1,434 |
+Turntabling is intended design: a HOLDING seed drops to partial α to modulate a downstream
+seed's blend, then ramps back to 1.0 and may fossilise; some seeds exist only to modulate. So
+the HOLDING excursion may be designed modulation, not loiter. **Effect-size screen
+(observational, seed 41):** turntabling is RARE (2% of decisions have ≥2 active seeds — masks
+enforce sequential dev); modulated fossils are NOT higher-LOO (co-resident 7.4 / upstream 2.3
+vs solo 11.6 / none 11.9) — but this is confounded by LOO-dilution AND LOO's blindness to
+transfer, so it is a **weak null, not a refutation**. Clean test = a scripted turntable arm
+measuring the DOWNSTREAM seed's outcome.
 
-By the reward's own contribution measure the two cohorts are **indistinguishable** (~10, both
-~77% above the 1.0 threshold). My earlier "the gate selects correctly (fossils 10.8 vs prunes
-0.12)" **conflated two fields**: nominal `seed_contribution` (≈10) vs `SEED_PRUNED.counterfactual`
-(≈0.12, a *cost-to-remove* measure). They diverge ~85×. So both my "selects correctly" AND the
-peer's "inverts selection" are **unestablished** — the gate is roughly *indifferent* to the
-reward's contribution at the commit choice. The two readings imply different worlds:
-- prune-cohort seeds are **redundant scaffolds** (nominal 10, cost-to-remove 0.12 → host
-  absorbed them → pruning is CORRECT, and attribution was over-paid on the nominal figure), OR
-- they are **reward-good seeds being pruned** (a real leak).
-Disambiguating needs: does `bounded_attribution` track nominal contribution even after the host
-has absorbed the seed? (The reward formula pays on nominal `seed_contribution`, so provisionally
-yes — the "over-pay for absorbed contribution" hypothesis — but confirm per-seed.)
+## The decisive zero-GPU packet (gpt-prime), then stop theorising
 
-## Read 4 — 185 harmful fossils confirmed (solid)
+- **A. Field/unit identity** — DONE (above): contribution in accuracy points; bonus on raw c.
+  Still open: whether extreme c (±45) is a meaningful marginal or an off-manifold break;
+  confirm event `counterfactual` == decision-time `seed_contribution`.
+- **B. First-HOLDING-to-fate trajectories** — per seed: c at first HOLDING, peak c, c at each
+  excursion, c at fate, ∫bounded_attribution after first HOLDING, time-remaining, re-blend
+  count/type, fate, ransomware/auto/scheduled status. **Decides whether the 0.12 prune cohort
+  was ALWAYS marginal or DECAYED after being useful** — the load-bearing unknown.
+- **C. Turntable exposure vs outcome** — downstream seeds' outcomes by upstream partial-α
+  exposure, matched on slot/blueprint/round/host-acc/param-budget. Positive association →
+  licenses a scripted causal arm.
+- **D. Reward settlement paycheck** — hindsight_credit & synergy_bonus by fate; cumulative
+  reward after first HOLDING by fate; bonus/warnings/shocks/costs/rent.
 
-185 seeds fossilized at **negative** decision-time `seed_contribution` (sample −0.36…−2.04),
-median `total_reward` −0.57 — the reward PENALIZED the commit (`action_shaping` −0.5…−0.9) and
-the policy committed anyway. Permanent, at full param rent, in the shipping product. Survives
-every mechanism story.
+## Decision table (after B–D)
 
-## Read 2 — attribution income is ~flat ≈3/step (population, not per-seed decay)
+| Finding | Implication |
+|---|---|
+| Prune cohort low FROM first HOLDING | marginal-seed exploration/recovery (benign) |
+| Prune cohort high early, downstream/host benefit retained | productive scaffolding; LOO under-credits history |
+| Prune cohort high early, no retained value, large reward accrued | attribution/timing problem |
+| Turntable-exposed downstream materially outperform controls | build explicit history-aware scaffold credit |
+| Turntable exposure no outcome association | close the modulation-credit branch |
+| Same-target/no-downstream excursions common | action-hygiene fix |
+| Negative-current-LOO fossils lack future benefit | commitment-gate defect |
+| hindsight_credit never pays PRUNE | explicit settlement gap |
 
-`bounded_attribution` by within-episode epoch: 0.11 (ep 0–15) → rises to ~3.2 (ep 45–60) →
-flat ~3.0 to episode end. So per-step attribution is substantial and sustained at the
-population level (3/step ≫ the ~0.5 one-shot fossilize bonus). This does NOT give the per-seed
-decay curve (population conflates seed-ages); the true decay curve needs per-seed age tracking
-through `reward_components` — the remaining open read.
+## Product baseline
 
-## Reframe (owner domain knowledge): turntabling, and the unpayable modulator
-
-The owner supplied the missing variable no code read could give: **turntabling is intended
-design.** A HOLDING seed can drop to partial α to *modulate a downstream seed's blend*, then
-ramp back to 1.0 and fossilize; some seeds exist ONLY to modulate (germinate → blend a
-downstream seed → cull), and downstream norm/attention seeds do better having had an upstream
-conv even after it's removed. So the HOLDING→partial→HOLDING excursion may be **designed
-modulation, not loitering** — my "null re-blend refuted" is retracted (wrong population AND
-wrong frame). The LSTM was added precisely so Tamiyo could remember a culled seed contributed
-to a future reward.
-
-**The structural defect (a reward-DESIGN fact, needs no measurement):** `bounded_attribution`
-is a leave-one-out marginal on the CURRENT network. A modulator whose value is banked in a
-downstream seed's weights and then culled is **unpayable** — its LOO contribution is ~0 by
-construction (not in the forward pass). A perfect modulator is indistinguishable from a
-worthless seed: both read ~0.12. So the prune cohort's 0.12 median CANNOT be read as "junk" —
-it may contain successful modulators the reward has no channel to pay. The LSTM gives memory
-but cannot manufacture an absent reward signal; the missing term is a **history-counterfactual**
-(Acc(downstream | upstream modulated) − Acc(downstream | upstream never existed)), not the
-presence-counterfactual LOO computes. This is bigger than "attribution misses host transfer":
-it misses **seed→seed transfer**, the load-bearing case for a compositional-topology system.
-
-**Modulation effect size (observational, seed 41):** turntabling is RARE — only **2%** of
-decisions have ≥2 active seeds (masks enforce sequential dev). Fossilize contribution WITH a
-co-resident modulator (median 7.4, n=457) / upstream modulator (2.3, n=259) is NOT higher than
-SOLO (11.6, n=1586) / no-upstream (11.9, n=1784). But this is **not a clean test**: (a)
-LOO-dilution — co-resident seeds mechanically split marginal credit; (b) LOO is structurally
-blind to the modulator's transferred value (above). So the null is weak evidence, not a
-refutation. The clean test is a **scripted turntable arm** measuring the DOWNSTREAM seed's
-outcome causally.
-
-## Status — solid vs open (no theory banked as headline)
-
-SOLID: hindsight_credit inert (0.005%); HOLDING sets partial targets 83% (re-blend real);
-185 harmful fossils; the two "contribution" fields diverge ~85× so the earlier cohort verdict
-is void; attribution ~3/step sustained. Earlier corrections that stand: PDR-0026 null ≠ mask
-topology; volume is exploration; α-throttle refuted at HOLDING *entry*.
-
-OPEN (do these deliberately, then write the way-forward): (1) per-seed decay curve + whether
-attribution is paid on nominal contribution after absorption (the over-pay hypothesis);
-(2) disambiguate redundant-scaffold vs leaked-good-seed for the prune-from-HOLDING cohort
-using cost-to-remove; (3) what paid for the 185 harmful fossils (per-component); (4) real
-product read (all-on vs all-off). Anchor the way-forward on the two things that survive every
-variable: **hindsight_credit is inert** and **185 harmful commits ship**.
+Morphogenesis-improves-a-host is NOT in doubt (established, incl. degraded hosts). The open
+product comparison is **Tamiyo's learned policy vs a competent scripted turntable/scaffold
+controller**, primary metric terminal accuracy contribution under parameter + developmental
+-compute cost. all-disabled (resident-seed effect, host learning retained) ≠ host-only control
+(total developmental effect); both useful.
