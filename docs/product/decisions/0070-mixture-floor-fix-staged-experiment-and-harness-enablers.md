@@ -1,6 +1,6 @@
 # PDR-0070 — Next bet: differentiable mixture-floor fix (staged experiment) + harness enablers
 
-Date: 2026-07-13   Status: **proposed** (the floor code change + GPU experiment are owner-gated) · the harness enablers are **accepted** (enabling work within grant, no GPU)
+Date: 2026-07-13   Status: **superseded by PDR-0071** (two-build staged experiment → one primitive + λ-sweep; ship path → co-requisite with `hindsight_credit`). The harness enablers (accepted, no GPU) carry forward unchanged.
 Related: PDR-0069 (root cause), PDR-0066 (critic is wrong lever). Analysis: `docs/analysis/2026-07-13-decision-point-diagnosis.md`. Memory: `floor-gradient-dead-zone`.
 
 ## Context

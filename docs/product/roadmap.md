@@ -1,4 +1,4 @@
-# Roadmap — Esper            Updated: 2026-07-13 (PDR-0069, PDR-0070)
+# Roadmap — Esper            Updated: 2026-07-13 (PDR-0069, PDR-0071)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
@@ -11,14 +11,18 @@
   a floor-bound action gets ZERO gradient to its logit — so ~94% of FOSSILIZE / 93-95% of PRUNE
   samples cannot learn (both seeds), despite a strong LOO-graded commit reward (−0.7→+8.2; the "gate"
   passes). This SUPERSEDES the value-target-variance premise below and demotes the critic (PDR-0066)
-  and cf-shaping/SNR (PDR-0067/0068) lines to secondary. **New lever = a differentiable mixture floor
-  (NOT straight-through), staged: no-floor NECESSITY smoke → hard-vs-mixture A/B n=5 (PDR-0070,
-  proposed — owner-gated: core-primitive code change + GPU + drl-expert review).** Harness enablers
-  (default-on checkpointing + per-decision advantage/pre-floor logging) land first — the July weights,
-  advantage, and pre-floor logits were NOT captured (PDR-0026 recurrence). The transfer/developmental-
-  value problem (`hindsight_credit` inert; no causal net-ensemble-value field) is a SEPARATE track,
-  unaffected by the floor fix. · metric: floor-bound sample rate → ~0; commit-logit LOO-sensitivity;
-  WAIT share on multi-choice states; guardrail = terminal accuracy contribution + destructive-rate.
+  and cf-shaping/SNR (PDR-0067/0068) lines to secondary. **The dead-zone is WHOLE-HEAD (PDR-0071):
+  in 67-80% of HOLDING decisions only one op is above the floor → the output vector is CONSTANT →
+  zero gradient to ALL op logits; SET_ALPHA's 0.55 is the analytic cap, not a learned preference.**
+  **New lever = a differentiable floor (NOT straight-through) — ONE primitive, λ-sweep {0,0.3,0.6}
+  (λ=0 = no-floor necessity smoke; PDR-0071, proposed — owner-gated: core-primitive code change + GPU
+  + drl-expert review).** Harness enablers (default-on checkpointing + per-decision advantage/pre-
+  floor/per-head-KL logging) land first — those quantities were NOT captured (PDR-0026 recurrence).
+  **CO-REQUISITE (PDR-0071): the floor fix is SCOREABLE but NOT SHIPPABLE until the transfer
+  settlement (`hindsight_credit`, inert 0.005%) carries signal** — else unfreezing the gradient yields
+  LOO-greedy myopic commit collapse; the dead-zone may be an accidental safety property. · metric:
+  floor-bound / |H|=1 rate → ~0; commit-logit LOO-sensitivity; WAIT share on multi-choice states;
+  guardrail = terminal accuracy contribution + destructive-intervention rate.
 - **EV-stabilization — joint value-target variance reduction for recurrent
   factored-action PPO** *(commitment-premise SUPERSEDED by PDR-0069; retained for history + the
   still-open cf-earns-keep/SNR sub-questions, now secondary).* Moved Next → Now 2026-07-05 (PDR-0027) after the owner parked
