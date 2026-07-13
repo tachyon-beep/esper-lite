@@ -151,31 +151,55 @@ A code trace (not telemetry) settles what the observational reads could not:
   head is STRUCTURALLY blind to LOO" is REFUTED — the flatness is learned/floored behaviour, not
   an architecture gap. (The op head is GLOBAL — one op distribution for the whole board — and LOO
   is 1 of ~32 per-slot features, so dilution is plausible; op↔slot coupling is mask-level only.)
-- **Anti-WAIT-collapse floors mechanically cap commitment selectivity (the load-bearing find).**
-  The op head has a DOCUMENTED history of collapsing to 99.9% WAIT (leyline/__init__.py:296-299).
-  The fix: a HARD **op probability floor = 0.15** (clamp+renormalize in MaskedCategorical,
-  __init__.py:300-301, verified) + an **op entropy floor = 0.30 normalized ≈ 52% of max entropy**
-  (__init__.py:238-242, verified). Consequence (precise, after the floor arithmetic):
-  in the observed HOLDING mix, FOSSILIZE ~17% / WAIT ~15% / PRUNE ~13% all sit AT the ~15% floor,
-  while SET_ALPHA (~55%) holds the only free/learned mass. With a 0.15 floor over ~4 legal ops the
-  floor CAPS fossilize at ~55% — so the policy is NOT at the cap, **it is at the FLOOR.** That means
-  the learned op-logit for FOSSILIZE is at-or-below the floor: the policy learned to prefer
-  SET_ALPHA and to NOT fossilize, and the 0.15 floor is what PROVIDES the ~15% fossilize mass — as
-  **state-independent exploration, flat in LOO by construction.** This directly explains: (a)
-  fossilize rate ~17% flat in LOO (floor-provided exploration, not a learned commit decision);
-  (b) the fossil/prune overlap; (c) the ~10% negative-current-LOO fossilizations — the
-  state-independent 0.15 floor forces ~15% fossilize exploration even on a harmful seed, every
-  decision. (The 0.30 entropy floor is NOT the binding constraint — it permits an ~85% peak; the
-  binding facts are the probability floor + a learned "don't-fossilize / prefer-SET_ALPHA" policy.)
-- **What I still cannot cleanly separate:** "the value dimension was never LEARNED (the policy
-  genuinely prefers SET_ALPHA and sits at the fossilize floor)" vs "training-time pressure
-  prevented a LOO-driven fossilize preference from forming." Both push the same way. The checkpoint
-  LOO-sweep (with floors ON vs bypassed) is what separates them. Also unquantified from code: HOLDING's share of op gradient
-  (loss is an unweighted masked-mean, no per-stage reweighting, ppo_update.py:352-354 — so
-  HOLDING-rarity dilution is PLAUSIBLE but needs the HOLDING step fraction from telemetry).
-- **Lineage:** this is the same op-collapse failure mode as the Dec-2025 fossilize-incentive
-  diagnosis. The floors were the FIX for WAIT-collapse; a side effect is a ceiling on commitment
-  selectivity. Any reward redesign that ignores the floors is pushing against a hard clamp.
+- **Anti-WAIT-collapse floors — the EXACT transform matters (both primes caught a naive-floor
+  over-read of mine).** Documented collapse-to-99.9%-WAIT history (leyline/__init__.py:296-299);
+  fix = op probability floor 0.15 (__init__.py:300-301) + entropy floor 0.30 (238-242). But the
+  floor is NOT a naive per-action clamp — it is **floor-PRESERVING renormalization**
+  (`_apply_floor_to_logits`, action_masks.py:522-581, READ): softmax → `effective_floor =
+  min(0.15, 0.99/num_valid)` → **underweight** actions (raw prob < floor) set to EXACTLY the floor;
+  **overweight** actions (raw ≥ floor) **scaled to fill the remaining mass, relative proportions
+  PRESERVED — NOT capped**; applied after masking.
+  - **Resolves the primes' arithmetic objection (PRUNE 13% < 0.15).** PRUNE needs
+    age ≥ MIN_PRUNE_AGE=5, so it is MASKED (0 mass) in young-HOLDING decisions; the 13% aggregate
+    is the mean of {0 when masked, ≥floor when legal}. So 55/17/15/13 is NOT a floor-simplex extreme.
+  - **Constrains the raw policy MORE than "inseparable," in the direction I did NOT expect.** Because
+    overweight actions AMPLIFY (not cap), a STRONG learned "fossilize high-LOO seeds" preference
+    would SURVIVE into the post-floor mix. Post-floor FOSSILIZE binned by LOO is FLAT → where
+    FOSSILIZE is overweight, it does NOT rise with LOO. **The floor is NOT hiding a strong LOO
+    preference** (the primes' hopeful hypothesis is largely refuted for the strong case).
+  - **What remains genuinely open:** a WEAK, entirely SUB-floor LOO gradient (raw FOSSILIZE drifting
+    e.g. 0.10→0.14) WOULD be clamped flat to the floor and masked. That is the only learned-LOO-
+    selectivity hypothesis still alive, and only the PRE-FLOOR logit read settles it.
+- **RETRACTED over-read #9:** "the policy is AT the floor / the floor provides ALL fossilize mass /
+  flat by construction." False by the transform — FOSSILIZE is OVERWEIGHT in some decisions (the
+  sampled `alternatives` showed FOSSILIZE=0.25 > floor), and the floor does not cap overweight, so it
+  does not "provide all the mass." **Precise bankable status** (both primes, refined by the actual
+  transform): *the realised HOLDING distribution is consistent with anti-WAIT floor saturation on the
+  UNDERWEIGHT actions, with SET_ALPHA holding the free mass; the post-floor evidence rules out a
+  STRONG learned LOO-fossilize preference, but a WEAK sub-floor one requires the pre-floor read.*
+- **Decisive read (both primes): pre-floor op logits at HOLDING binned by LOO — NOT in telemetry**
+  (only post-floor entropy/confidence/`alternatives` are emitted). Requires a checkpoint forward
+  pass, which CAN read `op_logits` BEFORE `_apply_floor_to_logits` (factored_lstm.py:899/1152), run
+  floors-ON vs floors-bypassed; plus a recurrence variant perturbing LOO HISTORY (the LSTM may
+  encode the LOO trajectory); plus HOLDING's share of the op-gradient (rarity dilution; unweighted
+  masked-mean loss, ppo_update.py:352-354). No new reward/critic arm before these cheap reads.
+- **Structural reframes to HOLD (hypotheses, not banked):** (claudeweb) "SET_ALPHA is the new WAIT"
+  — the do-nothing/penalty-resetting attractor reached after WAIT was clamped; the floors MASK the
+  collapse rather than fix it (Dec-bonus → P0-immediate-payment → anti-collapse-floors = a chain of
+  symptom-suppression on a policy that doesn't want to commit). (gpt) a per-action floor that forces
+  15% mass onto IRREVERSIBLE ops (FOSSILIZE/PRUNE) is a blunt primitive; a `P(non-WAIT) ≥ ε`
+  constraint preserving the learned relative distribution would prevent collapse without mandating
+  random irreversible commits.
+- **Lineage + way-forward correction (claudeweb).** Same op-collapse failure mode as the Dec-2025
+  fossilize-incentive diagnosis; floors were the FIX, side effect = ceiling on commitment selectivity.
+  BUT: the floor determines the *behaviour* (the sampled mix), NOT the *preference* underneath — and
+  the underlying logit preference is what the reward shaped. So "the reward may not be where this is
+  determined" was TOO STRONG (my wording, retracted): a learned "prefer-SET_ALPHA / don't-commit"
+  logit is still reward-shaped. The pre-floor read tells you whether it's a mild preference amplified
+  by exploration mass or a strong one — but either way the reward is implicated in the preference.
+- **Two invariants gate everything regardless of how the floor question lands (both primes):**
+  `hindsight_credit` is inert (0.005%) and transfer is unmeasurable. No floor read, no logit read, no
+  reward re-pricing changes those, and no downstream experiment is scoreable until they are fixed.
 
 ## The calibrated diagnosis (authoritative)
 
