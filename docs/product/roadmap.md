@@ -1,12 +1,27 @@
-# Roadmap — Esper            Updated: 2026-07-11 (PDR-0061)
+# Roadmap — Esper            Updated: 2026-07-13 (PDR-0069, PDR-0070)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
 > schedule. Do not compute WSJF here; hand the committed bet over for sequencing.
 
 ## Now  (committed, in-flight)
+- **Commitment root cause FOUND → exploration-primitive fix (REFRAMED 2026-07-13, PDR-0069/0070).**
+  The commitment defect the EV epic exists to fix is root-caused to the **anti-WAIT floor gradient
+  dead-zone**: `_apply_floor_to_logits` sits in the differentiable PPO path across all 8 heads, and
+  a floor-bound action gets ZERO gradient to its logit — so ~94% of FOSSILIZE / 93-95% of PRUNE
+  samples cannot learn (both seeds), despite a strong LOO-graded commit reward (−0.7→+8.2; the "gate"
+  passes). This SUPERSEDES the value-target-variance premise below and demotes the critic (PDR-0066)
+  and cf-shaping/SNR (PDR-0067/0068) lines to secondary. **New lever = a differentiable mixture floor
+  (NOT straight-through), staged: no-floor NECESSITY smoke → hard-vs-mixture A/B n=5 (PDR-0070,
+  proposed — owner-gated: core-primitive code change + GPU + drl-expert review).** Harness enablers
+  (default-on checkpointing + per-decision advantage/pre-floor logging) land first — the July weights,
+  advantage, and pre-floor logits were NOT captured (PDR-0026 recurrence). The transfer/developmental-
+  value problem (`hindsight_credit` inert; no causal net-ensemble-value field) is a SEPARATE track,
+  unaffected by the floor fix. · metric: floor-bound sample rate → ~0; commit-logit LOO-sensitivity;
+  WAIT share on multi-choice states; guardrail = terminal accuracy contribution + destructive-rate.
 - **EV-stabilization — joint value-target variance reduction for recurrent
-  factored-action PPO.** Moved Next → Now 2026-07-05 (PDR-0027) after the owner parked
+  factored-action PPO** *(commitment-premise SUPERSEDED by PDR-0069; retained for history + the
+  still-open cf-earns-keep/SNR sub-questions, now secondary).* Moved Next → Now 2026-07-05 (PDR-0027) after the owner parked
   the Committed-Shapley term. Rationale: advantage noise is the live suspect for
   suppressed commitment; fixing it may organically widen the k≥2 co-fossilization
   channel the A/B found too narrow (1.1% of episodes). **Stage-0 DELIVERED + gate PASSED
