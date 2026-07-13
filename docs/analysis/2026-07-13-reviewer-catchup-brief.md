@@ -243,6 +243,40 @@ learned, or a masking artifact. A drl-expert code trace (key lines re-verified b
   instrument-first recommendation now has a sibling: understand the floor/collapse dynamics before
   re-pricing commitment. `hindsight_credit` inert (0.005%) unchanged.
 
+### (4) FLOOR-TRANSFORM CORRECTION — you both caught the naive-floor arithmetic (answers your Q1/Q2)
+
+You both flagged that a naive 0.15-per-action floor cannot yield 55/17/15/13 (PRUNE < floor). Correct.
+I read the exact transform (`_apply_floor_to_logits`, action_masks.py:522-581):
+
+- **Q1 — floor form:** NOT a naive per-action clamp. It is **floor-PRESERVING renormalization**:
+  softmax → `effective_floor = min(0.15, 0.99/num_valid)` → **underweight** actions (raw < floor) set
+  to EXACTLY the floor; **overweight** actions (raw ≥ floor) **scaled to fill remaining mass, relative
+  proportions preserved — NOT capped**; applied after masking.
+- **Resolves the arithmetic:** PRUNE 13% < 0.15 because PRUNE is MASKED (age < MIN_PRUNE_AGE=5) in
+  young-HOLDING decisions → 0 mass; 13% is the mean of {0 masked, ≥floor legal}. 55/17/15/13 is NOT a
+  floor-simplex extreme.
+- **This cuts AGAINST the "floor masks learnt selectivity" hope, for the STRONG case:** because
+  overweight actions AMPLIFY (not cap), a strong learnt "fossilize high-LOO" preference would SURVIVE
+  post-floor. Binned post-floor FOSSILIZE is flat in LOO → where FOSSILIZE is overweight it does not
+  rise with LOO → the floor is not hiding a *strong* LOO preference. **Only a WEAK, entirely
+  sub-floor LOO gradient** (raw drifting below 0.15) would be clamped flat and masked — that is the
+  one live learned-selectivity hypothesis, and the pre-floor read settles it.
+- **RETRACTED (my over-read #9):** "the policy is AT the floor / the floor provides ALL fossilize
+  mass." False — FOSSILIZE is overweight in some decisions (`alternatives` showed 0.25 > floor) and
+  the floor doesn't cap overweight. Bankable wording (gpt's, refined by the transform): *the realised
+  HOLDING mix is consistent with floor saturation of the UNDERWEIGHT actions with SET_ALPHA holding
+  the free mass; a STRONG learnt LOO-fossilize preference is ruled out post-floor, a WEAK sub-floor
+  one needs the pre-floor read.*
+- **Q2 — pre-floor logits accessible?** YES via a checkpoint forward pass: `op_logits` are computed
+  (factored_lstm.py:820-845) BEFORE `_apply_floor_to_logits` (:899/:1152). They are NOT in telemetry
+  (only post-floor entropy/confidence/`alternatives` are emitted). So the decisive read is the
+  checkpoint sweep (raw → pre-floor → post-floor, floors ON vs bypassed, + a LOO-history/recurrence
+  variant), not a telemetry line.
+- **Way-forward correction (claudeweb):** the floor sets the BEHAVIOUR, the reward shapes the
+  PREFERENCE underneath — so "the reward may not be where this is determined" was too strong; a learnt
+  "prefer-SET_ALPHA" logit is still reward-shaped. And the two invariants gate everything regardless:
+  `hindsight_credit` dead, transfer unmeasurable — no experiment is scoreable until those are fixed.
+
 **Net after round 2:** the headline is now two-sided and much harder to dismiss — the realised
 cohorts overlap on LOO (fresh-confirmed), AND the policy's op distribution is flat in LOO. The
 open question flips from "is the overlap real" (yes) to **"what DOES the HOLDING decision key on?"**
