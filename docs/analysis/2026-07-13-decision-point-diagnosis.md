@@ -157,32 +157,45 @@ A code trace (not telemetry) settles what the observational reads could not:
   floor is NOT a naive per-action clamp — it is **floor-PRESERVING renormalization**
   (`_apply_floor_to_logits`, action_masks.py:522-581, READ): softmax → `effective_floor =
   min(0.15, 0.99/num_valid)` → **underweight** actions (raw prob < floor) set to EXACTLY the floor;
-  **overweight** actions (raw ≥ floor) **scaled to fill the remaining mass, relative proportions
-  PRESERVED — NOT capped**; applied after masking.
-  - **Resolves the primes' arithmetic objection (PRUNE 13% < 0.15).** PRUNE needs
-    age ≥ MIN_PRUNE_AGE=5, so it is MASKED (0 mass) in young-HOLDING decisions; the 13% aggregate
-    is the mean of {0 when masked, ≥floor when legal}. So 55/17/15/13 is NOT a floor-simplex extreme.
-  - **Constrains the raw policy MORE than "inseparable," in the direction I did NOT expect.** Because
-    overweight actions AMPLIFY (not cap), a STRONG learned "fossilize high-LOO seeds" preference
-    would SURVIVE into the post-floor mix. Post-floor FOSSILIZE binned by LOO is FLAT → where
-    FOSSILIZE is overweight, it does NOT rise with LOO. **The floor is NOT hiding a strong LOO
-    preference** (the primes' hopeful hypothesis is largely refuted for the strong case).
-  - **What remains genuinely open:** a WEAK, entirely SUB-floor LOO gradient (raw FOSSILIZE drifting
-    e.g. 0.10→0.14) WOULD be clamped flat to the floor and masked. That is the only learned-LOO-
-    selectivity hypothesis still alive, and only the PRE-FLOOR logit read settles it.
-- **RETRACTED over-read #9:** "the policy is AT the floor / the floor provides ALL fossilize mass /
-  flat by construction." False by the transform — FOSSILIZE is OVERWEIGHT in some decisions (the
-  sampled `alternatives` showed FOSSILIZE=0.25 > floor), and the floor does not cap overweight, so it
-  does not "provide all the mass." **Precise bankable status** (both primes, refined by the actual
-  transform): *the realised HOLDING distribution is consistent with anti-WAIT floor saturation on the
-  UNDERWEIGHT actions, with SET_ALPHA holding the free mass; the post-floor evidence rules out a
-  STRONG learned LOO-fossilize preference, but a WEAK sub-floor one requires the pre-floor read.*
-- **Decisive read (both primes): pre-floor op logits at HOLDING binned by LOO — NOT in telemetry**
-  (only post-floor entropy/confidence/`alternatives` are emitted). Requires a checkpoint forward
-  pass, which CAN read `op_logits` BEFORE `_apply_floor_to_logits` (factored_lstm.py:899/1152), run
-  floors-ON vs floors-bypassed; plus a recurrence variant perturbing LOO HISTORY (the LSTM may
-  encode the LOO trajectory); plus HOLDING's share of the op-gradient (rarity dilution; unweighted
-  masked-mean loss, ppo_update.py:352-354). No new reward/critic arm before these cheap reads.
+  **overweight** actions (raw ≥ floor) **scaled DOWN by factor `(1−|U|f)/Σ_H p < 1`** (relative
+  proportions preserved), capped at `1−(n−1)f ≈ 0.55` for 4 legal ops; applied after masking.
+  - **Algebra correction (gpt-prime, verified):** overweight actions are scaled DOWN to fund the
+    raised floors, NOT amplified — my previous "amplify" was WRONG (my example had 3 "underweight"
+    actions summing to >|U|·f, which is impossible). So the floor DOES cap per-state selectivity at
+    ~0.55. Realised frequencies ≠ policy probabilities, and the aggregate 55/17/15/13 mixes decisions
+    with different legal sets — so it alone CANNOT identify the raw policy (gpt-prime's caution).
+  - **Resolves the arithmetic (PRUNE 13% < 0.15):** PRUNE needs age ≥ MIN_PRUNE_AGE=5, so it is
+    MASKED (0 mass) in young-HOLDING decisions; 13% = mean of {0 masked, ≥floor legal}.
+- **RETRACTED over-read #9** ("policy is AT the floor / floor provides ALL fossilize mass"): false —
+  FOSSILIZE is overweight in some decisions (`alternatives` showed 0.25 > floor). Bankable status:
+  *the realised HOLDING mix is consistent with floor saturation on the underweight actions; the mix
+  alone cannot identify the raw policy.*
+- **⭐ THE MECHANISM FINDING (gpt-prime's dead-zone — autograd-CONFIRMED, zero-GPU).** The floor
+  transform is in the DIFFERENTIABLE PPO update path (`factored_lstm.py:1533`, `evaluate_actions`),
+  not just sampling. A floor-bound (underweight) action's post-floor prob is a CONSTANT
+  (`log(effective_floor)`), so **its PPO log-prob has ZERO gradient to the raw logits** — verified:
+  FOSS-below-floor → `d logP(FOSS)/d logits = [0,0,0,0]`; FOSS-above-floor → normal gradient (0.668).
+  Consequence: **when FOSSILIZE (or any op) is floor-bound, its advantage produces NO direct policy
+  gradient to its own logit.** The floor GUARANTEES the action is sampled (≥15% exploration) but
+  SEVERS the channel by which its outcomes would teach the policy — "forced exploration you cannot
+  learn from." This is a candidate ROOT mechanism for the whole thread: once WAIT-collapse pushed the
+  FOSSILIZE logit below floor, good/bad fossilize outcomes cannot climb/lower it via direct PG; it
+  can move only indirectly (shared trunk, entropy-floor loss, boundary crossings). It sharpens the
+  negative-LOO fossils (the penalty on a floor-forced bad fossil produces zero gradient to stop it)
+  and explains why the raw commit preference stayed undeveloped where it's below floor.
+  - **Caveats (not overclaiming):** the zero-gradient holds ONLY in below-floor states; above-floor
+    FOSS trains normally, so it is not a total freeze — it's a severed DIRECT channel below floor,
+    with indirect channels intact. NOT proven that this is the SOLE cause; the counterfactual (make
+    the floor gradient-preserving / straight-through, re-run, see if commit-selectivity emerges) is
+    the confirming experiment.
+  - **This is a FIXABLE code-level pathology:** a straight-through gradient estimator through the
+    floor, or gpt-prime's `P(non-WAIT) ≥ ε` constraint (reserve ε, redistribute by learned relative
+    probs) — either prevents WAIT-collapse WITHOUT zeroing the individual ops' gradients or mandating
+    random irreversible commits.
+- **Pre-floor logit sweep — DOWNGRADED from "decisive" (claudeweb's challenge accepted).** With the
+  dead-zone confirmed and a strong learned preference already implausible, the pre-floor read is
+  mop-up on a narrow residual and would not change the decision. It is NOT worth a GPU re-run. The
+  autograd test + binding audit substitute for it at zero cost.
 - **Structural reframes to HOLD (hypotheses, not banked):** (claudeweb) "SET_ALPHA is the new WAIT"
   — the do-nothing/penalty-resetting attractor reached after WAIT was clamped; the floors MASK the
   collapse rather than fix it (Dec-bonus → P0-immediate-payment → anti-collapse-floors = a chain of
@@ -200,6 +213,31 @@ A code trace (not telemetry) settles what the observational reads could not:
 - **Two invariants gate everything regardless of how the floor question lands (both primes):**
   `hindsight_credit` is inert (0.005%) and transfer is unmeasurable. No floor read, no logit read, no
   reward re-pricing changes those, and no downstream experiment is scoreable until they are fixed.
+
+### Immediate next steps (both primes converged, ordered)
+
+1. **Checkpoint saving = a HARNESS FIX, default-ON, no PDR / no GPU auth (claudeweb).** The seed41/42
+   weights were NOT saved (only Jan `basic_plus` checkpoints exist — different config/reward family).
+   Two GPU-days produced no artifact from which any "what did the policy LEARN" question can be
+   re-asked — the PDR-0026 failure recurring. Fix in the harness so every future run yields the
+   logits for free. Do this regardless of anything else.
+2. **Floor-binding + mandatory-mass audit on EXISTING telemetry (gpt-prime), IF `alternatives`
+   carries per-legal-op post-floor probs** — binding rate P(P(FOSS)≈f | LOO bin); among above-floor
+   FOSS, does P(FOSS) or log P(FOSS)/P(SET_ALPHA) move with LOO; decompose q_i = f + (q_i−f) into
+   mandatory-floor mass vs learned excess (estimates how much of the negative-LOO fossils / high-LOO
+   prunes is mandatory exploration). Zero-GPU. (Feasibility gate: check `alternatives` completeness.)
+3. **DROP path 2 (Jan-checkpoint proxy)** — both primes: different config/reward family, low decision
+   value; the transform's capacity to hide a signal is already settled by algebra + the autograd test.
+4. **The one GPU arm worth buying (claudeweb): test the floor's NECESSITY, not the pre-floor logits.**
+   The 99.9%-WAIT collapse was diagnosed in Dec-2025 under a reward that has since changed ≥twice; the
+   floor's necessity was never re-examined. Run ONE arm with the floor made gradient-preserving
+   (straight-through) OR replaced by `P(non-WAIT) ≥ ε`. If commit-selectivity emerges → the dead-zone
+   was load-bearing and the fix is in hand. If the head still collapses to WAIT → that is the finding:
+   the reward, as written, prefers inaction to every intervention, and every patch since Dec has
+   suppressed that signal rather than heeded it. Either outcome is actionable; the pre-floor sweep is
+   not.
+5. **Retained/transferred-value instrumentation stays an INDEPENDENT, active track** — no floor fix
+   makes transfer measurable; the two invariants are unaffected.
 
 ## The calibrated diagnosis (authoritative)
 
