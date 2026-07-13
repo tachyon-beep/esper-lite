@@ -61,17 +61,29 @@ few epochs stale.
 So the honest statement is "last-measured contribution ≈10," and the fossil-vs-HOLD-prune
 comparison is robust to staleness ONLY IF both fates act on equally-fresh counterfactuals.
 
-**Still NOT measurable / the live residuals (do not resolve either way):**
-- Whether the high-c HOLDING-discards are ransomware (net-harmful dependencies),
-  turntable-retirements, budget-pressure, or genuine waste — no CAUSAL net-ensemble-value field
-  exists (`total_improvement` is host-progress, non-causal).
-- **Freshness asymmetry** — IF fossilize decisions systematically act on FRESHER counterfactuals
-  than prune decisions (e.g. a confirm-before-commit pattern), the "identical distribution" could
-  be partly a staleness artifact. Checkable by joining COUNTERFACTUAL_MATRIX_COMPUTED timing to
-  each decision (not free). This is the one remaining threat to the headline.
-- Alpha at the HOLD-prune — contribution is measured at the seed's CURRENT alpha, so "last
-  measured cost to remove ≈10" holds at that alpha; separating full-α from turntabled-α needs the
-  residency/stage stream (gpt-prime step 4).
+**Freshness residual — CLOSED (both reviewers flagged as the #1 threat; refuted).** Reconstructed
+`epochs_since_counterfactual` exactly (the LOO value is written ONLY on a fresh solo-eval, so
+epochs-since-value-last-changed == staleness). Both cohorts act on FRESH counterfactuals: 98-99%
+at staleness=0, ~0% at ≥3, in FOSSILIZE and PRUNE alike — no confirm-before-commit asymmetry.
+The decisive matched read (fresh-only, staleness=0): FOSSILIZE median 11.2/10.2 vs PRUNE-from-HOLD
+median 10.3/9.2 — overlap HOLDS; prune-c does NOT collapse when forced fresh. Stale prunes (s≥3)
+are n=4-5 and low-c (median 0), the opposite of the stale-high concern. **The overlap is not a
+staleness artifact.**
+
+**Still NOT measurable / open (do not resolve either way):**
+- **Realised-action overlap ≠ policy-preference flatness (gpt-prime's key open read).** A
+  stochastic policy could have π(FOSSILIZE) rise with LOO yet produce overlapping REALISED
+  cohorts. The direct test is the op-head logit margin `log π(FOSSILIZE) − log π(PRUNE)` vs LOO,
+  on the both-actions-legal population — not classifying terminal outcomes. UNTIL THEN the banked
+  claim is "current LOO shows substantial distributional overlap and no obvious univariate
+  separation between realised FOSSILIZE and HOLD-PRUNE," NOT "the policy cannot separate them."
+- Whether the high-current-LOO HOLDING-prunes are premature prunes, productive turntable
+  retirement, ransomware/dependency correction, slot-budget, or partial-α removals — no CAUSAL
+  net-ensemble-value field exists (`total_improvement` is host-progress, non-causal).
+- Alpha at the HOLD-prune — separating full-α from turntabled-α (partial) removals.
+- Formal distribution equality — the medians/tails overlap, but ROC-AUC / Wasserstein with
+  run-level (not decision-row) bootstrap is needed before "same distribution" is more than
+  "substantial overlap."
 
 ## The calibrated diagnosis (authoritative)
 
@@ -84,16 +96,20 @@ comparison is robust to staleness ONLY IF both fates act on equally-fresh counte
 
 ## BANK (solid)
 
-- **Current terminal LOO does NOT separate commit from HOLDING-discard.** Identity-clean
-  (stage-on-row), 0% missingness, n=2: FOSSILIZE last-measured c median **10.4** (66/65% ≥5,
-  ~10% <0) vs PRUNE-from-HOLDING median **9.6** (65/61% ≥5, ~11% <0) — the SAME distribution.
-  BLEND-prune median 5.8; TRAIN-prune unmeasured (exploration). The commit-vs-discard decision
-  is NOT explained by current contribution. (Retracts BOTH the old "0.12" `None`-filter artifact
-  AND the "median 0.84 / strongly-positive-selection" carry-forward artifact — see over-read #8.)
-- **The gate leaks on both tails, same causal metric, same run:** ~10% of FOSSILIZED seeds are
-  net-negative (harmful commits) AND ~65% of HOLDING-prunes are ≥5 (load-bearing discards).
-  Cause of the discards (ransomware / turntable / budget / waste) UNRESOLVED — no causal
-  net-ensemble-value field exists (`total_improvement` is host-progress, non-causal).
+- **Current LOO shows substantial overlap and no obvious univariate separation between realised
+  FOSSILIZE and HOLD-PRUNE** (fresh-confirmed). Identity-clean (stage-on-row), 0% missingness,
+  n=2: FOSSILIZE last-measured c median **10.4** (66/65% ≥5, ~10% <0) vs PRUNE-from-HOLDING median
+  **9.6** (65/61% ≥5, ~11% <0). BLEND-prune median 5.8; TRAIN-prune unmeasured (exploration).
+  The REALISED commit-vs-discard action is not visibly separated by current contribution alone.
+  (Terminology per gpt-prime: "substantial overlap," NOT proven "same distribution" — needs
+  AUC/Wasserstein + run-level bootstrap. Retracts the "0.12" and "0.84" artifacts — over-read #8.)
+- **Both realised fates carry ~10% negative-current-LOO and ~63-65% ≥5.** So there exist
+  **negative-current-LOO fossilizations** (~10%) AND **high-current-LOO HOLDING-prunes** (~65%).
+  A negative current LOO is NOT proven a harmful product decision, and a high-LOO prune is NOT
+  proven a mistake — labelling them "harmful commits" / "leaks" presumes current LOO is the
+  correct commit-worthiness target, which is unproven. Cause (developmental enablement / synergy /
+  turntable / ransomware / budget / stale / waste) UNRESOLVED — no causal net-ensemble-value field
+  exists (`total_improvement` is host-progress, non-causal).
 - Current selection is IMPERFECT: substantial above-threshold non-fossilisation and some
   negative-current-LOO fossilisation both exist.
 - Re-blending after HOLDING is common (75%); most re-blenders never fossilise (88%).
