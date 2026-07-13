@@ -85,6 +85,36 @@ staleness artifact.**
   run-level (not decision-row) bootstrap is needed before "same distribution" is more than
   "substantial overlap."
 
+## POLICY-PREFERENCE read — the op-head decision at HOLDING is invariant to current LOO
+
+gpt-prime's key discriminator (realised-action overlap ≠ policy-preference flatness). At HOLDING
+(FOSSILIZE and PRUNE both legal, `op_masked==false`), binned by current LOO, both seeds:
+
+| LOO bin | op_entropy | op_conf | realised op mix (SET_ALPHA / FOSSILIZE / WAIT / PRUNE) |
+|---|---|---|---|
+| <0 | 0.88 | 0.35 | 55 / 17 / 15 / 13 |
+| 0–1 | 0.88 | 0.35 | 55 / 18 / 14 / 13 |
+| 1–5 | 0.88 | 0.36 | 58 / 17 / 14 / 11 |
+| 5–15 | 0.87 | 0.36 | 55 / 17 / 15 / 13 |
+| ≥15 | 0.87 | 0.35 | 54 / 18 / 16 / 11 |
+
+**The op-head's entropy, confidence, AND realised action mix are FLAT across the entire LOO range**
+(both seeds). A seed contributing <0 and a seed contributing ≥15 acc-pts get the same treatment:
+~55% alpha-retune, ~17% fossilize, ~13% prune. This is gpt-prime's case 2 — **current LOO is not
+the axis of the HOLDING op decision** — and it directly EXPLAINS the fossil/HOLD-prune overlap:
+the fates share one LOO distribution because the fossilize-vs-prune choice is made independently of
+LOO. Note the dominant HOLDING op is SET_ALPHA_TARGET (~55%), not commit (~17%) or prune (~13%):
+the policy overwhelmingly re-tunes rather than commits, LOO-invariantly.
+
+Caveats (do not overclaim): (a) this is MARGINAL invariance (LOO averaged over other state) — LOO
+could still matter conditional on other features and average out, though the completeness of the
+flatness across a >15-pt swing argues against much hidden signal; (b) these are PER-DECISION op
+rates, not per-seed terminal rates (a seed gets many HOLDING decisions); (c) n=2 trained
+controllers; (d) it says LOO is not the axis, NOT that the decision is illegible — the policy may
+key on host trajectory / slot pressure / LSTM history / freshness / downstream plans. The natural
+next read is claudeweb's: what DOES separate fossilize from prune (age, epochs-in-HOLDING,
+occupancy, blueprint, resident count, α history, host-acc trend)?
+
 ## The calibrated diagnosis (authoritative)
 
 > Tamiyo preferentially fossilises seeds that are currently important to the forward network
