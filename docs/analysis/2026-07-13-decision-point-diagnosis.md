@@ -305,6 +305,57 @@ live reward → SCOREABLE + fixable in code; (B) transfer/developmental value = 
   checkpoints (weights + optimiser + normaliser + RNG + config), so the advantage-vs-LOO GATE and the
   pre-floor policy are directly readable next time.
 
+## ROUND 7 — the dead-zone is WHOLE-HEAD (|H|=1), and the plan gains a co-requisite
+
+**Reshaping (claudeweb, confirmed both seeds).** Take the transform to |H|=1 (one op above floor):
+the output vector is a CONSTANT `[1−(n−1)f, f, …]` — gradient to EVERY op logit is zero, including
+the "winner". **|H|=1 holds in 67% (s41) / 80% (s42) of HOLDING decisions** (reconstructed from
+`action_confidence` + `alternatives`). SET_ALPHA's median 0.55 is the analytic CAP `1−3·0.15`, not a
+learned mode — it sits at exactly 0.55 in 48-61% of SET_ALPHA choices. **RETRACT the round-6 "SET_ALPHA
+is a genuine learned preference":** in the majority of HOLDING decisions the WHOLE op head emits a
+constant and learns nothing; it receives gradient only in the ~20-33% minority where |H|≥2. This is a
+better explanation for a structureless op head than a FOSS/PRUNE-specific freeze, and it makes the
+dead-zone bigger. (The 94% FOSS-floor-bound and 67-80% |H|=1 reconcile: FOSS is rarely the single
+overweight op, so it's floored ~94% of the time; the chosen op equals the cap-value op only ~half the
+time within |H|=1, hence 35-42% "at cap".)
+
+**Per-head KL not logged** (only aggregate `approx_kl`, emitters.py:471) — the "op-head KL biased to
+zero" free confirmation both primes wanted is NOT available from telemetry; folds into the re-run.
+
+**Sequencing correction — the floor fix is SCOREABLE but NOT SHIPPABLE alone (claudeweb #4, gpt).**
+`hindsight_credit` (the downstream settlement telling the policy a +8.2-rewarded fossil didn't
+transfer) is inert (0.005%). Unfreeze the gradient and the policy will learn to optimise a MYOPIC
+proxy — greedily fossilise high CURRENT LOO — with no downstream correction → plausibly trading
+flat-fossilise for **LOO-greedy commit collapse** (a new attractor, reached faster, with the
+optimiser behind it). So the dead-zone may be an accidental SAFETY property. **Revised invariant:
+the GPU arm is scoreable (the gate proves it); the floor fix is NOT shippable until the transfer
+settlement carries signal.** Promote `hindsight_credit`/transfer from "separate track" to
+**CO-REQUISITE of the floor fix** (still separate ENGINEERING, but a shipping gate).
+
+**Gate caveat (both primes):** the −0.7→+8.2 is IMMEDIATE reward; advantage `A ≈ r + γV(s′) − V(s)`,
+and `V(s′)` is NOT op-independent (fossilising CONSUMES the seed → V(s′) falls for high LOO,
+partially cancelling the graded r). The 9-pt spread survives, but LOG per-decision advantage in the
+re-run rather than continuing to infer it. Also reframe "the reward was doing its job" → **"a strong
+LOO-graded commit reward the op head usually cannot DIRECTLY learn from"** (the immediate shaping
+signal works; the reward's ability to value transfer/turntabling is unresolved).
+
+**Experiment — ONE primitive, λ-sweep (claudeweb #5, gpt).** The mixture floor `q =
+(1−λ)·softmax(z) + λ·uniform(legal)` reproduces the current guarantee at λ=0.6 (floor 0.15, cap
+0.55) and IS the no-floor condition at λ=0, with `∂q/∂z = (1−λ)·J_softmax` — never zero, even at
+|H|=1. So build ONE primitive and sweep **λ ∈ {0, 0.3, 0.6}**: λ=0 is the necessity smoke, the rest
+is the fix — one code change, one parametrised arm, NOT two builds. (gpt's differentiable uniform
+floor `q_i = f + (1−nf)·p_i` is an equivalent minimal-causal-isolation form; the smooth `P(non-WAIT)
+≥ ε` is the better long-term product primitive, adopted only after the causal pilot.) **Pre-register:
+the λ=0 arm most likely collapses to SET_ALPHA, not WAIT** — SET_ALPHA is the current do-nothing
+attractor, so "didn't collapse to WAIT" ≠ "floor unnecessary."
+
+**Scope correction (gpt-prime).** Do NOT claim the floor retroactively erases the prior reward/critic
+nulls. Objective-A HRA had its own validated total-fit failure; the Shapley A/B was genuinely
+coverage-bound; transfer stays unmeasured. Durable claim: *the hard floor is a newly-confirmed,
+high-prevalence (~94% FOSS/PRUNE; ~67-80% whole-head) training-path defect that likely prevented the
+op policy from learning commit/discard preferences from most realised outcomes — the leading proximal
+explanation for flat HOLDING preferences, but it does not erase the independent reward/critic limits.*
+
 ## The calibrated diagnosis (authoritative)
 
 > Tamiyo preferentially fossilises seeds that are currently important to the forward network
