@@ -209,6 +209,40 @@ Caveats kept honest: marginal (not conditional) invariance; per-decision (not pe
 rates; n=2 controllers; "LOO is not the axis" ≠ "the decision is illegible" (may key on host
 trajectory / slot pressure / LSTM history / freshness / downstream plans).
 
+### (3) CODE TRACE — the mechanism (verified against source, not telemetry)
+
+You both correctly warned the op-marginal ≠ the joint policy, and that "flat" could be structural,
+learned, or a masking artifact. A drl-expert code trace (key lines re-verified by hand) resolves it:
+
+- **Op×slot factorisation:** all 8 heads are conditionally-independent categoricals off ONE shared
+  `feature_net→LSTM` trunk; op↔slot coupling is MASK-level only (no logit conditioning). The op head
+  is GLOBAL — one op distribution for the whole board, not a per-seed decision.
+- **The op head CAN see LOO.** `counterfactual_contribution` is a per-slot input feature
+  (`features.py:827-832`), normalized ±1, feeding the shared trunk → all heads incl. op. So "op is
+  structurally blind to LOO" is REFUTED — the flatness is LEARNED/FLOORED behaviour, not architecture.
+  (Also addresses gpt-prime's slot-hides-LOO: slot head is FORCED — slot_entropy≈0 — in 97-98% of
+  HOLDING decisions, and if it selected high-LOO for FOSS / low-LOO for PRUNE the cohorts would
+  separate; they don't. And claudeweb's unlearned-static-head: refuted — the op mix DOES move with
+  occupancy, 1→≥3 seeds FOSS 18→22% / SET_ALPHA 49→56%; it's conditional, just not on LOO.)
+- **The load-bearing mechanism — anti-WAIT-collapse floors.** The op head has a DOCUMENTED history of
+  collapsing to 99.9% WAIT (`leyline/__init__.py:296-299`). The fix: a HARD **op probability floor =
+  0.15** (`__init__.py:300-301`) + **entropy floor = 0.30 normalized** (`238-242`). In the HOLDING mix,
+  FOSSILIZE ~17% / WAIT ~15% / PRUNE ~13% all sit AT the ~15% floor; SET_ALPHA ~55% holds the free
+  mass. The 0.15 floor over ~4 legal ops CAPS fossilize at ~55%, and the policy is at the FLOOR not
+  the cap — so the learned op-logit for FOSSILIZE is at-or-below the floor: **the policy learned to
+  prefer SET_ALPHA and NOT fossilize, and the floor PROVIDES the ~15% fossilize mass as
+  state-independent exploration — flat in LOO by construction.** This explains, in one mechanism, the
+  flat-in-LOO fossilize rate, the fossil/prune overlap, AND the ~10% negative-current-LOO
+  fossilizations (the floor forces ~15% fossilize even on a harmful seed, every decision).
+- **Still open:** cannot separate "value dimension never learned" from "training-time pressure
+  suppressed it" — the checkpoint LOO-sweep (floors ON vs bypassed) separates them; and HOLDING's
+  share of the op gradient (rarity-dilution magnitude) needs the HOLDING step fraction (telemetry).
+- **Lineage & way-forward reframe:** this is the SAME op-collapse failure mode as the Dec-2025
+  fossilize-incentive fix. The floors were the fix; a side effect is a ceiling on commitment
+  selectivity. **A reward redesign that ignores the floors is pushing against a hard clamp** — so the
+  instrument-first recommendation now has a sibling: understand the floor/collapse dynamics before
+  re-pricing commitment. `hindsight_credit` inert (0.005%) unchanged.
+
 **Net after round 2:** the headline is now two-sided and much harder to dismiss — the realised
 cohorts overlap on LOO (fresh-confirmed), AND the policy's op distribution is flat in LOO. The
 open question flips from "is the overlap real" (yes) to **"what DOES the HOLDING decision key on?"**
