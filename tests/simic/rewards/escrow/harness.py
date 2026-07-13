@@ -25,6 +25,9 @@ def escrow_config(
     """
     return ContributionRewardConfig(
         reward_mode=RewardMode.ESCROW,
+        # Isolated escrow-mechanics harness: exercises the escrow math with FOSSILIZE
+        # unreachable, so the fail-closed permanence guard is explicitly opted-in.
+        escrow_fossil_settlement="configured",
         contribution_weight=contribution_weight,
         disable_pbrs=True,
         disable_terminal_reward=True,

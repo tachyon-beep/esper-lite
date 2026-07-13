@@ -6,7 +6,9 @@ from esper.simic.training.epoch_runner import EpochState
 def test_epoch_state_create_allocates_per_env_contracts() -> None:
     env_reward_configs = [
         ContributionRewardConfig(reward_mode=RewardMode.BASIC),
-        ContributionRewardConfig(reward_mode=RewardMode.ESCROW),
+        ContributionRewardConfig(
+            reward_mode=RewardMode.ESCROW, escrow_fossil_settlement="configured"
+        ),
     ]
     loss_reward_config = LossRewardConfig.default()
 

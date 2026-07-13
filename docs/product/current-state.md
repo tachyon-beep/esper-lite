@@ -1,13 +1,15 @@
 # Current State — Esper        Checkpoint: 2026-07-14 (#44+) · commitment defect RESOLVED to a fossil measurement gap; "make permanence visible" refocus APPROVED (PDR-0074 accepted, PDR-0076 approved-with-conditions; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
-**The commitment defect is a permanent-value MEASUREMENT gap — ONE gap, FOUR symptoms (PDR-0074 + round-11/H6).** The
-counterfactual is undefined at both ends of a seed's life (α=0 birth; permanence — fossils excluded from ablation by
-design, `vectorized_trainer.py:956-975`), and every consumer of a `None` inherits it: (1) reward `bounded_attribution`
-stops firing → −113; (2) settlement `hindsight_credit` inert [H3, predicted]; (3) OBSERVATION contribution feature = 0
-(`features.py:830` `None→0`, H6-CONFIRMED); (4) the critic "overstates" the commit penalty because it is fit to that
-lying observation. So the reward AND the observation AND the value function all value a fossil at exactly 0 — while the
-freshness channel that could say "STALE not zero" (`γ^epochs_since_cf`) sits built-but-bypassed. APPROVED refocus
+**The commitment defect is a permanent-value MEASUREMENT gap — ONE gap, THREE coupled symptoms + a separate inert channel
+(PDR-0074 + round-11/H6 + drl deliverable).** The counterfactual is undefined at both ends of a seed's life (α=0 birth;
+permanence — fossils excluded from ablation by design, `vectorized_trainer.py:956-975`), and every consumer of the `None`
+inherits it: (1) reward `bounded_attribution` stops firing → −113; (2) OBSERVATION contribution feature = 0
+(`features.py:830` `None→0`, H6-CONFIRMED); (3) the critic "overstates" the commit penalty because it is fit to that
+lying observation (a SYMPTOM, not independent). The reward AND the observation AND the value function all value a fossil
+at exactly 0 — while the freshness channel that could say "STALE not zero" (`γ^epochs_since_cf`) sits built-but-bypassed.
+**`hindsight_credit`-inert is a SEPARATE defect (H3): a scaffold channel keyed on `total_improvement`, cap 0.2 — it can
+NEVER settle the −113, so L2 is a NEW channel, not a reactivation** (corrects PDR-0074/0075). APPROVED refocus
 (PDR-0076, owner-approved with binding conditions): **MAKE PERMANENCE VISIBLE** (L1 freeze-don't-zero + L2
 settle-at-fossilize on existing data; H7 GATES L1). Conditions: design against the FOSSIL-FARM adversary (naive L1+L2 ≈
 800:1 revenue:cost → commit-everything; sell-at-spike / decay-lie / double-count), L2 revenue ≈ the forfeited stream not
@@ -16,11 +18,13 @@ above it, OFFLINE-REPLAY before any run, DESIGN-don't-land, floor + critic held 
 farm fossils.
 
 ## In flight
-- **drl-expert L1/L2 DESIGN + reads (dispatched this session, background):** the "make permanence visible" deliverable —
-  **H7 first** (proxy-validity/drift), then L1 (canonical contribution-state struct + freeze-don't-zero + lifecycle
-  scoping), ≥2 L2 accounting semantics (invariant `G_stay≈G_fossilize`, priced to −113 not above), reads H3/H4/H5/H8, the
-  ESCROW fail-closed guard, and OFFLINE REPLAY per candidate. Design-don't-land; no GPU. Deliverable → owner review
-  before any code lands.
+- **drl-expert L1/L2 deliverable DONE** (design + reads + offline replay). Results: L1 = freeze-value + RISING UNCERTAINTY
+  (H7: post-commit drift UNMEASURABLE offline → do NOT bake a decay-γ; L3 for true drift); L2 = **settle-then-annuitize,
+  EWMA-priced** — the offline FARM VERDICT: A[ewma]+`staleness==0`+one-shot-netting VIABLE (removes −113, no systematic
+  windfall); A[spot] and B(continue-stream) FARM → rejected; EWMA/staleness are necessary-NOT-sufficient (timing
+  selection persists 45-47%). **de-shape NOT survivable** (H8: cf stream ~95% of positive reward). **ESCROW fail-closed
+  guard LANDED + tested** (5 new + 545 green). **L3 still required** for product-validity (legibility ≠ causality).
+  **Primes review pack written:** `docs/analysis/2026-07-14-permanence-visibility-primes-review-pack.md`.
 - **Harness enablers** (esper-lite-7fe21bd091, decision ACCEPTED, task OPEN, no GPU): default-on checkpointing +
   per-decision advantage/pre-floor/per-head-KL logging + **K>1** (Read B, P8=0). Correct regardless of the epic.
 - **EV-stabilization epic** (esper-lite-f25b71c165): reframed by PDR-0074; comment #181.
@@ -71,16 +75,19 @@ farm fossils.
 - Round-11 + **H6**: confirmed the OBSERVATION also zeroes a fossil's contribution (`features.py:830`) → ONE gap, FOUR
   symptoms; the **critic RETIRES as a symptom** (not independent); ESCROW contraindicated; refocus reworded to "make
   permanence visible."
-- Round-12: owner APPROVED all three (refocus / ESCROW guard / drl design) subject to the primes' roadblocks. **Enacted:**
-  roadmap Now bet refocused, `vision.md` reinforced, PDR-0076 written (binding anti-fossil-farm conditions), drl-expert
-  L1/L2 design + reads DISPATCHED.
+- Round-12: owner APPROVED all three (refocus / ESCROW guard / drl design) subject to the primes' roadblocks. Enacted:
+  roadmap refocused, `vision.md` reinforced, PDR-0076 (binding conditions), drl-expert dispatched.
+- Round-13: drl-expert deliverable DONE — L1 freeze-value+rising-uncertainty (H7: no decay-γ), L2 settle-then-annuitize
+  EWMA-priced (offline farm verdict: A[ewma] VIABLE, A[spot]/B FARM), de-shape not survivable (H8), **ESCROW guard LANDED
+  + tested**, L3 still required. **Primes review pack written** + record corrected (hindsight = separate scaffold channel,
+  not symptom 2 → THREE symptoms not four).
 
 ## Next session, start here
-1. **Review the drl-expert deliverable** (H7 verdict + H3/H4/H5/H8 reads + the L1 contribution-state design + ≥2 L2
-   semantics + the ESCROW guard + the OFFLINE REPLAY per candidate). The gate: does a candidate remove the −113
-   discontinuity WITHOUT creating an early-fossilization windfall (the farm)?
-2. **Bring the owner the reviewed L1/L2 change for a LAND decision** — only after offline replay clears the farm guardrail
-   and H7 says the last-valid LOO is an adequate proxy. Landing L1/L2 (+ any rerun) stays owner-gated.
-3. **P0 harness (independent, do regardless):** K>1 (Read B), default-on checkpointing, per-decision telemetry. Then
-   P1 (L1+L2 land) → P2 re-ask "is commitment good?" with a working instrument (never done) → P3 floor (packaged with the
-   reward, never alone). Do NOT run the λ=0 floor smoke until K is fixed.
+1. **Await the primes' round-13 review** of the pack (`docs/analysis/2026-07-14-permanence-visibility-primes-review-pack.md`,
+   owner relaying). Red-team targets in §7: the L1 freeze-don't-decay resolution, L2 sell-at-spike (necessary-not-sufficient),
+   whether L3 is truly required, de-shape non-survivability.
+2. **Then the L1/L2 LAND decision (owner-gated):** land L1 + L2-A2(EWMA, `staleness==0`, one-shot-netting) TELEMETRY-FIRST
+   only after the primes clear it; obs schema bump v3→v4 ⇒ re-warm/retrain (not a silent swap). Then re-run the |H|=1 RCT
+   with the working instrument (P2 — never done); L3 scheduled to validate the imputation + measure decay-γ.
+3. **P0 harness (independent, do regardless):** K>1 (Read B), default-on checkpointing, per-decision telemetry. Floor is P3
+   (packaged with the reward, never alone). Do NOT run the λ=0 floor smoke until K is fixed.

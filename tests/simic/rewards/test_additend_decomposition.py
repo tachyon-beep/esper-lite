@@ -227,7 +227,11 @@ def test_decompose_reconciles_real_contribution_reward_exactly(
 ) -> None:
     """residual == 0 across the real reward composition: every ``reward +=`` term
     inside compute_contribution_reward is a named additend (completeness)."""
-    config = ContributionRewardConfig(reward_mode=reward_mode)
+    # escrow_fossil_settlement is harmless for non-ESCROW modes and opts the ESCROW
+    # parametrization past the fail-closed permanence guard (isolated additend test).
+    config = ContributionRewardConfig(
+        reward_mode=reward_mode, escrow_fossil_settlement="configured"
+    )
     reward, components = compute_contribution_reward(
         action=action,
         seed_contribution=seed_contribution,
@@ -293,7 +297,9 @@ def test_escrow_mandates_return_components() -> None:
             seed_info=_training_seed(),
             epoch=10,
             max_epochs=100,
-            config=ContributionRewardConfig(reward_mode=RewardMode.ESCROW),
+            config=ContributionRewardConfig(
+                reward_mode=RewardMode.ESCROW, escrow_fossil_settlement="configured"
+            ),
             stable_val_acc=55.0,  # satisfy the earlier ESCROW guard to reach the one under test
             escrow_credit_prev=0.5,
             return_components=False,

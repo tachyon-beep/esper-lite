@@ -145,6 +145,27 @@ class ContributionRewardConfig:
     # Stable accuracy uses min(last_k) to require sustained improvement ("prove it held").
     escrow_stable_window: int = 3
 
+    # === ESCROW fossilization safety (fail-closed — 2026-07-14, "make permanence visible") ===
+    # ESCROW interprets a DROP in measured contribution as a loss of value and claws back
+    # accrued credit (the PRUNE branch and the measured-negative branch in
+    # compute_contribution_reward zero the credit target). A FOSSILIZED seed's contribution
+    # is STRUCTURALLY unmeasured: fossils are excluded from the counterfactual ablation
+    # (vectorized_trainer.py "disabling a permanently-integrated seed measures host damage,
+    # not the seed's contribution"), so seed_contribution is None post-fossilize. Read H4
+    # (2026-07-14) confirmed: the current [3,3,3,None] fossilize path FREEZES accrued credit
+    # (no clawback) — but that safety is ACCIDENTAL, resting on the None. The moment a fossil
+    # is actually measured and the naive ablation returns a host-damage NEGATIVE (drip>0, or a
+    # future permanence instrument), ESCROW claws back the accrued credit AND pays
+    # contribution_weight*negative — a catastrophic misread of missing observability as a
+    # measured loss of value. Until an explicit permanent-contribution/settlement strategy is
+    # wired, ESCROW must not run where FOSSILIZE is reachable. This flag is the explicit opt-in:
+    #   "unconfigured" (default, fail-closed) => __post_init__ raises for ESCROW.
+    #   "configured"                          => a settlement strategy is wired, OR this config
+    #                                            exercises escrow math in isolation with
+    #                                            FOSSILIZE unreachable (unit harnesses).
+    # Scoped to the current missing-input implementation; NOT a universal ban on escrow designs.
+    escrow_fossil_settlement: Literal["unconfigured", "configured"] = "unconfigured"
+
     # PBRS stage progression
     pbrs_weight: float = 0.3
     epoch_progress_bonus: float = 0.3
@@ -321,6 +342,24 @@ class ContributionRewardConfig:
 
     def __post_init__(self) -> None:
         """Validate drip configuration and set mode-specific defaults."""
+        # ESCROW fossilization safety (fail-closed). See escrow_fossil_settlement above.
+        if (
+            self.reward_mode == RewardMode.ESCROW
+            and self.escrow_fossil_settlement == "unconfigured"
+        ):
+            raise ValueError(
+                "RewardMode.ESCROW is active but no permanent-contribution/settlement "
+                "strategy is configured (escrow_fossil_settlement='unconfigured'). A "
+                "fossilized seed's counterfactual contribution is structurally unmeasured "
+                "(fossils are excluded from the ablation), and ESCROW claws back accrued "
+                "credit on a measured loss of value: missing observability must NOT be "
+                "interpreted as a measured loss of value. Set "
+                "escrow_fossil_settlement='configured' only when a fossilize-settlement "
+                "strategy is wired, or when exercising the escrow math in isolation with "
+                "FOSSILIZE unreachable. Scoped to the current missing-input implementation; "
+                "not a universal escrow ban."
+            )
+
         # BASIC_PLUS mode: enable drip by default if not explicitly set
         if self.reward_mode == RewardMode.BASIC_PLUS and self.drip_fraction == 0.0:
             self.drip_fraction = 0.7
