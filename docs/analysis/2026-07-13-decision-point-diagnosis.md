@@ -7,34 +7,49 @@ global epoch counter, unfiltered SET_ALPHA population, two different "contributi
 a bonus computed at c≲1 when actual c≈10, "unpayable" stated as absolute). The reasoning was
 consistently fine. The rule: **read the variable in the sentence before you write it.**
 
-## READ B result — the gate retires ABSORBED scaffolds; the prune cohort is not junk
+## READ B — CORRECTED: absorption/"scaffold retirement" REFUTED; ~30% of HOLDING-prunes discard causally-load-bearing seeds
 
-Field identity resolved (slot.py:1537,1624): `SEED_PRUNED.counterfactual` and
-`reward_components.seed_contribution` are the SAME field (`metrics.counterfactual_contribution`)
-read at different TIMES. So "prune cohort 0.12" (at the prune moment) vs "8.6 during HOLDING
-life" is one seed's contribution DECAYING, not two metrics disagreeing.
+An earlier version of this section (over-read #6, comforting direction, caught by claudeweb +
+the single-seed trace) claimed "productive scaffold retirement": the prune cohort peaked high
+then DECAYED to a 0.12 removal-cost as the host absorbed the value, so the gate "selects on the
+right signal." **That is refuted.** Two artifacts produced it:
 
-Read B trajectories (per-seed, from `reward_components`, seed 41):
-| cohort | c@first-HOLDING | PEAK c | c@fate (last snap) | c@prune event | decay | ∫bounded_attr after HOLDING | re-blend |
+1. **The "0.12" was a `None`-filter artifact.** `SEED_PRUNED.counterfactual` is `None` for ~7/8
+   pruned-after-HOLDING seeds (single-seed trace). The "prune cohort median 0.12" was computed
+   over the small non-`None` subset — never representative. There is NO gliding decay to 0.12.
+   The single-seed traces do not glide; several seeds are pruned at HIGH, RISING decision-time
+   c (e.g. 4.6→13.6, 8.9→**23.8**), not decayed.
+2. **The ransomware/leak split by `total_improvement` was invalid (over-read #7).**
+   `total_improvement = current_val_acc − initial_val_acc` at germination (slot.py:217) — HOST
+   PROGRESS over residency, explicitly warned NON-CAUSAL (slot.py:251-256, "conflates host
+   training gains with seed impact"). It cannot separate ransomware from leak from anything.
+
+**The clean read — causal decision-time contribution AT the commit/discard decision**
+(`counterfactual_contribution` = `seed_contribution` at the FOSSILIZE / PRUNE decision row;
+NOT peak, NOT the `None`-riddled event field, NOT `total_improvement`), seeds 41/42:
+
+| decision | n | median c | mean | %≥5 | %1–5 | %0–1 | %<0 |
 |---|---|---|---|---|---|---|---|
-| FOSSILIZE (n=2043) | 9.4 | 14.9 | 10.8 | — | **0.48** | 2.88 | 0 |
-| PRUNE-after-HOLD (n=3873) | 8.5 | 16.2 | 8.6 | **0.12** | **2.64+** | 5.29 | 1 |
+| **FOSSILIZE** (commit) | 2043 / 2108 | **10.4** | 11.2 | **66%** | 12% | 12% | 10% |
+| **PRUNE-after-HOLD** (discard) | 11.4k / 12.3k | **0.84** | 4.3 | **30%** | 18% | 30% | 22% |
 
-**73% of pruned-after-HOLDING seeds peaked ≥ 5.0** — they were once strongly useful, NOT
-marginal. The gate selects on the RIGHT signal: **fossilise seeds whose value STAYS
-load-bearing (decay 0.48); prune seeds whose value the host has ABSORBED (decay to 0.12 →
-removal is cheap because the benefit is retained in the host).** This is **productive
-scaffold retirement**, and it maps to gpt-prime's "prune cohort high early, host benefit
-retained → LOO under-credits historical value," NOT to a selection defect. The 0.12
-removal-cost IS the retained-value evidence (cheap to remove ⇒ value is in the host). The
-pruned scaffolds WERE paid attribution during residency (∫ = 5.29, more than fossils' 2.88).
+Reading, calibrated both ways:
+- **FOSSILIZE selection is genuinely positive** — Tamiyo commits strongly, causally
+  load-bearing seeds (median c≈10, 66% ≥5, only ~10% net-negative). Not inverted, not a defect.
+- **Prune-after-HOLDING is MAJORITY-correct by the causal metric** — median c≈0.8; ~51% are
+  <1 (spent) including ~22% net-negative (harmful). The CENTER of the cohort is correct retirement.
+- **BUT ~30% (~3,600/run) of HOLDING-seed prunes discard a seed causally contributing ≥5
+  accuracy points** — removing it costs ≥5 pts AT the prune decision. This is claudeweb's
+  "load-bearing discard," now on a causal metric that survives scrutiny. It is real, substantial,
+  and NOT the wholesale inversion (30%, not 68%) and NOT explained away by absorption.
 
-Calibration guard (do not over-swing to "no problems"): this rehabilitates the SELECTION
-(largely correct), but the narrow gaps stand — `hindsight_credit` for the durable value is
-inert (0.005%; residency attribution + weak indirect GAE is all a scaffold gets), and the
-185 negative-LOO fossils are still an unexplained commitment candidate. Not yet confirmed:
-a single seed's counterfactual traced continuously 16→0.12 (inferred from two time-points);
-whether the host benefit is measurably retained post-prune (the 0.12 is strong proxy).
+**Cause of the ~30% tail is UNRESOLVED and NOT cleanly measurable with current fields.**
+Candidate benign explanations — ransomware/dependency (high self-LOO, net-harmful),
+param-budget/compute pressure (freeing a slot for a better seed), turntable-retirement — cannot
+be separated from genuine waste because the only "net ensemble value" field (`total_improvement`)
+is non-causal. A CAUSAL ransomware/leak discriminator does not currently exist in telemetry;
+building one is the prerequisite to pricing this tail. Do NOT bank the tail as a defect OR as
+benign.
 
 ## The calibrated diagnosis (authoritative)
 
@@ -47,9 +62,14 @@ whether the host benefit is measurably retained post-prune (the 0.12 is strong p
 
 ## BANK (solid)
 
-- **Terminal current-LOO selection is strongly positive, not inverted.** Fossils median LOO
-  ~10–11 vs prune-after-HOLDING ~0.12 (SEED_PRUNED.counterfactual); P(FOSSILIZE|c≥1)=62–63%,
-  |c≥5=80–82%, |0≤c<1=12–13%. n=2.
+- **Terminal current-LOO selection is strongly positive, not inverted.** At the causal
+  decision moment: FOSSILIZE median c≈10.4 (66% ≥5, ~10% <0) vs PRUNE-after-HOLD median c≈0.84
+  (51% <1, ~22% <0). P(FOSSILIZE|c≥1)=62–63%, |c≥5=80–82%, |0≤c<1=12–13%. n=2.
+  (NOTE: the old "prune cohort 0.12" was a `SEED_PRUNED.counterfactual` `None`-filter artifact —
+  that field is `None` ~7/8 of the time; use decision-time `seed_contribution`, median 0.84.)
+- **~30% of prune-after-HOLDING decisions discard a seed causally contributing ≥5 acc-pts.**
+  Real on the causal metric; cause (ransomware / budget-pressure / waste) UNRESOLVED because no
+  causal net-ensemble-value field exists (`total_improvement` is host-progress, non-causal).
 - Current selection is IMPERFECT: substantial above-threshold non-fossilisation and some
   negative-current-LOO fossilisation both exist.
 - Re-blending after HOLDING is common (75%); most re-blenders never fossilise (88%).
@@ -70,6 +90,14 @@ whether the host benefit is measurably retained post-prune (the 0.12 is strong p
 - "185–228 negative-LOO fossils = certainly harmful commits" — correct label is
   **negative-current-LOO fossilisation**; a seed can have negative instantaneous LOO yet be a
   developmental enabler / synergistic / noisy. Needs the per-cohort reward + downstream read.
+- **(#6, comforting direction) "Productive scaffold retirement / gate selects on the right
+  signal" — REFUTED.** Rested on the "0.12 decay" (a `None`-filter artifact) and a two-point
+  interpolation across the prune boundary. The lesson repeated in the reassuring direction: a
+  tidy benign story is as much a red flag as a tidy alarming one.
+- **(#7) The ransomware-vs-leak split by `total_improvement` — INVALID.** `total_improvement`
+  is `current_val_acc − initial_val_acc` (host progress since germination), explicitly non-causal
+  (slot.py:251-256). Read as "seed's net help to the ensemble" it manufactured a false 68%/32%
+  split. Any ransomware/leak claim needs a CAUSAL discriminator, which telemetry lacks today.
 - "Re-blending is mostly loitering" AND "mostly useful turntabling" — both unresolved.
 - "The successful modulator receives NO temporal credit" (my over-claim) — TOO STRONG. Direct
   per-seed LOO doesn't pay historical modulation, but an **indirect RL channel exists**:
