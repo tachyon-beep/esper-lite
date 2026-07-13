@@ -1,17 +1,23 @@
-# Roadmap — Esper            Updated: 2026-07-13 (PDR-0069, PDR-0071)
+# Roadmap — Esper            Updated: 2026-07-14 (PDR-0072, PDR-0073 — round-8 calibration + read-before-build)
 
 > Sequencing, WSJF / cost-of-delay, and dated forecasts are produced by
 > /axiom-program-management. This file records bets as INTENT, not a delivery
 > schedule. Do not compute WSJF here; hand the committed bet over for sequencing.
 
 ## Now  (committed, in-flight)
-- **Commitment root cause FOUND → exploration-primitive fix (REFRAMED 2026-07-13, PDR-0069/0070).**
-  The commitment defect the EV epic exists to fix is root-caused to the **anti-WAIT floor gradient
+- **Commitment root-cause CANDIDATE → exploration-primitive fix (REFRAMED 2026-07-13, PDR-0069/0070;
+  CALIBRATED by the round-8 eval `docs/analysis/2026-07-13-round8-findings-evaluation.md`).**
+  The commitment defect the EV epic exists to fix is traced to the **anti-WAIT floor gradient
   dead-zone**: `_apply_floor_to_logits` sits in the differentiable PPO path across all 8 heads, and
-  a floor-bound action gets ZERO gradient to its logit — so ~94% of FOSSILIZE / 93-95% of PRUNE
-  samples cannot learn (both seeds), despite a strong LOO-graded commit reward (−0.7→+8.2; the "gate"
-  passes). This SUPERSEDES the value-target-variance premise below and demotes the critic (PDR-0066)
-  and cf-shaping/SNR (PDR-0067/0068) lines to secondary. **The dead-zone is WHOLE-HEAD (PDR-0071):
+  a floor-bound action gets ZERO gradient to its OWN logit — so ~94% of FOSSILIZE / 93-95% of PRUNE
+  samples deliver no credit to their own action (both seeds; MECHANISM established, autograd-forced,
+  dual-expert numeric-confirmed). The commit reward is strongly LOO-graded (−0.7→+8.2) but that is
+  IMMEDIATE reward — the ADVANTAGE-vs-LOO gate is UNMEASURED and directionally ambiguous (round-8),
+  NOT passed. As a **REPRIORITIZATION** (you cannot move a zero-gradient logit with a critic/reward arm)
+  this demotes the critic (PDR-0066) and cf-shaping/SNR (PDR-0067/0068) lines to secondary; it does NOT
+  prove causal SUPERSESSION of the value-target-variance premise (fix unrun; the |H|≥2 minority + trunk
+  still train; "SET_ALPHA is the new WAIT" not ruled out — only the λ=0 smoke disambiguates).
+  **The dead-zone is WHOLE-HEAD (PDR-0071):
   in 67-80% of HOLDING decisions only one op is above the floor → the output vector is CONSTANT →
   zero gradient to ALL op logits; SET_ALPHA's 0.55 is the analytic cap, not a learned preference.**
   **New lever = a differentiable floor (NOT straight-through) — ONE primitive, λ-sweep {0,0.3,0.6}
@@ -20,9 +26,22 @@
   floor/per-head-KL logging) land first — those quantities were NOT captured (PDR-0026 recurrence).
   **CO-REQUISITE (PDR-0071): the floor fix is SCOREABLE but NOT SHIPPABLE until the transfer
   settlement (`hindsight_credit`, inert 0.005%) carries signal** — else unfreezing the gradient yields
-  LOO-greedy myopic commit collapse; the dead-zone may be an accidental safety property. · metric:
-  floor-bound / |H|=1 rate → ~0; commit-logit LOO-sensitivity; WAIT share on multi-choice states;
-  guardrail = terminal accuracy contribution + destructive-intervention rate.
+  LOO-greedy myopic commit collapse; the dead-zone may be an accidental safety property (but the gate
+  must be stated in ADVANTAGE terms, and `hindsight_credit`=0.005% root-caused first — it is keyed on the
+  non-causal `total_improvement`; round-8). · metric: commit-logit LOO-sensitivity + a LIVE
+  advantage-vs-LOO relation (NOT floor-bound-rate→0, a tautology under any mixture); per-head KL activity
+  where the head was frozen; WAIT share on multi-choice states; guardrail = terminal accuracy
+  contribution + destructive-intervention rate.
+  **Round-8 additions (verified; full detail in the eval doc):** the same transform is ALSO a wide-head
+  EXPRESSIVENESS clamp (N1 — the 0.12 floor caps preference and survives any gradient fix; telemetry
+  REVISED severity DOWN: realized num_valid=7, ceiling ~2× uniform, realized 1.3-1.4× — a mild ceiling,
+  not a near-uniform sampler), an `approx_kl`
+  dilution source (N2), a monitoring blind-spot (N3 — entropy/collapse health guaranteed green where the
+  head is deadest → a TIP scar), and an advantage-standardization contaminant (N4). The λ-sweep must use
+  **per-num_valid λ** + a **hard-floor control arm** (N5), and a high-value zero-GPU candidate is an
+  OFFLINE GAE advantage reconstruction from the existing `value_estimate` telemetry — IF per-decision
+  reward + episode boundaries are also logged (value_estimate confirmed present; the rest UNVERIFIED),
+  it would close the gate without GPU.
 - **EV-stabilization — joint value-target variance reduction for recurrent
   factored-action PPO** *(commitment-premise SUPERSEDED by PDR-0069; retained for history + the
   still-open cf-earns-keep/SNR sub-questions, now secondary).* Moved Next → Now 2026-07-05 (PDR-0027) after the owner parked
