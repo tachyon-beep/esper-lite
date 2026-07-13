@@ -14,7 +14,7 @@ A seed occupies one slot and moves through a botanical lifecycle. Stages (enum v
 | `GERMINATED` | 2 | created, α=0 | no (learning only) |
 | `TRAINING` | 3 | α=0, learning from host error | no |
 | `BLENDING` | 4 | α ramps 0→target over `tempo` epochs | **yes** (partial) |
-| `HOLDING` | 6 | full amplitude (α≈1.0) — the **decision point** | **yes** |
+| `HOLDING` | 6 | ramp complete **at the chosen `alpha_target`** (α = 0.5 / 0.7 / 1.0 — NOT necessarily 1.0; see §5 correction) — the **decision point** | **yes** |
 | `FOSSILIZED` | 7 | permanently fused — **terminal success** | **yes** |
 | `PRUNED` | 8 | removed — failure | no |
 | `EMBARGOED` | 9 | post-removal cooldown | no |
@@ -94,8 +94,22 @@ qualifies, and the `slot` head then picks which. Conditions:
   **scaffolding** pattern: an older seed can be blending/holding (teaching the host) while a new
   seed germinates and trains. Culling a scaffold once its knowledge is locked in is normal and
   expected, not a defect.
-- **FOSSILIZE only from HOLDING** forces a seed to reach full amplitude (α≈1.0) — i.e. to prove
-  itself at full strength — before it can be permanently committed.
+- **FOSSILIZE only from HOLDING** requires a seed to complete its blend ramp — but **to its
+  chosen `alpha_target`, NOT necessarily α=1.0** (CORRECTION, verified in `slot.py`: BLENDING→
+  HOLDING fires on `reached_target`; the only special case is `alpha_target ≤ 0` → prune). So a
+  seed germinated at `alpha_target=HALF` reaches HOLDING at α=0.5 and **can be committed at half
+  amplitude.** `alpha_target` ∈ {HALF, SEVENTY, FULL} is therefore a commitment-shaping choice
+  made at GERMINATE: it sets *where on its own contribution curve* a seed locks in, not whether
+  it becomes eligible.
+
+> **Commitment economics (verified in `contribution.py`, SHAPED mode):** while a seed is
+> pre-fossilize it earns `bounded_attribution` (∝ contribution, per step) with no penalty unless
+> it's *hurting*. On **FOSSILIZE**, attribution stops (`not seed_is_fossilized` guard → 0) AND a
+> permanent `fossilized_maintenance_cost` rent begins. The compensating fossilize bonus is a
+> one-shot proportional to the *instantaneous* contribution rate. So committing converts a paying
+> asset into a rent-only liability, and the dominant alternative — **cull + re-germinate** —
+> renews the income stream at the top of a fresh contribution hump. This is action-trace-identical
+> to healthy scaffolding; only a **host-retention** measurement separates them.
 
 > Diagnostic note: because BLENDING/HOLDING don't block germination and PRUNE is always
 > available on developing seeds, high germinate/prune churn with a stable fossilize rate is
