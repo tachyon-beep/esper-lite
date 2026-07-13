@@ -69,6 +69,37 @@ population level (3/step ≫ the ~0.5 one-shot fossilize bonus). This does NOT g
 decay curve (population conflates seed-ages); the true decay curve needs per-seed age tracking
 through `reward_components` — the remaining open read.
 
+## Reframe (owner domain knowledge): turntabling, and the unpayable modulator
+
+The owner supplied the missing variable no code read could give: **turntabling is intended
+design.** A HOLDING seed can drop to partial α to *modulate a downstream seed's blend*, then
+ramp back to 1.0 and fossilize; some seeds exist ONLY to modulate (germinate → blend a
+downstream seed → cull), and downstream norm/attention seeds do better having had an upstream
+conv even after it's removed. So the HOLDING→partial→HOLDING excursion may be **designed
+modulation, not loitering** — my "null re-blend refuted" is retracted (wrong population AND
+wrong frame). The LSTM was added precisely so Tamiyo could remember a culled seed contributed
+to a future reward.
+
+**The structural defect (a reward-DESIGN fact, needs no measurement):** `bounded_attribution`
+is a leave-one-out marginal on the CURRENT network. A modulator whose value is banked in a
+downstream seed's weights and then culled is **unpayable** — its LOO contribution is ~0 by
+construction (not in the forward pass). A perfect modulator is indistinguishable from a
+worthless seed: both read ~0.12. So the prune cohort's 0.12 median CANNOT be read as "junk" —
+it may contain successful modulators the reward has no channel to pay. The LSTM gives memory
+but cannot manufacture an absent reward signal; the missing term is a **history-counterfactual**
+(Acc(downstream | upstream modulated) − Acc(downstream | upstream never existed)), not the
+presence-counterfactual LOO computes. This is bigger than "attribution misses host transfer":
+it misses **seed→seed transfer**, the load-bearing case for a compositional-topology system.
+
+**Modulation effect size (observational, seed 41):** turntabling is RARE — only **2%** of
+decisions have ≥2 active seeds (masks enforce sequential dev). Fossilize contribution WITH a
+co-resident modulator (median 7.4, n=457) / upstream modulator (2.3, n=259) is NOT higher than
+SOLO (11.6, n=1586) / no-upstream (11.9, n=1784). But this is **not a clean test**: (a)
+LOO-dilution — co-resident seeds mechanically split marginal credit; (b) LOO is structurally
+blind to the modulator's transferred value (above). So the null is weak evidence, not a
+refutation. The clean test is a **scripted turntable arm** measuring the DOWNSTREAM seed's
+outcome causally.
+
 ## Status — solid vs open (no theory banked as headline)
 
 SOLID: hindsight_credit inert (0.005%); HOLDING sets partial targets 83% (re-blend real);
