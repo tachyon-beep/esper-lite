@@ -1,84 +1,81 @@
-# Decision-point diagnosis (CORRECTED after cohort read)
+# Decision-point diagnosis (CALIBRATED — retract the claim, not the argument)
 
 Date: 2026-07-13 · Runs: `stage2_on_longdiag/seed{41,42}` (n=2). Code + telemetry, no GPU.
-**This supersedes an earlier version of this file that claimed "the reward pays Tamiyo not
-to commit" and "re-blend dominates fossilize ~50×." The cohort read below refutes both.**
-5th over-read of the session; the data caught it.
+This file has now swung twice — over-claimed ("50×, the reward pays Tamiyo not to commit"),
+then over-retracted ("the commit gate selects correctly"). Both wrong. Calibration fails in
+BOTH directions; after a hard hit, "I was wrong about everything" is as costly a distortion
+as the tidy verdict, because it discards true findings. The rule that catches both:
+**retract the CLAIM, not the ARGUMENT.**
 
-## The decisive measurement: the commit gate selects by contribution, CORRECTLY
+## The commit gate is PARTIALLY correct — and leaks both ways
 
-For seeds that reached HOLDING, split by terminal fate, median counterfactual contribution:
+Split HOLDING-reachers by terminal fate and terminal counterfactual contribution:
 
-| cohort | median contribution | mean | n |
-|--------|---------------------|------|---|
-| **FOSSILIZE** | **10.8 / 10.0** (s41/s42) | ~11 | 2,043 / 2,108 |
-| **PRUNE-after-HOLDING** | **0.12 / 0.12** | ~0.8 | 3,757 / 3,849 |
+| | seed 41 | seed 42 |
+|---|---|---|
+| P(FOSSILIZE \| contribution ≥ 1.0) | **62%** | **63%** |
+| P(FOSSILIZE \| contribution ≥ 5.0) | 80% | 82% |
+| **good-at-terminal (≥1.0) seeds PRUNED** | **977** | **958** |
+| P(FOSSILIZE \| 0 ≤ c < 1.0) | 13% | 12% |
+| **NEGATIVE-contribution seeds FOSSILIZED (committed harm)** | **185** | **228** |
 
-Fossils carry ~**90× the contribution** of the loiter-then-prune cohort, on both seeds.
-`DEFAULT_MIN_FOSSILIZE_CONTRIBUTION = 1.0` is the gate: below ~1.0 a seed earns the
-`fossilize_noncontributing_penalty` (−0.2), not the bonus. Median HOLDING-reacher contributes
-0.6 (below threshold); the top ~35% (above it) are what commit. **Tamiyo commits the good
-seeds and prunes the weak ones.** The selection-inversion hypothesis (reward commits junk,
-loiters the good) is FALSIFIED.
+So the gate mostly commits good seeds (62–80%) and mostly prunes weak ones (13% commit
+below threshold) — it is NOT inverted (the peer's selection-inversion is still refuted). BUT
+it **leaks ~38% of still-good seeds to pruning** and **commits ~200 actively-harmful seeds**.
+The cohort medians (fossils 10.8, prunes 0.12) hid both leaks in the tails. My "selects
+correctly / good seeds commit" headline over-corrected.
 
-## What this retracts
+## Retract the claim, keep the argument
 
-- **"The reward pays Tamiyo not to commit" — RETRACTED.** Good seeds (contribution ~11) commit;
-  most on first reaching HOLDING (74%). Low-contribution seeds (~0.12) loiter and prune.
-- **"Re-blend dominates fossilize ~50×" — RETRACTED.** That used an invented `c=0.5` and,
-  worse, a **constant-`c`** model. Contribution is hump-shaped and DECAYS as the host absorbs a
-  seed (a seed at 0.12 by prune may have been high earlier). A decaying stream is not the annuity
-  the arithmetic assumed, and the behavior proves it: a constant-`c` model says a c=10 seed should
-  loiter forever, yet c≈10 seeds overwhelmingly commit. The crossover the peer proposed
-  (`T* = (0.5+0.1c)/(c+0.002)`) is directionally better but still assumes constant `c`; do not bank
-  a magnitude without modeling decay/freshness and reading per-step `bounded_attribution`.
-- **The time-remaining test is UNRUN, not passed** — the epoch field used was the global counter,
-  not the within-episode host epoch; results were garbage and are discarded.
+- **RETRACTED (claim, invented input):** "re-blend beats fossilize ~50×." Used a guessed
+  `c=0.5` and a constant-`c` model; contribution decays, so the income integral is not `c·T`.
+  No magnitude is bankable without the decay curve.
+- **NOT RETRACTED (argument, a fact about the equations):** the fossilize bonus is a **one-shot**
+  `(0.5 + 0.1c)`; pre-commit attribution is an **income stream** `≈ (decaying c)` per step;
+  the two anti-loiter guards are structurally blind to a null-return re-blend (`alpha_shock`
+  Δα≈0, `holding_warning` resets on stage exit) at cost −0.005. A one-shot cannot generally
+  match an integral. No cohort read touches this. Its *bite* depends on the decay curve
+  (unmeasured) — and the Query-1 leak (38% of good seeds pruned) is exactly the footprint an
+  incentive-to-delay would leave.
 
-## What SURVIVES (do not over-correct the other way)
+## What survives (n=2, both seeds)
 
-- **The re-blend loop is real** (75% of HOLDING-reachers re-blend ≥1×; up to 7 cycles; 88% of
-  re-blenders never commit) — but it is **concentrated on low/marginal-contribution seeds**
-  (the never-committers median 0.12), not on the winners. It is mild waste on marginal seeds,
-  NOT commitment-avoidance on good ones.
-- **The anti-loiter guards don't see the re-blend** (structural): `alpha_shock` sees Δα≈0 on a
-  re-blend that returns to the same amplitude; `holding_warning` resets on the stage exit;
-  `set_alpha_target_cost` is only −0.005. This action-hygiene gap is genuine — BUT its blast
-  radius is smaller than claimed (it mostly lets marginal seeds cycle before pruning), and full
-  nullity is NOT yet verified: `slot.py:1837` says partial targets re-enter BLENDING, so a
-  re-blend may involve a transient partial-target excursion. Verify nullity over
-  target/style/speed/curve/output before banking it as a pure no-op.
+- Selection-inversion REFUTED (fossils high-c, prunes low-c on the median).
+- The re-blend loop is real (75% re-blend, ≤7 cycles, 88% of re-blenders never commit) and
+  concentrated on low/marginal seeds — but Query 1 shows it (or the same economics) also
+  costs ~38% of good seeds.
+- Two candidate live defects: **good seeds pruned** (~1000/seed) and **harmful seeds committed**
+  (~200/seed), pending the caveats below.
 
-## The scoreboard — corrected interpretation
+## Structural limits (what these metrics CANNOT tell me — stated before banking)
 
-Median episode: `num_contributing_fossilized` = 0, `param_ratio` 1.03, final acc 52.6%. **This is
-NOT "ships nothing":** (a) at <1 fossil/episode the median is 0 by construction; (b)
-`num_contributing_fossilized` is structurally 0 for fossils that leave the LOO ablation population
-(contribution → None), a retired-metric artifact (see the Committed-J retirement, PDR-0027 arc);
-(c) transient scaffolds can improve the host and be correctly shipped near-bare. The low commit
-rate reflects a **low yield of above-threshold seeds** (median contribution 0.6 < 1.0), not
-avoidance of committing good ones. The right product read is all-on vs all-off / host-alone
-terminal accuracy + footprint — needs an all-off arm, not in this run.
+1. Terminal counterfactual is **post-decay** — catches "pruned a still-good seed," misses
+   "loitered a good seed until it decayed, then pruned" (hides as a correct prune). So the 38%
+   leak is a LOWER bound on good-seed loss.
+2. `SEED_{FOSSILIZED,PRUNED}.counterfactual` may not equal the reward's decision-time
+   `seed_contribution` — the "committed harm" and "pruned good" counts need the field identity
+   confirmed before banking as defects.
+3. **Ransomware prunes** (high counterfactual + negative total_improvement) are *legitimate*
+   and inflate "good seeds pruned"; separate them before pricing the leak.
 
-## Corrections to the record that DO stand (from the earlier reads, unaffected)
+## Corrections that stand (earlier reads, unaffected)
 
-- PDR-0026's null was NOT the mask topology — decision surface is ~43% free.
-- The germinate/prune VOLUME is exploration, not farming (74k TRAINING-prunes at α≈0).
-- The α-throttle is refuted (all commits at α≈1.0; partial-fossil is a latent bug, not live).
+PDR-0026's null ≠ mask topology (43% free surface); the germinate/prune VOLUME is exploration
+(74k TRAINING-prunes at α≈0); the α-throttle is refuted (all commits at α≈1.0). Scoreboard:
+median-0 fossils is `<1/episode` + LOO-population artifact, not "ships nothing."
 
 ## Not banked
 
-`re-blend always beats fossilise`; `the policy commits worse seeds` (FALSIFIED — it commits
-better ones); `the reward is the sole cause of every re-blind`; `zero contributing fossils =
-no useful result`; any crossover magnitude, pending a decay-aware model on measured units.
+`50× / any crossover magnitude` (needs decay curve); `the gate is clean` (it leaks ~38% good +
+~200 harmful); `committed harm / pruned good are certain defects` (pending caveat 2/3);
+`the reward is the sole cause of the re-blend`.
 
-## Honest residual — what's actually still open
+## Remaining reads that settle it (all free, in order)
 
-1. Is the loitering on marginal seeds costly enough to matter (attribution paid + delayed prune)?
-   Unmeasured.
-2. The full reward economics with contribution DECAY (the missing variable in every version of
-   the arithmetic so far).
-3. Time-remaining-at-HOLDING by fate (re-run with the within-episode epoch).
-4. Full re-blend nullity over the whole schedule (style/speed/curve/output), for the
-   action-hygiene claim.
-5. The real product read (all-on vs all-off), which needs a new arm.
+3. **Units of `seed_contribution`, then per-step `bounded_attribution` traces for the fossilize
+   vs never-commit cohorts** → the **decay curve** → the pricing stops being a debate (measured,
+   not assumed). This is the one that turns the surviving argument into a number.
+4. Separate ransomware/age/scheduled prunes from the "good seeds pruned" count.
+5. Confirm the counterfactual field == decision-time contribution (caveat 2).
+6. Time-remaining-by-fate, re-run with the within-episode epoch.
+7. Full re-blend nullity over style/speed/curve/output (action-hygiene claim).
