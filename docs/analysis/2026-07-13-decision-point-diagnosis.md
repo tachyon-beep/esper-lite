@@ -141,6 +141,42 @@ occupancy, blueprint, resident count, α history, host-acc trend)?
   history through the recurrence), measure op/slot/joint logit change. That tests whether the
   TRAINED NETWORK uses the LOO feature at this decision, vs the observational marginal.
 
+## CODE TRACE (drl-expert, key lines re-verified) — the finding is LEARNED/FLOORED, not structural
+
+A code trace (not telemetry) settles what the observational reads could not:
+- **The op head CAN see the LOO.** `counterfactual_contribution` is a per-slot input feature at
+  `slot_offset+12`, normalized to [-1,1] (features.py:827-832, verified), with velocity (+13),
+  freshness (+29), and `current_alpha` (+11) companions. It flows through the single shared
+  `feature_net→LSTM` trunk that feeds ALL heads incl. op (factored_lstm.py:820-845). So "the op
+  head is STRUCTURALLY blind to LOO" is REFUTED — the flatness is learned/floored behaviour, not
+  an architecture gap. (The op head is GLOBAL — one op distribution for the whole board — and LOO
+  is 1 of ~32 per-slot features, so dilution is plausible; op↔slot coupling is mask-level only.)
+- **Anti-WAIT-collapse floors mechanically cap commitment selectivity (the load-bearing find).**
+  The op head has a DOCUMENTED history of collapsing to 99.9% WAIT (leyline/__init__.py:296-299).
+  The fix: a HARD **op probability floor = 0.15** (clamp+renormalize in MaskedCategorical,
+  __init__.py:300-301, verified) + an **op entropy floor = 0.30 normalized ≈ 52% of max entropy**
+  (__init__.py:238-242, verified). Consequence (precise, after the floor arithmetic):
+  in the observed HOLDING mix, FOSSILIZE ~17% / WAIT ~15% / PRUNE ~13% all sit AT the ~15% floor,
+  while SET_ALPHA (~55%) holds the only free/learned mass. With a 0.15 floor over ~4 legal ops the
+  floor CAPS fossilize at ~55% — so the policy is NOT at the cap, **it is at the FLOOR.** That means
+  the learned op-logit for FOSSILIZE is at-or-below the floor: the policy learned to prefer
+  SET_ALPHA and to NOT fossilize, and the 0.15 floor is what PROVIDES the ~15% fossilize mass — as
+  **state-independent exploration, flat in LOO by construction.** This directly explains: (a)
+  fossilize rate ~17% flat in LOO (floor-provided exploration, not a learned commit decision);
+  (b) the fossil/prune overlap; (c) the ~10% negative-current-LOO fossilizations — the
+  state-independent 0.15 floor forces ~15% fossilize exploration even on a harmful seed, every
+  decision. (The 0.30 entropy floor is NOT the binding constraint — it permits an ~85% peak; the
+  binding facts are the probability floor + a learned "don't-fossilize / prefer-SET_ALPHA" policy.)
+- **What I still cannot cleanly separate:** "the value dimension was never LEARNED (the policy
+  genuinely prefers SET_ALPHA and sits at the fossilize floor)" vs "training-time pressure
+  prevented a LOO-driven fossilize preference from forming." Both push the same way. The checkpoint
+  LOO-sweep (with floors ON vs bypassed) is what separates them. Also unquantified from code: HOLDING's share of op gradient
+  (loss is an unweighted masked-mean, no per-stage reweighting, ppo_update.py:352-354 — so
+  HOLDING-rarity dilution is PLAUSIBLE but needs the HOLDING step fraction from telemetry).
+- **Lineage:** this is the same op-collapse failure mode as the Dec-2025 fossilize-incentive
+  diagnosis. The floors were the FIX for WAIT-collapse; a side effect is a ceiling on commitment
+  selectivity. Any reward redesign that ignores the floors is pushing against a hard clamp.
+
 ## The calibrated diagnosis (authoritative)
 
 > Tamiyo preferentially fossilises seeds that are currently important to the forward network
