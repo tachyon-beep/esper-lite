@@ -307,6 +307,26 @@ Two corrections + one new finding this round:
   every patch since Dec suppressed that signal. (e) transfer instrumentation stays independent.
 - **Invariants unchanged:** `hindsight_credit` dead (0.005%), transfer unmeasurable.
 
+### (7) RESHAPING — dead-zone is WHOLE-HEAD; floor fix scoreable but NOT shippable alone
+
+- **|H|=1 → constant output vector → zero gradient to ALL op logits, in 67% (s41)/80% (s42) of
+  HOLDING decisions** (both seeds). SET_ALPHA's 0.55 is the analytic cap `1−(n−1)f`, NOT a learned
+  mode (48-61% at exactly 0.55) → "SET_ALPHA learned" RETRACTED; the head is constant in the majority
+  and learns only in the ~20-33% |H|≥2 minority. Bigger/worse than a FOSS/PRUNE-specific freeze.
+- **Floor fix is SCOREABLE but NOT SHIPPABLE alone (claudeweb/gpt).** `hindsight_credit` inert →
+  unfreezing the gradient yields a MYOPIC LOO-greedy commit collapse (dead-zone may be accidental
+  safety). `hindsight_credit`/transfer promoted from "separate track" to **CO-REQUISITE shipping
+  gate**. The GPU arm stays scoreable; the fix does not ship until transfer settlement carries signal.
+- **ONE primitive + λ-sweep {0,0.3,0.6}**: mixture `q=(1−λ)softmax+λ·uniform` reproduces the current
+  floor at λ=0.6 and IS the no-floor smoke at λ=0 — one code change, not two builds. Pre-register:
+  λ=0 likely collapses to SET_ALPHA, not WAIT.
+- **Gate caveat:** −0.7→+8.2 is IMMEDIATE reward; `V(s′)` is NOT op-independent (fossilising consumes
+  the seed) — log per-decision advantage in the re-run. Reframe "reward doing its job" → "strong
+  LOO-graded commit reward the op head usually cannot DIRECTLY learn from."
+- **Scope:** the floor does not retroactively erase the Objective-A HRA fit-failure or coverage-bound
+  Shapley A/B nulls; it is the leading PROXIMAL explanation for flat HOLDING preferences, not a
+  universal one. Per-head KL not logged → re-run adds it (free mechanism confirmation).
+
 ### (6) ROOT-CAUSE SYNTHESIS — dead-zone blast radius MEASURED + the gate PASSES (both seeds, zero-GPU)
 
 Both primes' zero-GPU reads, printed. Seeds 41/42:
