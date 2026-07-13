@@ -168,3 +168,50 @@ into the host or a downstream seed" does not exist as a measurable field. Fix th
 run arms.
 
 Durable record: `docs/analysis/2026-07-13-decision-point-diagnosis.md` (commit a748abda).
+
+---
+
+## ROUND 2 UPDATE — the two reads you both prioritised (run after your last reviews)
+
+### (1) Freshness residual — CLOSED (you both flagged it as the #1 threat)
+
+Reconstructed `epochs_since_counterfactual` exactly: the LOO value is written ONLY on a fresh
+solo-eval (`vectorized_trainer.py:1390`), so epochs-since-the-value-last-changed == staleness.
+Result, both seeds:
+- **98-99% of BOTH FOSSILIZE and PRUNE-from-HOLD decisions act on staleness=0** (fresh)
+  counterfactuals; ~0% at staleness ≥3. **No confirm-before-commit asymmetry.**
+- Decisive matched read (fresh-only, staleness=0): FOSSILIZE median 11.2/10.2 vs PRUNE-from-HOLD
+  10.3/9.2 — **the overlap HOLDS; prune-c does not collapse when forced fresh.**
+- Stale prunes (s≥3) are n=4-5 and LOW-c (median 0) — the opposite of the stale-high concern.
+
+**The overlap is not a staleness artifact.** (claudeweb bet against the residual and won.)
+
+### (2) Policy-preference read — the op-head decision at HOLDING is INVARIANT to LOO (gpt-prime's key read)
+
+At HOLDING (both FOSSILIZE & PRUNE legal, `op_masked==false`), binned by current LOO, both seeds:
+
+| LOO bin | op_entropy | op_conf | realised op mix (SET_ALPHA / FOSSILIZE / WAIT / PRUNE) |
+|---|---|---|---|
+| <0 | 0.88 | 0.35 | 55 / 17 / 15 / 13 |
+| 0–1 | 0.88 | 0.35 | 55 / 18 / 14 / 13 |
+| 1–5 | 0.88 | 0.36 | 58 / 17 / 14 / 11 |
+| 5–15 | 0.87 | 0.36 | 55 / 17 / 15 / 13 |
+| ≥15 | 0.87 | 0.35 | 54 / 18 / 16 / 11 |
+
+**Op-head entropy, confidence, and realised action mix are FLAT across the entire LOO range.** A
+seed contributing <0 and one contributing ≥15 acc-pts get identical treatment. This is gpt-prime's
+**case 2** — current LOO is not the axis of the HOLDING op decision — and it directly EXPLAINS the
+fossil/HOLD-prune overlap (the fates are chosen independently of LOO), rather than just restating
+it. The dominant HOLDING op is SET_ALPHA_TARGET (~55%), not commit (~17%) or prune (~13%): the
+policy overwhelmingly re-tunes, LOO-invariantly.
+
+Caveats kept honest: marginal (not conditional) invariance; per-decision (not per-seed terminal)
+rates; n=2 controllers; "LOO is not the axis" ≠ "the decision is illegible" (may key on host
+trajectory / slot pressure / LSTM history / freshness / downstream plans).
+
+**Net after round 2:** the headline is now two-sided and much harder to dismiss — the realised
+cohorts overlap on LOO (fresh-confirmed), AND the policy's op distribution is flat in LOO. The
+open question flips from "is the overlap real" (yes) to **"what DOES the HOLDING decision key on?"**
+(claudeweb's list: age, epochs-in-HOLDING, occupancy, blueprint, resident count, α history,
+host-acc trend). `hindsight_credit` inert (0.005%) and instrument-first way-forward both unchanged.
+Durable: diagnosis doc through commit (policy-preference read).
