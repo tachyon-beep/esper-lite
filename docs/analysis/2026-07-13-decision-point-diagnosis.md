@@ -41,11 +41,19 @@ correctly / good seeds commit" headline over-corrected.
 ## What survives (n=2, both seeds)
 
 - Selection-inversion REFUTED (fossils high-c, prunes low-c on the median).
-- The re-blend loop is real (75% re-blend, ≤7 cycles, 88% of re-blenders never commit) and
-  concentrated on low/marginal seeds — but Query 1 shows it (or the same economics) also
-  costs ~38% of good seeds.
-- Two candidate live defects: **good seeds pruned** (~1000/seed) and **harmful seeds committed**
-  (~200/seed), pending the caveats below.
+- **The measured, durable defect:** the gate leaks — **~38% of still-good seeds pruned**
+  (Q1) and **~200 harmful seeds committed** (Q2), pending the caveats below.
+- The re-blend loop is real (75% re-blend, ≤7 cycles, 88% never commit) and concentrated on
+  marginal seeds — but its **MECHANISM is NOT the "null no-op loophole."** Q3 nullity check
+  (seed 41, `ANALYTICS_SNAPSHOT`, n=34,811 `SET_ALPHA_TARGET` decisions): targets chosen are
+  0.5 (37%) / 0.7 (43%) / 1.0 (20%), speed and curve varied. Re-blends are REAL retunes to
+  partial amplitude, and a 1.0→0.5 change is a large Δα that `alpha_shock` DOES see. So the
+  earlier "null re-blend evades both guards at −0.005" claim is **likely REFUTED** (caveat:
+  the ~35k SET_ALPHA_TARGET decisions include BLENDING-phase ramp tweaks; the ~6,682
+  re-blend-triggering ones aren't cleanly isolated here). The one-shot-vs-integral ARGUMENT
+  still stands as an equation fact, but its "guards are blind" leg is weakened, and its
+  magnitude is unmeasured — the decay curve is nested in `reward_components`, not the
+  top-level `bounded_attribution` (which is null in the snapshots), so Q3-proper is still open.
 
 ## Structural limits (what these metrics CANNOT tell me — stated before banking)
 
