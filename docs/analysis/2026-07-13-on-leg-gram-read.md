@@ -6,15 +6,19 @@ Reviewed: advisor + 2 external peers (ChatGPT, claudemain), 2026-07-13 — all i
 Diagnostic (not a gate); rejected HRA re-used as substrate. THIRD-PASS: supersedes the
 "B favoured" (9dbf078f) and "light-A′ refuted" (a87ba291) verdicts — both were over-reads.
 
-## Headline: the critic is the wrong suspect; the residual is reward-intrinsic, and the real question is whether the cf shaping term earns its keep
+## Headline: further critic work is not justified until the cf term's downstream value is established
 
-Exact residual decomposition (matched pooled moments, no running-scale approximation)
-resolves the A′/B question by largely dissolving it: **no critic architecture in this
-family beats ~0.62–0.64 total EV, because ~all of the unexplained variance lives in the
-cf reward stream and is not predictable from state at this critic's capacity.** The
-main head is already near-perfect; heavy-A′'s primary head (a direct `V_total` critic)
-already exists as the OFF run and only reaches ~0.64. The lever is the cf REWARD, not the
-critic topology.
+Exact residual decomposition (matched pooled moments) largely dissolves the A′/B question:
+**no critic architecture in this family beats ~0.62–0.64 total EV, because ~all of the
+unexplained variance lives in the cf reward stream and is not predictable from state at
+this critic's capacity.** The main head is near-perfect; heavy-A′'s primary head (a direct
+`V_total` critic) already exists as the OFF run and only reaches ~0.64.
+
+Framing (per external review, GPT last-say): this does NOT erase the prior critic findings
+— the op-conditioned-baseline fix (P0-1) and the Objective-A rejection had real value. The
+correct statement is **"further critic optimization is not justified UNTIL the downstream
+value of the cf term is established,"** not "the critic was never the problem." The lever
+to test first is the cf REWARD, not the critic topology.
 
 ## Exact residual decomposition (rounds 400–600, count-weighted pooled)
 
@@ -68,26 +72,32 @@ OFF long-diag (direct-total critic, seed 41), pooled EV on matched windows:
 
 ## What actually moves the problem (reviewer-concordant, data-grounded)
 
-1. **Does the cf shaping term earn its keep? — the missing experiment.** `G_cf` carries
-   ~all the return variance AND ~39% of it is unpredictable from state (the ~228 residual
-   that survives every critic here). A shaping term that is simultaneously high-variance
-   and low-predictability injects advantage NOISE — the opposite of what shaping is for.
-   The direct test: **ablate the cf term, measure the DOWNSTREAM outcome** (host accuracy /
-   controller decision quality / committed-J). Collapse ⇒ cf is load-bearing and now
-   quantified (the baseline the epic never had). No collapse ⇒ the A/A′/B/C tree dissolves
-   and a term is deleted. Cheaper than this read, worth more.
-2. **The missing baseline (one level up):** 65 PDRs in, nothing connects `ev_sum` to a
-   downstream metric anyone cares about. EV is instrumental (advantage-variance → policy
-   quality); a PPO critic at ~0.6 is unremarkable. Establish that the current EV level
-   costs something downstream BEFORE any further critic-architecture work.
-3. **Path-C ceiling probe (cheap, data may be on disk):** offline predictor on the
-   policy-visible Obs V3 history for `Var(G_cf|s)` — is the ~228 residual an information
-   ceiling or critic-capacity? Beats the frozen-head Gram data for this question.
+1. **Does the CURRENT DENSE cf reward earn its keep? — the missing experiment.** `G_cf`
+   carries ~all the return variance AND ~39% is unpredictable from state (the ~228 residual
+   surviving every critic here). HYPOTHESIS (not yet a finding): a term that is
+   simultaneously high-variance and low-predictability may inject advantage NOISE rather
+   than reduce it — anti-shaping. But a noisy signal can still pay for itself via
+   exploration / rare-motif discovery / long-horizon credit. The question is its MARGINAL
+   DOWNSTREAM value. Direct test = the paired cf-off screen (§ below). Scope: it tests the
+   current DENSE cf-in-reward use, NOT whether a redesigned auxiliary/control-variate cf
+   could help.
+2. **The missing downstream baseline:** the CAUSAL chain "critic EV → less advantage noise
+   → better controller decisions → better accuracy/efficiency" is assumed, not demonstrated
+   (there ARE accuracy/param/churn/governor gates, but none tie EV to them). Establish it
+   before further critic work — see the program external-relevance gate (PDR-0067).
+3. **Path-C ceiling probe — NOT feasible from retained data** (checked 2026-07-13): the
+   event stream persists only aggregates; no per-timestep Obs V3 sequences. Would require a
+   fresh run with observation-sequence logging. Removed from the cheap-parallel list.
 
-## Caveats
+## Caveats (uncertainty-checked)
 
+- **Block-bootstrap (2026-07-13):** the earlier "plateau-1 split" is NOT real — `Var(G_cf)`
+  slopes over 250–600 are −53 (90% CI [−50, +53]) and +41 (CI [−45, +43]); both cross zero.
+  `ev_cf` slopes ~flat (±0.01). No evidence of drift or of a split; "ceiling"/"still-rising"
+  language is unsupported at n=2. Seed is the replication unit; 100 autocorrelated updates
+  are not 100 observations.
 - "Reward-intrinsic residual" = intrinsic AT THIS LSTM CRITIC CAPACITY. A larger/different
-  predictor might fit more of `G_cf` — the Path-C probe tests that; the vg scalars cannot.
+  predictor might fit more of `G_cf` — only a fresh Path-C probe (above) tests that.
 - n=2; single OFF comparator (seed 41); windows matched but runs differ in rollout.
 
 ## Process fix adopted
