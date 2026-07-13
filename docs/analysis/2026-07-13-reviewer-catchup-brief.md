@@ -307,6 +307,38 @@ Two corrections + one new finding this round:
   every patch since Dec suppressed that signal. (e) transfer instrumentation stays independent.
 - **Invariants unchanged:** `hindsight_credit` dead (0.005%), transfer unmeasurable.
 
+### (6) ROOT-CAUSE SYNTHESIS — dead-zone blast radius MEASURED + the gate PASSES (both seeds, zero-GPU)
+
+Both primes' zero-GPU reads, printed. Seeds 41/42:
+- **Blast radius:** `action_confidence` (=P(chosen op), POST-floor, verified by an exact 0.15 spike):
+  **FOSSILIZE floor-bound in 93-94% of HOLDING decisions, PRUNE 93-95%, WAIT 70-86%** → ~94% of
+  commit samples produced ZERO op-head gradient (over-read #9 un-retracted, quantified). **SET_ALPHA
+  0% floor-bound (median 0.55) — a genuine LEARNED preference.** The head CAN learn; FOSS/PRUNE are
+  specifically floor-frozen (weakens the entropy-bonus competing explanation).
+- **Stronger maths (both primes, verified):** the partition cancels — underweight logits are removed
+  from the transform output entirely (`∂q/∂z_U=0` for all outputs); PPO ratio for a floor-bound op is
+  EXACTLY 1.0 → zero op-head approx-KL (independently observable). Only the op-head component is
+  zeroed; other heads train around the frozen logit.
+- **POLICY-WIDE (gpt-prime, code-confirmed):** the floor is applied to ALL 8 heads in both rollout
+  and update legs (factored_lstm.py:1104-1106, 1527-1533). Rare efficient blueprint below its 0.12
+  floor can't be raised by its own outcomes → candidate for "finds good motifs, can't make them
+  dominant."
+- **⭐ THE GATE PASSES (resolves claudeweb's invariant-contradiction).** Advantage isn't logged, but
+  the reward-vs-LOO proxy for FOSSILIZE (both seeds): **c<0 → −0.7 ; 1–5 → +2.0 ; ≥15 → +8.2** —
+  strong monotonic rise. The IMMEDIATE commit reward is strongly LOO-graded (only the DOWNSTREAM
+  transfer settlement, `hindsight_credit`, is dead); with `V(s)` op-independent, the fossilize
+  ADVANTAGE rises too. **So the learning signal EXISTS and the dead-zone is why the policy can't act
+  on it — the mixture-floor arm IS scoreable on immediate reward.**
+- **Root cause:** *a strong, LOO-graded commit reward the policy CANNOT learn from, because ~94% of
+  commit samples are gradient-censored by the anti-WAIT floor.* Explains flat-in-LOO fossilize, the
+  cohort overlap, SET_ALPHA dominance, and the negative-LOO fossils (penalty → zero gradient to stop).
+  Separable from the transfer problem (unaffected by the floor fix).
+- **Plan corrections adopted:** fix = differentiable MIXTURE floor / smooth `P(non-WAIT)≥ε`, NOT
+  straight-through (biased PPO ratio). Staged GPU: (1) no-floor NECESSITY smoke (does WAIT-collapse
+  still recur under the twice-changed reward?), then (2) hard-vs-mixture paired A/B (n=5) if still
+  needed. Re-run adds per-decision advantage + pre/post-floor logits + periodic checkpoints so the
+  advantage-vs-LOO gate and pre-floor policy are directly readable.
+
 **Net after round 2:** the headline is now two-sided and much harder to dismiss — the realised
 cohorts overlap on LOO (fresh-confirmed), AND the policy's op distribution is flat in LOO. The
 open question flips from "is the overlap real" (yes) to **"what DOES the HOLDING decision key on?"**
