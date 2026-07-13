@@ -277,6 +277,36 @@ I read the exact transform (`_apply_floor_to_logits`, action_masks.py:522-581):
   "prefer-SET_ALPHA" logit is still reward-shaped. And the two invariants gate everything regardless:
   `hindsight_credit` dead, transfer unmeasurable — no experiment is scoreable until those are fixed.
 
+### (5) ⭐ GRADIENT DEAD-ZONE — autograd-confirmed, likely the mechanism finding of the thread
+
+Two corrections + one new finding this round:
+- **Algebra fix (gpt-prime, verified):** the floor scales overweight actions DOWN (factor
+  `(1−|U|f)/Σ_H p < 1`), capping per-state selectivity at ~0.55 for 4 ops — NOT "amplified" (my error).
+- **Q1:** `alternatives` = top-2 ops EXCLUDING the chosen action (action_execution.py:1498), not
+  per-op post-floor probs → the floor-binding audit is not feasible from current telemetry. (This also
+  produced a near-miss: SET_ALPHA looked absent from its own decisions *because it was chosen*; the op
+  head does weakly prefer SET_ALPHA, op_confidence≈0.40.)
+- **Q2 + the finding:** the floor transform IS in the differentiable PPO update path
+  (`factored_lstm.py:1533`, `evaluate_actions`). A floor-bound action's post-floor prob is a CONSTANT
+  (`log(effective_floor)`), so its PPO log-prob has **ZERO gradient to the raw logits** — autograd-
+  verified: FOSS-below-floor → `d logP/d logits = [0,0,0,0]`; FOSS-above-floor → normal (0.668).
+  **So when FOSSILIZE is floor-bound, its advantage produces NO direct policy gradient to its own
+  logit.** The floor guarantees ≥15% FOSSILIZE/PRUNE *sampling* but SEVERS the channel by which those
+  outcomes would teach the policy — forced irreversible exploration you cannot learn from. Candidate
+  ROOT mechanism: once WAIT-collapse pushed the commit logits below floor, good/bad fossilize outcomes
+  can't climb/lower them via direct PG (only indirect: trunk, entropy-loss, boundary crossings). It
+  sharpens the negative-LOO fossils (penalty → zero gradient to stop it). **Fixable in code:**
+  straight-through gradient through the floor, or `P(non-WAIT) ≥ ε` preserving learned relative probs.
+- **Consequences for the plan (both primes converged):** (a) checkpointing is a HARNESS FIX,
+  default-ON, no PDR/GPU — the seed41/42 weights weren't saved (PDR-0026 recurring); (b) DROP the
+  Jan-checkpoint proxy; (c) the pre-floor sweep is DOWNGRADED from decisive (would not change the
+  decision); (d) the ONE GPU arm worth buying is the floor-NECESSITY test — floor made
+  gradient-preserving OR `P(non-WAIT)≥ε` — since the 99.9%-WAIT collapse was diagnosed in Dec under a
+  reward that has since changed ≥twice. If commit-selectivity emerges → dead-zone was load-bearing,
+  fix in hand; if it still collapses to WAIT → the reward prefers inaction to every intervention, and
+  every patch since Dec suppressed that signal. (e) transfer instrumentation stays independent.
+- **Invariants unchanged:** `hindsight_credit` dead (0.005%), transfer unmeasurable.
+
 **Net after round 2:** the headline is now two-sided and much harder to dismiss — the realised
 cohorts overlap on LOO (fresh-confirmed), AND the policy's op distribution is flat in LOO. The
 open question flips from "is the overlap real" (yes) to **"what DOES the HOLDING decision key on?"**
