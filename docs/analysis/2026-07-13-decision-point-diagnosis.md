@@ -85,7 +85,13 @@ staleness artifact.**
   run-level (not decision-row) bootstrap is needed before "same distribution" is more than
   "substantial overlap."
 
-## POLICY-PREFERENCE read — the op-head decision at HOLDING is invariant to current LOO
+## POLICY-PREFERENCE read — the MARGINAL realised op mix at HOLDING is invariant to fresh current LOO
+
+**Headline amended (both primes, round 3):** this establishes MARGINAL invariance of the realised
+op mix, NOT invariance of the JOINT op×slot policy. LOO is a PER-SEED feature; a flat op marginal
+is consistent with Tamiyo fossilising at a fixed global rate and using the SLOT head to pick WHICH
+seed by LOO (`P(op=FOSS | selected-seed LOO)` flat while `P(op=FOSS, slot=s | state)` LOO-sensitive).
+Do NOT bank "the policy ignores LOO / the fate decision is independent of LOO." Adjudicator below.
 
 gpt-prime's key discriminator (realised-action overlap ≠ policy-preference flatness). At HOLDING
 (FOSSILIZE and PRUNE both legal, `op_masked==false`), binned by current LOO, both seeds:
@@ -114,6 +120,26 @@ controllers; (d) it says LOO is not the axis, NOT that the decision is illegible
 key on host trajectory / slot pressure / LSTM history / freshness / downstream plans. The natural
 next read is claudeweb's: what DOES separate fossilize from prune (age, epochs-in-HOLDING,
 occupancy, blueprint, resident count, α history, host-acc trend)?
+
+**Adjudication (round 3, both primes' concerns tested observationally), both seeds:**
+- **gpt-prime's slot-hides-LOO: substantially addressed.** The slot head is FORCED (slot_entropy
+  ≈0) in **97-98%** of HOLDING op-decisions — it is not spreading probability by LOO. And the
+  decisive check: if the slot head selected the high-LOO seed for FOSSILIZE and a low-LOO seed for
+  PRUNE, the realised cohorts would SEPARATE on selected-seed LOO — but they don't (10.4 vs 9.6).
+  So slot selection is not hiding a LOO signal. (Gold-standard confirmation = direct LOO
+  perturbation on a checkpoint; the observational evidence already argues against it.)
+- **claudeweb's "unlearned static head": refuted in the strong form, refined.** The op mix DOES
+  move with occupancy: 1-seed → ≥3-seed shifts FOSSILIZE 18%→22%, SET_ALPHA 49%→56%, PRUNE
+  17%→12% (reproducible both seeds). It is NOT a fixed init-prior multinomial. BUT it stays flat
+  across host-accuracy and hold-duration, AND flat across LOO. **Conclusion: the HOLDING op head
+  is conditional on SLOT/OCCUPANCY PRESSURE but NOT on the seed's contribution.** The precise claim
+  is "the VALUE dimension of the HOLDING decision is unlearned/underweighted," not "the HOLDING
+  decision is unlearned." This still explains the ~10% negative-current-LOO fossilizations: the
+  fossilize rate is set by occupancy, not down-weighted for negative LOO.
+- **Definitive remaining test (gpt-prime's gold standard):** load a checkpoint + real LSTM state,
+  hold all features/masks fixed, sweep the selected seed's LOO feature (and separately its LOO
+  history through the recurrence), measure op/slot/joint logit change. That tests whether the
+  TRAINED NETWORK uses the LOO feature at this decision, vs the observational marginal.
 
 ## The calibrated diagnosis (authoritative)
 
