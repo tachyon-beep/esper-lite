@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-14 (#44) · commitment defect RESOLVED to a fossil measurement gap; instrument-first refocus proposed (PDR-0074 accepted, PDR-0075 proposed; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-14 (#44+) · commitment defect RESOLVED to a fossil measurement gap; "make permanence visible" refocus APPROVED (PDR-0074 accepted, PDR-0076 approved-with-conditions; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
 **The commitment defect is a permanent-value MEASUREMENT gap — ONE gap, FOUR symptoms (PDR-0074 + round-11/H6).** The
@@ -7,19 +7,22 @@ design, `vectorized_trainer.py:956-975`), and every consumer of a `None` inherit
 stops firing → −113; (2) settlement `hindsight_credit` inert [H3, predicted]; (3) OBSERVATION contribution feature = 0
 (`features.py:830` `None→0`, H6-CONFIRMED); (4) the critic "overstates" the commit penalty because it is fit to that
 lying observation. So the reward AND the observation AND the value function all value a fossil at exactly 0 — while the
-freshness channel that could say "STALE not zero" (`γ^epochs_since_cf`) sits built-but-bypassed. PROPOSED refocus
-(PDR-0075, owner-gated): **MAKE PERMANENCE VISIBLE** (L1 freeze-don't-zero + L2 settle-at-fossilize, both on existing
-data; H7 drift-probe before any hard measurement programme) — the premise "under-fossilization is a defect" has never
-been tested with a working instrument. · metric: can a genuinely-contributing seed be committed WITHOUT its measured
-value going to 0.
+freshness channel that could say "STALE not zero" (`γ^epochs_since_cf`) sits built-but-bypassed. APPROVED refocus
+(PDR-0076, owner-approved with binding conditions): **MAKE PERMANENCE VISIBLE** (L1 freeze-don't-zero + L2
+settle-at-fossilize on existing data; H7 GATES L1). Conditions: design against the FOSSIL-FARM adversary (naive L1+L2 ≈
+800:1 revenue:cost → commit-everything; sell-at-spike / decay-lie / double-count), L2 revenue ≈ the forfeited stream not
+above it, OFFLINE-REPLAY before any run, DESIGN-don't-land, floor + critic held CONSTANT, premise UNMEASURED not wrong.
+· metric: does a genuinely-contributing seed retain its measured value across FOSSILIZE; guardrail = the fix does NOT
+farm fossils.
 
 ## In flight
-- **Instrument-first fix design (next):** drl-expert to design the valid permanent-seed contribution measure — likely
-  **settle-at-fossilize** (carry the last valid HOLDING LOO forward), NOT fossil-ablation (host-damage artifact) and NOT
-  ESCROW (would claw back on the measurement-zero). Then telemetry-first, then a coupled floor-fix + rerun. Owner offered
-  the measurement change + rerun; drl-design + a spec for owner review come first.
+- **drl-expert L1/L2 DESIGN + reads (dispatched this session, background):** the "make permanence visible" deliverable —
+  **H7 first** (proxy-validity/drift), then L1 (canonical contribution-state struct + freeze-don't-zero + lifecycle
+  scoping), ≥2 L2 accounting semantics (invariant `G_stay≈G_fossilize`, priced to −113 not above), reads H3/H4/H5/H8, the
+  ESCROW fail-closed guard, and OFFLINE REPLAY per candidate. Design-don't-land; no GPU. Deliverable → owner review
+  before any code lands.
 - **Harness enablers** (esper-lite-7fe21bd091, decision ACCEPTED, task OPEN, no GPU): default-on checkpointing +
-  per-decision advantage/pre-floor/per-head-KL logging. Still the enabler for any instrumented run.
+  per-decision advantage/pre-floor/per-head-KL logging + **K>1** (Read B, P8=0). Correct regardless of the epic.
 - **EV-stabilization epic** (esper-lite-f25b71c165): reframed by PDR-0074; comment #181.
 - **Branch-survivor** (esper-lite-1f1e55f58f): main-as-trunk (PDR-0062); gated on merge window — untouched.
 
@@ -51,15 +54,12 @@ value going to 0.
 - Docs: eval `2026-07-13-round8-findings-evaluation.md`; the Read-A→round-10 arc `2026-07-14-advantage-loo-read-preregistration.md`.
 
 ## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted)
-- **Confirm the "MAKE PERMANENCE VISIBLE" REFOCUS (PDR-0075, reworded)?** A strategy re-scope of the epic Now bet
-  (vision-level). You've signalled the direction (change+rerun offer); `vision.md`/roadmap band NOT rewritten pending your
-  explicit go. Note the reword: L1/L2 on existing data + H7 before any hard L3 — NOT a committed hard-measurement programme.
-- **Approve L1 (freeze-don't-zero, `features.py:830`) + L2 (settle-at-fossilize)** — after the drl-expert design + a spec
-  for your review. Do NOT just flip the fossilized-exclusion flag (host-damage artifact); L1 is restoring intended
-  semantics (the freshness channel already exists). Owner-gated code change (+ eventual rerun).
-- **Small safety flag (approve?):** mark `RewardMode.ESCROW` CONTRAINDICATED in code (a comment/guard) so a future
-  session doesn't flip it — it would claw back accrued credit on the fossilize measurement-collapse.
-- Owner-gated + deferred: the ρ-sweep floor primitive; the trust-region fix (K≥2 / post-step KL, Read B).
+- **REFOCUS APPROVED (PDR-0076)** — enacted: roadmap Now bet moved, `vision.md` reinforced (SNR + Goodhart anti-goals).
+  ESCROW guard APPROVED (fail-closed, folded into the drl deliverable). drl-expert L1/L2 design + reads DISPATCHED this session.
+- **Still owner-gated (AFTER the drl deliverable + offline replay):** LANDING L1/L2 (reward/observation code change) and any
+  GPU rerun. Do NOT land until the design + offline replay show the fix removes the −113 discontinuity WITHOUT farming
+  fossils (guardrail).
+- Owner-gated + deferred: the ρ-sweep floor primitive; the K>1 / trust-region fix (P0 harness, independent of the epic).
 - North-star target/date, rent ceiling, host-accuracy floor: owner-unset.
 - Standing: git identity tachyon-beep; no push/tag/release/branch-deletion/telemetry-deletion/remote action without an explicit ask.
 
@@ -69,16 +69,18 @@ value going to 0.
 - Banked the facts + retractions (PDR-0074, accepted); proposed the instrument-first refocus (PDR-0075, owner-gated);
   reconciled the epic (comments #181/#182). Multiple over-reads caught and retracted (advisor + primes) before banking.
 - Round-11 + **H6**: confirmed the OBSERVATION also zeroes a fossil's contribution (`features.py:830`) → ONE gap, FOUR
-  symptoms; the **critic RETIRES as a symptom** (not independent); the fix is **L1/L2 on existing data** (H7 decides if a
-  hard L3 is needed); ESCROW contraindicated; refocus reworded to "make permanence visible." (Checkpoint #44 addendum.)
+  symptoms; the **critic RETIRES as a symptom** (not independent); ESCROW contraindicated; refocus reworded to "make
+  permanence visible."
+- Round-12: owner APPROVED all three (refocus / ESCROW guard / drl design) subject to the primes' roadblocks. **Enacted:**
+  roadmap Now bet refocused, `vision.md` reinforced, PDR-0076 written (binding anti-fossil-farm conditions), drl-expert
+  L1/L2 design + reads DISPATCHED.
 
 ## Next session, start here
-1. **Zero-GPU reads that decide the epic's cost/shape:** H7 (ablation-drift probe — is a hard L3 measurement programme
-   even needed?), H3 (`hindsight_credit` — dead for the same measurement reason?), H8 (shaping as % of episode return —
-   is de-shape survivable / is the product objective trainable?). H6 DONE (observation zeroes a fossil's contribution).
-2. **drl-expert: design L1 (freeze-don't-zero, one line at `features.py:830`) + L2 (settle-at-fossilize) — both on
-   EXISTING data** + a telemetry-first spec. Bring the owner the reviewed change + the explicit **refocus confirmation**
-   (PDR-0075, reworded to "make permanence visible") BEFORE modifying code or spending a rerun.
-3. **P0 harness regardless:** K>1 (restore the trust-region guard — Read B), default-on checkpointing, per-decision
-   telemetry. Then P1 (L1+L2) → P2 re-ask "is commitment good?" with a working instrument (never done) → P3 floor
-   (packaged with the reward, never alone). Do NOT run the λ=0 floor smoke until K is fixed.
+1. **Review the drl-expert deliverable** (H7 verdict + H3/H4/H5/H8 reads + the L1 contribution-state design + ≥2 L2
+   semantics + the ESCROW guard + the OFFLINE REPLAY per candidate). The gate: does a candidate remove the −113
+   discontinuity WITHOUT creating an early-fossilization windfall (the farm)?
+2. **Bring the owner the reviewed L1/L2 change for a LAND decision** — only after offline replay clears the farm guardrail
+   and H7 says the last-valid LOO is an adequate proxy. Landing L1/L2 (+ any rerun) stays owner-gated.
+3. **P0 harness (independent, do regardless):** K>1 (Read B), default-on checkpointing, per-decision telemetry. Then
+   P1 (L1+L2 land) → P2 re-ask "is commitment good?" with a working instrument (never done) → P3 floor (packaged with the
+   reward, never alone). Do NOT run the λ=0 floor smoke until K is fixed.

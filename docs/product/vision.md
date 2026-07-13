@@ -28,6 +28,10 @@ script.
   the policy can farm without improving the host.
 - A body that grows a capability **without a corresponding sensor** (Signal-to-Noise
   commandment: if the policy can't see it, it can't optimise it).
+  *(Live instance, 2026-07-14, PDR-0074/0076: a fossil's contribution is structurally unmeasured — the counterfactual is
+  undefined at permanence — and coerced `None→0` in reward, observation, and value; the policy learned that permanence is
+  worthless because we told it so. The current Now bet, "make permanence visible," directly serves this commandment. The
+  proposed settlement fix must also honour the Goodhart anti-goal above — a mis-priced settlement would farm fossils.)*
 - A codebase carrying **legacy / backwards-compat / shim** code (No Legacy Code policy).
 
 ## Authority grant
