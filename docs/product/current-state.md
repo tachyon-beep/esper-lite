@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-14 (#62) · make-permanence-visible: ROUND-21 FOLDED IN (both primes adjudicated) — Φ(PENDING) fork PROPOSED-DISSOLVED (flag-on-HOLDING; both recorded options dead), PBRS reframed (non-telescoping progress stream), gates re-postured as BOUNDS; freeze blocked on the q_decision-IQR read + owner ratifications + final adversarial pass; PDR-0085..0088; code `b7b7c6d5` on `feat/ev-stab-stage2-hra`
+# Current State — Esper        Checkpoint: 2026-07-14 (#63) · make-permanence-visible: **ΔP_req = 0.10 OWNER-RATIFIED** (PDR-0089 — the owner's "ratify 10" meant the 0.10 constant, NOT item #10; Phase-2 stays owner-pending); round-22 pins registered; pending-visibility fork flagged; **IQR+noise read IN FLIGHT**; PDR-0085..0089; code `b7b7c6d5` on `feat/ev-stab-stage2-hra`
 
 ## The bet right now
 **Unchanged: the commitment defect is a permanent-value MEASUREMENT gap (PDR-0074/0076)** — the counterfactual is
@@ -50,19 +50,21 @@ measured value across FOSSILIZE; guardrail = the fix does NOT farm fossils.
 - **Power-calc discipline (PDR-0086):** never present an assumed-σ_d power as predictive; Exp-1 P2 is bounding; a
   relative-to-relative reassessment is vacuous — Δ_material is absolute or nothing.
 
-## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted; queue REDUCED by round 21)
-- **RATIFY the Φ(PENDING) DISSOLUTION (PDR-0088):** PENDING = flag on HOLDING, not a stage. Both recorded options are
-  dead under executed facts (default's parity premise false; fossil-schedule double-mints a ≈+0.52 climb). The
-  dissolution is PBRS-clean, discharges the r9 bridge assumption mechanically, needs zero new machinery; its designed
-  B−A PBRS delta is harness-computed (|Δ|≤~0.14, dwell-sign-varying). This replaced the old "adjudicate the fork" item.
-- **RATIFY gates-as-BOUNDS (PDR-0088):** detection-grade gate power needs n≈29–63 (worst case) — unreachable → GATE-DOM/
-  GATE-INFL scored as 95% UCB bounds vs Δ_material; wide bound at screen = INCONCLUSIVE-on-gates, never a pass. This
-  COLLAPSED the §8 "80/90 power split" and "max-n stretch" questions. Remaining §8 items: ΔP_req=0.10 materiality;
-  UCB posture (point-estimate primary recommended); IQR-read legitimacy under no-peek; σ_d-reduction lever preference.
-- **Price-vs-fix (PDR-0085):** the eis==0 skip = price it for the experiment, fix decided after (recommended). Your call.
-- **Standing (unchanged):** premium signature (`0.5+3·tanh(1/3)` ≈1.464538 × legitimacy — lands with the freeze);
-  Option-A cross-slot global audit lock ratification; Phase-2 (B-path) authorization; threshold-variance materiality
-  bound; north-star target/date, rent ceiling, host-accuracy floor owner-unset.
+## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted)
+- **RATIFIED (PDR-0089): ΔP_req = 0.10.** Δ_material = 0.10/IQR_q becomes a number when the in-flight read lands; the
+  0.10 family propagates as working constants to the gate-UCB and threshold-variance bounds (they inherit, not
+  separately ruled). IQR-read legitimacy: needs a §1.12 citation, not a ruling (claude-prime r22) — dispatched.
+- **Still yours — evidence-forced per claude-prime's sort (ratification ≈ bookkeeping):** Φ(PENDING) DISSOLUTION
+  (both alternatives dead by executed facts; PDR-0088); gates-as-BOUNDS (detection n≈29–63 unreachable; wide bound =
+  INCONCLUSIVE-on-gates); price-don't-fix the eis==0 skip (the matched-control ruling you've made twice).
+- **Still yours — genuinely open:** **Phase-2 B-path authorization** (the first core-reward-path change of the arc;
+  gpt-prime's proposed scope: default-off impl + tests + executable replay + drl review + docs; NOT training
+  activation, NOT GPU); **Option-A cross-slot lock** (a real tradeoff — the lock enters the protocol-package estimand;
+  lock-burden quantification queued before freeze); **pending-visibility fork** (gpt: obs must carry pending status +
+  time-to-boundary or state-aliasing; vs the frozen §2.5.8 obs-dim-31-OFF pin + claude-prime's interpretation-note
+  posture — PDR-0089 #4); **threshold-variance gate form** (data-conditional: raw EWMA fails ΔP<0.10 at σ≳0.15–0.2
+  near the cliff, LCB holds to σ≈0.3 — the in-flight noise read decides; PDR-0089 #5); UCB posture (point-estimate
+  primary recommended); max-n=10 confirmation; premium signature (lands with the freeze).
 - Standing rules: git identity tachyon-beep; no push/tag/release/branch-deletion/telemetry-deletion/remote action
   without an explicit ask.
 
@@ -79,11 +81,14 @@ measured value across FOSSILIZE; guardrail = the fix does NOT farm fossils.
   integrated doc.
 
 ## Next session, start here
-1. **Collect the owner ratifications on the REDUCED queue** (dissolution; gates-as-bounds; price-vs-fix; ΔP_req; UCB
-   posture; IQR-read legitimacy; premium signature; cross-slot lock; phase-2 gate).
-2. **Run the q_decision-IQR calibration read** (esper-lite-e12e2d1543 — now load-bearing for the GATES, not just P2;
-   r9-only, regime stamp asserted) → freeze Δ_material.
-3. **Final adversarial pass** on the integrated pre-reg (fresh eyes, no arc context) → no-peek freeze (owner signs) →
-   GPU authorization (owner).
-4. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); pending observation
+1. **Collect the IQR+noise read** (agent in flight on esper-lite-e12e2d1543; spec-first discipline) → Δ_material =
+   0.10/IQR_q becomes a number + the threshold-variance gate form resolves from the near-cliff σ.
+2. **Collect the owner rulings** (Phase-2 authorization is the load-bearing one; then dissolution/bounds/price-don't-fix
+   bookkeeping ratifications; pending-visibility fork; Option-A lock; UCB posture; max-n).
+3. **If Phase-2 authorized:** implementation plan → drl review → build behind the flag → executable B replay
+   (acceptance = gpt's ten invariants + round-22 pins 3a/3b: exactly-one-stage-entry-MINT wording; PBRS-only layer
+   fence on the B≡A-at-boundary identity). Then Option-A lock-burden quantification.
+4. **Then:** absolute-unit power/UCB finalization → final fresh-context adversarial pass → no-peek freeze (owner
+   signs) → GPU decision (owner). Order per PDR-0089 #6 (both primes converge: IQR before adversarial pass).
+5. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); pending observation
    esper-lite-obs-73926b0291 (longdiag pgrep scar) nearing its 2026-07-26 expiry — promote or dismiss.
