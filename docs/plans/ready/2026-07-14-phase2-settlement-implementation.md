@@ -1,119 +1,169 @@
-# Phase-2: non-selectable settlement implementation (flag-on-HOLDING, default-OFF) + executable B-path replay
+# Phase-2: non-selectable settlement implementation (flag-on-HOLDING, default-OFF) + executable B-path replay — REVISION 2
 
 ```yaml
-status: ready-pending-review
+status: ready-pending-re-review
 created: 2026-07-14
-owner_authorization: PDR-0090 (convergence endorsement; scope = gpt-prime item 10)
-scope: default-off implementation + tests + executable replay + drl review + docs
-NOT_in_scope: training-config activation; GPU use; any obs/observation change (pending-visibility fork is OWNER-OPEN, PDR-0090 #6)
-spec: docs/analysis/2026-07-14-permanence-visible-preregistration.md §2 (rounds 15–21 integrated)
-acceptance: the seven replay gates (§2.6) + gpt-prime's ten Phase-2 invariants + round-22 pins (PDR-0089 #3)
-reviewed_by: []   # drl-expert review REQUIRED before build (CLAUDE.md)
-tracker: esper-lite-<phase2-task>
+revised: 2026-07-14 (rev 2 — closes drl plan-review B1–B5/N1–N5 + the W1 window-targeting finding + round-23 safety semantics)
+owner_authorization: PDR-0090 (convergence endorsement; scope = default-off impl + tests + replay + drl review + docs)
+NOT_in_scope: training-config activation; GPU use; obs changes (pending-visibility = OWNER FORK, see §F2)
+spec: docs/analysis/2026-07-14-permanence-visible-preregistration.md §2 (rounds 15–21 + the §2.5.9 W1 amendment)
+acceptance: §2.6 seven gates + the TEN replay areas (§A below, transcribed) + 8 construction invariants (§B) + round-22 pins as re-worded in N5
+reviewed_by: [drl-expert plan review r1: REQUEST-CHANGES (B1–B5, N1–N5) — all addressed below; re-review pending]
+tracker: esper-lite-57a56da421
+owner_forks_open: [F1 abort-payment semantics, F2 pending-visibility/G-OBSERVABILITY]
 ```
 
-## Design constraints (non-negotiable, from the frozen-track spec)
+## §0. Epoch-phase placement (B1 — the load-bearing pin; everything below assumes it)
 
-1. **PENDING is a FLAG on HOLDING** (PDR-0088/0090): `committed=True` on `SeedState`; NO stage change at
-   request; NO `epochs_in_stage` reset; the seed stays in `active_slot_list` (measured every epoch) mechanically.
-2. **Request instant is STERILE** (§2.5.4): only `fossilize_cost=−0.01` charges; `legitimacy_request` frozen;
-   NO contribution-conditioned payment of any sign (the `0.1·c` grading, spot-c gate, −0.2 branch, cf-graded
-   penalties all move to the boundary keyed on `q_settle`).
-3. **Boundary is schedule-determined** (§2.2): global cadence every `W_settle=10` epochs; settle at the first
-   boundary ≥ request + `min_window=5` WITH ≥5 valid post-request measurements, else extend to the next boundary
-   (§2.3 zero-slack rule). Requests too late for window+horizon are MASKED (§2.5.6), never terminal-settled.
-4. **Two quotes** (§2.3): `q_decision` (lagged EWMA, analyst-side, NO payment keys on it) vs `q_settle`
-   (span-5 EWMA over post-request measurements, ≥5 valid, locked at the boundary — the payout basis).
-5. **Boundary package** (§2.4): fixed prior = the EXPRESSION `0.5 + 3.0*math.tanh(1.0/3.0)` × `legitimacy_request`,
-   **discount-neutral ÷γ^d** (d = request→boundary delay; index convention unit-tested), gated on
-   `q_settle ≥ 1.0` (gate form raw|lcb per config — the noise read decides; LCB = q̃ − z·s/√n, z=1); the
-   sign-symmetric −0.2 branch also boundary-paid and ÷γ^d; signed annuity begins (rate `q_settle`/epoch to
-   horizon, `T_annuity ≡ T_provisional` — identical sign/clip/eligibility, §2.5.2: negative q_settle → negative
-   annuity; `None` never becomes 0); maintenance starts at the boundary.
-6. **Option-A global audit lock** (§2.5.7, ratified conditionally): ONE pending fossilization at a time;
-   policy-controlled morphology ops (GERMINATE/PRUNE/SET_ALPHA/second FOSSILIZE) suspended request→boundary via
-   masking; host training + validation continue. Lock-burden telemetry REQUIRED (locked-epoch fraction,
-   suppressed-op counts by type, quote-stratum overlap) — quantified before freeze.
-7. **Fail-closed flag discipline** (the `escrow_fossil_settlement` precedent, contribution.py:167): the feature
-   activates only via a validated `FossilSettlementConfig` OBJECT; construction-raise if combined with
-   `drip_fraction > 0` (F-drip mode fence) or with `RewardMode.ESCROW`.
-8. **No observation changes.** The pending-visibility fork is owner-open; Phase 2 instruments the aliasing cost
-   (value-error during open windows) as TELEMETRY only.
+The live pipeline per epoch (phase-1 finding, verified): **metrics phase** (`record_accuracy` ticks stage clocks;
+counterfactual matrix computed; val_acc recorded) → **reward phase** (`compute_reward` on pre-action state,
+action_execution.py:1089) → **dispatch phase** (mutations, :1292–1348; `seeds_fossilized` bumps here) →
+**step_epoch** (:1643).
 
-## Touchpoints (build order)
+Pinned placements:
+- **Request (epoch R):** the FOSSILIZE action routes to request-issuance at DISPATCH phase of R (after R's reward).
+  The request-row reward is computed with the pre-action HOLDING state and `action==FOSSILIZE` (branch table §2).
+  c_R was recorded at R's metrics phase, BEFORE the request existed → c_R belongs to `q_decision`, excluded from
+  `q_settle`.
+- **Window rows (R+1 … B−1):** seed HOLDING+committed; masking prevents targeting; the LEDGER pays the window
+  provisional (§1/W1). Measurements c_{R+1}…c_{B−1} accumulate to the settlement window.
+- **Boundary (epoch B):** `q_settle` locks at REWARD phase of B and INCLUDES c_B (recorded at B's metrics phase,
+  before the lock — §2.3's "collected after the request, before the boundary [settlement act]"). Valid window =
+  **[R+1, B]**, giving B−R measurements; the ≥5 rule requires **B ≥ R+5**, else extend to the next boundary
+  (zero-slack §2.3). The boundary package (prior|−0.2 branch ÷γ^d with d = B−R, + annuity epoch 1) is paid at B's
+  REWARD phase via the ledger adapter (summed into the env step reward per §2.5.7 — NOT keyed on the policy action,
+  which is WAIT-elsewhere). **Provisional is explicitly suppressed at B** (the annuity replaces it from B inclusive
+  — G-EVENT-ORDER: no epoch pays both, none pays neither). The HOLDING→FOSSILIZED transition executes at DISPATCH
+  phase of B (after B's reward) — reusing the certified A-path mechanics.
+- **Maintenance starts B+1** (`num_fossilized_seeds` bumps at B's dispatch → first charged B+1). This EQUALS arm
+  A's semantics (commit at t_c → first `fossilized_rent` at t_c+1): G-MATCHED-CONTROL's maintenance leg asserts
+  B+1 ≡ t_c+1 parity, resolving the "starts at the boundary" wording (B1d).
+- ÷γ^d index convention: d = B − R (request row to boundary row, both reward-phase); pinned by unit test.
 
-### 1. Leyline (contracts first)
-- `FossilSettlementConfig` dataclass: `w_settle=10`, `min_window=5`, `ewma_span=5`, `min_measurements=5`,
-  `q_threshold=1.0`, `gate_form: Literal["raw","lcb"]`, `lcb_z=1.0`; the premium as a computed property
-  evaluating the expression in-code (PDR-0084 #2 — never a hand-rounded literal).
-- Telemetry: `FOSSILIZE_REQUESTED` / `FOSSILIZE_SETTLED` event types + payloads (§2.7/B10): request epoch,
-  legitimacy_request, boundary epoch, d, q_settle, branch (prior|noncontributing), measurements count,
-  extension count; lock-burden counters. New `RewardComponentsTelemetry` fields: `settlement_prior`,
-  `settlement_annuity` (leyline/telemetry_contracts.py:41).
-- Protocol version stamp for the settlement (§2.7) + a positive `settlement_enabled` config stamp in
-  TRAINING_STARTED (rides the TIP observation about positive stamps).
+## §1. W1 (NEW, found verifying B1a): the window provisional is LEDGER-DRIVEN
 
-### 2. Kasmina (`src/esper/kasmina/slot.py`)
-- `SeedState.committed: bool = False`, `settlement_boundary_epoch: int | None`, `legitimacy_at_request:
-  float | None`. At request: freeze the alpha controller (α, target, speed, curve — no mutations while
-  committed; assert in `set_alpha`/controller entry points), set the fields. NO transition call.
-- At settlement: the existing fossilize path executes (`advance_stage`/`transition(FOSSILIZED)`) — reuses the
-  certified A-path mechanics (exactly one stage-entry mint, at the boundary — round-22 pin 3a).
-- Guard: `prune()`/`advance_stage()` on a committed seed raises (uncancellable, §2.1) — masking is primary,
-  this is the defensive assert.
+The reward pays only the TARGETED slot (`action_execution.py:944-947`); the pending slot leaves the slot head's
+legal set → it can never be targeted → §2.5.9's "provisional stream RUNS" is unreachable via policy targeting, and
+negative carry would silently stop at request (F8 reborn through the mask). **Fix:** for window epochs [R+1, B−1]
+the settlement ledger pays the pending seed's measured c_t through the FULL live provisional transform (identical
+code path at the pending seed's inputs), summed into the env step reward. Consequences, stated honestly:
+- Deterministic every-epoch cadence vs S's when-targeted cadence = a real protocol-package estimand component
+  (labeled alongside the Option-A lock; pre-reg §2.5.9 amended, PDR-0091).
+- Negative c flows every window epoch — the hatch stays closed by construction.
+- G-CONTINUITY's synthetic asserts under the always-targeted comparator (the phase-1 harness convention), where
+  B−S ≈ 0 holds exactly for constant inputs.
 
-### 3. Settlement ledger (`src/esper/simic/rewards/settlement.py`, NEW, pure functions)
-- Per-slot ledger keyed by `seed_generation_id` (§2.5.5): request record (epoch, legitimacy, generation),
-  post-request measurement accumulator, boundary resolution (`next_boundary(request_epoch)` +
-  extension logic), `q_settle` EWMA (span 5, adjust=False — same convention as the phase-1 formula test,
-  frozen per PDR-0089), gate evaluation (raw|lcb), boundary package computation (prior ÷γ^d both branches),
-  per-epoch annuity stream to horizon.
-- Pure-function core so the replay drives it directly; trainer integration is a thin adapter.
+## §2. Request-row branch table (B2 — which `action==FOSSILIZE` branches apply)
 
-### 4. Action layer (`src/esper/simic/training/action_execution.py`, `handlers/fossilize.py`,
-`src/esper/tamiyo/policy/action_masks.py`)
-- Flag ON + op==FOSSILIZE on eligible HOLDING seed → request issuance (re-interpret FOSSILIZE, no schema bump —
-  §2.1/S1): validate FRESH staleness (STALE/NEVER → masked/invalid, §2.5.3 — never zero-priced), record request,
-  reward sees the sterile instant.
-- Masking: pending slot leaves the slot head's legal set (PRIMARY suppression, §2.5.9); Option-A lock masks
-  morphology ops globally while a window is open; late requests masked (§2.5.6: insufficient time for
-  min_window + ≥5 measurements before horizon). Mask math must mirror the legality predicates exactly
-  (BUG-020 precedent: mask and validity must agree).
-- Lock-burden counters emitted per epoch while locked.
+| Code site | At the request row | Rationale |
+|---|---|---|
+| fossilize action_shaping (contribution.py:824–863: base+0.1·c+tanh, penalties −1.0/−0.5/ransomware/−0.2) | **SUPPRESSED**; only `fossilize_cost=−0.01` charges | sterile instant, §2.5.4 |
+| cf<0 attribution zeroing (:644–654) | **DISABLED** — the row pays provisional as a continuing-HOLDING row (negative carry flows) | otherwise the request forgives negative carry for free = audit-F8 at the request row |
+| holding_warning terminal exemption (:709) | **KEPT** — no warning at the request row | the request ends indecision (§2.5.9; the +27.7 relief leg of G-MATCHED-CONTROL) |
 
-### 5. Reward path (`src/esper/simic/rewards/contribution.py`, flag-gated branch)
-- Request row: suppress `_contribution_fossilize_shaping` + tanh bonus + `0.1·c`; charge only `fossilize_cost`.
-- Window rows: provisional stream runs mechanically (seed is HOLDING + measured); `holding_warning` suppressed
-  for `committed=True` (defensive assert — masking should make the state unreachable; the replay asserts it).
-- Boundary row: `settlement_prior` (or the −0.2 branch) ÷γ^d + annuity begins + maintenance starts.
-- Post-boundary rows: `settlement_annuity` = `T_provisional(q_settle)` per epoch (fossils' `bounded_attribution`
-  stays 0 — the annuity is a NEW component, never additive with provisional for the same epoch: G-EVENT-ORDER).
-- PBRS: NO new potential, NO stage change at request → nothing to do (the flag construction's whole point).
+N1 made explicit: the request row PAYS provisional normally (bounded_attribution stream) + `fossilize_cost` in
+action_shaping — two different code regions; G-EVENT-ORDER's "request epoch pays provisional once + −0.01".
 
-### 6. Executable B-path replay (extend `tests/simic/rewards/replay/`)
-- `PathScenario` kind "B": request at dwell r, window d (with extension cases), driving the REAL flagged
-  production path (compute_reward + settlement module), plus S and A comparators.
-- The seven gates as tests (§2.6): G-CONTINUITY (B−S contribution-stream ≈0 at 1e-6, +/0/− constant c);
-  G-MATCHED-CONTROL (B−A: prior PV, both branches, cost, warning-cessation parity, PBRS semantics, maintenance
-  start); G-DESIGNED-DELTA (residual = Δ_obs − Δ_designed(x) ≈ 0; Δ_designed's PBRS term from the phase-1
-  harness values); G-PBRS (**exactly one STAGE-ENTRY MINT, at the boundary** — round-22 pin 3a wording; the
-  legitimate pre-cap HOLDING climb during the window must NOT fire it); G-EVENT-ORDER (half-open; no epoch pays
-  both provisional and annuity, none pays neither); G-CROSS-SLOT (adversarial neighbor-op sequences under the
-  lock); G-THRESHOLD-VARIANCE (already built; wire the configured gate form).
-- Layer fence (round-22 pin 3b): the B≡A-at-boundary identity is asserted for the PBRS layer ONLY; the
-  contribution and warning layers get their own explicit B−A/B−S expectations.
-- Case matrix: A6 dimensions incl. missed-measurement extension, late-request mask, terminal-edge,
-  generation-turnover, multi-slot adversarial.
-- **No-unenumerated-effects sweep:** a test greps/inspects that `committed` is read ONLY at the enumerated
-  sites (masking, warning suppression, controller freeze, settlement module, telemetry) — the PDR-0088
-  reversal-trigger guard.
+## §3. The boundary package + T_annuity enumeration (B3, N2)
 
-### 7. Docs
-- Pre-reg §2.1/§2.6 implementation-status annotations (design → implemented-behind-flag, default-OFF).
-- README flag documentation. This plan moves to completed/ when landed.
+At B (reward phase), from the locked `q_settle` and boundary-frozen inputs:
+- **Branch:** `q_settle ≥ 1.0` (or LCB form per config) → prior = `(0.5 + 3.0*math.tanh(1.0/3.0)) ×
+  legitimacy_request ÷ γ^d`; else → `−0.2 ÷ γ^d`. **The −0.5-damage/−0.3-ransomware request-instant branches are
+  intentionally DROPPED at the boundary** (N2): the harmful-seed case is carried by the SIGNED annuity — a negative
+  `q_settle` pays negative every epoch to horizon, strictly stronger than a one-shot −0.5. The replay asserts the
+  F8 case (bleeding seed: B's total ≤ S's; no free escape).
+- **T_annuity ≡ T_provisional at boundary-frozen inputs (enumerated):** annuity/epoch = `contribution_weight ×
+  attributed(c:=q_settle; progress:=progress_B) × attribution_discount(cf_B) × timing_discount(germination_epoch)`
+  where `progress_B = val_acc_B − acc_at_germination`, `cf_B` = counterfactual at B, and the attributed() branches
+  are the shipping ones (progress-gating; sqrt/formula cap; negative passthrough for q_settle<0). **ratio_penalty is
+  EXCLUDED** (it is the spot-spike anti-gaming term; the spot channel is structurally closed by the two-quote
+  design; including it would double-penalize a smoothed, policy-unselectable statistic). Computed ONCE at B; paid
+  per epoch [B, horizon]; truncated by construction.
+- G-CONTINUITY target defined (B3): constant c AND constant val_acc synthetic → provisional/epoch ==
+  annuity/epoch exactly; asserted at 1e-6.
+
+## §4. Safety and governor semantics (B4 + round-23; two classes — converged content adopted)
+
+- **Ordinary governor / resource-management morphology** (scheduled prunes, auto-advance, non-emergency paths):
+  **SUSPENDED by the Option-A lock** during any open window — the coherent reading of the ratified lock (any op
+  that moves the ensemble-relative quote breaks the cross-slot construction, whoever issues it).
+- **Hard safety interventions** (governor panic/rollback, invalid-state): **OVERRIDE commitment — safety always
+  wins.** Executes immediately; emits `FOSSILIZE_ABORTED_BY_SAFETY`; releases the global lock; preserves
+  generation-ID integrity; lock-burden + abort telemetry mandatory; a material abort rate is reported as a
+  protocol failure, never silently censored.
+- **OWNER FORK F1 — abort PAYMENT semantics (primes diverge; both implemented behind config, replay tests both):**
+  (a) claude-prime: settle at the scheduled boundary on q_settle-as-measured-so-far (liability preserved — an
+  abort must not erase a signed liability; SETTLEMENT-INTERRUPTED outcome class, censored from P2/gate cohorts by
+  pre-registration); (b) gpt-prime: pay NO prior and NO annuity; the request stays in intention-to-treat P2 and
+  P1; abort reported as a guardrail event. Owner picks before freeze.
+- The uncancellability assert is SCOPED to `initiator=="policy"` (N3): freeze-by-not-scheduling (mask SET_ALPHA;
+  skip controller stepping for committed seeds); no hard assert on non-policy `set_alpha` paths.
+
+## §5. Fail-closed + OFF-identity (B5)
+
+- **Flag OFF ≡ shipping, replay-asserted:** the phase-1 goldens ARE the pre-flag record — the entire phase-1 suite
+  passing on the flag-off path is the byte-identity proof for the reward stream; plus a behavioral sweep: flag ON
+  with `committed` forced False everywhere ⇒ reward stream identical to OFF (stronger than the grep sweep, which
+  is kept as a fast guard).
+- **SeedState serialization:** the new fields (`committed`, `settlement_boundary_epoch`, `legitimacy_at_request`)
+  enter `to_dict`/`from_dict` unconditionally (no-legacy: required keys, all call sites updated; pre-change
+  checkpoints are incompatible — documented breakage per house policy). Mid-window save/load round-trip test
+  (ledger + SeedState) required.
+- Construction-raises: settlement config with `drip_fraction > 0`; with `RewardMode.ESCROW`; activation via a
+  validated `FossilSettlementConfig` OBJECT only (escrow-precedent fail-closed, contribution.py:167).
+
+## §6. Masking + validity (N4 — both sides of BUG-020, enumerated)
+
+| New rule | Mask side (action_masks.py) | Validity side (must agree) |
+|---|---|---|
+| Pending slot off the slot head | slot-head legal-set excludes committed slots (builder learns `committed`) | `_parse_sampled_action` validity + handler `can_fossilize` (fossilize.py:157) reject committed targets |
+| Option-A global suspension | morphology ops masked for ALL slots while any window is open (global signal threaded into the builder) | `_preflight_lifecycle_mutation` rejects morphology ops while locked; ordinary-governor paths check the lock (§4) |
+| Late-request mask | FOSSILIZE masked when no boundary ≥ R+min_window with ≥5 achievable measurements before horizon | request-issuance validity re-checks the same predicate |
+| FRESH-required | FOSSILIZE masked for STALE/NEVER_MEASURED seeds (§2.5.3) | request-issuance validity re-checks |
+
+## §A. The TEN replay acceptance areas (transcribed — was un-enumerated; reviewer gap)
+
+1. **Pending-observation/value-head legibility (G-OBSERVABILITY)** — **OWNER FORK F2**: gpt-prime requires a
+   source-level observability proof (is `committed` in the obs? are masks network inputs? is epoch/cadence visible
+   enough to derive time-to-boundary? is the previous action in the recurrent input?) and, failing it, two
+   common-schema fields for ALL arms (`fossilization_pending` 0/1 + normalized countdown; arm A emits zeros;
+   explicit obs-schema version). claude-prime endorses invisibility + instrumented aliasing telemetry + a
+   pre-registered SYMMETRY CHECK (critic error concentrated in open-window epochs in arm B only; if it appears in
+   A it is not aliasing). **The source-level observability proof runs REGARDLESS (queued task) — both resolutions
+   need its facts.** Until the owner rules, the plan implements NO obs change and ships the telemetry + symmetry
+   check.
+2. Active-slot/ablation continuity (committed seed stays in `active_slot_list`, measured every epoch).
+3. Exactly one HOLDING→FOSSILIZED transition, at B — and G-PBRS asserts the **harness per-scenario Δ** (N5: the
+   re-accrual is a spread climb, not a discrete mint event; PDR-0088 #2's form; round-22 pin 3a's intent honored —
+   the boundary transition is the ONLY stage entry).
+4. No unenumerated `committed=True` effects (grep sweep + the §5 behavioral sweep).
+5. Signed contribution continuity (W1 ledger provisional + §3 annuity; negative carry never escapes: request row,
+   window, boundary, post-boundary all asserted).
+6. Event ordering (§0 placements; half-open intervals; no epoch pays both provisional and annuity, none neither).
+7. Cross-slot lock (adversarial neighbor-op sequences; ordinary-governor suspension included).
+8. Threshold variance (configured gate form raw|lcb from the noise read).
+9. Late-request masking (+ estimand stratification note per D5).
+10. Generation-ID isolation (ledger keyed by generation; reuse cannot inherit pending state or annuity).
+
+## §B. The 8 construction invariants (gpt round-23, transcribed)
+
+No `epochs_in_stage` reset at request · seed remains active+ablatable · α and manipulable controls freeze at
+request · request irreversible BY POLICY (safety per §4) · pending slot leaves the policy's morphology target set ·
+holding_warning suppressed · exactly one HOLDING→FOSSILIZED transition at B · fossil re-accrual begins only
+post-boundary (asserted via harness Δ per §A.3).
+
+## Touchpoints (build order — unchanged from rev 1 except as amended above)
+1. Leyline contracts (FossilSettlementConfig + gate_form + abort_payment_mode enum; FOSSILIZE_REQUESTED /
+   FOSSILIZE_SETTLED / FOSSILIZE_ABORTED_BY_SAFETY events; settlement components in RewardComponentsTelemetry;
+   positive settlement/obs-schema stamps in TRAINING_STARTED).
+2. Kasmina: committed fields + policy-scoped uncancellability + serialization (§5).
+3. `settlement.py` pure ledger (§0 placements; W1 window provisional; §3 boundary package; §4 abort branches).
+4. Action layer: request routing; §6 mask/validity table; lock-burden counters.
+5. Reward path: §2 branch table; ledger adapter summation; aliasing telemetry + symmetry check.
+6. Replay B path: §A areas + §B invariants + both F1 branches.
+7. Docs + pre-reg annotations.
 
 ## Review + landing discipline
-drl-expert plan review BEFORE build (this document). Build strictly flag-off; full suite + replay green;
-drl-expert code review before commit (the arc's reviewed-commit pattern); lock-burden + aliasing telemetry
-verified in the replay. NO training-config activation anywhere in this plan's scope.
+Re-review of THIS revision before build (same reviewer). Build flag-off; suites green; drl code review before
+commit; lock-burden + aliasing telemetry verified in replay. No training activation anywhere in scope.
 ```
