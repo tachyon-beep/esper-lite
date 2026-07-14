@@ -51,13 +51,16 @@ farm fossils.
   guardrail-baseline table; **no reads outstanding.** **The ONLY remaining pre-freeze gate is owner sign-off on the other
   flags** (HRA posture, P1-vs-P2 primary, τ_acc + MDEs + guardrail materiality, n/seeds/budget/device; settlement:
   re-interpret-FOSSILIZE vs new-op, boundary policy, EWMA-vs-min-window, flat-premium; floor: form + f + op-head-only).
-  No-peek freeze; GPU held. **FREEZE ON HOLD (round-15, PDR-0081).** Both primes converged on ~12 amendments (folded into the
-  pre-reg's §ROUND-15 table: per-RUN P2 power [old E5 was pseudoreplication], two-quote settlement design, signed-value invariant,
-  G-LEDGER, 3-test G-FARM, decision-level G-QUALPRUNE + bootstrap CI, pre-registered critic calibration, "endpoint-matched" floor
-  wording, verdict taxonomy) and disagree on exactly ONE thing = the commitment premium (Group A: A0 premium-0 + verdict-changing
-  raw-logit gate [recommended] vs A+ bake +0.5–1.0 now). Freeze blocked on THREE: (1) owner's premium call; (2) the paired-RUN P2
-  power number + blinded-reassessment rule + frozen max-n — NO obs-v4/K=4 pilot exists so n=10 is NOT pre-certifiable; (3) one more
-  adversarial pass (round 15 found a fatal-class flaw + a stats error after 14 rounds — new-flaw rate isn't polish-level yet).
+  No-peek freeze; GPU held. **FREEZE ON HOLD (rounds 15–17, PDR-0081/0082).** Round-15's ~12 converged amendments folded (per-RUN P2
+  power, two-quote settlement, signed-value invariant, G-LEDGER, 3-test G-FARM, decision-level G-QUALPRUNE + bootstrap CI, critic
+  calibration, endpoint-matched floor, verdict taxonomy). **Premium fork RESOLVED by convergence** (gpt adjudication + claude r17
+  concession): matched-control — retain the existing flat prior, remove ALL c-graded commit-time payments, NEVER retune. **Reward-path
+  audit COMPLETE** (docs/analysis/2026-07-14-fossilize-reward-path-audit.md): PR28 confirmed (spot-c threshold gate + more), the "tanh
+  bonus" is CONSTANT ≈0.964 → existing flat prior ≈1.464 not 0.5 (⚠ one-line owner confirm: consolidated 1.464 vs 0.5-alone), F5 PBRS
+  dwell-forfeiture −0.31..−0.46 → G-LEDGER, F8 negative-carry escape hatch LIVE today → structural sign fix. Gates respecified (r16):
+  GATE-DOM = per-run paired SLOPE of pre-floor p_FOSS on q_decision (not raw logits — gauge; not marginal Δp — state-dependent
+  dominance), GATE-INFL bottom-tercile; one-sided-in-B; verdict-changing. Freeze blocked on: ⚠ confirm; paired-run power calc
+  (P2+both gates, blinded reassessment, frozen max-n); one more adversarial pass (r13–r16 each found a load-bearing flaw). No GPU.
 - **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
   satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
   over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
