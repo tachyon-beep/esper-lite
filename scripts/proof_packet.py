@@ -168,7 +168,11 @@ PROOF_PROFILES: tuple[ProofProfile, ...] = (
 BLUEPRINT_ECONOMY_REWARD_MODES: frozenset[str] = frozenset(
     mode.value
     for mode in RewardMode
-    if ContributionRewardConfig(reward_mode=mode).supports_blueprint_economy_evidence
+    # Pure capability introspection (FOSSILIZE unreachable) — opt in past the ESCROW
+    # fossil-settlement fail-closed guard rather than weakening it.
+    if ContributionRewardConfig(
+        reward_mode=mode, escrow_fossil_settlement="configured"
+    ).supports_blueprint_economy_evidence
 )
 ALL_REWARD_MODE_VALUES: frozenset[str] = frozenset(mode.value for mode in RewardMode)
 
