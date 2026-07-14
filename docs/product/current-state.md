@@ -46,9 +46,12 @@ farm fossils.
   non-selectable-settlement spec (annuity, quote from pre-request measurements only, one-shot-bonus netting to kill the
   spot channel, all holes closed) + the re-scoped gradient-floor spec (per-num_valid differentiable floor, op-head-only,
   keeps the PRUNE minimum). Metrics P1(terminal acc)/P2(quote-graded commitment) + guardrails G-FARM/G-QUALPRUNE/G-STAB.
-  **OPEN — owner sign-off needed on the decision flags** (sequencing, HRA posture, thresholds/MDEs, n/seeds/budget, new-op
-  vs re-interpret FOSSILIZE, boundary policy, floor form) + **3 remaining r9 reads before FREEZE** (PRUNE-legality,
-  destruction hazard, val@1 ordering). **No-peek freeze order; GPU held until frozen + signed.**
+  **Sequencing DECIDED = STAGED (owner).** The "3 remaining reads" are ALREADY SATISFIED by READ 5 (PRUNE-legality 100%,
+  hazard 0.109/0.127, val@1 ~90% pre-mediator, G-QUALPRUNE baseline FOSS +6.9/+6.6 vs PRUNE +6.1/+5.9) → frozen into the
+  guardrail-baseline table; **no reads outstanding.** **The ONLY remaining pre-freeze gate is owner sign-off on the other
+  flags** (HRA posture, P1-vs-P2 primary, τ_acc + MDEs + guardrail materiality, n/seeds/budget/device; settlement:
+  re-interpret-FOSSILIZE vs new-op, boundary policy, EWMA-vs-min-window, flat-premium; floor: form + f + op-head-only).
+  No-peek freeze; GPU held until frozen + signed.
 - **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
   satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
   over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint

@@ -13,7 +13,7 @@ READ 5 retracts the READ-4 "shelter / floor-destroys-good-seeds" half: IPCW prun
 
 **1.1 What it buys:** attributes the two interventions instead of confounding them. B−A isolates the settlement under the existing floor; C−B isolates the incremental gradient-restoration; C−A is the combined bet. The ship/no-ship verdict rests only on the shelter-independent contrasts (B−A, C−A).
 
-**1.2 Sequencing — RECOMMENDED staged (OWNER FLAG).** Coupling rationale = "either-alone-degenerate": settlement-alone → commits stay 93–94% floor-forced (op head can't act selectively); floor-fix-alone (omitted D arm) → PARK under the −113-forfeiting reward → zero fossils (unsafe, never run). Staged: **Exp 1 = A vs B** (settlement, floor held; cleanest single-factor; pre-registered expected-null on selectivity = the degeneracy signature); **Exp 2 = add C** (gradient floor, settlement ON; tests coupled hypothesis). Tradeoff: A/B-first is cleanest + de-risks the settlement but can't show selective commitment (its P2 is an expected-null); triangular-in-one tests coupling in one shot but adds a factor + 3n runs.
+**1.2 Sequencing — DECIDED: STAGED (owner, 2026-07-14).** Coupling rationale = "either-alone-degenerate": settlement-alone → commits stay 93–94% floor-forced (op head can't act selectively); floor-fix-alone (omitted D arm) → PARK under the −113-forfeiting reward → zero fossils (unsafe, never run). Staged: **Exp 1 = A vs B** (settlement, floor held; cleanest single-factor; pre-registered expected-null on selectivity = the degeneracy signature); **Exp 2 = add C** (gradient floor, settlement ON; tests coupled hypothesis). Tradeoff: A/B-first is cleanest + de-risks the settlement but can't show selective commitment (its P2 is an expected-null); triangular-in-one tests coupling in one shot but adds a factor + 3n runs.
 
 **1.3 Arms** (all obs-v4/L1, K=4, paired fresh inits, identical telemetry): A control (SHAPED, no settlement, hard floor); B (non-selectable settlement §2, hard floor); C (settlement + gradient-restoring per-num_valid differentiable floor §3). Frozen identical: critic (HRA posture — OWNER FLAG), entropy/optimiser/lr, γ=0.995, gae_λ=0.95, K=4, n_envs=12, max_epochs=150, all reward terms except the settlement, obs-v4/L1, governor, cifar_baseline, slots r0c0-2, param_budget=500000, per_head_advantage_norm=false. Only toggles: A→B `fossil_settlement`; B→C `op_floor_primitive`. Loser deleted post-experiment (no-legacy). r9 is archival, NOT the concurrent control.
 
@@ -31,11 +31,16 @@ READ 5 retracts the READ-4 "shelter / floor-destroys-good-seeds" half: IPCW prun
 
 **1.10 Frozen-abort smoke** (optional, unscored): short floor-fix-alone run (diff floor ON, settlement OFF, current reward), pre-registered to ABORT on fossils→0/PARK collapse. Backstops degenerate leg 2.
 
-**1.11 Verification reads + plug-in:** READ 5 landed (fired the retraction; consumed above). Remaining before freeze: (1) PRUNE-legality at pinned WAIT decisions (age≥5) → G-QUALPRUNE population + §3 PRUNE-at-min baseline; (2) empirical per-decision destruction hazard (reconcile 55%/13ep) → G-QUALPRUNE/G-DESTROY-TOTAL baseline; (4) val@1 event-ordering → intrinsic-vs-residual label on B−A. Plus owner sign-off.
+**1.11 Verification reads — ALL SATISFIED by READ 5 (values confirmed from `read5_out.txt`, 2026-07-14). FROZEN guardrail baselines:**
+- PRUNE-legality at pinned WAIT decisions (age≥5): **100% / 100%** (1254/1254 s41, 1448/1448 s42) → the age-mask does not bite; the G-QUALPRUNE population is the age≥5 pinned cohort.
+- Empirical per-decision destruction hazard `P(op=PRUNE | pinned HOLDING, age≥5, slot-targeted)`: **0.109 (s41) / 0.127 (s42)**, k̄=1.8/1.7 legal pinned decisions/lifecycle → the **G-DESTROY-TOTAL baseline** arm C is read against.
+- Quality-pruning selectivity (the **G-QUALPRUNE baseline**, must NOT degrade in C): FOSS-destined lifetime LOO **+6.89/+6.58** vs PRUNE-destined **+6.08/+5.86** (pruning removes worse seeds).
+- val@1 event-ordering: pruned at delay≤1 = **9.7%/9.4%** → val@1 is **pre-mediator for ~90%** → the B−A residual is labeled "~90% intrinsic, ~10% residual-beyond-no-PRUNE."
+Remaining before freeze: **owner sign-off on the §1.13/§2.8/§3.5 flags only** (no reads outstanding).
 
 **1.12 Freeze order (no-peek):** (1) land remaining reads on r9; (2) owner ratifies flags + freeze table; (3) freeze; (4) run arms; (5) score. Calibration touches only r9/read data, never the new arms.
 
-**1.13 Owner flags:** sequencing (staged recommended vs triangular); HRA posture; P1 vs P2 banked-primary per leg; τ_acc + MDEs + guardrail materiality; n/seeds/budget/device.
+**1.13 Owner flags:** ~~sequencing~~ **DECIDED: staged (owner)**; HRA posture; P1 vs P2 banked-primary per leg; τ_acc + MDEs + guardrail materiality; n/seeds/budget/device.
 
 ---
 
