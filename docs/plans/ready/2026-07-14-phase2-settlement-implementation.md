@@ -47,12 +47,16 @@ The reward is computed exactly once per env step for the single `target_slot`'s 
 component on the target). Masking the pending slot therefore silences not just the provisional but ALL of its
 per-seed components (pbrs_bonus `:721-726`, holding_warning `:706-719`, blending_warning, synergy) — and,
 conversely, any targeting leak (see the WAIT gap below) double-pays them all. **Fix (re-review W1-A):**
-- **For window epochs [R+1, B−1] the settlement ledger is the SOLE OWNER of the committed seed's entire
+- **For window epochs [R+1, B] the settlement ledger is the SOLE OWNER of the committed seed's entire
   per-seed reward row** — it reproduces, each epoch, exactly what an ALWAYS-TARGETED HOLDING seed would earn
   under the production law at that epoch's actual inputs: provisional (c_t fresh, or the contribution=None
   branches — proxy/zero — when unmeasured; NO carry, NO imputation — N-r2b), the within-HOLDING PBRS
   climb/drag, warning semantics per the §2 table (suppressed for committed), synergy at the seed's inputs.
-  Summed into the env step reward.
+  Summed into the env step reward. **Scope includes epoch B for the HOLDING row (re-check r3 cleanup): the
+  seed is HOLDING at B's reward phase and the A-committed-at-boundary comparator pays the HOLDING PBRS climb
+  at B — the ledger pays it too, with provisional-suppressed-at-B the SOLE exception (the annuity + prior
+  layer on top at B per §0/§3). B−A is then boundary-clean by construction, no one-epoch discontinuity for
+  Δ_designed to price.**
 - **Defense-in-depth reward-path guard:** the policy path suppresses ALL per-seed components when
   `seed_info.committed` — so even the masking edge cases cannot double-pay. Named leak vectors the guard
   closes (re-review): `slot_by_op[LifecycleOp.WAIT]` is a SEPARATE tensor from the morphology masks
@@ -86,21 +90,26 @@ At B (reward phase), from the locked `q_settle` and boundary-frozen inputs:
   intentionally DROPPED at the boundary** (N2): the harmful-seed case is carried by the SIGNED annuity — a negative
   `q_settle` pays negative every epoch to horizon, strictly stronger than a one-shot −0.5. The replay asserts the
   F8 case (bleeding seed: B's total ≤ S's; no free escape).
-- **T_annuity ≡ T_provisional at boundary-frozen inputs (enumerated):** annuity/epoch = `contribution_weight ×
-  attributed(c:=q_settle; progress:=progress_B) × attribution_discount(cf_B) × timing_discount(germination_epoch)`
-  where `progress_B = val_acc_B − acc_at_germination`, `cf_B` = counterfactual at B, and the attributed() branches
-  are the shipping ones (progress-gating; sqrt/formula cap; negative passthrough for q_settle<0). **ratio_penalty is
-  EXCLUDED** (it is the spot-spike anti-gaming term; the spot channel is structurally closed by the two-quote
-  design; including it would double-penalize a smoothed, policy-unselectable statistic). Computed ONCE at B; paid
-  per epoch [B, horizon]; truncated by construction.
+- **T_annuity ≡ T_provisional at boundary-frozen inputs — LITERALLY, all branches (re-check r3 reversal of the
+  earlier exclusion):** annuity/epoch = `contribution_weight × attributed(c:=q_settle; progress:=progress_B) ×
+  attribution_discount(cf_B) × timing_discount(germination_epoch) + ratio_penalty(c:=q_settle, cf:=cf_B)` where
+  `progress_B = val_acc_B − acc_at_germination`, `cf_B` = the clean counterfactual at B, and ALL branches are the
+  shipping ones — including BOTH ratio_penalty branches (contribution.py:499–509: the ratio>threshold penalty AND
+  the cf≤safe_threshold ransomware branch). Rationale for inclusion (reviewer N-r2a, verified): `q_settle` is
+  EWMA(LOO drop), and **ransomware is a PERSISTENT ratio property, not a spot-timing spike** — a high-LOO/low-cf
+  seed is policy-SELECTABLE via q_decision (top tercile, where GATE-INFL is structurally blind), so without the
+  cf cross-check the annuity would convert a bounded window penalty into an unbounded unpenalized revenue line
+  and B−A would estimate ransomware-farming, not the protocol effect. The two-quote design closes TIMING gaming
+  only; the ratio check is the ONLY counterfactual cross-check in the law and stays in on both sides of B.
+  Computed ONCE at B (frozen args); applied per epoch [B, horizon]; truncated by construction.
 - G-CONTINUITY target defined (B3): constant c AND constant val_acc synthetic → provisional/epoch ==
   annuity/epoch exactly; asserted at 1e-6.
-- **Transform-law consistency at B (N-r2a, documented resolution):** the WINDOW keeps the FULL live
-  provisional law INCLUDING ratio_penalty — identical to S's law, the strongest B−S continuity property (the
-  window is provisional in kind; a live spike is paid for B exactly as it would be for S). The ANNUITY excludes
-  ratio_penalty (§3 rationale: its input is a smoothed, policy-unselectable statistic — the spot-spike detector
-  has no referent). The transform change at B tracks the input regime change (live c_t → frozen q_settle) and
-  is priced in Δ_designed at B, not hidden.
+- **Transform-law consistency at B (N-r2a, RESOLVED BY SYMMETRIC INCLUSION — re-check r3):** the WINDOW keeps
+  the FULL live provisional law including ratio_penalty (identical to S's law — maximal B−S continuity), and
+  the ANNUITY carries the SAME law at boundary-frozen args including both ratio_penalty branches (see the
+  T_annuity bullet above). One law, two input regimes (live c_t before B; frozen q_settle/cf_B after);
+  `T_annuity ≡ T_provisional` holds literally. The earlier annuity-exclusion rationale is WITHDRAWN — it
+  conflated spot-timing gaming (closed by two-quote) with persistent ratio gaming (selectable, not closed).
 - **Δ_designed cadence statement (W1-B):** all Δ_designed(x) values entering G-PBRS and G-DESIGNED-DELTA are
   computed under the always-targeted cadence the §1 ledger enforces; the replay's B path models the ledger row.
 
