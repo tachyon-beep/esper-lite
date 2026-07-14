@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-14 (#63) · make-permanence-visible: **ΔP_req = 0.10 OWNER-RATIFIED** (PDR-0089 — the owner's "ratify 10" meant the 0.10 constant, NOT item #10; Phase-2 stays owner-pending); round-22 pins registered; pending-visibility fork flagged; **IQR+noise read IN FLIGHT**; PDR-0085..0089; code `b7b7c6d5` on `feat/ev-stab-stage2-hra`
+# Current State — Esper        Checkpoint: 2026-07-14 (#71) · make-permanence-visible: **ALL FREEZE READS DONE; PLAN APPROVED (3 drl rounds); BUILD STARTED (increment 1 landed `3b36aa56`)**. Owner convergence-rule applied (PDR-0090): Phase-2 authorized, dissolution/bounds/price-don't-fix/Option-A/max-n ratified. Owner forks OPEN: **F1 abort-payment · F2 pending-bit · F3 threshold-gate redesign**. PDR-0085..0097; branch `feat/ev-stab-stage2-hra`
 
 ## The bet right now
 **Unchanged: the commitment defect is a permanent-value MEASUREMENT gap (PDR-0074/0076)** — the counterfactual is
@@ -81,14 +81,24 @@ measured value across FOSSILIZE; guardrail = the fix does NOT farm fossils.
   integrated doc.
 
 ## Next session, start here
-1. **Collect the IQR+noise read** (agent in flight on esper-lite-e12e2d1543; spec-first discipline) → Δ_material =
-   0.10/IQR_q becomes a number + the threshold-variance gate form resolves from the near-cliff σ.
-2. **Collect the owner rulings** (Phase-2 authorization is the load-bearing one; then dissolution/bounds/price-don't-fix
-   bookkeeping ratifications; pending-visibility fork; Option-A lock; UCB posture; max-n).
-3. **If Phase-2 authorized:** implementation plan → drl review → build behind the flag → executable B replay
-   (acceptance = gpt's ten invariants + round-22 pins 3a/3b: exactly-one-stage-entry-MINT wording; PBRS-only layer
-   fence on the B≡A-at-boundary identity). Then Option-A lock-burden quantification.
-4. **Then:** absolute-unit power/UCB finalization → final fresh-context adversarial pass → no-peek freeze (owner
-   signs) → GPU decision (owner). Order per PDR-0089 #6 (both primes converge: IQR before adversarial pass).
-5. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); pending observation
-   esper-lite-obs-73926b0291 (longdiag pgrep scar) nearing its 2026-07-26 expiry — promote or dismiss.
+1. **Freeze reads: ALL DONE.** Cadence 100% (PDR-0087) · Δ_material = 0.0075/pp, IQR_q 13.32pp (PDR-0092) ·
+   near-cliff σ ≈ 0.82pp → BOTH pre-registered gate forms fail → **F3** (PDR-0092) · observability: committed
+   state genuinely ALIASED, masks logit-only, countdown derivable → **F2 narrowed to ONE pending bit,
+   recommendation = add it** (PDR-0093) · lock burden 1.75% → Option-A condition DISCHARGED (PDR-0095).
+2. **Build state:** plan APPROVED after 3 adversarial drl rounds (B1–B5/N1–N5/W1/W1-A/W1-B/N-r2a all closed;
+   PDR-0091/0094/0096/0097 — key constructions: single-owner ledger owns the committed seed's ENTIRE per-seed
+   row [R+1,B]; T_annuity ≡ T_provisional LITERALLY incl. both ratio branches at windowed-cf; ledger-driven
+   window row; epoch-phase placement §0). **Increment 1 LANDED `3b36aa56`** (leyline FossilSettlementConfig,
+   settlement.py pure core, ratio_penalty extraction; 257/257 green). **Next increments:** kasmina committed
+   fields + controller freeze → action layer (request routing, §6 mask/validity table incl. slot_by_op[WAIT] +
+   index-0 fallback, Option-A lock + burden counters) → reward-path adapter (§2 branch table, single-owner
+   guard) → replay B path (§A ten areas, both F1 branches, both ratio-check failure directions). drl
+   pre-commit review gates feature completion.
+3. **Owner forks (the ONLY unmade decisions):** F1 abort payment (settle-partial vs void; config REQUIRES the
+   choice); F2 pending bit (recommend: add — one per-slot dim, arm A zeros, schema version); F3 threshold-gate
+   mechanism (options PDR-0092 #3: longer window / larger z / margin / price-it).
+4. **Then:** blinded power certification (80%-UCB primary, PDR-0091 #6) → final fresh-context adversarial pass →
+   no-peek freeze (owner signs: premium + F-rulings) → GPU decision (owner).
+5. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); observations
+   esper-lite-obs-73926b0291 (pgrep scar, expires 2026-07-26), obs-77569bfa0a (obs-version stamp),
+   obs-3811e62ea1 (scratchpad filename collisions).
