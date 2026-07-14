@@ -1,6 +1,6 @@
 # "Make permanence visible" — pre-registration + two coupled specs
 
-**Status: OPEN. Frozen-before-data intent; nothing here is frozen.** Blocked on owner sign-off (the flags in §1.13/§2.8/§3.5) + the remaining verification reads (§1.11). Grounded in PDR-0078/0079/0080, the primes review-pack, the Stage-2 acceptance gate (discipline template), and a primary-source symbol map. Design-only; no code touched; no GPU authorized. drl-expert deliverable, 2026-07-14.
+**Status: OPEN — freeze on HOLD (round-15, PDR-0081). Nothing here is frozen; no GPU authorized.** Round-15 (both primes) folded in ~12 converged amendments + surfaced ONE genuine owner fork (the commitment premium). Freeze is blocked on THREE things: (1) the owner's premium call; (2) the corrected **paired-run** P2 power number + blinded-reassessment rule + frozen max-n; (3) one more adversarial pass on the integrated doc. Honest status: "round-15 amendments folded; needs another review pass," NOT "one decision from freeze" — round 15 found a fatal-class flaw (unfalsifiable ACCEPT-SETTLE) + a basic stats error (P2 pseudoreplication) after 14 rounds. The freeze table below (§ROUND-15) supersedes the older §1.13/§2.8/§3.5 flag lists. Grounded in PDR-0078/0079/0080/0081, the primes reviews, the Stage-2 acceptance gate, and a primary-source symbol map. Design-only; no code touched. drl-expert deliverable, 2026-07-14.
 
 ## READ-5 fold-in
 READ 5 retracts the READ-4 "shelter / floor-destroys-good-seeds" half: IPCW prune-propensity mis-specified (79–82% predicted survival vs 45% observed); the SLOT head is deterministic (conf 1.0, 98%), not a random 0.15; pruning is quality-SELECTIVE (prunes lower-LOO seeds: PRUNE-destined lifetime LOO +6.1/+5.9 vs FOSS-destined +6.9/+6.6). Clean estimand: shelter ~16–20%, intrinsic-permanence residual ~80–84% of the +1.5pp. Three changes flow: (1) the settlement (arm B) is the well-motivated robust leg (priority); (2) arm C's op-primitive is re-scoped from "remove structural PRUNE probability" to the **gradient-restoring per-num_valid differentiable floor** (restore learnable op preference WITHOUT zeroing the PRUNE minimum — removing it could stop sensible quality-pruning); (3) the "reduced forced-destruction" guardrail flips to "quality-pruning selectivity **preserved/not degraded**." The design's shelter-independence (verdict rests only on B−A and C−A) is vindicated.
@@ -82,41 +82,38 @@ Remaining before freeze: **owner sign-off on the §1.13/§2.8/§3.5 flags only**
 
 ---
 
-## PROPOSED FREEZE TABLE — recommended answers to every flag (owner: ✓ / ✗ / adjust)
-Drafted 2026-07-14 for owner yes/no/adjust. Grounded in the Stage-2 acceptance gate (`docs/analysis/2026-07-06-stage2-hra-major1-acceptance-gate.md`) + the frozen r9 baselines (§1.11). Design-only; nothing freezes or runs until signed. Two rows marked **[drl power-calc at freeze]** need a final MDE/power computation before the table is frozen — everything else is decision-ready.
+## ROUND-15 INTEGRATED FREEZE TABLE (PDR-0081) — ONE owner decision; the rest folded in
+Freeze on HOLD. Both primes converged on ~12 amendments (Group B, accepted, shown for transparency) and passed the rest (Group C). They genuinely **disagree** on exactly one thing — the commitment premium (Group A) — which is the single owner decision. Design-only; nothing freezes or runs until (A) is decided, the paired-run power number lands, and one more review pass clears.
 
-### Experiment (Section 1)
-| # | Flag | RECOMMENDATION | Why | ✓/✗/adj |
-|---|---|---|---|---|
-| E1 | Sequencing | **STAGED** (Exp1 A/B, Exp2 add C) | DECIDED by owner | ✓ |
-| E2 | HRA critic posture | **Shipping (non-HRA) critic, held identical across arms** | HRA was the EV-stab experiment that REJECTED (PDR-0059); PDR-0074 showed the critic mis-fit was a SYMPTOM of the observation gap, which obs-v4/L1 now fixes → the plain critic on honest inputs is the cleanest baseline, and holding it constant means it's not a confound. (Re-measure critic calibration post-hoc.) | |
-| E3 | Banked primary per leg | **SETTLE (B−A): P1 non-regression + G-FARM. COUPLED (C−A): P2 (quote-graded commitment) as "did it fire," P1 non-regression@screen / superiority@n10** | Settlement-alone can't move accuracy (floor still forces 94%) → its job is remove-the-discontinuity-without-farming, judged on P1-non-regression + G-FARM. P2 (per-decision, high-power) is the mechanism test for the coupled arm. | |
-| E4 | τ_acc (non-regression margin) | **−0.3 pp** (val-acc floor) | Matches Stage-2 G1 (val-acc ≥ −0.3pp). | |
-| E5 | P2-slope MDE | **[drl power-calc at freeze]** — target ≈ detect a quote→commit slope ≥ ~⅓ of READ-3's CATE monotonicity (+1.19→+1.87/tercile) | Per-decision N (thousands/seed) makes this well-powered; the exact MDE needs the eligible-HOLDING count under obs-v4/K=4. | |
-| E6 | Guardrail materiality | **G-FARM: dwell→quote slope CI must exclude a positive assoc. G-QUALPRUNE: PRUNE-vs-FOSS LOO gap (baseline +0.81/+0.72) must not shrink >50%. G-STAB: Stage-2 thresholds (EV, KL, grad-anomaly, value-collapse, NaN). G-DESTROY-TOTAL: net harmful-destruction non-increase, read with G-QUALPRUNE** | Grounded in §1.11 baselines + Stage-2. | |
-| E7 | n / tiers | **n=5 paired SCREEN (SCREEN_PASS only), n=10 CLAIM (ACCEPT only)** | Matches Stage-2 discipline (screen never accepts). | |
-| E8 | Seeds | **41–45 (screen), 41–50 (claim)**; paired fresh-init | Stage-2 seed lineage; paired per §11.1. | |
-| E9 | Budget | **200 rounds/run, K=4 (4 inner epochs/batch), min 150 scored updates** | Stage-2 floor. | |
-| E10 | Device | **quiet-box, single GPU, device-paired per Stage-2 §11.1** | The co-tenancy starvation that degraded a prior wave (PDR-0056). | |
+### GROUP A — THE SINGLE OWNER DECISION: the commitment premium
+The proposed table contradicted itself (old S5 premium=0 vs old S8 "keep flat 0.5" — but `fossilize_base_bonus=0.5` **is** a flat premium). The primes resolve it opposite ways:
 
-### Settlement (Section 2)
-| # | Flag | RECOMMENDATION | Why | ✓/✗/adj |
-|---|---|---|---|---|
-| S1 | New op vs re-interpret FOSSILIZE | **Re-interpret FOSSILIZE** as request-issuance | No obs/action schema bump; FOSSILIZE already means "commit." | |
-| S2 | Boundary policy | **Fixed-cadence audit boundaries** (not terminal) | Non-selectable instant with denser, lower-variance settlement than terminal-only. | |
-| S3 | W_settle / min_window | **W_settle = 10 epochs, min_window = 5** | 5 = one MIN_PRUNE_AGE; a boundary within ≤10 epochs of request keeps the annuity horizon long (fossilize ~epoch 75/150). | |
-| S4 | Quote estimator | **EWMA over pre-request measurements** (span ≈ escrow_stable_window=3–5) | Instant is non-selectable → EWMA-as-quote is safe (READ 1); span matches the existing stable-window. | |
-| S5 | Flat commitment premium | **0 (neutral settlement)** | Cleanest test — let the *causal* value of commitment (host accuracy via GAE future-return) drive commitment, not a hardcoded subsidy. A small flat premium is the fallback if C shows under-commitment. | |
-| S6 | Stale/never-measured request | **Fail-closed: STALE → force fresh ablation or REJECT; NEVER_MEASURED → invalid** | No settle-0-and-commit escape hatch (§2.5.3). | |
-| S7 | Per-window confirmation cost | **None** (the frozen-α + delayed-integration + fossilize_cost=−0.01 are the implicit cost) | Avoid an extra tuned term. | |
-| S8 | One-shot bonus | **Drop the +0.1·c spot term; keep flat 0.5 only** | The +0.1·c is the sell-at-spike side channel (§2.5.4) — must go or the farm re-enters. | |
+| Option | Who | The case | Cost |
+|---|---|---|---|
+| **A0 — premium 0 + verdict-changing raw-logit gate (RECOMMENDED, constructed middle)** | synthesis of both | Keep Exp-1's accounting test clean (premium 0); make claude-prime's **pre-floor FOSSILIZE-preference read (arm A vs B) a HARD gate**: if B's raw commit-preference is materially below A's → settlement priced commitment as *dominated* → NOT protocol-safe → add a flat un-farmable premium (+0.5–1.0) and re-run before Exp 2. Free (PDR-0070 logs pre-floor logits). | Neither prime proposed this exact form — owner accepts or bounces to primes. |
+| **A+ — bake a flat +0.5–1.0 premium in NOW** | claude-prime | Under §2.6 neutrality, arm B's *complete* commit ledger is strictly negative (annuity−forfeited=0, premium 0, fossilize_cost −0.01, maint −0.002×71, frozen-α ≤0, PRUNE-option destroyed ≤0) → commitment is dominated → the floor forces 94% commits → ACCEPT-SETTLE is **bit-identical to a policy taught to avoid committing**. Flat premium is un-farmable (schedule-locked). | Muddies the accounting-continuity test (is B passing because sound, or bribed?). |
+| **A0-strict — premium 0, gate stays descriptive** | gpt-prime | Exp-1's floor is load-bearing, so commitment SHOULD be floor-forced; Exp 1 = SETTLEMENT-PROTOCOL-SAFE (infra behind a flag, not a ship); commitment-preference is Exp-2's job. | Advisor: if the gate is only descriptive, claude-prime's fatal case stands untouched. → **A0 is A0-strict + the gate promoted to verdict-changing.** |
 
-### Gradient floor (Section 3)
-| # | Flag | RECOMMENDATION | Why | ✓/✗/adj |
-|---|---|---|---|---|
-| F1 | Primitive form | **Uniform-floor `q_i = f + (1−n·f)·p_i`** (per-num_valid) | Minimal causal isolation (reproduces the current floor/cap exactly at the current f); differentiable everywhere. | |
-| F2 | f magnitude | **Match current 0.15** (per-num_valid `min(0.15, 0.99/n)`) | Isolate the *gradient* change, not the exploration magnitude (round-8 N5). | |
-| F3 | Scope | **Op head only** | The commit-learning dead-zone is op-specific; other-heads floor is a deferred workstream → clean C−B. | |
-| F4 | λ-sweep vs single | **Single `diff_floor` in arm C** (no within-arm sweep); the λ=0 no-floor case only as the frozen-abort smoke | The settlement is the treatment; a within-arm λ-sweep adds factors. | |
+**Discriminating question for the owner:** *do you trust the pre-floor commit-preference gate (A0) to catch a dominated-commitment policy?* Yes → A0 (cleaner test; the data decides the premium in Exp 2). Not confident → A+ (hedge now). **Both primes agree the `+0.1·c` spot term dies either way** (sell-at-spike channel).
 
-**After your pass:** I apply the ✓/adjusted answers, get the drl power-calc for E5 (+ confirm the n=10 P1 power for E4/E7), freeze the doc (no-peek), and bring you the frozen pre-registration for the GPU authorization. The remaining verification reads are already satisfied (§1.11); READ 5 is folded in.
+### GROUP B — CONVERGED AMENDMENTS (accepted, folded in; NOT owner questions)
+| # | Amendment | Source |
+|---|---|---|
+| B1 | **P2 power unit = per-RUN slope, not per-decision** (old E5 was pseudoreplication). One P2 slope/run; pairwise across n=5/n=10 **runs**. **No obs-v4/K=4 pilot exists → n=10 cannot be pre-certified** → blinded post-screen variance reassessment, frozen max-n, rule written before launch. Parametric power curve = freeze-time drl task; NOT fundable-as-scoped until it exists. | gpt |
+| B2 | **Two-quote design:** `q_decision=EWMA(c_{≤t−1})` (policy-visible, P2 predictor) vs `q_settle=EWMA(valid c collected AFTER request, span 5, ≥5 obs, invisible at request, locked at boundary)`. Annuity rate = `q_settle`. Removes sell-at-spike more directly than a locked pre-request EWMA. | gpt |
+| B3 | **Signed-value invariant:** settlement applies identical clip/sign to provisional `bounded_attribution` across +/0/− contribution; "neg quote→annuity 0" valid only if the provisional stream applies the identical zero-plus-penalty transform. | gpt |
+| B4 | **Add G-LEDGER** (hard): constant synthetic c ⇒ discounted return invariant to requesting FOSSILIZE within tol; report PV(credit), PV(annuity), net replacement error (mean/median/tail), completion/invalid rates. | gpt |
+| B5 | **G-FARM → three tests:** spot-residual timing; audit-cycle phase; settlement-overpayment tail. (Selection on persistent `q_decision` intended; on transient residual/phase = farming.) | gpt |
+| B6 | **G-QUALPRUNE → bootstrap the r9 baseline CI (before freezing "shrink >50%") + decision-level per-run `P(PRUNE|q_decision)`** (non-positive quote-sensitivity, top-quote not pruned more, C−B doesn't reverse). Cohort gap kept descriptive. | both |
+| B7 | **G-DESTROY-TOTAL defined:** harmful = PRUNE of top-quote-tercile seed, or PRUNE→pre-defined adverse host-acc. Total PRUNE-rate alone is not harm. | gpt |
+| B8 | **E2 critic:** non-HRA held-constant STANDS, but post-hoc calibration on arm A (does the commit-penalty still overstate MC by ~4–6× on honest inputs?) is a **pre-registered scored read** — if yes, PDR-0066 re-opens (over-read #14). | both |
+| B9 | **F1 = "endpoint-matched," not "behaviour-identical."** C−B = an endpoint-matched differentiable primitive. Log full pre/post op dist, full **categorical** op KL, per-op prob changes, raw+transformed score-fn norms, near-floor rate `q_i≤f+ε`. | gpt |
+| B10 | **S1:** version the env protocol + emit `FOSSILIZE_REQUESTED`/`FOSSILIZE_SETTLED` events. | gpt |
+| B11 | **Late requests masked** (insufficient time for the ≥5-obs window + min horizon) — no underspecified "settle at terminal" fallback. | gpt |
+| B12 | **Verdict taxonomy:** SETTLEMENT-PROTOCOL-SAFE (flag-land, not ship) / COUPLED-MECHANISM / SHIP-COUPLED (+powered P1 superiority C−A) / INCONCLUSIVE / REJECT. Test order P2→P1→guardrails. B−A is honestly the **whole protocol**, not pure annuity accounting. | gpt (=claude's "infra behind a flag") |
+
+### GROUP C — AFFIRMED (both primes passed; unchanged)
+S8 drop `+0.1·c` ("most important row") · S2/S3 fixed-cadence non-selectable boundary (W=10/min=5) · S1 re-interpret direction · F2 match `f=0.15` exactly · F3 op-head-only · F4 single `diff_floor` (λ=0 = unscored abort smoke) · §1.4 "no PASS branch requires a C−B magnitude" · E4 τ_acc=−0.3pp (**test: one-sided 95% LCB of paired diff > −0.3pp**) · E8 seeds 41–45/41–50 · E9 K=4/200-round (freeze burn-in/scoring window) · E10 quiet-box device-pairing · E5 left blank (correct).
+
+### Freeze blockers (all three required)
+1. Owner decides **Group A** (the premium). 2. The **paired-run** P2 power number + blinded-reassessment rule + frozen max-n (B1). 3. One more adversarial pass on the integrated doc (round 15 found a fatal-class flaw + a stats error after 14 rounds — the new-flaw rate isn't polish-level yet). **No GPU until all three clear and the doc is frozen no-peek.**
