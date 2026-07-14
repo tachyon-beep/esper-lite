@@ -102,6 +102,11 @@ At B (reward phase), from the locked `q_settle` and boundary-frozen inputs:
   and B−A would estimate ransomware-farming, not the protocol effect. The two-quote design closes TIMING gaming
   only; the ratio check is the ONLY counterfactual cross-check in the law and stays in on both sides of B.
   Computed ONCE at B (frozen args); applied per epoch [B, horizon]; truncated by construction.
+  **Denominator = WINDOWED cf (final-eyeball refinement, adopted as DEFAULT): `cf_w` = EWMA over the window's
+  per-epoch clean-counterfactual measurements [R+1, B], same span/formula as `q_settle` — like-with-like; the
+  single-epoch spot `cf_B` is noise-fragile in BOTH directions (false-positive: legit seed, spuriously-low cf at
+  B → penalized to horizon; false-negative: ransomware seed, spuriously-high cf at B → the check silently skips).
+  The replay case matrix MUST exercise both directions.**
 - G-CONTINUITY target defined (B3): constant c AND constant val_acc synthetic → provisional/epoch ==
   annuity/epoch exactly; asserted at 1e-6.
 - **Transform-law consistency at B (N-r2a, RESOLVED BY SYMMETRIC INCLUSION — re-check r3):** the WINDOW keeps

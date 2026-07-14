@@ -496,17 +496,9 @@ def compute_contribution_reward(
                 exp_arg = min(-config.attribution_sigmoid_steepness * counterfactual_imp, 700.0)
                 attribution_discount = 1.0 / (1.0 + math.exp(exp_arg))
 
-        if seed_contribution > 1.0 and attribution_discount >= 0.5 and not config.disable_anti_gaming:
-            safe_threshold = max(config.improvement_safe_threshold, 1e-8)
-            if counterfactual_imp > safe_threshold:
-                ratio = seed_contribution / counterfactual_imp
-                if ratio > config.hacking_ratio_threshold:
-                    ratio_penalty = -min(
-                        -config.prune_good_seed_penalty,
-                        0.1 * (ratio - config.hacking_ratio_threshold) / config.hacking_ratio_threshold,
-                    )
-            elif counterfactual_imp <= config.improvement_safe_threshold:
-                ratio_penalty = config.prune_good_seed_penalty * min(1.0, seed_contribution / 10.0)
+        ratio_penalty = _compute_ratio_penalty(
+            seed_contribution, counterfactual_imp, attribution_discount, config
+        )
 
         if slot_id is not None and seed_id is not None:
             hub = get_hub()
@@ -1359,6 +1351,39 @@ def _contribution_prune_shaping(
         max_penalty = 3.0 * base_penalty
         return max(scaled_penalty, max_penalty)
 
+    return 0.0
+
+
+def _compute_ratio_penalty(
+    seed_contribution: float,
+    counterfactual_imp: float,
+    attribution_discount: float,
+    config: ContributionRewardConfig,
+) -> float:
+    """The anti-ransomware ratio cross-check (extracted verbatim from the inline block).
+
+    Fires when the seed's LOO contribution is disproportionate to the clean
+    counterfactual improvement (hostage signature), or when the counterfactual
+    is ~zero while the LOO is high. This is the reward law's ONLY
+    counterfactual-based cross-check; the settlement annuity applies it at
+    boundary-frozen arguments (settlement.py) — see PDR-0096.
+    """
+    if not (
+        seed_contribution > 1.0
+        and attribution_discount >= 0.5
+        and not config.disable_anti_gaming
+    ):
+        return 0.0
+    safe_threshold = max(config.improvement_safe_threshold, 1e-8)
+    if counterfactual_imp > safe_threshold:
+        ratio = seed_contribution / counterfactual_imp
+        if ratio > config.hacking_ratio_threshold:
+            return -min(
+                -config.prune_good_seed_penalty,
+                0.1 * (ratio - config.hacking_ratio_threshold) / config.hacking_ratio_threshold,
+            )
+    elif counterfactual_imp <= config.improvement_safe_threshold:
+        return config.prune_good_seed_penalty * min(1.0, seed_contribution / 10.0)
     return 0.0
 
 
