@@ -397,6 +397,15 @@ class SeedState:
     previous_epochs_in_stage: int = 0  # Epochs in previous stage at transition (for PBRS)
     stage_entered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # Phase-2 settlement: PENDING is a FLAG on HOLDING, not a stage (PDR-0088/0090).
+    # A committed seed stays HOLDING (no transition, no stage-clock reset, stays in
+    # the ablation set) until the schedule-determined boundary; uncancellable BY
+    # POLICY (safety paths always win, plan §4). Default-OFF: nothing sets these
+    # unless the fossil-settlement feature is active.
+    committed: bool = False
+    settlement_boundary_epoch: int | None = None
+    legitimacy_at_request: float | None = None
+
     alpha: float = 0.0
     metrics: SeedMetrics = field(default_factory=SeedMetrics)
 
@@ -531,6 +540,29 @@ class SeedState:
         self.metrics.reset_stage_baseline()
         return True
 
+    def request_fossilization(
+        self, *, settlement_boundary_epoch: int, legitimacy: float
+    ) -> None:
+        """Issue the non-cancellable fossilization request (pre-reg §2.1).
+
+        Sets the committed FLAG — deliberately NOT a stage transition: the
+        stage clock keeps ticking (no PBRS mint), the seed stays HOLDING and
+        measurable, and legitimacy is frozen at the request instant. The
+        settlement ledger owns the boundary schedule; this records it.
+        """
+        if self.stage != SeedStage.HOLDING:
+            raise ValueError(
+                f"fossilization request requires HOLDING, seed is {self.stage.name}"
+            )
+        if self.committed:
+            raise ValueError(
+                "seed is already committed (pending settlement at epoch "
+                f"{self.settlement_boundary_epoch}); the request is uncancellable"
+            )
+        self.committed = True
+        self.settlement_boundary_epoch = settlement_boundary_epoch
+        self.legitimacy_at_request = legitimacy
+
     @property
     def epochs_in_stage(self) -> int:
         """Convenience property for epochs in current stage."""
@@ -596,6 +628,9 @@ class SeedState:
             "is_healthy": self.is_healthy,
             "is_paused": self.is_paused,
             "previous_epochs_in_stage": self.previous_epochs_in_stage,
+            "committed": self.committed,
+            "settlement_boundary_epoch": self.settlement_boundary_epoch,
+            "legitimacy_at_request": self.legitimacy_at_request,
         }
 
     @classmethod
@@ -650,6 +685,9 @@ class SeedState:
         state.is_healthy = data["is_healthy"]  # Required
         state.is_paused = data["is_paused"]  # Required
         state.previous_epochs_in_stage = data["previous_epochs_in_stage"]  # Required
+        state.committed = data["committed"]  # Required (Phase-2 settlement)
+        state.settlement_boundary_epoch = data["settlement_boundary_epoch"]  # Required
+        state.legitimacy_at_request = data["legitimacy_at_request"]  # Required
         return state
 
 
@@ -1619,6 +1657,18 @@ class SeedSlot(nn.Module):
             self._pending_prune_reason = None
             self._pending_prune_initiator = None
             return False
+
+        # Phase-2 settlement: a committed (pending-settlement) seed is
+        # uncancellable BY POLICY (pre-reg §2.1) — masking is the primary
+        # suppression; this is the defensive assert. Safety/governor paths
+        # (initiator != "policy") ALWAYS proceed (plan §4: safety wins);
+        # settlement-ledger teardown is the trainer adapter's job.
+        if self.state.committed and initiator == "policy":
+            raise RuntimeError(
+                "Policy PRUNE on a committed (pending-settlement) seed — the "
+                "request is uncancellable by policy and the pending slot should "
+                "have been masked (state-machine/mask bug if reached)."
+            )
 
         # Capture metrics before transition clears state
         improvement = self.state.metrics.total_improvement
