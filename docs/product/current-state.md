@@ -33,11 +33,16 @@ farm fossils.
   strongly-motivated-but-softer. **The coupling rationale is "EITHER-ALONE-IS-DEGENERATE"** (settlement-alone: commits stay
   floor-forced + seeds destroyed; floor-repair-alone: the learned preference is PARK → zero fossils) — NOT the 50/50. The
   floor is on the critical path regardless.
-- **IN FLIGHT (both parallel):** (a) the 5 shelter-VERIFICATION reads (PRUNE-legality, empirical destruction hazard,
-  slot-head focal-slot propensity [decisive], val@1 ordering, pinned-only-vs-all-PRUNE sensitivity) — decide whether the
-  shelter half + 55% + 50/50 survive; (b) the drl-expert **coupled DESIGN** (TRIANGULAR A/B/C attributable experiment +
-  non-selectable-settlement spec + forced-PRUNE-safe op-distribution spec), design-only. **GPU held** until the 5
-  verification items + the triangular design + both specs are in a single pre-registration.
+- **READ 5 (verification) RESOLVED it (PDR-0080 outcome): the shelter half is RETRACTED** (3 ways: IPCW mis-specified in
+  degree — predicts 79-82% survival vs observed 45%; in kind — the SLOT head is DETERMINISTIC not a known 0.15, and
+  pruning is quality-SELECTIVE, removing LOWER-LOO seeds; under the clean estimand shelter→16-20%, residual→80-84%).
+  **The intrinsic-permanence / SETTLEMENT half is the identified, robust bet.** The floor's forced-PRUNE is NOT an
+  indiscriminate destroyer — target selection is sensible learned quality-pruning; only the timing is forced. So the
+  "floor co-required via shelter" claim is WITHDRAWN; arm C's floor intervention RE-SCOPED to the gradient-dead-zone fix
+  (round-8 per-num_valid differentiable floor), NOT forced-PRUNE-removal. Coupling rests ONLY on "either-alone-degenerate."
+- **IN FLIGHT:** the drl-expert **coupled DESIGN** (updated with READ 5): non-selectable-settlement spec (priority) +
+  the re-scoped experiment (A control / B settlement-only / C = gradient-floor-fix — sequencing is the drl call).
+  **GPU held** until the design + specs are in a single owner-signed pre-registration.
 - **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
   satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
   over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
