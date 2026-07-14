@@ -40,9 +40,15 @@ farm fossils.
   indiscriminate destroyer — target selection is sensible learned quality-pruning; only the timing is forced. So the
   "floor co-required via shelter" claim is WITHDRAWN; arm C's floor intervention RE-SCOPED to the gradient-dead-zone fix
   (round-8 per-num_valid differentiable floor), NOT forced-PRUNE-removal. Coupling rests ONLY on "either-alone-degenerate."
-- **IN FLIGHT:** the drl-expert **coupled DESIGN** (updated with READ 5): non-selectable-settlement spec (priority) +
-  the re-scoped experiment (A control / B settlement-only / C = gradient-floor-fix — sequencing is the drl call).
-  **GPU held** until the design + specs are in a single owner-signed pre-registration.
+- **The PRE-REGISTRATION is DONE (`docs/analysis/2026-07-14-permanence-visible-preregistration.md`) — the GPU-decision
+  artifact.** Triangular attributable design (A control / B settlement-only / C = gradient-restoring differentiable floor),
+  RECOMMENDED STAGED (Exp-1 A/B settlement, Exp-2 add C); verdict rests only on the shelter-independent B−A / C−A. Full
+  non-selectable-settlement spec (annuity, quote from pre-request measurements only, one-shot-bonus netting to kill the
+  spot channel, all holes closed) + the re-scoped gradient-floor spec (per-num_valid differentiable floor, op-head-only,
+  keeps the PRUNE minimum). Metrics P1(terminal acc)/P2(quote-graded commitment) + guardrails G-FARM/G-QUALPRUNE/G-STAB.
+  **OPEN — owner sign-off needed on the decision flags** (sequencing, HRA posture, thresholds/MDEs, n/seeds/budget, new-op
+  vs re-interpret FOSSILIZE, boundary policy, floor form) + **3 remaining r9 reads before FREEZE** (PRUNE-legality,
+  destruction hazard, val@1 ordering). **No-peek freeze order; GPU held until frozen + signed.**
 - **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
   satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
   over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
