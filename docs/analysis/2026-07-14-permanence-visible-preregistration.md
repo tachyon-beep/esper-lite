@@ -82,5 +82,41 @@ Remaining before freeze: **owner sign-off on the §1.13/§2.8/§3.5 flags only**
 
 ---
 
-## Consolidated owner decisions before freeze
-Sequencing (staged vs triangular); HRA posture; primary-per-leg (P1 vs P2); τ_acc + MDEs + guardrail materiality; n/seeds/budget/device; new-op vs re-interpret FOSSILIZE; boundary policy + window; EWMA vs min-window; flat-premium magnitude; stale-request handling; differentiable-floor form + f + op-head-only scope. The three remaining verification reads (PRUNE-legality, destruction hazard, val@1 ordering) land before the threshold table freezes; READ 5 is folded in.
+## PROPOSED FREEZE TABLE — recommended answers to every flag (owner: ✓ / ✗ / adjust)
+Drafted 2026-07-14 for owner yes/no/adjust. Grounded in the Stage-2 acceptance gate (`docs/analysis/2026-07-06-stage2-hra-major1-acceptance-gate.md`) + the frozen r9 baselines (§1.11). Design-only; nothing freezes or runs until signed. Two rows marked **[drl power-calc at freeze]** need a final MDE/power computation before the table is frozen — everything else is decision-ready.
+
+### Experiment (Section 1)
+| # | Flag | RECOMMENDATION | Why | ✓/✗/adj |
+|---|---|---|---|---|
+| E1 | Sequencing | **STAGED** (Exp1 A/B, Exp2 add C) | DECIDED by owner | ✓ |
+| E2 | HRA critic posture | **Shipping (non-HRA) critic, held identical across arms** | HRA was the EV-stab experiment that REJECTED (PDR-0059); PDR-0074 showed the critic mis-fit was a SYMPTOM of the observation gap, which obs-v4/L1 now fixes → the plain critic on honest inputs is the cleanest baseline, and holding it constant means it's not a confound. (Re-measure critic calibration post-hoc.) | |
+| E3 | Banked primary per leg | **SETTLE (B−A): P1 non-regression + G-FARM. COUPLED (C−A): P2 (quote-graded commitment) as "did it fire," P1 non-regression@screen / superiority@n10** | Settlement-alone can't move accuracy (floor still forces 94%) → its job is remove-the-discontinuity-without-farming, judged on P1-non-regression + G-FARM. P2 (per-decision, high-power) is the mechanism test for the coupled arm. | |
+| E4 | τ_acc (non-regression margin) | **−0.3 pp** (val-acc floor) | Matches Stage-2 G1 (val-acc ≥ −0.3pp). | |
+| E5 | P2-slope MDE | **[drl power-calc at freeze]** — target ≈ detect a quote→commit slope ≥ ~⅓ of READ-3's CATE monotonicity (+1.19→+1.87/tercile) | Per-decision N (thousands/seed) makes this well-powered; the exact MDE needs the eligible-HOLDING count under obs-v4/K=4. | |
+| E6 | Guardrail materiality | **G-FARM: dwell→quote slope CI must exclude a positive assoc. G-QUALPRUNE: PRUNE-vs-FOSS LOO gap (baseline +0.81/+0.72) must not shrink >50%. G-STAB: Stage-2 thresholds (EV, KL, grad-anomaly, value-collapse, NaN). G-DESTROY-TOTAL: net harmful-destruction non-increase, read with G-QUALPRUNE** | Grounded in §1.11 baselines + Stage-2. | |
+| E7 | n / tiers | **n=5 paired SCREEN (SCREEN_PASS only), n=10 CLAIM (ACCEPT only)** | Matches Stage-2 discipline (screen never accepts). | |
+| E8 | Seeds | **41–45 (screen), 41–50 (claim)**; paired fresh-init | Stage-2 seed lineage; paired per §11.1. | |
+| E9 | Budget | **200 rounds/run, K=4 (4 inner epochs/batch), min 150 scored updates** | Stage-2 floor. | |
+| E10 | Device | **quiet-box, single GPU, device-paired per Stage-2 §11.1** | The co-tenancy starvation that degraded a prior wave (PDR-0056). | |
+
+### Settlement (Section 2)
+| # | Flag | RECOMMENDATION | Why | ✓/✗/adj |
+|---|---|---|---|---|
+| S1 | New op vs re-interpret FOSSILIZE | **Re-interpret FOSSILIZE** as request-issuance | No obs/action schema bump; FOSSILIZE already means "commit." | |
+| S2 | Boundary policy | **Fixed-cadence audit boundaries** (not terminal) | Non-selectable instant with denser, lower-variance settlement than terminal-only. | |
+| S3 | W_settle / min_window | **W_settle = 10 epochs, min_window = 5** | 5 = one MIN_PRUNE_AGE; a boundary within ≤10 epochs of request keeps the annuity horizon long (fossilize ~epoch 75/150). | |
+| S4 | Quote estimator | **EWMA over pre-request measurements** (span ≈ escrow_stable_window=3–5) | Instant is non-selectable → EWMA-as-quote is safe (READ 1); span matches the existing stable-window. | |
+| S5 | Flat commitment premium | **0 (neutral settlement)** | Cleanest test — let the *causal* value of commitment (host accuracy via GAE future-return) drive commitment, not a hardcoded subsidy. A small flat premium is the fallback if C shows under-commitment. | |
+| S6 | Stale/never-measured request | **Fail-closed: STALE → force fresh ablation or REJECT; NEVER_MEASURED → invalid** | No settle-0-and-commit escape hatch (§2.5.3). | |
+| S7 | Per-window confirmation cost | **None** (the frozen-α + delayed-integration + fossilize_cost=−0.01 are the implicit cost) | Avoid an extra tuned term. | |
+| S8 | One-shot bonus | **Drop the +0.1·c spot term; keep flat 0.5 only** | The +0.1·c is the sell-at-spike side channel (§2.5.4) — must go or the farm re-enters. | |
+
+### Gradient floor (Section 3)
+| # | Flag | RECOMMENDATION | Why | ✓/✗/adj |
+|---|---|---|---|---|
+| F1 | Primitive form | **Uniform-floor `q_i = f + (1−n·f)·p_i`** (per-num_valid) | Minimal causal isolation (reproduces the current floor/cap exactly at the current f); differentiable everywhere. | |
+| F2 | f magnitude | **Match current 0.15** (per-num_valid `min(0.15, 0.99/n)`) | Isolate the *gradient* change, not the exploration magnitude (round-8 N5). | |
+| F3 | Scope | **Op head only** | The commit-learning dead-zone is op-specific; other-heads floor is a deferred workstream → clean C−B. | |
+| F4 | λ-sweep vs single | **Single `diff_floor` in arm C** (no within-arm sweep); the λ=0 no-floor case only as the frozen-abort smoke | The settlement is the treatment; a within-arm λ-sweep adds factors. | |
+
+**After your pass:** I apply the ✓/adjusted answers, get the drl power-calc for E5 (+ confirm the n=10 P1 power for E4/E7), freeze the doc (no-peek), and bring you the frozen pre-registration for the GPU authorization. The remaining verification reads are already satisfied (§1.11); READ 5 is folded in.

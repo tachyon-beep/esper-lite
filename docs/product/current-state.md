@@ -51,7 +51,9 @@ farm fossils.
   guardrail-baseline table; **no reads outstanding.** **The ONLY remaining pre-freeze gate is owner sign-off on the other
   flags** (HRA posture, P1-vs-P2 primary, τ_acc + MDEs + guardrail materiality, n/seeds/budget/device; settlement:
   re-interpret-FOSSILIZE vs new-op, boundary policy, EWMA-vs-min-window, flat-premium; floor: form + f + op-head-only).
-  No-peek freeze; GPU held until frozen + signed.
+  No-peek freeze; GPU held until frozen + signed. **A PROPOSED FREEZE TABLE is drafted** (recommended answers to all ~20
+  flags, grounded in Stage-2 + the r9 baselines — owner does a ✓/✗/adjust pass) at the end of the pre-reg doc; 2 rows
+  (P2-slope MDE, n=10 P1 power) need a final drl power-calc at freeze. After the owner's pass → freeze → GPU authorization.
 - **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
   satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
   over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
