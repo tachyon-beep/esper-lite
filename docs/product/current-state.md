@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-14 (#44+) · commitment defect RESOLVED to a fossil measurement gap; "make permanence visible" refocus APPROVED (PDR-0074 accepted, PDR-0076 approved-with-conditions; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-14 (#49) · make-permanence-visible: mechanism RESOLVED → COUPLED floor-forced-PRUNE-repair + non-selectable-settlement; premise causally supported; L1+K>1 landed (PDR-0074→0079; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
 **The commitment defect is a permanent-value MEASUREMENT gap — ONE gap, THREE coupled symptoms + a separate inert channel
@@ -23,14 +23,22 @@ farm fossils.
   spike-selection, but uninformative (dead-zone, not safety). **READ 3 (exact |H|=1 ID + IPW/MSM, PR15-validated,
   balance-checked, well-powered 2–5× MDE, both seeds): committing a floor-pinned good HOLDING seed NOW causally BEATS
   WAITING — terminal +1.4–1.6 pp, val-acc all horizons, AUC +1.5–1.7, no added destruction.** Permanence carries real,
-  proxy-free product value the reward zeroes out → the fix is worth building. **Calibration (advisor): do NOT bank
-  "under-fossilization is a defect, full stop"** — it's commit-EARLIER vs commit-more (WAIT≠never), the contrast excludes
-  SET_ALPHA (the real alternative), and part of the gain may be permanence SHIELDING from the floor's own later PRUNE
-  (s42 prune↓). One free r9 read (WAIT-arm decomposed by later-pruned) settles it.
-- **L1 (obs-v4) + K>1 code diff DONE + tested (uncommitted, under my review).** v3 byte-identical (tested); +9 state_dim
-  behind a default-OFF flag; shrink-toward-UNKNOWN + explicit status dims; K=4 (drl-justified, guard activates). 2 test
-  issues: one pre-existing (EV-liftoff threshold, re-baseline); one is MY ESCROW-guard regression (proof_packet builds
-  ESCROW config → hits the raise) — I own the fix.
+  proxy-free product value the reward zeroes out. Bank ONLY the positive TOTAL effect (not "under-fossilization is a
+  defect full stop"; comparator is inaction not SET_ALPHA).
+- **READ 4 (WAIT-arm decomposition, IPCW/g-formula NOT survivor conditioning, well-supported ESS≈0.9) RESOLVED the
+  mechanism (PDR-0079): the terminal effect splits ~50/50** — **residual intrinsic-permanence value** (+0.77/+0.87,
+  significant; 90–95% of the *immediate* val@1 benefit where forced-PRUNE can't yet act) **+ shelter from the floor's own
+  forced-PRUNE** (+0.65/+0.79, accumulating). **BOTH material → COUPLED PACKAGE:** reward permanence (non-selectable
+  settlement) AND repair the floor's forced-PRUNE — **the floor is BACK ON THE CRITICAL PATH.** NEW: the same anti-WAIT
+  floor forces the commits AND the destruction — **55% of good held seeds force-pruned within ~13 epochs, both at 0.15,
+  both uncontrollable.** (Soften: shelter ≠ "a floor repair banks +0.7pp"; the two halves aren't additive.)
+- **Archival r9 reads running** (per-head floor-binding, |H|=1-over-time confidence-trap, α/blueprint histograms, data
+  provenance) — the LAST free evidence before a K>1/v4 run orphans r9 (schema-freeze-guarded).
+- **L1 (obs-v4) + K>1 LANDED as two reviewed commits** (`b5839021` L1 default-OFF v3-byte-identical; `7715a62e` K=4
+  trust-region restore) + the ESCROW-guard proof_packet regression fixed (`b35dec21`, opt-in). All verified green (L1 9 +
+  features 55 + config 45 + k-test 4). Obs-v4 = default-OFF (+9 state_dim, re-warm/retrain when enabled); K=4 restores the
+  trust-region guard. **LOG (do not silently re-baseline):** the pre-existing `test_ev_liftoff_k4` threshold drifted
+  (2.9× vs 3.0×, proven not-this-diff via a clean worktree) — a finding with an unread cause.
 - **ESCROW guard LANDED + tested** (checkpoint #46).
 - **Harness enablers** (esper-lite-7fe21bd091, decision ACCEPTED, task OPEN, no GPU): default-on checkpointing +
   per-decision advantage/pre-floor/per-head-KL logging + **K>1** (Read B, P8=0). Correct regardless of the epic.
@@ -90,19 +98,15 @@ farm fossils.
   not symptom 2 → THREE symptoms not four).
 
 ## Next session, start here
-1. **MINE r9 FIRST — it is a one-way door (round-13.5 §2): K>1/obs-v4 make future runs a different regime, so r9 (the whole
-   13-round evidence base) becomes non-extendable once a new-regime run happens.** The load-bearing free read: **WAIT-arm
-   decomposition** (split the READ-3 WAIT arm by later-force-pruned vs not) — settles commit-EARLIER-vs-more and
-   protect-from-forced-PRUNE vs intrinsic-benefit (PDR-0078 OPEN). Also mine while free: per-head floor-binding rates,
-   |H|=1 rate vs training round, α-target/blueprint histograms. Do these before authorizing any K>1/v4 GPU run.
-2. **Review + commit the L1(obs-v4) + K>1 diff** (uncommitted, done+tested): read the actual diff (esp. `features.py`
-   `_encode_contribution_v4` + the schema plumbing), confirm v3 byte-identical, then commit. **Fix the ESCROW-guard
-   regression** (`scripts/proof_packet.py` builds an ESCROW config → hits the fail-closed raise; set the opt-in). Re-baseline
-   the pre-existing EV-liftoff-k4 threshold separately (not this diff's regression).
-3. **L2 REDESIGN around a NON-SELECTABLE settlement instant** (READ 1 verdict): fixed-time / terminal / non-cancellable
-   REQUEST_FOSSILIZE confirmation window — the only construction that removes the timing max-operator. The EWMA quote is a
-   valid VALUE proxy (READ 3) but must not be evaluated at a policy-chosen instant. Close the 4 L2 spec holes (gpt-prime §3).
-   Owner-gated to land; L1 lands first (don't run L1 alone).
-4. **Then the first GPU arm** (owner-gated, after r9 mined): SHAPED control vs L1+non-selectable-L2, floor+critic+K held
-   constant for attribution. Success = the −113 discontinuity gone + contribution-sensitive commitment + NO timing farm +
-   stable/better terminal outcomes. Floor is P3 (packaged with the reward, never alone).
+1. **Fold in the ARCHIVAL r9 reads** (running: per-head floor-binding, |H|=1-over-time confidence-trap, α/blueprint
+   histograms, data-provenance hashes) — the last free evidence; record them, then r9 is frozen.
+2. **Design the COUPLED bet (PDR-0079) — neither ships alone:** (a) **non-selectable settlement** (fixed-time / terminal /
+   non-cancellable REQUEST_FOSSILIZE confirmation window; EWMA a valid QUOTE not cashable; close the 4 L2 spec holes,
+   gpt-prime §3); (b) **floor forced-PRUNE repair** — the floor destroys 55% of good held seeds within ~13 epochs (a
+   distinct workstream from the ρ-sweep gradient fix). drl-expert design; owner-gated to land.
+3. **First GPU arm (owner-gated, after r9 mined + the coupled design):** SHAPED control vs L1(obs-v4)+non-selectable-L2
+   (+/− the forced-PRUNE repair, to attribute the two halves), critic + K held constant. Success = −113 discontinuity gone
+   + contribution-sensitive commitment + NO timing farm + stable/better terminal outcomes + reduced forced-destruction of
+   good seeds. Do NOT run L1 alone (repairs obs while the reward still forfeits).
+4. **LOG, don't paper over:** the `test_ev_liftoff_k4` threshold drift (unread cause); freeze r9's schema in the read
+   tooling (assert obs-v3/K=1) so archival reads can't be silently re-run on the new regime.
