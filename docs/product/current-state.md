@@ -25,13 +25,19 @@ farm fossils.
   WAITING — terminal +1.4–1.6 pp, val-acc all horizons, AUC +1.5–1.7, no added destruction.** Permanence carries real,
   proxy-free product value the reward zeroes out. Bank ONLY the positive TOTAL effect (not "under-fossilization is a
   defect full stop"; comparator is inaction not SET_ALPHA).
-- **READ 4 (WAIT-arm decomposition, IPCW/g-formula NOT survivor conditioning, well-supported ESS≈0.9) RESOLVED the
-  mechanism (PDR-0079): the terminal effect splits ~50/50** — **residual intrinsic-permanence value** (+0.77/+0.87,
-  significant; 90–95% of the *immediate* val@1 benefit where forced-PRUNE can't yet act) **+ shelter from the floor's own
-  forced-PRUNE** (+0.65/+0.79, accumulating). **BOTH material → COUPLED PACKAGE:** reward permanence (non-selectable
-  settlement) AND repair the floor's forced-PRUNE — **the floor is BACK ON THE CRITICAL PATH.** NEW: the same anti-WAIT
-  floor forces the commits AND the destruction — **55% of good held seeds force-pruned within ~13 epochs, both at 0.15,
-  both uncontrollable.** (Soften: shelter ≠ "a floor repair banks +0.7pp"; the two halves aren't additive.)
+- **READ 4 (WAIT-arm decomposition) split the effect ~50/50 (residual FOSSILIZE + forced-PRUNE shelter) — but ROUND-14
+  RECALIBRATED it (PDR-0080).** The **residual/permanence half is SOLID** (Support-1: val@1, assumption-light, design-based
+  — the READ-3 exact randomization where forced-PRUNE can't yet have fired). The **shelter half is UNDER VERIFICATION** —
+  its flat-0.15 IPCW propensity is likely mis-specified (PRUNE masked below age-5; "this seed pruned" needs the SLOT head
+  too; 0.85^13≈12% ≫ the reported 55%). So the settlement is the WELL-EVIDENCED leg; the floor-repair is
+  strongly-motivated-but-softer. **The coupling rationale is "EITHER-ALONE-IS-DEGENERATE"** (settlement-alone: commits stay
+  floor-forced + seeds destroyed; floor-repair-alone: the learned preference is PARK → zero fossils) — NOT the 50/50. The
+  floor is on the critical path regardless.
+- **IN FLIGHT (both parallel):** (a) the 5 shelter-VERIFICATION reads (PRUNE-legality, empirical destruction hazard,
+  slot-head focal-slot propensity [decisive], val@1 ordering, pinned-only-vs-all-PRUNE sensitivity) — decide whether the
+  shelter half + 55% + 50/50 survive; (b) the drl-expert **coupled DESIGN** (TRIANGULAR A/B/C attributable experiment +
+  non-selectable-settlement spec + forced-PRUNE-safe op-distribution spec), design-only. **GPU held** until the 5
+  verification items + the triangular design + both specs are in a single pre-registration.
 - **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
   satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
   over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
