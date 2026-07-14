@@ -430,9 +430,11 @@ def _extract_slot_features_v3(
         contribution = 0.0
     contribution_norm = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
 
-    # Contribution velocity (1 dim) - raw velocity, not fossilize lookahead
-    velocity = slot_report.metrics.contribution_velocity
-    velocity_norm = max(-1.0, min(velocity / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
+    # Contribution velocity (1 dim) — V3/V4 SCHEMA CONSTANT 0.0 (mirrors the
+    # batch encoder's pin; see batch_obs_to_features and esper-lite-f0a82adccb).
+    # The transport is live (telemetry/dashboards see true velocity); the obs
+    # exposes it only at Obs V5.
+    velocity_norm = 0.0
 
     # Blend tempo epochs (1 dim) - normalized to [0, 1] range (max ~12 epochs)
     blend_tempo_norm = float(slot_report.blend_tempo_epochs) / 12.0
@@ -909,10 +911,15 @@ def batch_obs_to_features(
                 contribution_norm = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
                 obs[env_idx, slot_offset + 12] = contribution_norm
 
-            # Contribution velocity (1 dim)
-            velocity = report.metrics.contribution_velocity
-            velocity_norm = max(-1.0, min(velocity / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
-            obs[env_idx, slot_offset + 13] = velocity_norm
+            # Contribution velocity (1 dim) — V3/V4 SCHEMA CONSTANT 0.0.
+            # This dim was dead (constant 0.0) from Obs V3's inception because the
+            # leyline transport dropped the field (bug esper-lite-f0a82adccb). The
+            # transport is FIXED (telemetry now carries the true value), but V3/V4
+            # deliberately preserve the historical constant: every policy and every
+            # r9-derived prior was calibrated on a dead dim, and the permanence
+            # experiment holds observations matched (PDR-0100). The live value is
+            # exposed only at Obs V5 (defect register B).
+            obs[env_idx, slot_offset + 13] = 0.0
 
             # Blend tempo epochs (1 dim)
             blend_tempo_norm = float(report.blend_tempo_epochs) / 12.0

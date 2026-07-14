@@ -366,8 +366,14 @@ def test_batch_obs_to_features_slot_features():
     # contribution_norm (index 12) - 2.5 / 10.0 = 0.25
     assert abs(slot[12].item() - 0.25) < 1e-6
 
-    # contribution_velocity (index 13) - 0.5 / 10.0 = 0.05
-    assert abs(slot[13].item() - 0.05) < 1e-6
+    # contribution_velocity (index 13) — V3/V4 SCHEMA CONSTANT 0.0.
+    # This golden previously asserted pass-through (0.5/10 = 0.05), a behavior
+    # production NEVER exhibited: the leyline transport dropped the field, so
+    # the live encoder always saw 0.0 (bug esper-lite-f0a82adccb). The test
+    # only "passed" by setting the leyline field directly, bypassing the broken
+    # transport. The transport is now fixed and the dim is deliberately pinned
+    # to 0.0 in V3/V4 (PDR-0100); it goes live at Obs V5.
+    assert slot[13].item() == 0.0
 
     # blend_tempo_norm (index 14) - 8 / 12.0 ≈ 0.6667
     assert abs(slot[14].item() - (8.0 / 12.0)) < 1e-4

@@ -298,6 +298,7 @@ class SeedMetrics:
             boost_received=self.boost_received,
             upstream_alpha_sum=self.upstream_alpha_sum,
             downstream_alpha_sum=self.downstream_alpha_sum,
+            contribution_velocity=self.contribution_velocity,
         )
 
     # Schema version for SeedMetrics serialization
