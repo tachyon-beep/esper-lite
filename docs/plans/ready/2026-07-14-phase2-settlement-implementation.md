@@ -5,7 +5,13 @@ status: ready-pending-re-review
 created: 2026-07-14
 revised: 2026-07-14 (rev 2 — closes drl plan-review B1–B5/N1–N5 + the W1 window-targeting finding + round-23 safety semantics)
 owner_authorization: PDR-0090 (convergence endorsement; scope = default-off impl + tests + replay + drl review + docs)
-NOT_in_scope: training-config activation; GPU use; obs changes (pending-visibility = OWNER FORK, see §F2)
+NOT_in_scope: training-config activation; GPU use
+owner_rulings_2026-07-14 (PDR-0098): F1 = settle_partial (experiment value; void stays implemented+tested);
+  F2 = ADD the pending bit -> NEW OBS INCREMENT in scope (one per-slot pending_settlement dim, obs-v4 path,
+  arm A constant 0, explicit obs-schema version, features.py per-slot block + get_feature_size + the
+  G-OBSERVABILITY replay area + a pending-vs-ordinary distinguishability test);
+  F3 = S9 PROPOSED on simulation (min_window=10, span-10 EWMA, LCB z=1.5 — owner ratifies at freeze;
+  FossilSettlementConfig experiment values updated accordingly)
 spec: docs/analysis/2026-07-14-permanence-visible-preregistration.md §2 (rounds 15–21 + the §2.5.9 W1 amendment)
 acceptance: §2.6 seven gates + the TEN replay areas (§A below, transcribed) + 8 construction invariants (§B) + round-22 pins as re-worded in N5
 reviewed_by: [drl-expert plan review r1: REQUEST-CHANGES (B1–B5, N1–N5) — all addressed below; re-review pending]
