@@ -1,0 +1,83 @@
+{
+  "label": "seed42",
+  "path": "/home/john/esper-lite/telemetry/stage2_on_longdiag/seed42/telemetry_2026-07-12_161217/events.jsonl",
+  "regime_stamp": {
+    "recurrent_n_epochs": 1,
+    "reward_mode": "shaped",
+    "chunk_length": 150,
+    "max_epochs": 150,
+    "per_head_advantage_norm": false,
+    "max_seeds": 3,
+    "gamma": 0.995,
+    "task": "cifar_baseline",
+    "reward_family": "contribution",
+    "n_envs": 12,
+    "gae_lambda": 0.95
+  },
+  "n_lines": 4306545,
+  "n_last_action": 1079950,
+  "n_partitions": 7200,
+  "type_totals": {
+    "GERMINATE": 89088,
+    "PRUNE": 82107,
+    "SET_ALPHA_TARGET": 32143,
+    "FOSSILIZE": 2108
+  },
+  "success_by_type": {
+    "GERMINATE": {
+      "true": 89088
+    },
+    "PRUNE": {
+      "true": 82107
+    },
+    "SET_ALPHA_TARGET": {
+      "true": 32143
+    },
+    "FOSSILIZE": {
+      "true": 2108
+    }
+  },
+  "CONSISTENCY_queued_eq_suppFOSS": true,
+  "sum_queued_fossilizes": 24,
+  "suppressed_FOSSILIZE_second_request": 24,
+  "total_episode_epochs": 1079950,
+  "total_window_epochs": 19269,
+  "locked_fraction_pooled": 0.01784249270799574,
+  "n_windows": 2031,
+  "late_masked": 53,
+  "suppressed_by_type": {
+    "PRUNE": 1743,
+    "GERMINATE": 1579,
+    "SET_ALPHA_TARGET": 407,
+    "FOSSILIZE": 24
+  },
+  "suppressed_frac_of_type": {
+    "GERMINATE": 0.01772404813218391,
+    "PRUNE": 0.021228397091599984,
+    "SET_ALPHA_TARGET": 0.01266216594592913,
+    "FOSSILIZE": 0.011385199240986717
+  },
+  "suppressed_hold_PRUNE": 13,
+  "suppressed_hold_GERMINATE": 0,
+  "frac_supp_PRUNE_holding": 0.007458405048766495,
+  "n_episodes_with_window": 1949,
+  "n_episodes_any_locked_epoch": 1949,
+  "frac_episodes_any_lock": 0.27069444444444446,
+  "per_episode_locked_frac_pctls": {
+    "n": 7200,
+    "mean": 0.017843410586496068,
+    "p50": 0.0,
+    "p75": 0.03333333333333333,
+    "p90": 0.07333333333333333,
+    "p99": 0.09333333333333334,
+    "max": 0.18666666666666668
+  },
+  "queue_depth_distribution": {
+    "0": 2007,
+    "1": 24
+  },
+  "e_max_hist": {
+    "149": 2,
+    "150": 7198
+  }
+}

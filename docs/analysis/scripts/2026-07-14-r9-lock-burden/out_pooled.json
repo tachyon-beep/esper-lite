@@ -1,0 +1,47 @@
+{
+  "pooled_locked_fraction": 0.01754586593156478,
+  "total_window_epochs": 37897,
+  "total_episode_epochs": 2159882,
+  "n_partitions": 14400,
+  "n_windows": 3999,
+  "late_masked": 100,
+  "type_totals": {
+    "GERMINATE": 177931,
+    "PRUNE": 163931,
+    "SET_ALPHA_TARGET": 66954,
+    "FOSSILIZE": 4151
+  },
+  "suppressed_by_type": {
+    "PRUNE": 3443,
+    "GERMINATE": 3104,
+    "FOSSILIZE": 52,
+    "SET_ALPHA_TARGET": 798
+  },
+  "suppressed_frac_of_type": {
+    "GERMINATE": 0.017444964621117175,
+    "PRUNE": 0.021002738957244207,
+    "SET_ALPHA_TARGET": 0.011918630701675778,
+    "FOSSILIZE": 0.012527101903155867
+  },
+  "suppressed_hold_PRUNE": 32,
+  "suppressed_hold_GERMINATE": 0,
+  "frac_supp_PRUNE_holding": 0.009294220156839965,
+  "n_episodes_any_locked_epoch": 3867,
+  "frac_episodes_any_lock": 0.2685416666666667,
+  "per_episode_locked_frac_pctls": {
+    "n": 14400,
+    "mean": 0.01754595025969099,
+    "p50": 0.0,
+    "p75": 0.03333333333333333,
+    "p90": 0.07333333333333333,
+    "p99": 0.09333333333333334,
+    "max": 0.18666666666666668
+  },
+  "queue_depth_distribution": {
+    "0": 3947,
+    "1": 52
+  },
+  "sum_queued_fossilizes": 52,
+  "consistency_queued_eq_suppFOSS": true,
+  ">25pct_escalation_fires": false
+}
