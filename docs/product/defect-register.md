@@ -3,7 +3,12 @@
 **A-gate status:** A2 ✅ DONE (`1df249ab` — transport fixed, dim pinned, bug esper-lite-f0a82adccb CLOSED with
 fix_verification; class-closers landed: transport-completeness + dim-liveness tests). A3 ✅ static half done
 (the liveness sweep with its documented not-yet-varied ledger) / runtime normalizer proof-packet still open on
-esper-lite-c739c3ab97. A4 🔄 coverage-report agent in flight. A1+A5 🔄 settlement build: increments 1–2 of 6
+esper-lite-c739c3ab97. A4 ✅ DONE (`docs/analysis/2026-07-14-reward-obs-coverage.md`, reviewed) — headline: the SHAPED reward has
+**6 accidentally-unplumbed inputs**, topped by `counterfactual_total_improvement` (gates EVERY
+anti-gaming/fossilize/prune branch; aliases obs dim +12 only in single-seed episodes — multi-seed episodes
+leave the policy blind to the gate signal) and the param family (rent fires every step, zero capacity signal
+in the obs). Both join register B's V5 candidates; heuristic's `host_stabilized` confirmed
+INTENTIONALLY-hidden (features.py:305). A1+A5 🔄 settlement build: increments 1–2 of 6
 done (`3b36aa56` pure core, `89831e8a` committed-flag state machine); next = action layer → reward adapter →
 F2 obs bit → replay B-path → drl pre-commit review.
 
@@ -31,6 +36,9 @@ F2 obs bit → replay B-path → drl pre-commit review.
 | Train−val generalization gap | Overfit-vs-undercapacity indistinguishable today |
 | **Occupancy decomposition** — `num_provisional_holding` / `num_fossilized` / `num_pending` / `num_occupied`; `num_holding` keeps its (misnamed) frozen semantics, then deprecates | Bug esper-lite-e0f03d7800; NEVER redefine a live dim (both primes converged) |
 | D2-cleared per-site features (InjectionSpec statics free; slot-local grad aggregates) | GERMINATE is the worst-served decision; gated on the D2 information-ceiling read |
+| **`counterfactual_total_improvement`** (the all-off clean counterfactual) as a per-slot/base feature | Coverage report #1: gates EVERY reward anti-gaming/fossilize/prune branch; obs-blind whenever ≥2 seeds active (dim +12 aliases it only at n=1) — arguably the top-leverage V5 candidate |
+| `acc_at_germination` (or progress-since-germination directly) | Coverage report #3: the attribution SCALE for all positive contributions; reward-side anchor invisible to the policy |
+| Param/capacity family (`host_params`, `effective_seed_params`) | Coverage report #2 + pytorch audit #7: rent fires every step; policy optimizes gain-per-param with no capacity signal |
 | Generated feature layout (named blocks, no hand offsets, layout hash) + exhaustive transport test | gpt §8; kills the A1/A2 defect classes permanently |
 
 ## C. DEFERRED-PRICED defects (decision anchored; do NOT hot-fix)
