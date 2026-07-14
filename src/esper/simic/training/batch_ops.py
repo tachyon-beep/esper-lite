@@ -347,11 +347,13 @@ def batch_signals_to_features(
     device: torch.device,
     *,
     max_epochs: int,
+    obs_v4: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Consolidated signals-to-features conversion for all environments.
 
     Returns:
-        obs: [batch, obs_dim] - observation features (Obs V3: 120 dims for 3 slots)
+        obs: [batch, obs_dim] - observation features (Obs V3: 120 dims for 3 slots;
+            Obs V4: 129 dims when obs_v4=True)
         blueprint_indices: [batch, num_slots] - blueprint indices for embedding lookup (int64)
     """
     return batch_obs_to_features(
@@ -361,4 +363,5 @@ def batch_signals_to_features(
         slot_config=slot_config,
         device=device,
         max_epochs=max_epochs,
+        obs_v4=obs_v4,
     )

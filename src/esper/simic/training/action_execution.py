@@ -1443,6 +1443,10 @@ def execute_actions(
                 else:
                     # Initialize tracking for new slots
                     env_state.epochs_since_counterfactual[slot_id] = 0
+                # Obs V4: age the canonical state in lock-step (FRESH -> STALE; a fresh
+                # measurement later this epoch resets it via record_counterfactual_measurement,
+                # mirroring the legacy dict's increment-then-reset ordering). Obs V4 only.
+                env_state.advance_counterfactual_epoch(slot_id)
 
         # Consolidate telemetry via emitter
         if ops_telemetry_enabled and masked_np is not None:

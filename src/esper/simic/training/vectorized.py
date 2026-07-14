@@ -784,6 +784,7 @@ def train_ppo_vectorized(
     per_head_advantage_norm: bool = False,  # Per-head advantage standardization ablation (default OFF)
     hra_value_decomposition: bool = False,  # EV-stab Stage 2 HRA cf value head (default OFF)
     return_variance_telemetry: bool = False,  # EV-stab Stage 0 value-free variance-share gate (default OFF)
+    obs_v4_contribution_state: bool = False,  # L1 Obs V4 canonical contribution state (default OFF = V3, byte-identical)
     value_coef: float = 0.5,  # Value loss coefficient (lower reduces critic dominance)
     value_warmup_batches: int = 0,  # Batches to ramp up value_coef (0 = no warmup)
     value_coef_start: float | None = None,  # Starting value_coef (default: 0.1 * value_coef)
@@ -1082,7 +1083,9 @@ def train_ppo_vectorized(
     # NOTE: Telemetry and escrow-credit features are MERGED into slot features (32 per slot),
     # so we no longer add separate SeedTelemetry.feature_dim() per slot.
     # Blueprint embeddings (4 × num_slots) are added inside the network.
-    state_dim = get_feature_size(slot_config)
+    # Obs V4 (default OFF) grows state_dim by 3 dims/slot; the SAME flag drives the trainer's
+    # obs builds and the normalizer contract so the network input width and the obs width agree.
+    state_dim = get_feature_size(slot_config, obs_v4=obs_v4_contribution_state)
 
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
@@ -1188,6 +1191,7 @@ def train_ppo_vectorized(
             obs_normalizer=obs_normalizer,
             slot_config=slot_config,
             device=device,
+            obs_v4=obs_v4_contribution_state,
         )
 
         # Restore reward normalizer state
@@ -1613,6 +1617,7 @@ def train_ppo_vectorized(
         effective_max_seeds=effective_max_seeds,
         device=device,
         logger=_logger,
+        obs_v4=obs_v4_contribution_state,
     )
 
     try:

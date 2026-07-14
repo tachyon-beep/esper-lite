@@ -32,6 +32,12 @@ from esper.leyline import (
     OBS_V3_NON_BLUEPRINT_DIM,
     OBS_V3_SLOT_FEATURE_SIZE,
     OBS_V3_UNKNOWN_SENTINEL,
+    OBS_V4_SLOT_FEATURE_SIZE,
+    OBS_V4_SLOT_OFFSET_CF_AGE_NORM,
+    OBS_V4_SLOT_OFFSET_CF_FROZEN,
+    OBS_V4_SLOT_OFFSET_CF_OBSERVED,
+    ContributionState,
+    CounterfactualStatus,
     TaskConfig,  # Cross-subsystem task configuration
     safe,  # Cross-subsystem safe value conversion
 )
@@ -73,6 +79,56 @@ def _counterfactual_freshness(
         return OBS_V3_UNKNOWN_SENTINEL
     epochs_since_cf = epochs_since_counterfactual[slot_id]
     return DEFAULT_GAMMA ** epochs_since_cf
+
+
+def _encode_contribution_v4(
+    state: ContributionState | None,
+) -> tuple[float, float, float, float]:
+    """Encode the canonical ``ContributionState`` for Obs V4.
+
+    Returns ``(value, observed, frozen, age_norm)`` for slot dims 12 / 32 / 33 / 34.
+
+    Round-13 corrected representation (both primes):
+    - **never-measured / no valid value** -> ``value = UNKNOWN sentinel``, ``observed = 0``,
+      ``age_norm = 1`` (maximum uncertainty). A just-germinated seed and a fossil that was
+      never measured both read as "we have never seen this," NOT as ``0``.
+    - **fresh** (incl. a genuine measured ``0.0``) -> ``value = last_valid_norm`` (freshness=1),
+      ``observed = 1``, ``age_norm = 0``. A true measured ``0.0`` stays distinguishable from
+      absence (``0.0`` with ``observed=1`` vs sentinel with ``observed=0``).
+    - **stale / frozen** -> the value **shrinks toward the UNKNOWN sentinel as staleness rises**
+      (``freshness = gamma ** epochs_since``), so an old measurement reads as "we don't know"
+      (interval-widening) rather than a confident ``+c`` (the freeze-forever mirror bug) or ``0``
+      (the original bug). ``observed = 1``, ``age_norm`` rises toward 1, ``frozen`` flags a
+      ``FROZEN_AT_FOSSILIZE`` value so the policy can tell a permanent commit from a provisional
+      stale reading.
+
+    The four dims are only *jointly* self-describing: a sentinel in the value dim is
+    disambiguated by ``observed`` (0 => unknown) versus a true fresh strong-negative
+    (``observed=1``, ``age_norm=0``), which the round-13 review required (a bare ``-1`` sentinel
+    is not self-describing because a true negative contribution also clips to ``-1``).
+    """
+    if (
+        state is None
+        or state.counterfactual_status == CounterfactualStatus.NEVER_MEASURED
+        or state.last_valid_counterfactual_contribution is None
+    ):
+        return (OBS_V3_UNKNOWN_SENTINEL, 0.0, 0.0, 1.0)
+
+    last_norm = max(
+        -1.0,
+        min(state.last_valid_counterfactual_contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0),
+    )
+    # freshness in (0, 1]: 1.0 when measured this epoch, decays toward 0 as it ages.
+    freshness = DEFAULT_GAMMA ** state.epochs_since_counterfactual
+    age_norm = 1.0 - freshness
+    # Shrink the value toward the UNKNOWN sentinel as staleness rises (NOT toward 0).
+    value = freshness * last_norm + (1.0 - freshness) * OBS_V3_UNKNOWN_SENTINEL
+    frozen = (
+        1.0
+        if state.counterfactual_status == CounterfactualStatus.FROZEN_AT_FOSSILIZE
+        else 0.0
+    )
+    return (value, 1.0, frozen, age_norm)
 
 
 def _previous_gradient_health(
@@ -649,10 +705,10 @@ _ALPHA_ALGO_MAX: int = max(algo.value for algo in AlphaAlgorithm)
 _ALPHA_ALGO_RANGE: int = max(_ALPHA_ALGO_MAX - _ALPHA_ALGO_MIN, 1)
 
 
-def get_feature_size(slot_config: SlotConfig) -> int:
+def get_feature_size(slot_config: SlotConfig, *, obs_v4: bool = False) -> int:
     """Feature size excluding blueprint embeddings (added by network).
 
-    Obs V3 Breakdown:
+    Obs V3 Breakdown (``obs_v4=False``, the default — byte-identical to today):
         Base features:     24 dims (epoch, val_loss, val_accuracy,
                                     loss_history_5, accuracy_history_5,
                                     stage distribution,
@@ -662,16 +718,23 @@ def get_feature_size(slot_config: SlotConfig) -> int:
 
     For 3 slots: 24 + (32 × 3) = 120 dims
 
+    Obs V4 (``obs_v4=True``) grows the per-slot block to 35 dims (+3 explicit counterfactual
+    status dims: observed / frozen / age_norm), giving 24 + (35 × 3) = **129** dims for 3 slots
+    (network input 129 + 12 = 141). This is a schema change requiring a re-warm/retrain; V3 runs
+    stay byte-identical with the flag OFF.
+
     Note: Blueprint embeddings (4 dims × num_slots) are added inside the network
-    via BlueprintEmbedding module, making total network input 120 + 12 = 132 for 3 slots.
+    via BlueprintEmbedding module, making total network input 120 + 12 = 132 for 3 slots (V3).
 
     Args:
         slot_config: Slot configuration defining number of slots
+        obs_v4: Select the Obs V4 slot layout (canonical contribution state). Default False.
 
     Returns:
         Total observation feature size (excluding blueprint embeddings)
     """
-    return OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * slot_config.num_slots)
+    slot_feature_size = OBS_V4_SLOT_FEATURE_SIZE if obs_v4 else OBS_V3_SLOT_FEATURE_SIZE
+    return OBS_V3_BASE_FEATURE_SIZE + (slot_feature_size * slot_config.num_slots)
 
 
 def batch_obs_to_features(
@@ -682,8 +745,9 @@ def batch_obs_to_features(
     device: torch.device,
     *,
     max_epochs: int,
+    obs_v4: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Extract features for batch of environments (Obs V3).
+    """Extract features for batch of environments (Obs V3, or Obs V4 when ``obs_v4=True``).
 
     OPTIMIZED for high n_envs (64-256+):
     - Pre-allocates single output tensor on CPU, fills in-place, then single H2D transfer
@@ -721,7 +785,10 @@ def batch_obs_to_features(
     """
     n_envs = len(batch_signals)
     num_slots = slot_config.num_slots
-    obs_dim = OBS_V3_BASE_FEATURE_SIZE + OBS_V3_SLOT_FEATURE_SIZE * num_slots
+    # Obs V4 grows the per-slot block by 3 explicit counterfactual-status dims (32/33/34) and
+    # changes dim-12 semantics; V3 (default) is byte-identical.
+    slot_feature_size = OBS_V4_SLOT_FEATURE_SIZE if obs_v4 else OBS_V3_SLOT_FEATURE_SIZE
+    obs_dim = OBS_V3_BASE_FEATURE_SIZE + slot_feature_size * num_slots
 
     # Pre-allocate on CPU for Python-loop filling, then transfer once to device.
     # CRITICAL: Do NOT pre-allocate on GPU and fill element-by-element - each indexed
@@ -801,10 +868,10 @@ def batch_obs_to_features(
         obs[env_idx, 17:23] = op_table[env_state.last_action_op]
         obs[env_idx, 23] = _stable_val_acc_feature(env_state)
 
-        # === SLOT FEATURES (32 dims per slot) ===
+        # === SLOT FEATURES (32 dims per slot; 35 under Obs V4) ===
         for slot_idx, slot_id in enumerate(slot_config.slot_ids):
             report = reports.get(slot_id)
-            slot_offset = OBS_V3_BASE_FEATURE_SIZE + slot_idx * OBS_V3_SLOT_FEATURE_SIZE
+            slot_offset = OBS_V3_BASE_FEATURE_SIZE + slot_idx * slot_feature_size
 
             if report is None:
                 # Empty slot (`state is None`) - already zeros from initialization
@@ -824,12 +891,23 @@ def batch_obs_to_features(
             # Current alpha (1 dim)
             obs[env_idx, slot_offset + 11] = report.metrics.current_alpha
 
-            # Improvement (1 dim) - causal counterfactual contribution only
-            contribution = report.metrics.counterfactual_contribution
-            if contribution is None:
-                contribution = 0.0
-            contribution_norm = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
-            obs[env_idx, slot_offset + 12] = contribution_norm
+            # Improvement (1 dim) - causal counterfactual contribution.
+            if obs_v4:
+                # Obs V4: dim-12 reads the CANONICAL ContributionState. A structurally-unmeasured
+                # counterfactual (fossil / at birth) reads as the UNKNOWN sentinel and shrinks
+                # toward it as staleness rises — NOT a confident 0 (the None->0 bug on the V3 line
+                # below). The explicit status dims (32/33/34) make the value self-describing.
+                cf_state = env_state.contribution_states.get(slot_id)
+                cf_value, cf_observed, cf_frozen, cf_age_norm = _encode_contribution_v4(cf_state)
+                obs[env_idx, slot_offset + 12] = cf_value
+            else:
+                # Obs V3 (default): the historical None->0 coercion. Kept byte-identical so
+                # existing V3 runs are unchanged (the bug this replaces lives HERE, gated OFF).
+                contribution = report.metrics.counterfactual_contribution
+                if contribution is None:
+                    contribution = 0.0
+                contribution_norm = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
+                obs[env_idx, slot_offset + 12] = contribution_norm
 
             # Contribution velocity (1 dim)
             velocity = report.metrics.contribution_velocity
@@ -904,6 +982,14 @@ def batch_obs_to_features(
 
             # escrow_credit_prev (1 dim)
             obs[env_idx, slot_offset + 31] = _escrow_credit_feature(env_state, slot_id)
+
+            # === Obs V4 explicit counterfactual status/mask (3 dims: 32/33/34) ===
+            # These reach the POLICY (not just telemetry) so a stale/frozen/absent counterfactual
+            # is self-describing alongside the shrinking value in dim-12 (round-13 requirement).
+            if obs_v4:
+                obs[env_idx, slot_offset + OBS_V4_SLOT_OFFSET_CF_OBSERVED] = cf_observed
+                obs[env_idx, slot_offset + OBS_V4_SLOT_OFFSET_CF_FROZEN] = cf_frozen
+                obs[env_idx, slot_offset + OBS_V4_SLOT_OFFSET_CF_AGE_NORM] = cf_age_norm
 
     # Single H2D transfer at end (after all Python-loop filling is complete)
     return obs.to(device), blueprint_indices.to(device)

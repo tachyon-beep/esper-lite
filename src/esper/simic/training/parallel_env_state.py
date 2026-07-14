@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, DefaultDict, cast
 
 import torch
 
-from esper.leyline import LifecycleOp, SeedSlotProtocol
+from esper.leyline import ContributionState, LifecycleOp, SeedSlotProtocol
 from esper.simic.rewards import FossilizedSeedDripState
 
 if TYPE_CHECKING:
@@ -147,6 +147,19 @@ class ParallelEnvState:
     # no entry here until its first counterfactual measurement.
     epochs_since_counterfactual: dict[str, int] = field(default_factory=dict)
 
+    # === Obs V4 Canonical Contribution State (L1: make permanence visible) ===
+    # ONE source for a seed's counterfactual (LOO) contribution + measurement status,
+    # consumed by the Obs V4 encoder (and future L2 settlement). Replaces the three
+    # independent None->0 coercions (observation dim-12, reward gate, settlement input).
+    # Maintained ALWAYS (cheap dict ops, crash-proof create-on-demand) but only CONSUMED
+    # under the Obs V4 flag; V3 observation/reward outputs are byte-identical.
+    #
+    # slot_generation is the monotonic lifecycle identity: it increments on germinate so a
+    # slot's new occupant never inherits the previous occupant's cached last_valid (the
+    # carry-forward artifact — kept OUT of the live policy).
+    contribution_states: dict[str, ContributionState] = field(default_factory=dict)
+    slot_generation: dict[str, int] = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         # Initialize counters with LifecycleOp names (WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE, ADVANCE)
         # since factored actions use op.name for counting, not flat action enum names
@@ -268,6 +281,10 @@ class ParallelEnvState:
         # just germinated seed is never observed as healthy/fresh (TPD-003).
         self.gradient_health_prev.clear()
         self.epochs_since_counterfactual.clear()
+        # Obs V4: clear canonical contribution state AND generation counters at the episode
+        # boundary (slots are DORMANT; a new episode's germinations restart at generation 1).
+        self.contribution_states.clear()
+        self.slot_generation.clear()
 
         self.signal_tracker.reset()
         self.governor.reset()
@@ -295,6 +312,10 @@ class ParallelEnvState:
         """
         self.gradient_health_prev.pop(slot_id, None)
         self.epochs_since_counterfactual.pop(slot_id, None)
+        # Obs V4: a new occupant of this slot id starts a NEW generation with NO cached
+        # counterfactual (NEVER_MEASURED). The generation bump is what guarantees the prior
+        # occupant's last_valid is never carried forward into the live policy.
+        self.germinate_contribution_state(slot_id)
 
     def clear_obs_v3_slot_tracking(self, slot_id: str) -> None:
         """Clear Obs V3 per-slot tracking when a slot becomes empty."""
@@ -302,6 +323,46 @@ class ParallelEnvState:
             del self.gradient_health_prev[slot_id]
         if slot_id in self.epochs_since_counterfactual:
             del self.epochs_since_counterfactual[slot_id]
+        # Obs V4: drop the canonical state on prune/empty (the generation counter is retained so
+        # a future occupant of the same slot id gets a strictly-greater generation id).
+        self.contribution_states.pop(slot_id, None)
+
+    # === Obs V4 canonical contribution-state maintenance =====================
+    # Maintained alongside the legacy epochs_since_counterfactual dict at the SAME hook sites
+    # (germinate / measurement / epoch-advance / fossilize / prune). Create-on-demand mirrors
+    # the legacy dict's create-on-demand semantics so this can NEVER raise a new exception into
+    # the V3 hot path (which does not read these fields).
+
+    def germinate_contribution_state(self, slot_id: str) -> None:
+        """Start a new generation for a freshly germinated (or reused) slot: NEVER_MEASURED.
+
+        Increments the slot's monotonic generation id and clears any cached last_valid from a
+        previous occupant (lifecycle-safety invariant: no carry-forward inside the live policy).
+        """
+        generation = self.slot_generation.get(slot_id, 0) + 1
+        self.slot_generation[slot_id] = generation
+        self.contribution_states[slot_id] = ContributionState.never_measured(generation)
+
+    def record_counterfactual_measurement(self, slot_id: str, value: float) -> None:
+        """Record a fresh counterfactual ablation result for a slot (status -> FRESH)."""
+        state = self.contribution_states.get(slot_id)
+        if state is None:
+            generation = self.slot_generation.get(slot_id, 0)
+            state = ContributionState.never_measured(generation)
+            self.contribution_states[slot_id] = state
+        state.record_measurement(value)
+
+    def advance_counterfactual_epoch(self, slot_id: str) -> None:
+        """Advance a tracked slot one epoch with no fresh measurement (FRESH -> STALE; ages)."""
+        state = self.contribution_states.get(slot_id)
+        if state is not None:
+            state.advance_epoch()
+
+    def freeze_contribution_at_fossilize(self, slot_id: str) -> None:
+        """Freeze the last-valid contribution at the commit instant (status -> FROZEN)."""
+        state = self.contribution_states.get(slot_id)
+        if state is not None:
+            state.freeze_at_fossilize()
 
 
 __all__ = ["ParallelEnvState"]

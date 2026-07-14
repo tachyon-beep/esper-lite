@@ -692,6 +692,9 @@ class VectorizedPPOTrainer:
     effective_max_seeds: int
     device: str
     logger: logging.Logger
+    # L1 Obs V4 canonical contribution state (default OFF = V3, byte-identical). Drives the
+    # per-slot obs layout; MUST match the state_dim the network/normalizer were built with.
+    obs_v4: bool = False
     action_execution_context: ActionExecutionContext = field(init=False)
     ppo_coordinator: PPOCoordinator = field(init=False)
     # Tier-0 phase-profiler handle. NullProfiler until run() enters the real
@@ -1392,6 +1395,11 @@ class VectorizedPPOTrainer:
                             env_state.epochs_since_counterfactual[
                                 slot_id
                             ] = 0
+                            # Obs V4: record the fresh measurement into the canonical state
+                            # (status -> FRESH, last_valid captured). Consumed only under Obs V4.
+                            env_state.record_counterfactual_measurement(
+                                slot_id, new_contribution
+                            )
                 elif kind == "solo_on":
                     slot_id = cfg["_slot"]
                     solo_on_accs[i][slot_id] = acc
@@ -2001,6 +2009,7 @@ class VectorizedPPOTrainer:
             slot_config=slot_config,
             device=torch.device(device),
             max_epochs=max_epochs,
+            obs_v4=self.obs_v4,
         )
         # NOTE: blueprint_indices_batch is passed to get_action() for op-conditioned value (Phase 4)
 
@@ -2316,6 +2325,7 @@ class VectorizedPPOTrainer:
                     env_states=bootstrap_env_states,
                     device=torch.device(device),
                     max_epochs=max_epochs,
+                    obs_v4=self.obs_v4,
                 )
             )
             post_action_features_normalized = obs_normalizer.normalize(
@@ -3125,7 +3135,7 @@ class VectorizedPPOTrainer:
             checkpoint_metadata = {
                 "checkpoint_kind": "last",
                 **obs_normalizer_metadata(
-                    self.obs_normalizer, slot_config=self.slot_config
+                    self.obs_normalizer, slot_config=self.slot_config, obs_v4=self.obs_v4
                 ),
                 # Reward normalizer (RewardNormalizer)
                 "reward_normalizer_mean": self.reward_normalizer.mean,

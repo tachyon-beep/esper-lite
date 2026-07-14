@@ -199,6 +199,12 @@ def execute_fossilize(
 
     total_improvement = _fossilized_total_improvement(seed_info)
 
+    # Obs V4: freeze the last-valid counterfactual at the commit instant (status -> FROZEN,
+    # staleness reset to 0). The permanent seed is excluded from the ablation thereafter, so the
+    # frozen value ages toward the UNKNOWN sentinel in the observation instead of reading 0.
+    # Consumed only under Obs V4; a no-op for the canonical-state dict under V3.
+    ctx.env_state.freeze_contribution_at_fossilize(ctx.slot_id)
+
     # Update episode counters
     ctx.env_state.seeds_fossilized += 1
     ctx.env_state.fossilize_count += 1

@@ -9,20 +9,31 @@ from esper.leyline import (
     OBS_V3_FEATURE_SCHEMA_VERSION,
     OBS_V3_SLOT_FEATURE_SIZE,
     OBS_V3_UNKNOWN_SENTINEL,
+    OBS_V4_FEATURE_SCHEMA_VERSION,
+    OBS_V4_SLOT_FEATURE_SIZE,
     SlotConfig,
 )
 from esper.simic.control import RunningMeanStd
 from esper.tamiyo.policy.features import get_feature_size
 
 
-def obs_normalizer_contract(slot_config: SlotConfig) -> dict[str, Any]:
-    """Return the Obs V3 contract that fitted normalizer stats must match."""
+def obs_normalizer_contract(slot_config: SlotConfig, *, obs_v4: bool = False) -> dict[str, Any]:
+    """Return the observation contract that fitted normalizer stats must match.
+
+    ``obs_v4=False`` (default) is the byte-identical Obs V3 contract. Under Obs V4 the schema
+    version and slot_feature_size change, so a V3<->V4 checkpoint resume is correctly rejected
+    by the contract-equality check (the re-warm/retrain requirement).
+    """
     return {
-        "schema_version": OBS_V3_FEATURE_SCHEMA_VERSION,
+        "schema_version": (
+            OBS_V4_FEATURE_SCHEMA_VERSION if obs_v4 else OBS_V3_FEATURE_SCHEMA_VERSION
+        ),
         "slot_ids": list(slot_config.slot_ids),
         "base_feature_size": OBS_V3_BASE_FEATURE_SIZE,
-        "slot_feature_size": OBS_V3_SLOT_FEATURE_SIZE,
-        "state_dim": get_feature_size(slot_config),
+        "slot_feature_size": (
+            OBS_V4_SLOT_FEATURE_SIZE if obs_v4 else OBS_V3_SLOT_FEATURE_SIZE
+        ),
+        "state_dim": get_feature_size(slot_config, obs_v4=obs_v4),
         "unknown_sentinel": OBS_V3_UNKNOWN_SENTINEL,
     }
 
@@ -49,9 +60,10 @@ def obs_normalizer_metadata(
     obs_normalizer: RunningMeanStd,
     *,
     slot_config: SlotConfig,
+    obs_v4: bool = False,
 ) -> dict[str, Any]:
     """Serialize observation normalizer state with its fitted feature contract."""
-    contract = obs_normalizer_contract(slot_config)
+    contract = obs_normalizer_contract(slot_config, obs_v4=obs_v4)
     state_dim = int(contract["state_dim"])
     _validate_obs_normalizer_shape(obs_normalizer, expected_state_dim=state_dim)
     return {
@@ -69,9 +81,10 @@ def restore_obs_normalizer_from_metadata(
     obs_normalizer: RunningMeanStd,
     slot_config: SlotConfig,
     device: str,
+    obs_v4: bool = False,
 ) -> None:
-    """Restore observation normalizer state only when the Obs V3 contract matches."""
-    expected_contract = obs_normalizer_contract(slot_config)
+    """Restore observation normalizer state only when the observation contract matches."""
+    expected_contract = obs_normalizer_contract(slot_config, obs_v4=obs_v4)
     try:
         checkpoint_contract = metadata["obs_normalizer_contract"]
         mean = torch.tensor(metadata["obs_normalizer_mean"], device=device)

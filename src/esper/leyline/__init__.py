@@ -680,6 +680,26 @@ OBS_V3_SLOT_FEATURE_SIZE = 32
 OBS_V3_NON_BLUEPRINT_DIM = OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * DEFAULT_NUM_SLOTS)
 OBS_V3_UNKNOWN_SENTINEL = -1.0
 
+# =============================================================================
+# Obs V4 — canonical counterfactual-contribution state (L1: make permanence visible)
+# =============================================================================
+# Obs V4 appends THREE explicit per-slot status dims (indices 32/33/34) to the V3 slot
+# block and changes the SEMANTICS of the contribution value dim (12) so a stale/frozen
+# counterfactual reads as "we don't know" (shrinks toward the UNKNOWN sentinel) instead of
+# a confident 0 (the original bug) or a frozen-at-full-magnitude value (the mirror bug).
+# See esper.tamiyo.policy.features (get_feature_size / batch_obs_to_features / the v4 encoder).
+#
+# SCHEMA CHANGE — NOT a hot patch: dim-12 semantics change and the slot block grows, so the
+# LSTM/critic were trained on the V3 semantics. Enabling V4 (TrainingConfig.obs_v4_contribution_state)
+# requires a re-warm/retrain; existing V3 runs are byte-identical with the flag OFF (default).
+OBS_V4_FEATURE_SCHEMA_VERSION = 3
+# +3 explicit status dims per slot: counterfactual_observed, counterfactual_frozen, age_norm.
+OBS_V4_SLOT_FEATURE_SIZE = OBS_V3_SLOT_FEATURE_SIZE + 3
+# New per-slot dim offsets within the V4 slot block (base V3 offsets 0..31 are unchanged).
+OBS_V4_SLOT_OFFSET_CF_OBSERVED = 32
+OBS_V4_SLOT_OFFSET_CF_FROZEN = 33
+OBS_V4_SLOT_OFFSET_CF_AGE_NORM = 34
+
 # Number of independent action heads in Tamiyo's factored action space.
 # Heads: op, slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve.
 NUM_ACTION_HEADS = 8
@@ -768,6 +788,12 @@ from esper.leyline.stages import (
     is_terminal_stage,
     is_active_stage,
     is_failure_stage,
+)
+
+# Canonical counterfactual-contribution state (Obs V4 / L1)
+from esper.leyline.contribution_state import (
+    ContributionState,
+    CounterfactualStatus,
 )
 
 # Stage schema (centralized stage encoding contract)
@@ -1092,6 +1118,13 @@ __all__ = [
     "OBS_V3_SLOT_FEATURE_SIZE",
     "OBS_V3_NON_BLUEPRINT_DIM",
     "OBS_V3_UNKNOWN_SENTINEL",
+    "OBS_V4_FEATURE_SCHEMA_VERSION",
+    "OBS_V4_SLOT_FEATURE_SIZE",
+    "OBS_V4_SLOT_OFFSET_CF_OBSERVED",
+    "OBS_V4_SLOT_OFFSET_CF_FROZEN",
+    "OBS_V4_SLOT_OFFSET_CF_AGE_NORM",
+    "ContributionState",
+    "CounterfactualStatus",
     "NUM_ACTION_HEADS",
     "LOG_PROB_MIN",
 

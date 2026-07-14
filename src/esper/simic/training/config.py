@@ -116,6 +116,16 @@ class TrainingConfig:
     # byte-identical to the pre-EV-stab baseline.
     return_variance_telemetry: bool = False
 
+    # === Observation schema (L1: make permanence visible) ===
+    # Obs V4 canonical contribution-state representation (default OFF = Obs V3, byte-identical).
+    # When True, the per-slot observation block grows by 3 explicit counterfactual-status dims
+    # (observed / frozen / age_norm) and the contribution value dim shrinks toward the UNKNOWN
+    # sentinel as staleness rises, instead of coercing a structurally-unmeasured counterfactual
+    # (fossil / at birth) to a confident 0. This changes observation SEMANTICS and the input
+    # dimension (129 vs 120 for 3 slots): the LSTM/critic were trained on V3, so enabling it is
+    # NOT a hot patch — it requires a re-warm/retrain. See tamiyo.policy.features (Obs V4).
+    obs_v4_contribution_state: bool = False
+
     # === Value function ===
     # Coefficient for value loss in combined PPO loss. Lower values reduce critic
     # dominance when using shared backbone (LSTM shared between actor/critic).
@@ -384,6 +394,7 @@ class TrainingConfig:
             "per_head_advantage_norm": self.per_head_advantage_norm,
             "hra_value_decomposition": self.hra_value_decomposition,
             "return_variance_telemetry": self.return_variance_telemetry,
+            "obs_v4_contribution_state": self.obs_v4_contribution_state,
             "value_coef": self.value_coef,
             "value_warmup_batches": self.value_warmup_batches,
             "value_coef_start": self.value_coef_start,
