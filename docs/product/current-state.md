@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-14 (#61) · make-permanence-visible: G-LEDGER replay PHASE 1 EXECUTED with a material pricing correction (F5 refuted live; park residual reversed); power-calc framework accepted (DRAFT); r9 cadence read banked (trigger #3 not fired); freeze now blocked on round-21 fold-in + owner ratifications + final adversarial pass; PDR-0085..0087; code landed `b7b7c6d5` on `feat/ev-stab-stage2-hra`
+# Current State — Esper        Checkpoint: 2026-07-14 (#62) · make-permanence-visible: ROUND-21 FOLDED IN (both primes adjudicated) — Φ(PENDING) fork PROPOSED-DISSOLVED (flag-on-HOLDING; both recorded options dead), PBRS reframed (non-telescoping progress stream), gates re-postured as BOUNDS; freeze blocked on the q_decision-IQR read + owner ratifications + final adversarial pass; PDR-0085..0088; code `b7b7c6d5` on `feat/ev-stab-stage2-hra`
 
 ## The bet right now
 **Unchanged: the commitment defect is a permanent-value MEASUREMENT gap (PDR-0074/0076)** — the counterfactual is
@@ -50,36 +50,40 @@ measured value across FOSSILIZE; guardrail = the fix does NOT farm fossils.
 - **Power-calc discipline (PDR-0086):** never present an assumed-σ_d power as predictive; Exp-1 P2 is bounding; a
   relative-to-relative reassessment is vacuous — Δ_material is absolute or nothing.
 
-## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted)
-- **Φ(PENDING) re-adjudication (NEW, material):** PDR-0084 #3's default (Φ(PENDING):=Φ(FOSSILIZED)) was justified by
-  arm-A forfeiture parity — a premise the replay falsified (arm A pays NO forfeiture; fossils re-accrue). Needs your
-  ruling before the round-21 fold-in freezes the window PBRS spec.
-- **Price-vs-fix (NEW):** the eis==0 skip is arguably a production defect; recommendation = price it for the
-  experiment, decide the fix after (PDR-0085). Your call, not enacted.
-- **Power-calc §8 ratifications (PDR-0086):** ΔP_req=0.10 materiality; P2 80%/gates 90% split; UCB posture
-  (point-estimate primary recommended); **max-n stretch pre-authorization (load-bearing if tercile gates need 90%)**;
-  q_decision-IQR read legitimacy under no-peek; σ_d-reduction lever preference.
+## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted; queue REDUCED by round 21)
+- **RATIFY the Φ(PENDING) DISSOLUTION (PDR-0088):** PENDING = flag on HOLDING, not a stage. Both recorded options are
+  dead under executed facts (default's parity premise false; fossil-schedule double-mints a ≈+0.52 climb). The
+  dissolution is PBRS-clean, discharges the r9 bridge assumption mechanically, needs zero new machinery; its designed
+  B−A PBRS delta is harness-computed (|Δ|≤~0.14, dwell-sign-varying). This replaced the old "adjudicate the fork" item.
+- **RATIFY gates-as-BOUNDS (PDR-0088):** detection-grade gate power needs n≈29–63 (worst case) — unreachable → GATE-DOM/
+  GATE-INFL scored as 95% UCB bounds vs Δ_material; wide bound at screen = INCONCLUSIVE-on-gates, never a pass. This
+  COLLAPSED the §8 "80/90 power split" and "max-n stretch" questions. Remaining §8 items: ΔP_req=0.10 materiality;
+  UCB posture (point-estimate primary recommended); IQR-read legitimacy under no-peek; σ_d-reduction lever preference.
+- **Price-vs-fix (PDR-0085):** the eis==0 skip = price it for the experiment, fix decided after (recommended). Your call.
 - **Standing (unchanged):** premium signature (`0.5+3·tanh(1/3)` ≈1.464538 × legitimacy — lands with the freeze);
   Option-A cross-slot global audit lock ratification; Phase-2 (B-path) authorization; threshold-variance materiality
   bound; north-star target/date, rent ceiling, host-accuracy floor owner-unset.
 - Standing rules: git identity tachyon-beep; no push/tag/release/branch-deletion/telemetry-deletion/remote action
   without an explicit ask.
 
-## Last did (this checkpoint, #61)
-- Owner-requested **first-principles review of checkpoints #55–#60** — every checkable claim verified against source
-  (tanh constant, Φ table, F5 arithmetic, exclusion sites); conclusion upheld; cleared to proceed.
-- **Built + landed replay Phase 1** (TDD; 84 tests; review nits closed incl. real proxy-path coverage) and banked the
-  PBRS live-semantics finding with both-seeds r9 confirmation (PDR-0085).
-- **Dispatched + reviewed the power calc** (PDR-0086) and the **r9 cadence read** (PDR-0087; results persisted from
-  scratchpad to `docs/analysis/` + scripts preserved).
-- Tracker: 3 tasks created+closed (replay P1, power calc, cadence read), 1 new pre-freeze task (q_decision-IQR,
-  esper-lite-e12e2d1543), 1 TIP observation filed. Code commit `b7b7c6d5`; this checkpoint commits the workspace.
+## Last did (this checkpoint, #62; #61 earlier today)
+- **#61:** owner-requested first-principles review of #55–#60 (upheld); built + landed replay Phase 1 (84 tests,
+  drl-reviewed, nits closed, `b7b7c6d5`) → PBRS live-semantics finding banked (PDR-0085); power-calc framework
+  accepted (PDR-0086); r9 cadence read banked, trigger #3 not fired (PDR-0087).
+- **#62 (this one):** both round-21 primes adjudicated against the harness before banking — **the harness corrected a
+  prime hand-derivation a SIXTH time** (the "−0.09·d" flag-delta budget → measured |Δ|≤~0.14, dwell-sign-varying).
+  **ROUND-21 FOLDED IN:** pre-reg §2.5.9 rewritten (Φ(PENDING) dissolution PROPOSED, both dead options recorded,
+  "telescoping" clause withdrawn), G-PBRS gate rewritten to skip-semantics, §ROUND-21 block added (ledger pins:
+  −274.7-vs−113 convention, F8→GATE-INFL, +27.7→suspension clause; gates-as-bounds), blockers updated; audit A8
+  appended. PDR-0088. Prime ordering disagreement resolved: fold-in carries PROPOSED markers, owner ratifies on the
+  integrated doc.
 
 ## Next session, start here
-1. **Collect the owner rulings** (Φ(PENDING); price-vs-fix; power-calc §8; ΔP_req) — everything else queues behind them.
-2. **Run the q_decision-IQR calibration read** (esper-lite-e12e2d1543; r9-only, regime-stamp asserted) → freeze Δ_material.
-3. **Round-21 fold-in** of the six PDR-0085 amendments + power-calc numbers into the pre-reg body.
-4. **Final adversarial pass** on the integrated artifact (fresh eyes, no arc context) → no-peek freeze (owner signs:
-   premium + cross-slot lock + phase-2 gate) → GPU authorization (owner).
-5. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); pending observation
+1. **Collect the owner ratifications on the REDUCED queue** (dissolution; gates-as-bounds; price-vs-fix; ΔP_req; UCB
+   posture; IQR-read legitimacy; premium signature; cross-slot lock; phase-2 gate).
+2. **Run the q_decision-IQR calibration read** (esper-lite-e12e2d1543 — now load-bearing for the GATES, not just P2;
+   r9-only, regime stamp asserted) → freeze Δ_material.
+3. **Final adversarial pass** on the integrated pre-reg (fresh eyes, no arc context) → no-peek freeze (owner signs) →
+   GPU authorization (owner).
+4. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); pending observation
    esper-lite-obs-73926b0291 (longdiag pgrep scar) nearing its 2026-07-26 expiry — promote or dismiss.
