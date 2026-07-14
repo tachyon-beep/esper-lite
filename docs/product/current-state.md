@@ -51,17 +51,19 @@ farm fossils.
   guardrail-baseline table; **no reads outstanding.** **The ONLY remaining pre-freeze gate is owner sign-off on the other
   flags** (HRA posture, P1-vs-P2 primary, τ_acc + MDEs + guardrail materiality, n/seeds/budget/device; settlement:
   re-interpret-FOSSILIZE vs new-op, boundary policy, EWMA-vs-min-window, flat-premium; floor: form + f + op-head-only).
-  No-peek freeze; GPU held. **FREEZE ON HOLD (rounds 15–19, PDR-0081/0082/0083).** Premium SETTLED: **1.464538 × legitimacy_request**
-  (matched-control consolidation of BOTH shipping flat terms — the "tanh bonus" is a CONSTANT 3·tanh(1/3)≈0.9645, not c-graded), paid
-  at the settlement BOUNDARY, discount-neutral (÷γ^d, unit-tested), qualified on q_settle≥1.0, never retuned. Rounds 18–19 REJECTED
-  the audit's own q_decision re-key (available at the request instant → invariant violation; also would bake quote→request into P2
-  via the mask) → request-instant sterilization: NO contribution-conditioned payment of any sign at request; only −0.01 cost;
-  legitimacy frozen. F5 PBRS reclassified (should telescope; truncation residual γ^150≈0.47×Φ_FOSS=6.0 possibly PRO-fossil; PENDING
-  potential to define; never a numeric refund). holding_warning window read ANSWERED (fires only when targeting the pending slot →
-  suspend for committed=True). Gates: GATE-DOM (per-run paired slope of pre-floor p_FOSS on q_decision) + GATE-INFL, one-sided-in-B,
-  verdict-changing. Pre-reg BODY RECONCILED to Groups-A–D altitude (no stale clauses). Freeze blocked on THREE: **executable G-LEDGER
-  replay** (9-dim case matrix, per-component PV, 2 invariants @1e-6, event-order assertion — the new load-bearing blocker);
-  paired-run power calc (P2+both gates, blinded reassessment, frozen max-n); one final adversarial pass. No GPU.
+  No-peek freeze; GPU held. **FREEZE ON HOLD (rounds 15–20, PDR-0081..0084).** Premium: principle owner-decided (matched-control),
+  figure corrected by audit — frozen as the EXPRESSION `0.5+3·tanh(1/3)` (≈1.464538) × legitimacy_request, boundary-paid,
+  discount-neutral (÷γ^d, BOTH signs incl. the −0.2 branch), q_settle≥1.0-qualified (LCB fallback if threshold-variance test shows a
+  windfall), never retuned; owner signature lands with the freeze (prime consensus ≠ owner ruling — governance rewording banked).
+  Request instant STERILE (q_decision re-key rejected). **Replay contract v2 (audit A7):** three paths S/A/B, SEVEN gates —
+  CONTINUITY, MATCHED-CONTROL (B−A parity incl. holding_warning cessation + PBRS-at-instant), DESIGNED-DELTA in residual form
+  (Δ_obs−Δ_designed(x)≈0; the old "invariant to dwell" was impossible — prior scales with legitimacy), PBRS telescoping,
+  EVENT-ORDER (half-open), CROSS-SLOT adversarial, THRESHOLD-VARIANCE. PENDING-Φ default = Φ(FOSSILIZED) (forfeiture at request =
+  arm-A parity; alternative recorded, replay adjudicates). NAMED residual: Φ(park-capped)=7.5 > Φ(FOSS)=6.0 → shaping pays ~+0.31
+  for PARKING (shared across arms; ~25% haircut; GATE-DOM suspect). Zero-slack quote hole closed (extend-to-next-boundary; r9
+  measurement-rate read queued). Cross-slot: Option A GLOBAL AUDIT LOCK recommended (owner ratifies at freeze). obs dim 31 OFF.
+  Blockers: G-LEDGER replay (phase 1 = S/A+telescoping+threshold-variance, zero-GPU test-only, buildable NOW; phase 2 = B path,
+  needs flagged settlement reward impl = OWNER-GATED); paired-run power calc; final adversarial pass. No GPU.
 - **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
   satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
   over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
