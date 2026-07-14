@@ -1,148 +1,85 @@
-# Current State — Esper        Checkpoint: 2026-07-14 (#60) · make-permanence-visible: pre-registration integrated through prime round 20, FREEZE ON HOLD on three checkable blockers; premium settled-pending-signature; replay contract v2 is the load-bearing instrument (PDR-0074→0084; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-14 (#61) · make-permanence-visible: G-LEDGER replay PHASE 1 EXECUTED with a material pricing correction (F5 refuted live; park residual reversed); power-calc framework accepted (DRAFT); r9 cadence read banked (trigger #3 not fired); freeze now blocked on round-21 fold-in + owner ratifications + final adversarial pass; PDR-0085..0087; code landed `b7b7c6d5` on `feat/ev-stab-stage2-hra`
 
 ## The bet right now
-**The commitment defect is a permanent-value MEASUREMENT gap — ONE gap, THREE coupled symptoms + a separate inert channel
-(PDR-0074 + round-11/H6 + drl deliverable).** The counterfactual is undefined at both ends of a seed's life (α=0 birth;
-permanence — fossils excluded from ablation by design, `vectorized_trainer.py:956-975`), and every consumer of the `None`
-inherits it: (1) reward `bounded_attribution` stops firing → −113; (2) OBSERVATION contribution feature = 0
-(`features.py:830` `None→0`, H6-CONFIRMED); (3) the critic "overstates" the commit penalty because it is fit to that
-lying observation (a SYMPTOM, not independent). The reward AND the observation AND the value function all value a fossil
-at exactly 0 — while the freshness channel that could say "STALE not zero" (`γ^epochs_since_cf`) sits built-but-bypassed.
-**`hindsight_credit`-inert is a SEPARATE defect (H3): a scaffold channel keyed on `total_improvement`, cap 0.2 — it can
-NEVER settle the −113, so L2 is a NEW channel, not a reactivation** (corrects PDR-0074/0075). APPROVED refocus
-(PDR-0076, owner-approved with binding conditions): **MAKE PERMANENCE VISIBLE** (L1 freeze-don't-zero + L2
-settle-at-fossilize on existing data; H7 GATES L1). Conditions: design against the FOSSIL-FARM adversary (naive L1+L2 ≈
-800:1 revenue:cost → commit-everything; sell-at-spike / decay-lie / double-count), L2 revenue ≈ the forfeited stream not
-above it, OFFLINE-REPLAY before any run, DESIGN-don't-land, floor + critic held CONSTANT, premise UNMEASURED not wrong.
-· metric: does a genuinely-contributing seed retain its measured value across FOSSILIZE; guardrail = the fix does NOT
-farm fossils.
+**Unchanged: the commitment defect is a permanent-value MEASUREMENT gap (PDR-0074/0076)** — the counterfactual is
+undefined at permanence, every consumer inherits the `None→0` lie, and the fix is L1 freeze-don't-zero + L2
+non-selectable boundary settlement priced to neutralize the forfeited stream. **Phase-1 replay re-certified the
+premise: the forfeited attribution stream (−274.7 PV from commit) still dominates the shipping commit ledger by two
+orders of magnitude.** What changed is the PRICING LAYER (PDR-0085): the fine structure the verdict gates read was
+wrong in three places and is now measured, not hand-derived. · metric: does a genuinely-contributing seed retain its
+measured value across FOSSILIZE; guardrail = the fix does NOT farm fossils.
 
-## In flight
-- **The three gating reads are RESOLVED (PDR-0078).** READ 1: every policy-timed settlement is farmable OOS (lower bound)
-  → **settle on a NON-SELECTABLE instant** (fixed-time / terminal / confirmation-window); A[ewma] BLOCKED. READ 2: no
-  spike-selection, but uninformative (dead-zone, not safety). **READ 3 (exact |H|=1 ID + IPW/MSM, PR15-validated,
-  balance-checked, well-powered 2–5× MDE, both seeds): committing a floor-pinned good HOLDING seed NOW causally BEATS
-  WAITING — terminal +1.4–1.6 pp, val-acc all horizons, AUC +1.5–1.7, no added destruction.** Permanence carries real,
-  proxy-free product value the reward zeroes out. Bank ONLY the positive TOTAL effect (not "under-fossilization is a
-  defect full stop"; comparator is inaction not SET_ALPHA).
-- **READ 4 (WAIT-arm decomposition) split the effect ~50/50 (residual FOSSILIZE + forced-PRUNE shelter) — but ROUND-14
-  RECALIBRATED it (PDR-0080).** The **residual/permanence half is SOLID** (Support-1: val@1, assumption-light, design-based
-  — the READ-3 exact randomization where forced-PRUNE can't yet have fired). The **shelter half is UNDER VERIFICATION** —
-  its flat-0.15 IPCW propensity is likely mis-specified (PRUNE masked below age-5; "this seed pruned" needs the SLOT head
-  too; 0.85^13≈12% ≫ the reported 55%). So the settlement is the WELL-EVIDENCED leg; the floor-repair is
-  strongly-motivated-but-softer. **The coupling rationale is "EITHER-ALONE-IS-DEGENERATE"** (settlement-alone: commits stay
-  floor-forced + seeds destroyed; floor-repair-alone: the learned preference is PARK → zero fossils) — NOT the 50/50. The
-  floor is on the critical path regardless.
-- **READ 5 (verification) RESOLVED it (PDR-0080 outcome): the shelter half is RETRACTED** (3 ways: IPCW mis-specified in
-  degree — predicts 79-82% survival vs observed 45%; in kind — the SLOT head is DETERMINISTIC not a known 0.15, and
-  pruning is quality-SELECTIVE, removing LOWER-LOO seeds; under the clean estimand shelter→16-20%, residual→80-84%).
-  **The intrinsic-permanence / SETTLEMENT half is the identified, robust bet.** The floor's forced-PRUNE is NOT an
-  indiscriminate destroyer — target selection is sensible learned quality-pruning; only the timing is forced. So the
-  "floor co-required via shelter" claim is WITHDRAWN; arm C's floor intervention RE-SCOPED to the gradient-dead-zone fix
-  (round-8 per-num_valid differentiable floor), NOT forced-PRUNE-removal. Coupling rests ONLY on "either-alone-degenerate."
-- **The PRE-REGISTRATION is DONE (`docs/analysis/2026-07-14-permanence-visible-preregistration.md`) — the GPU-decision
-  artifact.** Triangular attributable design (A control / B settlement-only / C = gradient-restoring differentiable floor),
-  RECOMMENDED STAGED (Exp-1 A/B settlement, Exp-2 add C); verdict rests only on the shelter-independent B−A / C−A. Full
-  non-selectable-settlement spec (annuity, quote from pre-request measurements only, one-shot-bonus netting to kill the
-  spot channel, all holes closed) + the re-scoped gradient-floor spec (per-num_valid differentiable floor, op-head-only,
-  keeps the PRUNE minimum). Metrics P1(terminal acc)/P2(quote-graded commitment) + guardrails G-FARM/G-QUALPRUNE/G-STAB.
-  **Sequencing DECIDED = STAGED (owner).** The "3 remaining reads" are ALREADY SATISFIED by READ 5 (PRUNE-legality 100%,
-  hazard 0.109/0.127, val@1 ~90% pre-mediator, G-QUALPRUNE baseline FOSS +6.9/+6.6 vs PRUNE +6.1/+5.9) → frozen into the
-  guardrail-baseline table. All ~20 design flags are now RESOLVED in the pre-reg's §ROUND-15 Groups A–D (the old flag
-  lists are superseded); one queued read remains (r9 per-epoch HOLDING measurement rate). No-peek freeze; GPU held. **FREEZE ON HOLD (rounds 15–20, PDR-0081..0084).** Premium: principle owner-decided (matched-control),
-  figure corrected by audit — frozen as the EXPRESSION `0.5+3·tanh(1/3)` (≈1.464538) × legitimacy_request, boundary-paid,
-  discount-neutral (÷γ^d, BOTH signs incl. the −0.2 branch), q_settle≥1.0-qualified (LCB fallback if threshold-variance test shows a
-  windfall), never retuned; owner signature lands with the freeze (prime consensus ≠ owner ruling — governance rewording banked).
-  Request instant STERILE (q_decision re-key rejected). **Replay contract v2 (audit A7):** three paths S/A/B, SEVEN gates —
-  CONTINUITY, MATCHED-CONTROL (B−A parity incl. holding_warning cessation + PBRS-at-instant), DESIGNED-DELTA in residual form
-  (Δ_obs−Δ_designed(x)≈0; the old "invariant to dwell" was impossible — prior scales with legitimacy), PBRS telescoping,
-  EVENT-ORDER (half-open), CROSS-SLOT adversarial, THRESHOLD-VARIANCE. PENDING-Φ default = Φ(FOSSILIZED) (forfeiture at request =
-  arm-A parity; alternative recorded, replay adjudicates). NAMED residual: Φ(park-capped)=7.5 > Φ(FOSS)=6.0 → shaping pays ~+0.31
-  for PARKING (shared across arms; ~25% haircut; GATE-DOM suspect). Zero-slack quote hole closed (extend-to-next-boundary; r9
-  measurement-rate read queued). Cross-slot: Option A GLOBAL AUDIT LOCK recommended (owner ratifies at freeze). obs dim 31 OFF.
-  Blockers: G-LEDGER replay (phase 1 = S/A+telescoping+threshold-variance, zero-GPU test-only, buildable NOW; phase 2 = B path,
-  needs flagged settlement reward impl = OWNER-GATED); paired-run power calc; final adversarial pass. No GPU.
-- **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
-  satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
-  over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
-  NEAR-UNIFORM (weak preference). Enum ranges expressive, selection under-differentiated (N1 partially refuted).
-- **L1 (obs-v4) + K>1 LANDED as two reviewed commits** (`b5839021` L1 default-OFF v3-byte-identical; `7715a62e` K=4
-  trust-region restore) + the ESCROW-guard proof_packet regression fixed (`b35dec21`, opt-in). All verified green (L1 9 +
-  features 55 + config 45 + k-test 4). Obs-v4 = default-OFF (+9 state_dim, re-warm/retrain when enabled); K=4 restores the
-  trust-region guard. **LOG (do not silently re-baseline):** the pre-existing `test_ev_liftoff_k4` threshold drifted
-  (2.9× vs 3.0×, proven not-this-diff via a clean worktree) — a finding with an unread cause.
-- **ESCROW guard LANDED + tested** (checkpoint #46).
-- **Harness enablers** (esper-lite-7fe21bd091, decision ACCEPTED, task OPEN, no GPU): default-on checkpointing +
-  per-decision advantage/pre-floor/per-head-KL logging + **K>1** (Read B, P8=0). Correct regardless of the epic.
-- **EV-stabilization epic** (esper-lite-f25b71c165): reframed by PDR-0074; comment #181.
-- **Branch-survivor** (esper-lite-1f1e55f58f): main-as-trunk (PDR-0062); gated on merge window — untouched.
+## In flight / freeze-blocker scoreboard
+- **Replay (blocker #3): PHASE 1 DONE + reviewed + LANDED `b7b7c6d5`** (`tests/simic/rewards/replay/`, 84 tests; drl
+  APPROVE-WITH-NITS, 5 nits closed; findings `docs/analysis/2026-07-14-gledger-replay-phase1-findings.md`).
+  **HEADLINE (PDR-0085, r9-confirmed both seeds, 0/4,151 commits):** the trainer epoch ordering makes the PBRS
+  `eis==0` branch unreachable live → ALL cross-stage PBRS transition deltas are SKIPPED. Audit **F5's forfeiture never
+  fires**; **fossils re-accrue potential 6.0→8.0**; **PDR-0084 #4's park>fossil +0.31 residual REVERSES** (pro-fossil
+  +0.02…+0.57 measured); holding_warning relief (+27.7) is the 2nd-largest pro-commit term; **F8 hatch measured +45.8
+  PV**. Six pre-reg amendments PROPOSED for round 21 — **body deliberately NOT edited** (one touches the owner-pending
+  Φ(PENDING) call). Phase 2 (B path, 7 gates) stays owner-gated.
+- **Power calc (blocker #2): DRAFT accepted at review (PDR-0086)** — `2026-07-14-paired-run-power-calc-DRAFT.md`.
+  n=10 ≥80% iff σ_d ≤ 1.17·Δ; Exp-1 arm-B P2 = BOUNDING not detection; tercile gates set required n (σ_d ×1.7–2.5);
+  blinded reassessment = unsigned within-pair spreads, point-estimate primary; max-n=10 proposed + escalate branch.
+  **Circularity fix: Δ_material must freeze ABSOLUTE via a NEW r9 q_decision-IQR read — task esper-lite-e12e2d1543
+  (open, pre-freeze).** Six §8 owner ratifications outstanding.
+- **r9 cadence read (was queued): DONE (PDR-0087)** — 100.000% per-epoch HOLDING measurement, zero gaps, both seeds →
+  **PDR-0084 reversal trigger #3 does NOT fire**; zero-slack window feasible; bridge assumption named (pending seeds
+  stay ablatable to boundary, §2.0). obs-v3 indirect verification ratified; missing positive obs-version stamp filed
+  as TIP observation (esper-lite-obs-77569bfa0a).
+- **Remaining before freeze:** (1) round-21 fold-in of the six PDR-0085 amendments (needs the owner's Φ(PENDING)
+  call); (2) the q_decision-IQR read + owner ratification of ΔP_req; (3) final adversarial pass on the corrected,
+  integrated doc; (4) owner gates below. **No GPU; nothing pushed.**
+- **Harness enablers** (esper-lite-7fe21bd091, OPEN) and **branch-survivor** (esper-lite-1f1e55f58f, parked on merge
+  window; stale-claim flag is bookkeeping) — unchanged.
 
 ## Facts the next session must not relitigate
-- **Measurement gap (PDR-0074), fire-rate not magnitude:** fossil `bounded_attribution` collapses 88%→11% FIRE-RATE
-  (magnitude barely moves). Realized FOSS−SET_ALPHA return penalty −113/−102 = ~99% forfeited cf-credit, ~0.8% accuracy,
-  ~0.3% rent. Bonus:forfeit ≈ 75:1.
-- **RETRACTED:** PDR-0069 "the gate passes"/"reward already correct"; PDR-0071 §4 "signal survives the 9-pt spread"; the
-  round-9 "reward-specification / vindicates the epic" over-read; "ESCROW as fix." Un-retracted: PDR-0071's
-  settlement/transfer co-requisite (it is the missing revenue line).
-- **The premise is UNMEASURED, not refuted:** τ_main ≈ 0 once the cf phantom is stripped; G3's "no positive region" is
-  bounded to THIS floored policy's seeds. Read A was PROXY-tier; the "measurement gap CAUSES avoidance" causal claim is a
-  strong hypothesis (policy gradient-frozen on 94% of commits), not intervention-confirmed.
-- **Floor + reward are a PACKAGE:** FOSSILIZE is floor-bound 93-94%; the ~17% rate is the FLOOR's, not the policy's.
-  Fixing the gradient alone → fossilization ~0. Floor ρ-sweep CONTRAINDICATED + deferred (not rejected).
-- **Critic = SYMPTOM, not an independent defect (round-11/H6):** V_main "overstates" the FOSSILIZE main-stream penalty
-  4-6× because the OBSERVATION zeroes a fossil's contribution (`features.py:830`) → the critic is fit to a lying state
-  vector, correctly predicting accuracy damage that never materializes. Retire the critic as a separate line; PDR-0066
-  ("wrong lever") was right for a new reason. Do NOT redesign the critic. (Subject to MC/value-target parity.)
-- **No reward transform fixes a missing INPUT:** ESCROW / telescoping / de-shape all take the missing `attributed` as
-  input. **`RewardMode.ESCROW` is CONTRAINDICATED** (it reads the fossilize measurement-collapse as "transient" → claws
-  back accrued credit) — flag it in code before a future session flips it. The only fixes SUPPLY a fossil's value (L1/L2/L3).
-- **The exclusion is a JUDGMENT, not a fact:** the "ablating a fossil measures host damage" comment is unmeasured; the fix
-  for a biased estimator is a bias correction, not substituting 0. H7 (drift probe: valid fossilize-instant LOO vs the
-  "invalid" ablation at t+1/+5/+20) decides whether a hard measurement programme (L3) is even needed. Don't scope hard before H7.
-- **Read B (K=1):** the configured target-KL early-stop supplies no operative pre-emptive guard under the K=1 loop (P8=0)
-  — a competing, reward-independent structural fact; the λ=0 necessity smoke would be uninterpretable. Fix K before any
-  floor smoke.
-- Docs: eval `2026-07-13-round8-findings-evaluation.md`; the Read-A→round-10 arc `2026-07-14-advantage-loo-read-preregistration.md`.
+- **PBRS live semantics (PDR-0085, executed read):** `record_accuracy` ticks before decisions; reward sees pre-action
+  state; mutations execute after → first post-transition reward row has eis=1 → cross-stage PBRS deltas skipped.
+  Code-cited, drl-review-re-verified (incl. FOSSILIZE synchronous inline), r9-population-confirmed. The kasmina
+  fidelity test pins MECHANICS given the ordering, not the ordering itself (scope stated in the test).
+- **F5 is refuted as a live penalty; A7's park residual is pro-fossil; do NOT quote the old −0.31/+0.31 figures.**
+- **The finding does NOT weaken the epic** — forfeited attribution still dominates; the annuity remains the revenue line.
+- **Matched-control holds across arms** (all share the trainer ordering) — the correction is to Δ_designed's pricing,
+  not to arm design. **Price the skip, don't fix it mid-arc** (fixing changes arm A's shipping semantics — recommended
+  owner ruling, PDR-0085).
+- Carried from before: measurement gap fire-rate not magnitude (PDR-0074); premise UNMEASURED not refuted; floor +
+  reward are a PACKAGE (FOSSILIZE 93–94% floor-bound); critic = symptom (round-11/H6); no reward transform fixes a
+  missing INPUT (ESCROW contraindicated); Read B (K=1 KL guard inoperative — fixed by landed K=4); the r9 archival
+  regime stamp must be asserted by every r9 read.
+- **Power-calc discipline (PDR-0086):** never present an assumed-σ_d power as predictive; Exp-1 P2 is bounding; a
+  relative-to-relative reassessment is vacuous — Δ_material is absolute or nothing.
 
 ## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted)
-- **Premium signature (at freeze):** magnitude frozen as the expression `0.5+3·tanh(1/3)` ≈ 1.464538 × legitimacy_request —
-  principle (matched-control) owner-decided, figure corrected by the audit, both primes endorse; **prime consensus ≠ owner
-  ruling — your signature lands with the no-peek freeze.**
-- **Cross-slot construction ratification (at freeze):** Option A global audit lock recommended (one pending fossilization
-  at a time; morphogenesis ops suspended request→boundary; host training continues). Enters the frozen protocol-package estimand.
-- **Replay phase 2 gate:** the B-path replay requires implementing the flagged settlement reward semantics — an owner-gated
-  core-reward change. Phase 1 (S/A paths, PBRS telescoping, threshold-variance) is zero-GPU test-only and within standing authority.
-- **GPU authorization:** held until all freeze blockers clear + the doc is frozen no-peek + you sign.
-- North-star target/date, rent ceiling, host-accuracy floor: owner-unset.
-- Standing: git identity tachyon-beep; no push/tag/release/branch-deletion/telemetry-deletion/remote action without an explicit ask.
+- **Φ(PENDING) re-adjudication (NEW, material):** PDR-0084 #3's default (Φ(PENDING):=Φ(FOSSILIZED)) was justified by
+  arm-A forfeiture parity — a premise the replay falsified (arm A pays NO forfeiture; fossils re-accrue). Needs your
+  ruling before the round-21 fold-in freezes the window PBRS spec.
+- **Price-vs-fix (NEW):** the eis==0 skip is arguably a production defect; recommendation = price it for the
+  experiment, decide the fix after (PDR-0085). Your call, not enacted.
+- **Power-calc §8 ratifications (PDR-0086):** ΔP_req=0.10 materiality; P2 80%/gates 90% split; UCB posture
+  (point-estimate primary recommended); **max-n stretch pre-authorization (load-bearing if tercile gates need 90%)**;
+  q_decision-IQR read legitimacy under no-peek; σ_d-reduction lever preference.
+- **Standing (unchanged):** premium signature (`0.5+3·tanh(1/3)` ≈1.464538 × legitimacy — lands with the freeze);
+  Option-A cross-slot global audit lock ratification; Phase-2 (B-path) authorization; threshold-variance materiality
+  bound; north-star target/date, rent ceiling, host-accuracy floor owner-unset.
+- Standing rules: git identity tachyon-beep; no push/tag/release/branch-deletion/telemetry-deletion/remote action
+  without an explicit ask.
 
-## Last did (this checkpoint, #60 — session = checkpoints #55–#59, prime rounds 15–20, PDR-0081..0084)
-- **#55:** drafted the proposed freeze table (recommended answers to all ~20 flags for a yes/no/adjust pass).
-- **#56 (round 15, PDR-0081):** both primes returned a HOLD — a fatal-class flaw (unfalsifiable ACCEPT-SETTLE under a
-  net-negative commit ledger) + a stats error (P2 pseudoreplication → per-RUN unit). ~12 converged amendments folded
-  (two-quote settlement, G-LEDGER, 3-test G-FARM, verdict taxonomy…); ONE genuine fork isolated (the premium).
-- **#57 (rounds 16–17, PDR-0082):** premium fork RESOLVED by convergence (matched-control: retain the existing flat prior,
-  never retune); **FOSSILIZE reward-path audit executed against code** — the "tanh bonus" is a CONSTANT ≈0.9645 (three
-  readers × four rounds mischaracterized it) → the true flat prior ≈1.4645; PR28 confirmed; F5 PBRS forfeiture + F8
-  live negative-carry escape hatch found; gates respecified (GATE-DOM = per-run paired slope of pre-floor p_FOSS).
-- **#58 (rounds 18–19, PDR-0083):** the audit's own `q_decision` re-key REJECTED (invariant violation) → request-instant
-  sterilization + boundary-paid discount-neutral prior; F5 reclassified (telescoping open); holding_warning window read
-  ANSWERED from code; **executable G-LEDGER replay became the load-bearing blocker**; pre-reg body reconciled (no stale
-  clauses). Process rule banked: severity markers only for executed reads.
-- **#59 (round 20, PDR-0084):** replay contract v2 (3 paths S/A/B, 7 gates, DESIGNED-DELTA in residual form — the old
-  "invariant to dwell" was impossible); PENDING-Φ default = Φ(FOSSILIZED); NAMED residual Φ(park)=7.5 > Φ(FOSS)=6.0 (the
-  shaping itself pays ~+0.31 for parking); zero-slack quote hole closed; cross-slot audit lock recommended; governance
-  rewording (prime consensus ≠ owner ruling). First round since 13 with no fatal findings.
-- **#60:** checkpoint bookkeeping — resume brief refreshed; no new decisions (all session decisions already PDR'd).
+## Last did (this checkpoint, #61)
+- Owner-requested **first-principles review of checkpoints #55–#60** — every checkable claim verified against source
+  (tanh constant, Φ table, F5 arithmetic, exclusion sites); conclusion upheld; cleared to proceed.
+- **Built + landed replay Phase 1** (TDD; 84 tests; review nits closed incl. real proxy-path coverage) and banked the
+  PBRS live-semantics finding with both-seeds r9 confirmation (PDR-0085).
+- **Dispatched + reviewed the power calc** (PDR-0086) and the **r9 cadence read** (PDR-0087; results persisted from
+  scratchpad to `docs/analysis/` + scripts preserved).
+- Tracker: 3 tasks created+closed (replay P1, power calc, cadence read), 1 new pre-freeze task (q_decision-IQR,
+  esper-lite-e12e2d1543), 1 TIP observation filed. Code commit `b7b7c6d5`; this checkpoint commits the workspace.
 
 ## Next session, start here
-1. **Build replay PHASE 1** (zero-GPU, test-only, within standing authority): S/A comparator paths on shipping code,
-   PBRS whole-path telescoping (settles F5 + quantifies the park>fossil residual empirically), G-THRESHOLD-VARIANCE
-   formula test. Contract: audit A7 + pre-reg §2.6.
-2. **Owner gates to collect:** phase-2 authorization (implement the flagged settlement reward semantics — needed for the
-   B-path replay), Option-A cross-slot lock ratification, premium signature (all land with/before the freeze).
-3. **Paired-run power calc** (P2 + GATE-DOM + GATE-INFL; blinded reassessment rule; frozen max-n) — drl task; can run in
-   parallel with phase 1.
-4. **Queued r9 read:** per-epoch HOLDING measurement rate (feasibility of the zero-slack window; extension-clause traffic).
-5. Then: **final adversarial pass** on the integrated artifact → no-peek freeze (owner signs) → GPU authorization (owner).
-6. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); r9 archival regime-stamp assertion.
+1. **Collect the owner rulings** (Φ(PENDING); price-vs-fix; power-calc §8; ΔP_req) — everything else queues behind them.
+2. **Run the q_decision-IQR calibration read** (esper-lite-e12e2d1543; r9-only, regime-stamp asserted) → freeze Δ_material.
+3. **Round-21 fold-in** of the six PDR-0085 amendments + power-calc numbers into the pre-reg body.
+4. **Final adversarial pass** on the integrated artifact (fresh eyes, no arc context) → no-peek freeze (owner signs:
+   premium + cross-slot lock + phase-2 gate) → GPU authorization (owner).
+5. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); pending observation
+   esper-lite-obs-73926b0291 (longdiag pgrep scar) nearing its 2026-07-26 expiry — promote or dismiss.
