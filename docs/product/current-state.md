@@ -1,4 +1,4 @@
-# Current State — Esper        Checkpoint: 2026-07-14 (#49) · make-permanence-visible: mechanism RESOLVED → COUPLED floor-forced-PRUNE-repair + non-selectable-settlement; premise causally supported; L1+K>1 landed (PDR-0074→0079; on `feat/ev-stab-stage2-hra`)
+# Current State — Esper        Checkpoint: 2026-07-14 (#60) · make-permanence-visible: pre-registration integrated through prime round 20, FREEZE ON HOLD on three checkable blockers; premium settled-pending-signature; replay contract v2 is the load-bearing instrument (PDR-0074→0084; on `feat/ev-stab-stage2-hra`)
 
 ## The bet right now
 **The commitment defect is a permanent-value MEASUREMENT gap — ONE gap, THREE coupled symptoms + a separate inert channel
@@ -48,10 +48,8 @@ farm fossils.
   keeps the PRUNE minimum). Metrics P1(terminal acc)/P2(quote-graded commitment) + guardrails G-FARM/G-QUALPRUNE/G-STAB.
   **Sequencing DECIDED = STAGED (owner).** The "3 remaining reads" are ALREADY SATISFIED by READ 5 (PRUNE-legality 100%,
   hazard 0.109/0.127, val@1 ~90% pre-mediator, G-QUALPRUNE baseline FOSS +6.9/+6.6 vs PRUNE +6.1/+5.9) → frozen into the
-  guardrail-baseline table; **no reads outstanding.** **The ONLY remaining pre-freeze gate is owner sign-off on the other
-  flags** (HRA posture, P1-vs-P2 primary, τ_acc + MDEs + guardrail materiality, n/seeds/budget/device; settlement:
-  re-interpret-FOSSILIZE vs new-op, boundary policy, EWMA-vs-min-window, flat-premium; floor: form + f + op-head-only).
-  No-peek freeze; GPU held. **FREEZE ON HOLD (rounds 15–20, PDR-0081..0084).** Premium: principle owner-decided (matched-control),
+  guardrail-baseline table. All ~20 design flags are now RESOLVED in the pre-reg's §ROUND-15 Groups A–D (the old flag
+  lists are superseded); one queued read remains (r9 per-epoch HOLDING measurement rate). No-peek freeze; GPU held. **FREEZE ON HOLD (rounds 15–20, PDR-0081..0084).** Premium: principle owner-decided (matched-control),
   figure corrected by audit — frozen as the EXPRESSION `0.5+3·tanh(1/3)` (≈1.464538) × legitimacy_request, boundary-paid,
   discount-neutral (÷γ^d, BOTH signs incl. the −0.2 branch), q_settle≥1.0-qualified (LCB fallback if threshold-variance test shows a
   windfall), never retuned; owner signature lands with the freeze (prime consensus ≠ owner ruling — governance rewording banked).
@@ -107,40 +105,44 @@ farm fossils.
 - Docs: eval `2026-07-13-round8-findings-evaluation.md`; the Read-A→round-10 arc `2026-07-14-advantage-loo-read-preregistration.md`.
 
 ## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted)
-- **REFOCUS APPROVED (PDR-0076)** — enacted: roadmap Now bet moved, `vision.md` reinforced (SNR + Goodhart anti-goals).
-  ESCROW guard APPROVED (fail-closed, folded into the drl deliverable). drl-expert L1/L2 design + reads DISPATCHED this session.
-- **Still owner-gated (AFTER the drl deliverable + offline replay):** LANDING L1/L2 (reward/observation code change) and any
-  GPU rerun. Do NOT land until the design + offline replay show the fix removes the −113 discontinuity WITHOUT farming
-  fossils (guardrail).
-- Owner-gated + deferred: the ρ-sweep floor primitive; the K>1 / trust-region fix (P0 harness, independent of the epic).
+- **Premium signature (at freeze):** magnitude frozen as the expression `0.5+3·tanh(1/3)` ≈ 1.464538 × legitimacy_request —
+  principle (matched-control) owner-decided, figure corrected by the audit, both primes endorse; **prime consensus ≠ owner
+  ruling — your signature lands with the no-peek freeze.**
+- **Cross-slot construction ratification (at freeze):** Option A global audit lock recommended (one pending fossilization
+  at a time; morphogenesis ops suspended request→boundary; host training continues). Enters the frozen protocol-package estimand.
+- **Replay phase 2 gate:** the B-path replay requires implementing the flagged settlement reward semantics — an owner-gated
+  core-reward change. Phase 1 (S/A paths, PBRS telescoping, threshold-variance) is zero-GPU test-only and within standing authority.
+- **GPU authorization:** held until all freeze blockers clear + the doc is frozen no-peek + you sign.
 - North-star target/date, rent ceiling, host-accuracy floor: owner-unset.
 - Standing: git identity tachyon-beep; no push/tag/release/branch-deletion/telemetry-deletion/remote action without an explicit ask.
 
-## Last did (this checkpoint, #44)
-- Ran the pre-registered reads (PDR-0073): Read A = INVERTED (PROXY); Read B = K=1 no-trust-region (P8=0). Round-9 G1/G2/G3
-  + round-10 fire-rate decomposition + a code read (H2) RESOLVED the commitment defect to a **fossil measurement gap**.
-- Banked the facts + retractions (PDR-0074, accepted); proposed the instrument-first refocus (PDR-0075, owner-gated);
-  reconciled the epic (comments #181/#182). Multiple over-reads caught and retracted (advisor + primes) before banking.
-- Round-11 + **H6**: confirmed the OBSERVATION also zeroes a fossil's contribution (`features.py:830`) → ONE gap, FOUR
-  symptoms; the **critic RETIRES as a symptom** (not independent); ESCROW contraindicated; refocus reworded to "make
-  permanence visible."
-- Round-12: owner APPROVED all three (refocus / ESCROW guard / drl design) subject to the primes' roadblocks. Enacted:
-  roadmap refocused, `vision.md` reinforced, PDR-0076 (binding conditions), drl-expert dispatched.
-- Round-13: drl-expert deliverable DONE — L1 freeze-value+rising-uncertainty (H7: no decay-γ), L2 settle-then-annuitize
-  EWMA-priced (offline farm verdict: A[ewma] VIABLE, A[spot]/B FARM), de-shape not survivable (H8), **ESCROW guard LANDED
-  + tested**, L3 still required. **Primes review pack written** + record corrected (hindsight = separate scaffold channel,
-  not symptom 2 → THREE symptoms not four).
+## Last did (this checkpoint, #60 — session = checkpoints #55–#59, prime rounds 15–20, PDR-0081..0084)
+- **#55:** drafted the proposed freeze table (recommended answers to all ~20 flags for a yes/no/adjust pass).
+- **#56 (round 15, PDR-0081):** both primes returned a HOLD — a fatal-class flaw (unfalsifiable ACCEPT-SETTLE under a
+  net-negative commit ledger) + a stats error (P2 pseudoreplication → per-RUN unit). ~12 converged amendments folded
+  (two-quote settlement, G-LEDGER, 3-test G-FARM, verdict taxonomy…); ONE genuine fork isolated (the premium).
+- **#57 (rounds 16–17, PDR-0082):** premium fork RESOLVED by convergence (matched-control: retain the existing flat prior,
+  never retune); **FOSSILIZE reward-path audit executed against code** — the "tanh bonus" is a CONSTANT ≈0.9645 (three
+  readers × four rounds mischaracterized it) → the true flat prior ≈1.4645; PR28 confirmed; F5 PBRS forfeiture + F8
+  live negative-carry escape hatch found; gates respecified (GATE-DOM = per-run paired slope of pre-floor p_FOSS).
+- **#58 (rounds 18–19, PDR-0083):** the audit's own `q_decision` re-key REJECTED (invariant violation) → request-instant
+  sterilization + boundary-paid discount-neutral prior; F5 reclassified (telescoping open); holding_warning window read
+  ANSWERED from code; **executable G-LEDGER replay became the load-bearing blocker**; pre-reg body reconciled (no stale
+  clauses). Process rule banked: severity markers only for executed reads.
+- **#59 (round 20, PDR-0084):** replay contract v2 (3 paths S/A/B, 7 gates, DESIGNED-DELTA in residual form — the old
+  "invariant to dwell" was impossible); PENDING-Φ default = Φ(FOSSILIZED); NAMED residual Φ(park)=7.5 > Φ(FOSS)=6.0 (the
+  shaping itself pays ~+0.31 for parking); zero-slack quote hole closed; cross-slot audit lock recommended; governance
+  rewording (prime consensus ≠ owner ruling). First round since 13 with no fatal findings.
+- **#60:** checkpoint bookkeeping — resume brief refreshed; no new decisions (all session decisions already PDR'd).
 
 ## Next session, start here
-1. **Fold in the ARCHIVAL r9 reads** (running: per-head floor-binding, |H|=1-over-time confidence-trap, α/blueprint
-   histograms, data-provenance hashes) — the last free evidence; record them, then r9 is frozen.
-2. **Design the COUPLED bet (PDR-0079) — neither ships alone:** (a) **non-selectable settlement** (fixed-time / terminal /
-   non-cancellable REQUEST_FOSSILIZE confirmation window; EWMA a valid QUOTE not cashable; close the 4 L2 spec holes,
-   gpt-prime §3); (b) **floor forced-PRUNE repair** — the floor destroys 55% of good held seeds within ~13 epochs (a
-   distinct workstream from the ρ-sweep gradient fix). drl-expert design; owner-gated to land.
-3. **First GPU arm (owner-gated, after r9 mined + the coupled design):** SHAPED control vs L1(obs-v4)+non-selectable-L2
-   (+/− the forced-PRUNE repair, to attribute the two halves), critic + K held constant. Success = −113 discontinuity gone
-   + contribution-sensitive commitment + NO timing farm + stable/better terminal outcomes + reduced forced-destruction of
-   good seeds. Do NOT run L1 alone (repairs obs while the reward still forfeits).
-4. **LOG, don't paper over:** the `test_ev_liftoff_k4` threshold drift (unread cause); freeze r9's schema in the read
-   tooling (assert obs-v3/K=1) so archival reads can't be silently re-run on the new regime.
+1. **Build replay PHASE 1** (zero-GPU, test-only, within standing authority): S/A comparator paths on shipping code,
+   PBRS whole-path telescoping (settles F5 + quantifies the park>fossil residual empirically), G-THRESHOLD-VARIANCE
+   formula test. Contract: audit A7 + pre-reg §2.6.
+2. **Owner gates to collect:** phase-2 authorization (implement the flagged settlement reward semantics — needed for the
+   B-path replay), Option-A cross-slot lock ratification, premium signature (all land with/before the freeze).
+3. **Paired-run power calc** (P2 + GATE-DOM + GATE-INFL; blinded reassessment rule; frozen max-n) — drl task; can run in
+   parallel with phase 1.
+4. **Queued r9 read:** per-epoch HOLDING measurement rate (feasibility of the zero-slack window; extension-clause traffic).
+5. Then: **final adversarial pass** on the integrated artifact → no-peek freeze (owner signs) → GPU authorization (owner).
+6. Unchanged logged items: `test_ev_liftoff_k4` threshold drift (unread cause); r9 archival regime-stamp assertion.
