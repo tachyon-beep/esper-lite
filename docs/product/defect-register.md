@@ -1,4 +1,11 @@
-# Defect & Pathology Register — Esper        Updated: 2026-07-14 (PDR-0100)
+# Defect & Pathology Register — Esper        Updated: 2026-07-14 evening (execution pass, checkpoint #75)
+
+**A-gate status:** A2 ✅ DONE (`1df249ab` — transport fixed, dim pinned, bug esper-lite-f0a82adccb CLOSED with
+fix_verification; class-closers landed: transport-completeness + dim-liveness tests). A3 ✅ static half done
+(the liveness sweep with its documented not-yet-varied ledger) / runtime normalizer proof-packet still open on
+esper-lite-c739c3ab97. A4 🔄 coverage-report agent in flight. A1+A5 🔄 settlement build: increments 1–2 of 6
+done (`3b36aa56` pure core, `89831e8a` committed-flag state machine); next = action layer → reward adapter →
+F2 obs bit → replay B-path → drl pre-commit review.
 
 > The standing "what must we fix" ledger, owner-requested 2026-07-14. Split by WHEN each item must be
 > addressed. Tracker IDs are authoritative for status; this file is the map. Nothing here is fixed
