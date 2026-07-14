@@ -18,15 +18,20 @@ above it, OFFLINE-REPLAY before any run, DESIGN-don't-land, floor + critic held 
 farm fossils.
 
 ## In flight
-- **drl-expert deliverable DONE + primes round-13 review IN (PDR-0077).** L1 = freeze-value; **CORRECTED: shrink the
-  value dim toward UNKNOWN as staleness rises + an explicit obs status/mask** (a −1 sentinel alone isn't self-describing;
-  frozen-forever is the mirror lie — H7's rising slope ⇒ biased HIGH). **L2 A[ewma] = BLOCKED, NOT viable** — median-0 /
-  mean-+5.8 is a right-tail ~48:1 farm a policy will time; the static replay scored the OLD policy's timing. Unblock gates
-  (zero-GPU): oracle-timing replay + commitment-hazard null + RCT-CATE. Redesign to remove the policy's control of the
-  settlement instant (fixed-time / lagged-quote / confirmation-window). **de-shape:** SOFTENED (reward-mass ≠ gradient
-  signal; diagnostic control). **ESCROW guard LANDED + tested** (5 new + 545 green). **Cheaper causal read than full L3:**
-  existing |H|=1 RCT-CATE on proxy-free product outcomes + a terminal host-level objective (validate the 95% proxy).
-  Pack + round-13 outcome: `docs/analysis/2026-07-14-permanence-visibility-primes-review-pack.md`.
+- **The three gating reads are RESOLVED (PDR-0078).** READ 1: every policy-timed settlement is farmable OOS (lower bound)
+  → **settle on a NON-SELECTABLE instant** (fixed-time / terminal / confirmation-window); A[ewma] BLOCKED. READ 2: no
+  spike-selection, but uninformative (dead-zone, not safety). **READ 3 (exact |H|=1 ID + IPW/MSM, PR15-validated,
+  balance-checked, well-powered 2–5× MDE, both seeds): committing a floor-pinned good HOLDING seed NOW causally BEATS
+  WAITING — terminal +1.4–1.6 pp, val-acc all horizons, AUC +1.5–1.7, no added destruction.** Permanence carries real,
+  proxy-free product value the reward zeroes out → the fix is worth building. **Calibration (advisor): do NOT bank
+  "under-fossilization is a defect, full stop"** — it's commit-EARLIER vs commit-more (WAIT≠never), the contrast excludes
+  SET_ALPHA (the real alternative), and part of the gain may be permanence SHIELDING from the floor's own later PRUNE
+  (s42 prune↓). One free r9 read (WAIT-arm decomposed by later-pruned) settles it.
+- **L1 (obs-v4) + K>1 code diff DONE + tested (uncommitted, under my review).** v3 byte-identical (tested); +9 state_dim
+  behind a default-OFF flag; shrink-toward-UNKNOWN + explicit status dims; K=4 (drl-justified, guard activates). 2 test
+  issues: one pre-existing (EV-liftoff threshold, re-baseline); one is MY ESCROW-guard regression (proof_packet builds
+  ESCROW config → hits the raise) — I own the fix.
+- **ESCROW guard LANDED + tested** (checkpoint #46).
 - **Harness enablers** (esper-lite-7fe21bd091, decision ACCEPTED, task OPEN, no GPU): default-on checkpointing +
   per-decision advantage/pre-floor/per-head-KL logging + **K>1** (Read B, P8=0). Correct regardless of the epic.
 - **EV-stabilization epic** (esper-lite-f25b71c165): reframed by PDR-0074; comment #181.
@@ -85,16 +90,19 @@ farm fossils.
   not symptom 2 → THREE symptoms not four).
 
 ## Next session, start here
-1. **The two zero-GPU L2-gating reads (PDR-0077), if the owner authorizes:** (a) **oracle-timing farm replay** — settle at
-   EVERY eligible commit time out-of-sample (tune s41 / test s42, then reverse); report max-over-eligible-times gain +
-   percentiles; (b) **commitment-hazard null** — `P(spike|FOSSILIZE)` vs `P(spike|all eligible)` (the 45–47% is meaningless
-   without the baseline). These decide whether A[ewma] un-blocks or the settlement must be redesigned (fixed-time /
-   lagged-quote / confirmation-window).
-2. **The proxy-free product-validity read (zero-GPU):** existing |H|=1 RCT-CATE, `β3 = FOSSILIZE×q_t` on val-acc@{1,5,10,25}
-   / terminal acc / AUC / compute-to-target / destructive events (episode-clustered). β3≤0 ⇒ EWMA is not a valid
-   retained-value proxy regardless of the farm test.
-3. **L1 land decision (owner-gated):** land the canonical `ContributionState` + explicit obs status/mask + shrink-toward-
-   UNKNOWN; obs v3→v4 ⇒ re-warm/retrain. Do NOT run L1 alone (repairs obs while the reward still forfeits). Land L2 only
-   after gate (1)+(2) clear.
-4. **P0 harness (independent, do regardless):** **K>1** (Read B — five rounds open, free, contaminating every run),
-   default-on checkpointing, per-decision telemetry. Floor is P3 (packaged with the reward, never alone).
+1. **MINE r9 FIRST — it is a one-way door (round-13.5 §2): K>1/obs-v4 make future runs a different regime, so r9 (the whole
+   13-round evidence base) becomes non-extendable once a new-regime run happens.** The load-bearing free read: **WAIT-arm
+   decomposition** (split the READ-3 WAIT arm by later-force-pruned vs not) — settles commit-EARLIER-vs-more and
+   protect-from-forced-PRUNE vs intrinsic-benefit (PDR-0078 OPEN). Also mine while free: per-head floor-binding rates,
+   |H|=1 rate vs training round, α-target/blueprint histograms. Do these before authorizing any K>1/v4 GPU run.
+2. **Review + commit the L1(obs-v4) + K>1 diff** (uncommitted, done+tested): read the actual diff (esp. `features.py`
+   `_encode_contribution_v4` + the schema plumbing), confirm v3 byte-identical, then commit. **Fix the ESCROW-guard
+   regression** (`scripts/proof_packet.py` builds an ESCROW config → hits the fail-closed raise; set the opt-in). Re-baseline
+   the pre-existing EV-liftoff-k4 threshold separately (not this diff's regression).
+3. **L2 REDESIGN around a NON-SELECTABLE settlement instant** (READ 1 verdict): fixed-time / terminal / non-cancellable
+   REQUEST_FOSSILIZE confirmation window — the only construction that removes the timing max-operator. The EWMA quote is a
+   valid VALUE proxy (READ 3) but must not be evaluated at a policy-chosen instant. Close the 4 L2 spec holes (gpt-prime §3).
+   Owner-gated to land; L1 lands first (don't run L1 alone).
+4. **Then the first GPU arm** (owner-gated, after r9 mined): SHAPED control vs L1+non-selectable-L2, floor+critic+K held
+   constant for attribution. Success = the −113 discontinuity gone + contribution-sensitive commitment + NO timing farm +
+   stable/better terminal outcomes. Floor is P3 (packaged with the reward, never alone).
