@@ -40,18 +40,32 @@ Pinned placements:
   B+1 ≡ t_c+1 parity, resolving the "starts at the boundary" wording (B1d).
 - ÷γ^d index convention: d = B − R (request row to boundary row, both reward-phase); pinned by unit test.
 
-## §1. W1 (NEW, found verifying B1a): the window provisional is LEDGER-DRIVEN
+## §1. W1 rev 3 — THE SINGLE-OWNER PRINCIPLE: the ledger owns the committed seed's ENTIRE per-seed reward row
 
-The reward pays only the TARGETED slot (`action_execution.py:944-947`); the pending slot leaves the slot head's
-legal set → it can never be targeted → §2.5.9's "provisional stream RUNS" is unreachable via policy targeting, and
-negative carry would silently stop at request (F8 reborn through the mask). **Fix:** for window epochs [R+1, B−1]
-the settlement ledger pays the pending seed's measured c_t through the FULL live provisional transform (identical
-code path at the pending seed's inputs), summed into the env step reward. Consequences, stated honestly:
-- Deterministic every-epoch cadence vs S's when-targeted cadence = a real protocol-package estimand component
-  (labeled alongside the Option-A lock; pre-reg §2.5.9 amended, PDR-0091).
-- Negative c flows every window epoch — the hatch stays closed by construction.
-- G-CONTINUITY's synthetic asserts under the always-targeted comparator (the phase-1 harness convention), where
-  B−S ≈ 0 holds exactly for constant inputs.
+The reward is computed exactly once per env step for the single `target_slot`'s seed (loops at
+`action_execution.py:817`/`:1005` are env/count-only — no per-seed reward loop; `:944-947` keys every per-seed
+component on the target). Masking the pending slot therefore silences not just the provisional but ALL of its
+per-seed components (pbrs_bonus `:721-726`, holding_warning `:706-719`, blending_warning, synergy) — and,
+conversely, any targeting leak (see the WAIT gap below) double-pays them all. **Fix (re-review W1-A):**
+- **For window epochs [R+1, B−1] the settlement ledger is the SOLE OWNER of the committed seed's entire
+  per-seed reward row** — it reproduces, each epoch, exactly what an ALWAYS-TARGETED HOLDING seed would earn
+  under the production law at that epoch's actual inputs: provisional (c_t fresh, or the contribution=None
+  branches — proxy/zero — when unmeasured; NO carry, NO imputation — N-r2b), the within-HOLDING PBRS
+  climb/drag, warning semantics per the §2 table (suppressed for committed), synergy at the seed's inputs.
+  Summed into the env step reward.
+- **Defense-in-depth reward-path guard:** the policy path suppresses ALL per-seed components when
+  `seed_info.committed` — so even the masking edge cases cannot double-pay. Named leak vectors the guard
+  closes (re-review): `slot_by_op[LifecycleOp.WAIT]` is a SEPARATE tensor from the morphology masks
+  (action_masks.py:229-238) and would otherwise still admit the committed slot as a WAIT target; and the
+  single-active-seed fallback (`_resolve_target_slot` → index 0, vectorized.py:151).
+- **Cadence reconciliation (re-review W1-B):** Δ_designed(x) for G-PBRS/G-DESIGNED-DELTA is computed by the
+  phase-1 harness under ALWAYS-TARGETED cadence — the ledger enforces exactly that cadence for the committed
+  seed, so the real-run B−A delta matches the harness Δ by construction. The replay's B path models the
+  LEDGER-driven per-seed row, never a policy-targeted one. (Without this, the window PBRS alone misses by
+  ~0.078/epoch × d ≈ 0.4–0.8 against the |Δ| ≤ ~0.14 harness scale.)
+- Estimand + telemetry: the deterministic every-epoch cadence (provisional AND pbrs) vs S's when-targeted
+  cadence is a real protocol-package component — labeled alongside the Option-A lock and included in the
+  lock-burden/aliasing telemetry (N-r2c). Negative c flows every window epoch — the hatch stays closed.
 
 ## §2. Request-row branch table (B2 — which `action==FOSSILIZE` branches apply)
 
@@ -81,6 +95,14 @@ At B (reward phase), from the locked `q_settle` and boundary-frozen inputs:
   per epoch [B, horizon]; truncated by construction.
 - G-CONTINUITY target defined (B3): constant c AND constant val_acc synthetic → provisional/epoch ==
   annuity/epoch exactly; asserted at 1e-6.
+- **Transform-law consistency at B (N-r2a, documented resolution):** the WINDOW keeps the FULL live
+  provisional law INCLUDING ratio_penalty — identical to S's law, the strongest B−S continuity property (the
+  window is provisional in kind; a live spike is paid for B exactly as it would be for S). The ANNUITY excludes
+  ratio_penalty (§3 rationale: its input is a smoothed, policy-unselectable statistic — the spot-spike detector
+  has no referent). The transform change at B tracks the input regime change (live c_t → frozen q_settle) and
+  is priced in Δ_designed at B, not hidden.
+- **Δ_designed cadence statement (W1-B):** all Δ_designed(x) values entering G-PBRS and G-DESIGNED-DELTA are
+  computed under the always-targeted cadence the §1 ledger enforces; the replay's B path models the ledger row.
 
 ## §4. Safety and governor semantics (B4 + round-23; two classes — converged content adopted)
 
@@ -116,7 +138,7 @@ At B (reward phase), from the locked `q_settle` and boundary-frozen inputs:
 
 | New rule | Mask side (action_masks.py) | Validity side (must agree) |
 |---|---|---|
-| Pending slot off the slot head | slot-head legal-set excludes committed slots (builder learns `committed`) | `_parse_sampled_action` validity + handler `can_fossilize` (fossilize.py:157) reject committed targets |
+| Pending slot off the slot head | slot-head legal-set excludes committed slots (builder learns `committed`) — **including the SEPARATE `slot_by_op[WAIT]` tensor (:229-238) and the single-active-seed fallback (`_resolve_target_slot` → index 0)** | `_parse_sampled_action` validity + handler `can_fossilize` (fossilize.py:157) reject committed targets; **plus the §1 reward-path guard (suppress per-seed components when `seed_info.committed`) as the backstop that makes any residual leak double-pay impossible** |
 | Option-A global suspension | morphology ops masked for ALL slots while any window is open (global signal threaded into the builder) | `_preflight_lifecycle_mutation` rejects morphology ops while locked; ordinary-governor paths check the lock (§4) |
 | Late-request mask | FOSSILIZE masked when no boundary ≥ R+min_window with ≥5 achievable measurements before horizon | request-issuance validity re-checks the same predicate |
 | FRESH-required | FOSSILIZE masked for STALE/NEVER_MEASURED seeds (§2.5.3) | request-issuance validity re-checks |
@@ -135,7 +157,8 @@ At B (reward phase), from the locked `q_settle` and boundary-frozen inputs:
 2. Active-slot/ablation continuity (committed seed stays in `active_slot_list`, measured every epoch).
 3. Exactly one HOLDING→FOSSILIZED transition, at B — and G-PBRS asserts the **harness per-scenario Δ** (N5: the
    re-accrual is a spread climb, not a discrete mint event; PDR-0088 #2's form; round-22 pin 3a's intent honored —
-   the boundary transition is the ONLY stage entry).
+   the boundary transition is the ONLY stage entry). **Δ_designed is computed under the §1 ledger's
+   always-targeted cadence; the B-path replay models the ledger-driven per-seed row (W1-B).**
 4. No unenumerated `committed=True` effects (grep sweep + the §5 behavioral sweep).
 5. Signed contribution continuity (W1 ledger provisional + §3 annuity; negative carry never escapes: request row,
    window, boundary, post-boundary all asserted).
