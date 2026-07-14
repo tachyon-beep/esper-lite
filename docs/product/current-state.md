@@ -51,16 +51,17 @@ farm fossils.
   guardrail-baseline table; **no reads outstanding.** **The ONLY remaining pre-freeze gate is owner sign-off on the other
   flags** (HRA posture, P1-vs-P2 primary, τ_acc + MDEs + guardrail materiality, n/seeds/budget/device; settlement:
   re-interpret-FOSSILIZE vs new-op, boundary policy, EWMA-vs-min-window, flat-premium; floor: form + f + op-head-only).
-  No-peek freeze; GPU held. **FREEZE ON HOLD (rounds 15–17, PDR-0081/0082).** Round-15's ~12 converged amendments folded (per-RUN P2
-  power, two-quote settlement, signed-value invariant, G-LEDGER, 3-test G-FARM, decision-level G-QUALPRUNE + bootstrap CI, critic
-  calibration, endpoint-matched floor, verdict taxonomy). **Premium fork RESOLVED by convergence** (gpt adjudication + claude r17
-  concession): matched-control — retain the existing flat prior, remove ALL c-graded commit-time payments, NEVER retune. **Reward-path
-  audit COMPLETE** (docs/analysis/2026-07-14-fossilize-reward-path-audit.md): PR28 confirmed (spot-c threshold gate + more), the "tanh
-  bonus" is CONSTANT ≈0.964 → existing flat prior ≈1.464 not 0.5 (⚠ one-line owner confirm: consolidated 1.464 vs 0.5-alone), F5 PBRS
-  dwell-forfeiture −0.31..−0.46 → G-LEDGER, F8 negative-carry escape hatch LIVE today → structural sign fix. Gates respecified (r16):
-  GATE-DOM = per-run paired SLOPE of pre-floor p_FOSS on q_decision (not raw logits — gauge; not marginal Δp — state-dependent
-  dominance), GATE-INFL bottom-tercile; one-sided-in-B; verdict-changing. Freeze blocked on: ⚠ confirm; paired-run power calc
-  (P2+both gates, blinded reassessment, frozen max-n); one more adversarial pass (r13–r16 each found a load-bearing flaw). No GPU.
+  No-peek freeze; GPU held. **FREEZE ON HOLD (rounds 15–19, PDR-0081/0082/0083).** Premium SETTLED: **1.464538 × legitimacy_request**
+  (matched-control consolidation of BOTH shipping flat terms — the "tanh bonus" is a CONSTANT 3·tanh(1/3)≈0.9645, not c-graded), paid
+  at the settlement BOUNDARY, discount-neutral (÷γ^d, unit-tested), qualified on q_settle≥1.0, never retuned. Rounds 18–19 REJECTED
+  the audit's own q_decision re-key (available at the request instant → invariant violation; also would bake quote→request into P2
+  via the mask) → request-instant sterilization: NO contribution-conditioned payment of any sign at request; only −0.01 cost;
+  legitimacy frozen. F5 PBRS reclassified (should telescope; truncation residual γ^150≈0.47×Φ_FOSS=6.0 possibly PRO-fossil; PENDING
+  potential to define; never a numeric refund). holding_warning window read ANSWERED (fires only when targeting the pending slot →
+  suspend for committed=True). Gates: GATE-DOM (per-run paired slope of pre-floor p_FOSS on q_decision) + GATE-INFL, one-sided-in-B,
+  verdict-changing. Pre-reg BODY RECONCILED to Groups-A–D altitude (no stale clauses). Freeze blocked on THREE: **executable G-LEDGER
+  replay** (9-dim case matrix, per-component PV, 2 invariants @1e-6, event-order assertion — the new load-bearing blocker);
+  paired-run power calc (P2+both gates, blinded reassessment, frozen max-n); one final adversarial pass. No GPU.
 - **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
   satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
   over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
