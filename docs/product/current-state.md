@@ -50,6 +50,14 @@ measured value across FOSSILIZE; guardrail = the fix does NOT farm fossils.
 - **Power-calc discipline (PDR-0086):** never present an assumed-σ_d power as predictive; Exp-1 P2 is bounding; a
   relative-to-relative reassessment is vacuous — Δ_material is absolute or nothing.
 
+## Standing fix-ledger
+**`docs/product/defect-register.md`** (NEW, owner-requested, PDR-0100) — the what-must-we-fix map with
+WHEN-gates: A = before the next run (F2 landmines, velocity transport+test, dead-dim sweep, coverage report),
+B = the bounded Obs-V5 batch, C = deferred-priced (eis==0, F8-in-A, num_holding), D = training pathologies in
+programme stage-order, E = logged-unread. Round-24 adjudicated (PDR-0100): experiment stays narrow; ladder runs
+now with corrected read designs; committed_val_acc = PROPOSED Exp-1 secondary; blueprint ceiling CORRECTED to
+~2.0× uniform and NOT currently binding (9th instrument-corrected claim).
+
 ## Open questions / blocked-on-owner  (Step-2 escalations — flagged, NOT enacted)
 - **RATIFIED (PDR-0089): ΔP_req = 0.10.** Δ_material = 0.10/IQR_q becomes a number when the in-flight read lands; the
   0.10 family propagates as working constants to the gate-UCB and threshold-variance bounds (they inherit, not
