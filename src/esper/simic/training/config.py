@@ -74,7 +74,18 @@ class TrainingConfig:
     # reference pass, so they do not re-run GAE or re-mutate the value normalizer.
     # ppo_updates_per_batch stays pinned to 1 for LSTM runs (the external loop is
     # disallowed); K is expressed here instead.
-    recurrent_n_epochs: int = 1
+    #
+    # Default K=4 (was 1): at K=1 the PPO trust-region guard is STRUCTURALLY INERT — the
+    # epoch-0 diagnostic KL is KL(theta||theta)=0 by construction and the ratio is exactly
+    # 1.0, so the target-KL early-stop can never fire and the ratio-clip never binds (Read B,
+    # PDR-0077). K>1 gives post-anchor epochs where the ratio diverges from 1 and approx_kl>0,
+    # restoring an operative early-stop + clip. K=4 is this codebase's established, empirically
+    # anchored value (test_ev_liftoff_k4: pre-update EV ~0.47 at K=4 vs ~0.09 at K=1, seed
+    # 2024; anomaly-detector thresholds calibrated for K=4 vs K=1 at n=200 with drl-expert
+    # sign-off 2026-06-18). The recurrent TBPTT cost is ~4x the K=1 update; the target-KL
+    # early-stop caps the *effective* epochs by divergence, so 4 is a ceiling, not a fixed cost.
+    # (clip_value must stay False under K>1 — enforced in PPOAgent.__init__.)
+    recurrent_n_epochs: int = 4
 
     # === Entropy (exploration) ===
     entropy_coef: float = DEFAULT_ENTROPY_COEF
