@@ -32,8 +32,10 @@ farm fossils.
   settlement) AND repair the floor's forced-PRUNE — **the floor is BACK ON THE CRITICAL PATH.** NEW: the same anti-WAIT
   floor forces the commits AND the destruction — **55% of good held seeds force-pruned within ~13 epochs, both at 0.15,
   both uncontrollable.** (Soften: shelter ≠ "a floor repair banks +0.7pp"; the two halves aren't additive.)
-- **Archival r9 reads running** (per-head floor-binding, |H|=1-over-time confidence-trap, α/blueprint histograms, data
-  provenance) — the LAST free evidence before a K>1/v4 run orphans r9 (schema-freeze-guarded).
+- **Archival r9 reads DONE + r9 hash-SEALED** (`docs/analysis/2026-07-14-r9-archival-record.md`). The one-way-door gate is
+  satisfied. Findings: the floor pathology is THREE distinct things — OP floor-binding (~43%, and its pinned rate GROWS
+  over training → round-11 confidence-trap CONFIRMED), `alpha_speed`+`alpha_curve` fully COLLAPSED (dead heads), blueprint
+  NEAR-UNIFORM (weak preference). Enum ranges expressive, selection under-differentiated (N1 partially refuted).
 - **L1 (obs-v4) + K>1 LANDED as two reviewed commits** (`b5839021` L1 default-OFF v3-byte-identical; `7715a62e` K=4
   trust-region restore) + the ESCROW-guard proof_packet regression fixed (`b35dec21`, opt-in). All verified green (L1 9 +
   features 55 + config 45 + k-test 4). Obs-v4 = default-OFF (+9 state_dim, re-warm/retrain when enabled); K=4 restores the
