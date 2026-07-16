@@ -16,7 +16,7 @@ dependencies = [
     "pydantic>=2.0.0", # Config validation for Nissa
     "PyYAML>=6.0", # Config file parsing
     "duckdb>=1.4.3",
-    "mcp>=1.25.0",
+    "mcp>=1.28.1",
     "psutil>=5.9.0",  # System resource monitoring for Sanctum
 ]
 
