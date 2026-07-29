@@ -12,9 +12,9 @@
     "generate:types": "cd ../../../../.. && PYTHONPATH=src uv run --python 3.11 python scripts/generate_overwatch_types.py > src/esper/karn/overwatch/web/src/types/sanctum.ts"
   },
   "dependencies": {
-    "echarts": "^5.5.0",
+    "echarts": "^6.1.0",
     "vue": "^3.4.0",
-    "vue-echarts": "^6.6.0"
+    "vue-echarts": "^8.0.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",
